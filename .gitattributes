@@ -5,7 +5,7 @@
 *.json text eol=lf
 *.workflow.js text eol=lf
 
-# ENG-95683 review — the JS toolchain is LF-ONLY, and this is a correctness rule, not a style one.
+# the JS toolchain is LF-ONLY, and this is a correctness rule, not a style one.
 # `scripts/build-workflows.mjs` inlines `_workflow-core/*.mjs` into `*.workflow.js` (already pinned LF above) and
 # then byte-compares the result. On a CRLF checkout the sources arrive CRLF, the generated file is pinned LF, and
 # `--check` reports EVERY line as drifted — which makes the one gate protecting the generated artifacts unreadable
@@ -17,7 +17,7 @@
 *.mjs text eol=lf
 *.js text eol=lf
 
-# Review (m-dymytrova) — the captured Classic schema fixtures are EXEMPT. This is data integrity, not style.
+# The captured Classic schema fixtures are EXEMPT. This is data integrity, not style.
 # Seven of them (contract/ContractInInvoice, ContractInOrder, CoreContracts, DocumentInContract, SalesContracts,
 # WorkCompliance, WorkOverride) are stored with DOUBLE-CR line endings (CR CR LF) — genuinely what the stand
 # emitted. Git classifies them `i/-text`, because the lone CRs defeat its text detection, so until the `*.js` rule

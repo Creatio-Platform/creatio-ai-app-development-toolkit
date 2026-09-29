@@ -57,7 +57,7 @@ class ScaffoldingPlaybookDocTests(unittest.TestCase):
         )
 
     def test_playbook_locks_single_retry_and_terminal_stop_and_report(self):
-        # Heart of ENG-93376: exactly one same-name retry, then stop and report —
+        # The heart of it: exactly one same-name retry, then stop and report —
         # both on a hard retry failure (step 5) and on poll-cap timeout (step 4).
         lowered = read_text(RUNBOOK).lower()
         self.assertIn("retry once", lowered)

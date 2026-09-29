@@ -7,7 +7,7 @@
 // self-declared version). This script closes that gap: it independently fetches `<package>@<version>` from the
 // public npm registry, verifies the tarball against the registry's OWN published `dist.integrity` (sha512),
 // extracts the pinned dist file, LF-normalizes it, and asserts its SHA-256 equals the pinned one — so
-// provenance.json can no longer *assert* an upstream hash it was never checked against.
+// provenance.json cannot *assert* an upstream hash it was never checked against.
 //
 // Self-contained: fetch + node:zlib (gunzip) + a tiny in-process ustar reader — no `npm`/`tar` CLI (Node 20+
 // won't spawn npm.cmd without a shell, and this must run identically on Linux and Windows). Network-dependent,

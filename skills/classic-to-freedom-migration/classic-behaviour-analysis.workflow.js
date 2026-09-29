@@ -56,8 +56,8 @@ export const meta = {
 // back a validated result; the CORE decides what runs next. Nothing in this file
 // knows about `agent()`, `parallel()` or any other vendor API.
 //
-// WHY A PROTOCOL AND NOT A FUNCTION CALL. The migration workflows used to call
-// `agent()` directly, which made the orchestration executable on exactly one
+// WHY A PROTOCOL AND NOT A FUNCTION CALL. A migration workflow that called
+// `agent()` directly would be executable on exactly one
 // host. Describing the same work as DATA is what lets Claude Code, Codex and a
 // plain CLI run the identical decision sequence — and what lets the suite assert
 // the sequence without an AI runtime at all.
@@ -100,7 +100,7 @@ const ACCESS_VALUES = new Set(Object.values(ACCESS))
 // distinguishes a NULLISH return ("terminal death — the host already exhausted
 // its own retries") from a REJECTION ("the host refused, the schema threw, the
 // prompt was malformed"), and reports which one happened. Collapsing them was a
-// real defect (PR#88 review), so the protocol names all three states rather than
+// real defect, so the protocol names all three states rather than
 // leaving an adapter to invent a convention:
 //
 //   OUTCOME.VALUE — the item produced a result. Driven into the generator with
@@ -661,9 +661,9 @@ async function safeExecute(item, execute) {
 // everything" is not evidence, and that is exactly how a real run left the child
 // pages at 0-of-8 described while the plan showed nothing wrong.
 //
-// These functions used to live inside `---8<---` sentinels in the Claude
+// These functions are a real module rather than text inside `---8<---` sentinels in the Claude
 // workflow script, sliced out by the test suite because the script cannot be
-// imported. They are a real module now; the generated Claude script inlines them
+// imported. The generated Claude script inlines them
 // between the same sentinels, so the slice-based checks still see them in the
 // shipped artifact.
 
@@ -703,7 +703,7 @@ function digestKeyOf(entryKey, keys) {
 // several inventory rows end in `::<key>` (AMBIGUOUS — a real row the answer could not be pinned to) and none does
 // (UNKNOWN — a key naming no row on this surface, so invented, stale or copied from another run). The remedies are
 // opposite — re-key the answer versus discard it — so a caller that has to report the failure needs to tell them
-// apart. One implementation, because two would be a second source of truth for the same lookup (PR #147 review).
+// apart. One implementation, because two would be a second source of truth for the same lookup.
 function resolveKey(entryKey, keys) {
   if (keys.has(entryKey)) return { key: entryKey, reason: 'exact' }
   const suffix = `::${entryKey}`
@@ -786,9 +786,9 @@ function coveredKeys(rs, allKeys) {
 const RETRY_ATTEMPTS = 2
 
 // A phase that DIED, retried — and living HERE, as a delegating generator, precisely so the suite can EXECUTE it.
-// This loop used to sit inline at the Critique call site, where the only reachable test was a regex over the
-// workflow's own source: it proved the loop's SHAPE was present and nothing about whether a second attempt ever
-// fires. A condition that silently never allowed one would have passed every check while the retry was a no-op in
+// Keeping this loop inline at the Critique call site would leave the only reachable test a regex over the
+// workflow's own source: that proves the loop's SHAPE is present and nothing about whether a second attempt ever
+// fires. A condition that silently never allowed one would pass every check while the retry was a no-op in
 // production — on the one path whose whole purpose is that a dead pass stops being silent.
 //
 // `makeStep(attempt)` returns the work STEP to yield, so the helper stays host-neutral: it never touches an agent
@@ -802,7 +802,7 @@ const RETRY_ATTEMPTS = 2
 //
 // Returns `{ result, ran }`, not the bare value. `ran` is what this loop KNOWS — an attempt handed back something.
 // A caller re-deriving it as `!!result` reads any falsy-but-PRESENT value as "the phase never ran" and marks a real
-// answer UNCHECKED downstream (PR#88 review). Death is a NULLISH outcome; `0`, `''` and `false` are results.
+// answer UNCHECKED downstream. Death is a NULLISH outcome; `0`, `''` and `false` are results.
 // One yield, both failure shapes, no try/catch at the call site. A nullish outcome comes back as
 // `value: null`; a REJECTION is thrown into the generator by the driver's `sendFor`, and an
 // unwrapped yield let it propagate out of `run()` as a raw exception — past the structured verdict
@@ -870,9 +870,9 @@ function mergeDeathLine(attempt, error, willRetry) {
 // PARTIAL object is dead by this test, because the only thing lost is a claim
 // that the missing field was verified — which is the claim there is no evidence
 // for.
-// PR #147 review — "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
+// "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
 // `isCritiqueShape` below exists for, applied to the phase whose failure is the most expensive. A truthy value
-// that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — used to pass the core's bare
+// that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — would pass the core's bare
 // truthiness guard and reach `normalizeScopes`, which coerces it to an EMPTY scope list via `(rawScopes || [])`.
 // The run then took the "empty worklist is DONE" exit and reported `skipped: true` with `complete: true` over a
 // digest that may be full — the one outcome this workflow exists to make impossible, reached through a malformed
@@ -996,7 +996,7 @@ function itemId(phase, ...parts) {
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
 //
-// PR #147 review — the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
+// the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
 //
 // The round: both rounds order scopes by rows descending (`planBatches`/`packBatches`), so the largest scope leads
 // a batch in each and the repair round was handed round 1's file. A repair agent writing it fresh dropped round
@@ -1006,7 +1006,7 @@ function itemId(phase, ...parts) {
 // The index: `packBatches` partitions SCOPES, not labels, and `label` is `schema || role`, so two scopes the
 // Context agent returns under one `schema` are separate batch members carrying one label. With disjoint key sets
 // `keyCollapse` sees no duplicate and passes, and `acceptParts` cannot see it either — both items are ASKED for
-// that path and both return it, so returned-equals-asked holds and no warning fires. Measured by the reviewer at
+// that path and both return it, so returned-equals-asked holds and no warning fires. Measured at
 // `rowsPerAgent: 1` with two `UsrPage` scopes: `describe.1.UsrPage` and `describe.2.UsrPage` both got
 // `customizations-part-UsrPage.md`.
 //
@@ -1092,8 +1092,8 @@ const INDEX_ENTRY = {
                                            // row and closes neither (see `ambiguousEntryKeys`)
     card: { type: 'string' },              // namespaced: '<scope>/C03'
     ac: { type: 'array', items: { type: 'string' } },
-    whatItDoes: { type: 'string' },        // ENG-96534: plain-language "what it does" (card's "What it is") — a human plan column
-    useCase: { type: 'string' },           // ENG-96534: plain-language step-by-step walkthrough for a non-technical reader — a human plan column
+    whatItDoes: { type: 'string' },        // plain-language "what it does" (card's "What it is") — a human plan column
+    useCase: { type: 'string' },           // plain-language step-by-step walkthrough for a non-technical reader — a human plan column
     bodyCard: { type: 'string' },          // the body's OWN card, when the behaviour is defined outside this scope
     bodyAc: { type: 'array', items: { type: 'string' } },
     trigger: { type: 'string' },           // only when this run resolved one the engine could not
@@ -1176,7 +1176,7 @@ const MERGE_SCHEMA = {
 // Prompts are DATA in the work-item protocol, so they are built here and carried
 // on the item rather than passed to a host API. Keeping them pure is also what
 // lets the suite assert the text a phase actually receives — a prompt that lost
-// its read-only clause is a safety regression no coverage arithmetic would catch.
+// its read-only clause is a safety hole no coverage arithmetic would catch.
 
 // Shared preamble. Embedded so no phase depends on another skill's files being
 // loaded in its context — except `classic-ui-expert` itself, which every Describe
@@ -1215,7 +1215,7 @@ Return the schema. The cards live in the FILE; the return carries the inventory,
 }
 
 function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote, round = 1 }) {
-  // PR #147 review — the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
+  // the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
   // the collision hazard itself two clauses later ("bare `C01` ids collide across parts and the migration plan
   // would then point at two different cards"), and a repair round numbering from `C01` off the same scope label
   // reproduced exactly that between round 1's part and its own. Round 1 keeps the historical spelling.
@@ -1249,8 +1249,8 @@ Your member ledger proves completeness for YOUR scopes only — say so; the surf
 
 function repairNote(toRepair, batch, critiqueNotes) {
   const mine = toRepair.filter((k) => batch.scopes.some((s) => [...s.methodKeys, ...s.memberKeys].includes(k)))
-  // PR #147 review — the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
-  // file at all, so an agent handed round 1's path (the defect `partFile`'s round marker fixes) had no reason to
+  // the round's part file is its OWN, and the agent is told so. A prompt that mentioned the
+  // file nowhere would leave an agent handed round 1's path with no reason to
   // suspect it was overwriting a first pass. Saying the first pass is KEPT is also what stops this round paying to
   // restate cards that are already in the deliverable.
   return `\nTHIS IS A REPAIR ROUND. A first pass already ran on these scopes and left these rows with no card — or, for a body-elsewhere row, no \`bodyCard\`: ${mine.join(', ')}\nDescribe THOSE rows. If a row genuinely cannot be described, return it as a \`gap\` with the settling query — a second silent omission is worse than a stated gap. Your part file above is this round's own, empty file: the first pass's part is KEPT and merged alongside it, so describe only the rows named here and do not restate cards it already carries.\nCritique notes: ${critiqueNotes || '(none)'}\n`
@@ -1392,8 +1392,8 @@ function skippedReturn(surface, extra = {}) {
 //
 // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the cards
 // are still merged and the coverage arithmetic still describes what the report contains. Dropping the answer would
-// discard real analysis over a path string, which is the worse failure. What this closes is that the core used to
-// accept whatever path came back, so a part file shared by two items left no trace in the run at all.
+// discard real analysis over a path string, which is the worse failure. What this closes is a core that
+// accepts whatever path comes back, leaving a part file shared by two items with no trace in the run at all.
 function acceptedParts(items, results, askedPart, log) {
   return results.map((r, i) => {
     const want = askedPart.get(items[i]?.id)
@@ -1459,7 +1459,7 @@ function contextFailureReason(cause, unusable, shape) {
 function contextFailedReturn(contextOutcome, surface, log, returned = null) {
   const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
   // THREE causes, three lines. A rejection, a silent death and a truthy-but-unusable return need different
-  // repairs, and the third one used to be indistinguishable from a surface with nothing on it (PR #147 review).
+  // repairs, and without three lines the third is indistinguishable from a surface with nothing on it.
   const unusable = !cause && returned !== null && returned !== undefined
   const shape = Array.isArray(returned) ? 'an array' : `a ${typeof returned}`
   if (cause) {
@@ -1513,7 +1513,7 @@ function censusShortfallReturn(shortfall, ctx, surface, log) {
 // happen there. Nothing checked it HERE, on the consumer side, and `SCOPE.required` does not list `schema`, so a
 // schema-validating host permits the omission. `censusShortfall` cannot see it either: the collapse changes no
 // scope COUNT, so the run passes the census gate and reports `complete` over a fraction of the surface - the
-// exact failure ENG-96529 defect 2 exists to close. The check is arithmetic, which is the standard this module
+// exact failure a key collapse causes. The check is arithmetic, which is the standard this module
 // sets for itself: rows dispatched must equal rows counted.
 function keyCollapseReturn(collapse, ctx, surface, log) {
   const { totalRows, keyCount, duplicated } = collapse
@@ -1577,8 +1577,8 @@ function* run(rawInput, io = {}) {
 
   phase('Context')
   // Through `stepOutcome`, because the driver has TWO ways to report a failed Context and only one of
-  // them used to reach the structured verdict below. A nullish outcome (terminal death) arrives as
-  // `value: null`; a REJECTION is thrown back in here by `sendFor`, and with no catch it propagated
+  // them reaches the structured verdict below on its own. A nullish outcome (terminal death) arrives as
+  // `value: null`; a REJECTION is thrown back in here by `sendFor`, and with no catch it propagates
   // straight out of `run()` as a raw exception — same root cause, two caller-visible results: a
   // documented verdict object, or a stack trace with no coverage numbers at all.
   const contextOutcome = yield* stepOutcome(step({
@@ -1601,7 +1601,7 @@ function* run(rawInput, io = {}) {
   // to reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete
   // zero-row analysis for a digest that may be full — the one outcome this workflow exists to make impossible.
   //
-  // PR #147 review — narrowed through `isCensusShape`, not a bare truthiness test. A truthy value that is not a
+  // narrowed through `isCensusShape`, not a bare truthiness test. A truthy value that is not a
   // census (`{}`, `[]`, a `scopes` of the wrong type) reached `normalizeScopes`, was coerced to an empty scope
   // list and took that same forbidden exit; `submit`'s shallow required-key check does not stop it. The same
   // narrowing `isCritiqueShape` applies one phase later, on the phase whose failure costs the most.
@@ -1646,14 +1646,14 @@ function* run(rawInput, io = {}) {
   // The part file each dispatched item was ASKED for, by item id. Read back by `acceptParts` below.
   const askedPart = new Map()
 
-  // PR #147 review — an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
-  // The core used to accept whatever path came back, so an agent writing round 1's file from the repair round left
+  // an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
+  // A core that accepted whatever path came back would let an agent writing round 1's file from the repair round leave
   // no trace at all; this line is what makes a recurrence, or any other path drift, visible in the run log.
   //
   // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the
   // cards are still merged and the coverage arithmetic still describes what the report contains. Dropping the
   // answer would discard real analysis over a path string, which is a worse failure than reporting the mismatch.
-  // PR #147 review — the parts to READ, deduplicated. `described` is round 1 plus the repair round, so a part
+  // the parts to READ, deduplicated. `described` is round 1 plus the repair round, so a part
   // path returned by an item in each round listed the same file twice; the round marker in `partFile` stops that
   // arising from the rounds, and this stops it arising at all. A duplicate input file is never useful — it either
   // reads the same cards twice or hides that two items claimed one file.
@@ -1770,13 +1770,13 @@ function* run(rawInput, io = {}) {
   // --- One repair round, and only when there is something to repair ----------
   // Scoped to the SCOPES that own the uncovered rows — never to a bare row list, which is the per-row split the
   // analysis contract forbids.
-  // PR #147 review — resolved through `digestKeyOf`, the same normaliser `coveredKeys` and
-  // `wiringOnlyMixinKeys` use, NOT a strict `allKeys.has`. ENG-96529 made `normalizeScopes` requalify every scope
-  // key, so bare method keys no longer exist in `allKeys`; the Critique is an analysis agent and may legitimately
-  // answer with either form. Under the strict test a Critique answering `onSaved` was DROPPED, and the dropped
+  // resolved through `digestKeyOf`, the same normaliser `coveredKeys` and
+  // `wiringOnlyMixinKeys` use, NOT a strict `allKeys.has`. `normalizeScopes` requalifies every scope
+  // key, so bare method keys do not exist in `allKeys`; the Critique is an analysis agent and may legitimately
+  // answer with either form. Under a strict test a Critique answering `onSaved` is DROPPED, and the dropped
   // rows are the dangerous ones: rows the arithmetic already counts as covered because they carry a card, which
   // the adversarial pass judged undescribed. They never reached `repairKeys`, no repair item was dispatched, and
-  // the run still reported `complete: true` — the same silent coverage hole ENG-96529 exists to close.
+  // the run would still report `complete: true` — the silent coverage hole this closes.
   const critiqueUncoveredRaw = (critique?.uncovered || []).map((u) => u?.key).filter((k) => typeof k === 'string')
   const critiqueResolved = critiqueUncoveredRaw.map((k) => ({ k, ...resolveKey(k, allKeys) }))
   const critiqueUncovered = critiqueResolved.map((r) => r.key).filter(Boolean)
@@ -1784,7 +1784,7 @@ function* run(rawInput, io = {}) {
   // attributed to one row. A critique key that resolves to nothing is an adversarial finding this run is about to
   // lose, so it is said out loud rather than swallowed by the filter.
   //
-  // PR #147 review — SPLIT BY REASON, and carried on the result. AMBIGUOUS (several inventory rows end in
+  // Unresolved keys are SPLIT BY REASON, and carried on the result. AMBIGUOUS (several inventory rows end in
   // `::<key>`) is a real row the critique could not be pinned to; UNKNOWN (none does) names no row on this
   // surface, so it is a stale, copied or invented key. The remedies are opposite — re-key the answer versus
   // discard it — and merged they were indistinguishable both in the log and to a consumer. `resolveKey` is the
@@ -1879,7 +1879,7 @@ function* run(rawInput, io = {}) {
     // unchecked (not verified-empty), and coverage.complete is arithmetic-only — no pass verified that
     // cited cards actually describe their rows.
     critiqueRan,
-    // PR #147 review — the critique keys this run could NOT place, on the result and not only in the log. Same
+    // the critique keys this run could NOT place, on the result and not only in the log. Same
     // class of claim as `critiqueRan` above: a machine consumer (the engine re-reads this as `behaviourIndex`,
     // and `cli.mjs status` serialises it as the state document) has to know the adversarial pass produced a
     // finding the run could not attribute, and stderr does not reach it.
@@ -1904,7 +1904,7 @@ function* run(rawInput, io = {}) {
     // What the caller does next: merge indexPath into the manifest as `behaviourIndex` and re-run `--plan --out`.
     // The plan's own worklist headers then report the same coverage from the engine's side.
     //
-    // PR #147 review — CONDITIONAL on `mergeOk`. `reportPath`/`indexPath` above fall back to their default names so
+    // CONDITIONAL on `mergeOk`. `reportPath`/`indexPath` above fall back to their default names so
     // a caller that checks `complete` still learns where the deliverable would have gone; `next` was unconditional,
     // so a run whose Merge died twice told the operator to fold an index file that was never written.
     next: mergeOk

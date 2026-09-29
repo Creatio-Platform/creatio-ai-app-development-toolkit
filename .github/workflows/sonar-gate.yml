@@ -13,8 +13,9 @@ name: Sonar gate
 # anonymously, so this also works on pull requests from forks.
 
 on:
+  # No `branches:` filter on purpose: with `[main]` a PR stacked on a feature base got no
+  # new-issues gate at all. The PR is looked up by number and head SHA, so any base works.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read

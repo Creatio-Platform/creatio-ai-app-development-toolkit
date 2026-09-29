@@ -291,7 +291,7 @@ class UpdateAgentsTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_updates_exactly_the_targets_handed(self):
-        # update_agents no longer filters: the caller scopes the list. Passing a
+        # update_agents does not filter: the caller scopes the list. Passing a
         # single id must update only that id (one agent × two native steps).
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
@@ -375,7 +375,7 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
         # The identity the provisioner reads comes from the GENERATED manifest, not from the
-        # script text (PR #147 review) - a cached tree without it is a separate, tested failure.
+        # script text - a cached tree without it is a separate, tested failure.
         manifest = root / "skills" / "_workflow-core" / "workflows.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(

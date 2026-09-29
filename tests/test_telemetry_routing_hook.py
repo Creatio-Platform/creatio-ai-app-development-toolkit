@@ -206,7 +206,7 @@ def settled_payloads(capture: "Path", count: int, event_name: "str | None" = Non
 def outcome_files(session: str, kind: str) -> "list[Path]":
     """Every answer file for this session and kind.
 
-    One file per DISPATCH, not per kind: a second dispatch used to truncate the file a still-running
+    One file per DISPATCH, not per kind: a second dispatch would truncate the file a still-running
     child was writing to, so the files now carry a nonce and the tests have to look them all up.
     """
     state = Path(_TMP, "caadt-telemetry-routing")
@@ -216,15 +216,26 @@ def outcome_files(session: str, kind: str) -> "list[Path]":
 
 
 def await_outcome(session: str, kind: str, timeout: float = 20.0) -> str:
-    """Wait until clio's answer for the most recent dispatch has been written, and return it."""
+    """Wait until clio's answer for the most recent dispatch has been written, and return it.
+
+    EVERY answer file has to be non-empty, not just one of them. `dispatch` creates the file for a
+    dispatch before the hook returns and the child fills it afterwards, so a caller in a loop that
+    stopped at the first non-empty file was reading the PREVIOUS call's answer and continuing while
+    this call's refusal was still in flight. The hook then saw one attempt slot fewer than the test
+    counted, which on a slow runner slid the exhaustion diagnostic a call later than asserted.
+    """
     deadline = time.monotonic() + timeout
+    latest = ""
     while time.monotonic() < deadline:
-        for answer in outcome_files(session, kind):
-            text = answer.read_text(encoding="utf-8")
-            if text.strip():
-                return text
+        answers = [(a, a.read_text(encoding="utf-8")) for a in outcome_files(session, kind)]
+        settled = [(a, text) for a, text in answers if text.strip()]
+        if settled:
+            latest = max(settled, key=lambda pair: pair[0].stat().st_mtime)[1]
+        if answers and len(settled) == len(answers):
+            return latest
         time.sleep(0.05)
-    return ""
+    # Timed out with a dispatch still unanswered: the newest answer that did arrive, as before.
+    return latest
 
 
 def age_out_outcome(session: str, kind: str) -> None:
@@ -475,7 +486,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
     def test_names_the_installed_plugin_version_and_never_a_placeholder(self):
         # The routing text tells the agent to send no plugin_version at all rather than the
-        # placeholder `unknown` — and the hook used to default to exactly that placeholder, so it
+        # placeholder `unknown` — and a hook defaulting to exactly that placeholder would, so it
         # broke its own rule and, before clio made the field optional, was rejected outright. The
         # version now comes from the manifest beside this hook, which IS the installed version.
         manifest = json.loads(
@@ -599,7 +610,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertNotIn("<", floor["model"])
 
     def test_a_refused_floor_emit_is_retried_on_the_next_clio_call(self):
-        # The claim is taken before the emit, so a refused send used to spend the one marker that
+        # The claim is taken before the emit, so a refused send must not spend the one marker that
         # allows the floor and lose it permanently — the same failure mode the consent check above
         # already guards against. The refusal is now noticed on a later call rather than awaited,
         # because the emit is fire-and-forget: see `dispatch` in the hook.
@@ -685,8 +696,8 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
     def test_a_persistently_refused_floor_says_so_once_and_not_once_per_call(self):
         # `noteFloorExhausted` is the only local signal that an install's floor is dead: a clio that
         # refuses `workflow_started` on every attempt leaves the session with no telemetry and, without
-        # that line, nothing anywhere saying anything was ever tried. Raised in review of PR #96 as
-        # untested, and a regression in either half of it is silent. The diagnostic has to appear once
+        # that line, nothing anywhere saying anything was ever tried. Both halves of it fail
+        # silently when untested. The diagnostic has to appear once
         # the attempt slots are spent, and its `claimOnce` guard has to hold it to one line per session
         # rather than repeating on every later clio call for the life of a long session.
         session = str(uuid.uuid4())
@@ -918,7 +929,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(len(readings), 5, "bounded by USAGE_ATTEMPT_LIMIT, and not lower")
 
     def test_an_executor_call_with_no_readable_command_counts_as_a_write(self):
-        # `clio-run` alone is read/write-ambiguous, so an unreadable command used to be classified as
+        # `clio-run` alone is read/write-ambiguous, so an unreadable command must not be classified as
         # a read — losing the first-write reminder on what may well have been a mutation. The two
         # ways of being wrong are not equal: guessing write costs at most one extra reminder in a turn
         # already bounded to one.
@@ -1006,7 +1017,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertIn("workflow_started", result.stdout)
 
     def test_a_refusal_that_echoes_the_success_word_is_still_a_refusal(self):
-        # The outcome used to be decided by searching the raw stdout for `"recorded"`. A rejection
+        # The outcome must not be decided by searching the raw stdout for `"recorded"`. A rejection
         # whose message happens to contain it — "already recorded for this session" — would then be
         # read as success, and since this outcome decides whether the floor claim is kept forever or
         # released for retry, a false success permanently drops the one event this file guarantees.
@@ -1028,11 +1039,11 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
     def test_works_from_a_completely_fresh_state_directory(self):
-        # Regression: `markerPath` was made side-effect-free so the always-firing events touch
-        # nothing, but `markTouchedClio` — the FIRST write of a session — then had no directory to
-        # write into. The marker silently failed to appear, so Stop stayed silent for the whole
-        # session and no usage reading was ever sent. The suite could not see it because every other
-        # test shares one state directory that an earlier test had already created.
+        # Guard: `markerPath` is side-effect-free so the always-firing events touch
+        # nothing, which leaves `markTouchedClio` — the FIRST write of a session — with no directory
+        # to write into unless it creates one. Without that the marker never appears, Stop stays silent
+        # for the whole session and no usage reading is sent. Every other test shares one state
+        # directory that an earlier test already created, so only a fresh directory exercises this.
         fresh = tempfile.mkdtemp(prefix="caadt-fresh-flow-", dir=_TMP)
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
@@ -1099,7 +1110,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # optimisation risky at all, which is why the offset is trusted only while a fingerprint of
         # the file's head still matches.
         #
-        # This test used to demand the total RESTART from zero on a rewrite, which is what the code
+        # Demanding the total RESTART from zero on a rewrite is what the code
         # did and is the more serious of the two bugs here: `session_usage` is a monotonic series, so
         # a reading that goes backwards is suppressed by the growth gate — not for one turn, but for
         # the rest of the session. The series went quiet rather than wrong, which is why neither this
@@ -1323,7 +1334,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(len(floor), 1, "a pending answer is not a refusal")
 
     def test_no_second_reading_while_the_first_answer_is_outstanding(self):
-        # Same for the series, and this one used to be guarded by comparing transcript SIZES — which
+        # Same for the series, and guarding this one by comparing transcript SIZES — which
         # differ on nearly every turn, so the guard was decorative and overlapping dispatches were the
         # norm. Overlap is what let one child truncate another's files.
         session = str(uuid.uuid4())
@@ -1750,7 +1761,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # resolves, specifically so the nonce-keyed request/outcome pair is reclaimed promptly rather
         # than left for the weekly sweep. Every other test in this file only asserts on the payload
         # sent and the 'usage' marker's `output` field — nothing here has asserted the files
-        # themselves are actually gone, so a regression that silently dropped or mis-keyed the
+        # themselves are actually gone, so silently dropping or mis-keying the
         # removeDispatchFiles() call would go unnoticed.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
@@ -1811,7 +1822,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
     def test_floor_is_still_emitted_when_consent_arrives_later_in_the_session(self):
-        # The floor claim used to be taken before the consent check, so a first clio call made while
+        # The floor claim must not be taken before the consent check, or a first clio call made while
         # consent was still `unknown` — the ordinary bootstrap case — burned the one-shot marker and
         # the "guaranteed" floor event was lost for the whole session, even after the developer said
         # yes moments later.
@@ -2132,9 +2143,9 @@ class TelemetryStateDirSecurityTests(unittest.TestCase):
 
 
 class ConsentTelemetryHomeFallbackTests(unittest.TestCase):
-    """telemetryHome()'s no-override fallback, per platform — regression coverage for a bug
-    raised in review of PR #96: with neither CLIO_TELEMETRY_HOME nor CLIO_HOME set, the fallback
-    used to join clio's storage suffix onto a Windows-shaped `.../AppData/Local` path even on
+    """telemetryHome()'s no-override fallback, per platform. With neither CLIO_TELEMETRY_HOME
+    nor CLIO_HOME set, the fallback must not join clio's storage suffix onto a
+    Windows-shaped `.../AppData/Local` path on
     macOS/Linux, where clio's own ClioRuntimePaths.Home resolves to `~/creatio/clio` instead —
     silently and permanently making consentGranted() return false there. `process.platform` is
     overridden inside the probe script (Node allows redefining it) so both branches are exercised
@@ -2259,7 +2270,7 @@ class TelemetryDispatchRealClioResponseFixtureTests(unittest.TestCase):
     an id:1 `initialize` response in the same stream, was never actually exercised end-to-end
     against bytes clio itself produced. There is currently no way to also capture a real
     `'recorded'` response the same way, since doing that needs the not-yet-released vocabulary
-    support tracked by clio#1081 / ENG-92551 — that half stays covered only by the hand-built
+    support tracked by clio#1081 — that half stays covered only by the hand-built
     stubs above, same as before.
     """
 
@@ -2320,7 +2331,7 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
     tests check that a live clio actually accepts the new flow-agnostic vocabulary
     (`workflow_started`, `session_usage`) into its allow-list — something no stub can answer, and
     something today's released clio does not yet do (see docs/telemetry-transport-decision.md and
-    clio#1081/ENG-92551). What is NOT gated behind a real binary, and runs unconditionally in
+    clio#1081). What is NOT gated behind a real binary, and runs unconditionally in
     every default CI run via `TelemetryRoutingHookBehaviorTests` above, is the exactly-once
     claim/release and retry-on-refusal state machine this vocabulary rides on: see in particular
     `test_a_clio_that_never_records_stops_being_retried` (retry-on-refusal, bounded by

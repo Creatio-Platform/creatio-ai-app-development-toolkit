@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Compensating control (Minor 2, PR #50): the vendored acorn parser is excluded from SonarCloud
+// Compensating control: the vendored acorn parser is excluded from SonarCloud
 // (Security Hotspots) and is NOT tracked in package.json/lockfile, so it is outside SCA tooling
 // (Dependabot) too. verify-vendor.mjs pins its SHA-256 — that guards silent DRIFT, but not a CVE
 // disclosed against the pinned VERSION. This queries OSV (https://osv.dev) for each pinned vendored

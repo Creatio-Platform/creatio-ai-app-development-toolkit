@@ -5,8 +5,9 @@ name: Sonar config check
 # Window-safe: globs whose base dir does not exist yet are skipped (see scripts/check-sonar-exclusions.mjs).
 
 on:
+  # No `branches:` filter on purpose: with `[main]` a PR stacked on a feature base skipped
+  # this check, so a broken exclusion glob surfaced only once the stack reached main.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
