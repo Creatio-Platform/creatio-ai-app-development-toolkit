@@ -249,6 +249,11 @@ function control(dataType, contentType, ref) {
 // purpose, but the label fell through to plain `Text`, so the Layout table in `plan.md` — the verbatim operator
 // deliverable — rendered an encrypted or hashed column indistinguishably from any other text column. The Type cell
 // must never be able to read `Text` for one of these.
+// The Type labels of a hashed / encrypted column: the plan's "(not migrated)" verdict, read by the field's
+// deliverable status too.
+const HASHED_TYPE_LABEL = "Hashed text (not migrated)";
+const ENCRYPTED_TYPE_LABEL = "Encrypted text (not migrated)";
+export const SECRET_TYPE_LABELS = new Set([HASHED_TYPE_LABEL, ENCRYPTED_TYPE_LABEL]);
 const TYPE_LABEL = {
   phone: "Phone",
   email: "Email",
@@ -256,8 +261,8 @@ const TYPE_LABEL = {
   boolean: "Boolean",
   datetime: "Date/time",
   date: "Date",
-  hashtext: "Hashed text (not migrated)",
-  securetext: "Encrypted text (not migrated)",
+  hashtext: HASHED_TYPE_LABEL,
+  securetext: ENCRYPTED_TYPE_LABEL,
   integer: "Integer",
   decimal: "Decimal",
   float: "Decimal",

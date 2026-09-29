@@ -1,8 +1,10 @@
 # Building a page
 
-Handed, with `./references/build-task-execution.md` and
-`./references/classic-to-freedom-mapping.md`, to every page build and repair task. The five rules in
-`build-task-execution.md` override every convenience in this file.
+Handed, with `./references/build-task-execution.md`, to every page build and repair task, which is
+also pointed at `./references/classic-to-freedom-mapping.md`. The mapping is a reference: look up by
+heading (`grep -n '^#'` lists them) and read every section that applies to your page — a pointer
+below names the section most tasks need, not the only one — but it is never read whole. The five
+rules in `build-task-execution.md` override every convenience in this file.
 
 ## Everything else about building a page
 
@@ -32,7 +34,7 @@ every task that touches a page's layout, and the clio-safety rules apply to ever
      (`crt.ApprovalList`, brings its own approve/reject actions). Add BOTH — list-only is
      incomplete. "The child has no edit page / it's view-only" does not reclassify a
      `standardFeatures` entry into a list. Confirm the components on-stand (`get-component-info`)
-     before building. → the mapping reference's build recipes.
+     before building. → the mapping reference → *Build recipes for the components agents get wrong*.
    - **Card widgets (`card-widget` decisions) are converted by the migrator, never hand-built.**
      Each `needsDecision` of `kind:"card-widget"` (also listed in `changeSet.cardWidgets[]`) carries
      `widgetKey`, `recordId`, and a target `region`. **Group the widgets by `recordId`** and make
@@ -54,9 +56,9 @@ every task that touches a page's layout, and the clio-safety rules apply to ever
      **`cardWidget:<recordId>:<widgetKey>`** (`true` placed / `false` blocked; keyed by BOTH
      coordinates so the same `widgetKey` under two records can't collide) in `built.json` so
      `--verify` gates it. If the migrator or `run-process` is not available on the stand, the whole
-     `card-widget` set stays `TODO`/`BLOCKED`. **Full result-envelope contract + field breakdown →
-     the mapping reference's Card widgets recipe** (`references/classic-to-freedom-mapping.md`) —
-     the single canonical description.
+     `card-widget` set stays `TODO`/`BLOCKED`. **Full result-envelope contract + field breakdown:**
+     the mapping reference → *Card widgets* (`references/classic-to-freedom-mapping.md`) — the
+     single canonical description.
    - Resolve any `detail-unresolved` (auto-named `SchemaNDetail`) by fetching the detail schema
      first. For every `detail-editpage` flag, confirm a Freedom form exists for the child entity or
      migrate it as a follow-on page.
@@ -185,8 +187,7 @@ Real failures from prior builds, each enforced by a gate or a reference — a me
 rules. The plan-phase half stays in `SKILL.md`.
 
 - **Feature downgraded to a list.** Rebuilding a Visa (Approvals) as a plain `ApplicantVisa`
-  DataGrid, or Activities/Emails as a `crt.Timeline`. → the mapping reference's standard-features
-  table.
+  DataGrid, or Activities/Emails as a `crt.Timeline`. → the mapping reference → *Standard features, widgets & actions*.
 - **DCM widgets mis-placed / mis-built — and the wrong form template.** When a DCM case is present
   the form page needs a stage **progress bar**, so PREFER building the form on
   **`PageWithTabsAndProgressBarTemplate`** (it ships the bar placed + the top profile island) and
@@ -197,22 +198,22 @@ rules. The plan-phase half stays in `SKILL.md`.
   `MainContainer` (top of content, below the header) — NOT `MainHeader`, not a bare child of `Main`.
   **Next steps** is a tab BESIDE Feed/Attachments, built like them (caption via `#ResourceString#`,
   icon = `flag-icon`, header in the tab's `tools` slot, widget in `items`) — not a bare widget and
-  not an ExpansionPanel. Both auto-populate from the case; don't hand-author stages/steps. → the
-  mapping reference's build recipes.
+  not an ExpansionPanel. Both auto-populate from the case; don't hand-author stages/steps. →
+  the mapping reference → *Build recipes for the components agents get wrong*.
 - **Added container doesn't match the template's.** An island/container you ADD (e.g. a second
   profile island) must copy the template island's `color`/`padding`/`borderRadius`/card settings —
-  not a bare, differently-styled box. → the mapping reference's build recipes.
+  not a bare, differently-styled box. → the mapping reference → *Embedded profile cards*.
 - **Run-process button mis-placed / missing on a surface.** Read the process BINDING
   (`ProcessInModules` by SysModule): it may be bound to the **list**, the **form/record card**, or
   **both** — add it as a menu item in the existing `Actions` button on EACH bound surface (list →
   run for selected rows; form → run for the current record via `$Id`), labelled with the process
-  **Caption** (not its code). Never a standalone button; don't assume list-only or form-only. → the
-  mapping reference's build recipes.
+  **Caption** (not its code). Never a standalone button; don't assume list-only or form-only. →
+  the mapping reference → *Build recipes for the components agents get wrong*.
 - **Plan layout simplified at build.** Collapsing the plan's profile islands (or groups/tabs) into
   one "for simplicity" is an unannounced plan deviation — build EVERY island the plan shows (each is
   its own `crt.GridContainer` in the side profile) and every group/tab. A genuinely better
-  simplification is a proposal to raise, not a change to apply silently. → the mapping reference's
-  build recipes.
+  simplification is a proposal to raise, not a change to apply silently. →
+  the mapping reference → *Embedded profile cards*.
 - **UI-guidelines gate deferred or run shallow.** Two failure shapes, both = page NOT done: (1)
   marking the gate `PENDING` and reporting the page done anyway; (2) running `creatio-ui-guidelines`
   only as a surface review (screenshot + schema) and skipping the
@@ -225,13 +226,13 @@ rules. The plan-phase half stays in `SKILL.md`.
   **Communication-options** component (`crt.CommunicationOptions`, the compositeOnly component the
   "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY
   name, not a component type), not a plain Expanded-list — if its component/`CrtCustomer360App`
-  package is missing on-stand, RAISE it, don't silently build a grid. → the mapping reference's
-  standard-features table.
+  package is missing on-stand, RAISE it, don't silently build a grid. →
+  the mapping reference → *Standard features, widgets & actions*.
 - **Auto-filled companion fields dropped → lone-field island.** An island/group field whose column
   is NOT on the entity (e.g. `Department`/`Job title` loaded from the selected `Request` by an
   `on<Lookup>Change`/`set<Lookup>Info` handler) must be built as a **read-only field on a view-model
   attribute** + the on-change handler — not dropped because it has no real column. Dropping them is
-  what leaves a one-field island. → the mapping reference's build recipes.
+  what leaves a one-field island. → the mapping reference → *Embedded profile cards*.
 - **`success` mistaken for "works".** clio returns `success` for bodies that fail at runtime —
   render in the browser. → step 7 / step 8.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
@@ -246,7 +247,7 @@ rules. The plan-phase half stays in `SKILL.md`.
   (the folded form page has neither), so build them on the Freedom LIST page: the quick filters as
   the list's filter controls, the section actions as list-page actions. A list page that migrated
   columns but dropped the filter bar / its `createRegistry`-style actions is NOT done. → step 4.2
-  (`section`) / the mapping reference.
+  (`section`) / the mapping reference → *Standard features, widgets & actions*.
 - **A card's condition replaced by a "stronger equivalent", and the row still marked ported.** One
   of three conjunctive gates (the new-record check) was swapped for a guard the agent judged
   strictly stronger. It inverted the card's negative AC — editing any pre-existing record now
@@ -262,7 +263,8 @@ rules. The plan-phase half stays in `SKILL.md`.
   when these columns change" wiring → an on-change handler) and for a **virtual** attribute with no
   entity column behind it (page UI state — an editability/mode flag, a collection backing a menu —
   which no field insert carries). All three are now members with their own decisions; none of them
-  may be reported as absent. → step 4.2 / the mapping reference.
+  may be reported as absent. → step 4.2 /
+  the mapping reference → *Distinguish declarative business rules from imperative logic*.
 - **Detail add flow ≠ plain related list.** Many details are NOT a default add-new list: they ADD
   via a **lookup** (pick existing), call a backend **service** to link/insert, and/or are an
   **inline-editable grid**. The engine detects this from the detail body

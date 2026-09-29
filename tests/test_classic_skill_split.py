@@ -66,15 +66,19 @@ def section(text, start, end):
     return text[begin:stop]
 
 
-def brief_table(text):
-    """Rows of the task-kind table under step 7.3, as (kind cell, brief paths)."""
+def brief_table(text, column=2):
+    """Rows of the task-kind table under step 7.3, as (kind cell, reference paths).
+
+    Column 2 holds the briefs a task kind reads whole; column 3 the references it
+    looks up by heading.
+    """
     step = section(text, "**7.3 What each sub-agent is handed.**", "**7.4 ")
     rows = []
     for line in step.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if not line.lstrip().startswith("|") or len(cells) < 3 or set(cells[0]) <= set("-: "):
+        if not line.lstrip().startswith("|") or len(cells) <= column or set(cells[0]) <= set("-: "):
             continue
-        paths = re.findall(r"`\./references/([A-Za-z0-9._-]+\.md)`", cells[-1])
+        paths = re.findall(r"`\./references/([A-Za-z0-9._-]+\.md)`", cells[column])
         if paths:
             rows.append((cells[0], paths))
     return rows
@@ -133,7 +137,7 @@ class BriefRoutingTableTests(unittest.TestCase):
     def test_every_brief_the_table_names_exists(self):
         rows = brief_table(read(ORCHESTRATE))
         self.assertGreaterEqual(len(rows), 6, f"the 7.3 task-kind table has {len(rows)} rows")
-        for kind, paths in rows:
+        for kind, paths in rows + brief_table(read(ORCHESTRATE), column=3):
             for name in paths:
                 self.assertTrue((REFERENCES / name).is_file(), f"{kind}: {name} does not exist")
 
@@ -162,11 +166,12 @@ class BriefRoutingTableTests(unittest.TestCase):
         self.assertIn(f"`kind: {repair}`", cells, "the repair row does not use the engine's repair kind")
 
     def test_the_mapping_reference_goes_to_every_page_builder(self):
-        rows = brief_table(read(ORCHESTRATE))
-        page_rows = [paths for kind, paths in rows if "build-page.md" in paths]
+        text = read(ORCHESTRATE)
+        references = dict(brief_table(text, column=3))
+        page_rows = [(kind, paths) for kind, paths in brief_table(text) if "build-page.md" in paths]
         self.assertTrue(page_rows, "no task kind is handed build-page.md")
-        for paths in page_rows:
-            self.assertIn("classic-to-freedom-mapping.md", paths)
+        for kind, paths in page_rows:
+            self.assertIn("classic-to-freedom-mapping.md", references.get(kind, []), kind)
             self.assertIn("build-task-execution.md", paths)
 
 
