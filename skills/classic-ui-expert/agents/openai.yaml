@@ -1,0 +1,5 @@
+---
+display_name: "Classic UI Expert"
+short_description: "Describe the business logic customized on a Creatio Classic UI section"
+default_prompt: "Use $classic-ui-expert to enumerate and describe every customization on this Classic UI section — behaviour cards with acceptance criteria, proven from the live stand's source."
+---

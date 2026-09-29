@@ -12,10 +12,55 @@ on:
         required: false
         default: false
         type: boolean
+  # A merged release preparation PR releases itself: it is the only change that
+  # moves the canonical manifest version, and the `detect` job below releases
+  # only a version that has no tag yet.
+  push:
+    branches: [main]
+    paths: ['.claude-plugin/plugin.json']
+
+# One release at a time; a second run waits instead of racing the first for
+# the tag and the `release` branch.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  detect:
+    name: Detect a version to release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Read the canonical manifest version and check its tag
+        id: version
+        # A manual run always proceeds and names its version itself. A push
+        # proceeds only when the manifest version has no tag yet, so a manifest
+        # edit that does not change the version releases nothing.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)
+          echo "version=$PJ_VERSION" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$PJ_VERSION" >/dev/null 2>&1; then
+            echo "Tag $PJ_VERSION already exists; nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
     name: Release Gate + execute
+    needs: detect
+    if: ${{ needs.detect.outputs.should_release == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,7 +69,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_VERSION: ${{ inputs.version || needs.detect.outputs.version }}
     steps:
       # Mint a short-lived token for the dedicated release-bot GitHub App.
       # This is the ONLY identity allowed to update the protected `release`
@@ -40,15 +85,18 @@ jobs:
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          # A push releases exactly the merged commit; a manual run releases the
+          # head of `main`. The `release` branch is later moved to $GITHUB_SHA,
+          # so the tag and the branch point at the same commit either way.
+          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
           fetch-depth: 0
           # Persist the app token so `git push` (tag + release branch) below
           # authenticates as the release-bot App, which holds the ruleset bypass.
           token: ${{ steps.app-token.outputs.token }}
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
@@ -198,7 +246,7 @@ jobs:
         # Mints a signed SLSA provenance attestation tying the zip to this
         # workflow run/commit. Verifiable with:
         #   gh attestation verify <zip> --repo <owner>/<repo>
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: /tmp/creatio-ai-app-development-toolkit-${{ env.RELEASE_VERSION }}.zip
 
