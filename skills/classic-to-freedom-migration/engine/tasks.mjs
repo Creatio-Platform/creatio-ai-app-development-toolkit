@@ -1694,14 +1694,20 @@ export const notBuiltOpenItems = (tasks) =>
 // The open rows a person's answer is what they wait on: recorded `not-built — needs-decision` and not closed by
 // a `--decide` entry. No repair round is written for them.
 // A `blocked` task is read too: the question that raised the halt is still the thing it waits on.
+// A task whose open questions a person is asked about: closed or halted, never one a builder may still be writing.
+export const awaitsAnswer = (t) => !t.unread && (SETTLED.has(t.status) || t.status === S_BLOCKED);
+
+// The ONE predicate of an open question: a row recorded `not-built — needs-decision`, not built by a repair round,
+// with no closing `--decide` entry. Callers add their own task-status gate.
+const isOpenDecisionRow = (task, row, n) => row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION
+  && !settledByRound(row) && !hasClosingDecision(task, n);
+
 export function decisionWaitingRows(tasks) {
   const out = [];
   for (const t of tasks || []) {
-    if (t.unread || !(SETTLED.has(t.status) || t.status === S_BLOCKED)) continue;
+    if (!awaitsAnswer(t)) continue;
     (t.rows || []).forEach((r, i) => {
-      if (r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
-      if (settledByRound(r) || hasClosingDecision(t, i + 1)) return;
-      out.push({ task: t, row: r, n: i + 1 });
+      if (isOpenDecisionRow(t, r, i + 1)) out.push({ task: t, row: r, n: i + 1 });
     });
   }
   return out;
@@ -3091,8 +3097,7 @@ function openDecisionSources(tasks) {
   const open = new Map();
   for (const t of tasks) {
     (t.rows || []).forEach((r, i) => {
-      if (!r.subject || r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
-      if (settledByRound(r) || hasClosingDecision(t, i + 1)) return;
+      if (!r.subject || !isOpenDecisionRow(t, r, i + 1)) return;
       if (!open.has(r.subject)) open.set(r.subject, []);
       open.get(r.subject).push({ task: t, n: i + 1, label: r.label });
     });
@@ -3409,14 +3414,15 @@ export function readTaskDir(dir) {
 // no dispatch record is exactly what this gate exists to catch — one row's decision must not clear the
 // failure the built rows raised. And a map entry only counts when the row actually holds the decision it
 // claims (`wont-do` / `postponed`): a stale entry left after an edit cannot earn the exemption on its own.
+// A plan-boundary row closes on its pre-fill, read back from the file or not yet.
+const isPlanBoundaryRow = (r) => !!r.na && (!r.outcomeKind || r.outcomeKind === O_NOT_APPLICABLE);
 function isDecidedDescope(t) {
   const rows = t.rows || [];
   if (!rows.length) return false;
   const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
   return rows.every((r, i) => {
     if (r.outcomeKind === O_BUILT) return false;
-    // A plan-boundary row closes on its pre-fill, read back from the file or not yet.
-    if (r.na && (!r.outcomeKind || r.outcomeKind === O_NOT_APPLICABLE)) return true;
+    if (isPlanBoundaryRow(r)) return true;
     return (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && closingEntry(map, i + 1);
   });
 }
@@ -4014,10 +4020,10 @@ export function applyDecision(dir, result, opts = {}) {
 
 // `--decide D<N> --build`: the answer to a needs-decision row is "build it". The row is re-opened for a builder:
 // its Outcome is cleared, the task's `decisions:` names who decided, and the task's status is recomputed off the
-// cells as a freshly re-opened task. Only a row waiting on a decision is re-opened; every other row addressed is
-// skipped with its reason.
+// cells as a freshly re-opened task. Only a row waiting on a decision, in a task that is closed or blocked, is
+// re-opened; every other row addressed is skipped with its reason.
 function buildSkipReason(row, task, n) {
-  if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) return "plan-boundary row (engine-owned Outcome)";
+  if (isPlanBoundaryRow(row)) return "plan-boundary row (engine-owned Outcome)";
   if (row.outcomeKind === O_BUILT) return "already built — there is nothing to reopen";
   if (row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED) {
     const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
@@ -4026,7 +4032,10 @@ function buildSkipReason(row, task, n) {
     if (isStatusDecision(entry)) return `closed by its \`manifest.deliverableStatus\` entry${decidedBy} — set that entry to \`build\` (or remove it) and re-run \`--tasks\``;
     return `already decided${decidedBy} — \`--revoke\` that decision first`;
   }
-  if (row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION) return null;
+  if (row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION) {
+    if (awaitsAnswer(task)) return null;
+    return `its task is ${task.status || "unknown"}, not closed or blocked — a builder may still be writing its page, and re-opening the row would let a second agent be dispatched onto it; answer once the task closes`;
+  }
   const cause = row.outcomeCause ? ` — ${row.outcomeCause}` : "";
   const recorded = row.outcomeKind ? `\`${row.outcomeKind}${cause}\`` : "no Outcome";
   return `recorded ${recorded}, not a \`${CAUSE_NEEDS_DECISION}\` row — a build-it answer re-opens only a row waiting on a decision`;

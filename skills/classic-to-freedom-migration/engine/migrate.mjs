@@ -3798,8 +3798,10 @@ function runDecideMode(result, dir, opts) {
   const migrationDir = path.join(dir, "..");
   const res = applyDecision(dir, result, opts);
   if (res.refused) {
+    // The rows skipped for a reason are named too: a refusal that says only that nothing was touched hides why.
+    const skippedLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
     return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems,
-      decideRefusalHelp(res, opts, migrationDir)), ok: false };
+      [...decideRefusalHelp(res, opts, migrationDir), ...skippedLines]), ok: false };
   }
   const lines = decideTouchedLines(res, opts);
   // A cell the in-place writer could not place is reported as a FAILURE, not folded into the success line. Its
@@ -3819,20 +3821,25 @@ function runRevokeMode(result, dir, opts) {
   if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
   // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
-  const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
-  // No cell written under the decision is a no-op. Every such cell skipped leaves the decision in force: a failure.
+  // A withdrawn build-it entry left the folder as asked; a skipped cell is a decision still in force. They are
+  // reported apart, and only the skipped cells decide the exit status.
+  const skipped = res.skipped || [];
+  const withdrawnLines = skipped.filter((s) => s.withdrawn).map((s) => `  · withdrawn ${s.task.file} row ${s.n}: ${s.why}`);
+  const inForceLines = skipped.filter((s) => !s.withdrawn).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
   if (!res.cleared.length) {
-    if (!skipLines.length) return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
-    // A withdrawn build-it entry left the folder as asked, so it is not a failure.
-    if (res.skipped.every((s) => s.withdrawn)) {
-      return { note: [`migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}. The build-it entries listed below were withdrawn.`, ...skipLines].join("\n") + "\n", ok: true };
+    if (!withdrawnLines.length && !inForceLines.length) return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
+    if (!inForceLines.length) {
+      return { note: [`migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}. The build-it entries listed below were withdrawn.`, ...withdrawnLines].join("\n") + "\n", ok: true };
     }
+    // No cell written under the decision was cleared: every one that exists was skipped and stays in force.
     const head = `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`;
-    return { note: [head, ...skipLines].join("\n") + "\n", ok: false };
+    const lines = [head, ...inForceLines];
+    if (withdrawnLines.length) lines.push("", `The build-it entries under ${opts.decision} were withdrawn:`, ...withdrawnLines);
+    return { note: lines.join("\n") + "\n", ok: false };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
-  lines.push(...skipLines, "", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
+  lines.push(...withdrawnLines, ...inForceLines, "", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 
