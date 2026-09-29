@@ -1969,8 +1969,7 @@ const brief = (s, n = 90) => { const t = String(s || "").replace(/\s+/g, " ").tr
 // No cause at all is the weaker claim of the two: nobody said anything about the row either way.
 function whyNotBuilt(cause) {
   if (!cause) return "unaccounted — the task closed without recording this row";
-  // BOTH causes are routed — `notBuiltOpenRows` filters on neither. What differs is what CLOSES the row: a re-run
-  // for `blocked`, a person for `needs-decision`. Neither says the row cannot be scheduled.
+  // Only `blocked` is routed. A `needs-decision` row waits for `--decide D<N> [--build|--wont-do|--postponed]`.
   const tail = RETRYABLE_CAUSES.has(cause) ? " (a re-run may clear it)" : " (a decision settles it, not a re-run: `--decide D<N> [--build|--wont-do|--postponed]`)";
   return `${cause}${tail}`;
 }
@@ -3078,12 +3077,6 @@ export function startBlocker(task, tasks, running = {}, decisions = decisionInde
 
 // A row still to build: not a plan boundary, and its outcome blank or `not-built`.
 const isOpenRow = (r) => !r.na && (!r.outcomeKind || r.outcomeKind === O_NOT_BUILT);
-
-// Whether row `n` (1-based) of a task has a `--decide` entry.
-function hasDecision(task, n) {
-  const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
-  return !!map?.has(n);
-}
 
 // A `--decide` entry that closes the row. A build-it entry does not: its row is open work again, and if the
 // builder raises it as needs-decision once more it is an open question again.

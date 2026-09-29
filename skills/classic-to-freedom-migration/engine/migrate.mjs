@@ -3541,7 +3541,7 @@ function buildTouchedLines(res, opts) {
   const lines = [`migrate.mjs: reopened ${res.touched.length} row(s) to build under ${opts.decision} — ${decideTargetLabel(opts)}.`,
     ...res.touched.map(decidedRowLine),
     ...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`)];
-  if (res.clearedHalts?.length) lines.push(`  · retired the \`declared: blocked\` of ${res.clearedHalts.join(", ")} — the halt was this question.`);
+  if (res.clearedHalts?.length) lines.push(`  · retired the \`declared: blocked\` of ${res.clearedHalts.join(", ")} — no row of it is recorded blocked, so the halt is cleared; it may have named another cause, check the task's \`## Notes\`.`);
   if (res.keptHalts?.length) lines.push(`  · kept the \`declared: blocked\` of ${res.keptHalts.join(", ")} — another row is still recorded blocked, so the task stays blocked.`);
   for (const w of res.clearedWarnings || []) lines.push(`  · cleared ${w} — a re-opened task is measured against its current rows.`);
   lines.push("", `Each task without a kept halt is \`todo\` again: \`${TASKS_FLAG} <dir> ${NEXT_FLAG}\` offers it, and \`${START_FLAG}\` dispatches it. No task file was edited.`);

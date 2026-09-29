@@ -3858,8 +3858,8 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
   check("the progress block — the one surface a watching user reads while the run happens — carries the partial count AND names each unbuilt row, because that is the boundary the two lost filters died at",
     () => {
       const prog = renderProgress(second, dir);
-      // …and says what the row is waiting on WITHOUT claiming nothing can be scheduled for it: `notBuiltOpenRows`
-      // filters on no cause, so `--route` opens a round over a `needs-decision` row like any other.
+      // …and says what the row is waiting on: only `blocked` is routed, a `needs-decision` row waits for
+      // `--decide D<N> [--build|--wont-do|--postponed]`.
       return /⚠ partial 1/.test(prog) && /⚠ NOT BUILT — 1 deliverable/.test(prog)
         && /a decision settles it, not a re-run: `--decide D<N> \[--build\|--wont-do\|--postponed\]`/.test(prog)
         && !/not re-dispatched/.test(prog);
@@ -4567,6 +4567,29 @@ check("a row the cap has EXHAUSTED fails the gate instead of passing as schedule
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
     return { parent: backAt(s, tgt.id).status, residuals: backAt(s, tgt.id).rows.map((r) => r.residual),
       unrouted: notBuiltOpenItems(s.tasks).filter((it) => !it.residual).length }; });
+
+{
+  const { d } = partialFolder("cap-parked-beside-decision");
+  for (let r = 1; r <= REPAIR_ROUND_CAP; r++) {
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    for (const t of res.written) runRepair(d, t.id, r % 2 ? NOT_BUILT_BLOCKED_ALT : NOT_BUILT_BLOCKED);
+  }
+  const other = taskAt(syncRepairDir(d, RUN, {}, OPTS).set, "main", "Page build");
+  clearDepsOf(d, other.id, RUN, OPTS, nextMin());
+  startTask(d, other.id, RUN, { ...OPTS, dispatchToken: `tok-${other.id}` }, null, AT(nextMin()));
+  const fpO = taskFilePath(d, other.id);
+  fs.writeFileSync(fpO, setOutcome(allBuilt(fs.readFileSync(fpO, "utf8")), 1, "not-built — needs-decision"));
+  editFrontMatter(d, other.id, "agentNonce", `tok-${other.id}`);
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(nextMin()) });
+  const res = syncRepairDir(d, RUN, {}, OPTS);
+  const awaiting = TASKS_MODULE.decisionWaitingRows(res.set.tasks);
+  const text = repairRoundLines({ ...res, awaiting }, d, "route").join("\n");
+  check("--route (AC-5): a cause parked after the round cap is reported as PARKED beside a row that waits on a decision, and neither the awaiting-decision report nor the nothing-to-route text is printed",
+    () => awaiting.length === 1 && res.parked.length === 1 && new RegExp(`PARKED after ${REPAIR_ROUND_CAP} rounds`).test(text)
+      && !/wait(s)? on a decision/.test(text) && !/nothing there is waiting to be routed/.test(text),
+    () => ({ awaiting: awaiting.length, parked: res.parked.length, text }));
+  fs.rmSync(d, { recursive: true, force: true });
+}
 
 check("a newly recorded cause gets its OWN round rather than waiting behind another cause's open one — the cap counts the KIND, but an `unverified:fields` round still open must not hold a `not-built:fields` row unroutable while the gate names it and tells the user to run `--route`, which would write nothing",
   () => {
@@ -8090,6 +8113,8 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       () => route.stdout);
     check("--route (T1): the decision-waiting report names the command that answers it, `--decide D<N> --build`",
       () => /--decide D<N> --build/.test(route.stdout || ""), () => route.stdout);
+    check("--route (T1): no repair task file is written for a needs-decision row",
+      () => readTaskDir(dir).some((x) => x.kind === "repair") === false, () => readTaskDir(dir).map((x) => x.file));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
@@ -8172,6 +8197,16 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     fs.rmSync(base, { recursive: true, force: true });
   }
 
+  {
+    const { base, dir, t, fp } = buildItFixture("build-declared-notes");
+    fs.writeFileSync(fp, fs.readFileSync(fp, "utf8").replace(/^declared:.*$/m, "declared: blocked").trimEnd() + "\n\nstand outage: the stand was unreachable\n");
+    const cli = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    check("CLI `--decide --build`: a `declared: blocked` whose cause is recorded only in `## Notes` is cleared with a message that points at the Notes instead of claiming the halt was this question",
+      () => cli.status === 0 && /retired the `declared: blocked` of/.test(cli.stdout || "") && /check the task's `## Notes`/.test(cli.stdout || "")
+        && !/the halt was this question/.test(cli.stdout || ""),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
   {
     const { base, dir, t, fp } = buildItFixture("build-declared-kept");
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED).replace(/^declared:.*$/m, "declared: blocked"));
@@ -8266,9 +8301,16 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
   {
     const { base, dir, t, fp } = buildItFixture("build-revoke");
     build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    const snapshot = () => Object.fromEntries(fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE && f !== path.basename(fp))
+      .map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]));
+    const othersBefore = snapshot();
     const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
+    const othersAfter = snapshot();
     const back = readTaskDir(dir).find((x) => x.id === t.id);
     const meta = parseTaskFile(fs.readFileSync(fp, "utf8")).meta;
+    check("--revoke D5 (T6): every other task file is byte-for-byte unchanged",
+      () => Object.keys(othersBefore).length > 0 && JSON.stringify(othersBefore) === JSON.stringify(othersAfter),
+      () => Object.keys(othersBefore).filter((f) => othersBefore[f] !== othersAfter[f]));
     check("--revoke D5 (T6): a build-it entry is withdrawn — the row is a question again, the entry is gone, the task computes partial and no warning is raised",
       () => !rev.refused && rev.cleared.length === 1 && back.rows[0].outcomeCause === "needs-decision"
         && String(meta.decisions || "").trim() === "" && back.status === "partial" && !back.statusEdited
@@ -8289,6 +8331,16 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
         && String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim() === ""
         && !/edited after the engine wrote it|OLDER set|CHANGED since/.test(readIndex(dir)),
       () => ({ mid: mid.status, rev: rev.refused ? rev.problems : rev.cleared?.length, back: back.status, cell: back.rows[0].outcome }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-revoke-built-cli");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"));
+    const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
+    check("CLI `--revoke D5`: over a build-it entry whose row a builder has since built, exits 0 and says the build-it entries listed below were withdrawn",
+      () => cli.status === 0 && /The build-it entries listed below were withdrawn/.test(cli.stdout || ""),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
