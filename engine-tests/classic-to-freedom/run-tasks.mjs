@@ -8059,6 +8059,14 @@ check("identity digest guard: rendering the identity condition does NOT move any
 }
 
 console.log("\n===== deliverable status: a planning decision closes its row before dispatch =====");
+// The task row carrying `label` in the folder, with its `decisions:` entry; null when no task holds it.
+const locateRow = (dir, label) => {
+  for (const t of readTaskDir(dir)) {
+    const i = t.rows.findIndex((r) => r.label === label);
+    if (i >= 0) return { t, i, r: t.rows[i], d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null };
+  }
+  return null;
+};
 {
   const stBody = `define("MPage",[],function(){return{entitySchemaName:"M",attributes:{"Dept":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN}},details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}},R2:{schemaName:"R2D",entitySchemaName:"C2",filter:{detailColumn:"m",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"R2",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"MainG",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainG"}},{operation:"insert",name:"PrintButton",parentName:"ProfileContainer",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"ProfileContainer",propertyName:"items",values:{}}],methods:{onA:function(){return this.get("x");},onB:function(){return this.get("y");}}};});`;
   const PRINTABLE = { resolved: true, present: true, names: ["Invoice"] };
@@ -8113,13 +8121,7 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
         rows: checklistGroups(RUN_ST, OPTS_ST).filter((g) => !(g.pageKey === "main" && g.rows.every((r) => handlers.has(r.label)))).map(groupEntry) },
     ] })).split;
     const { base, dir } = cut("status-reconcile", RUN_ST, OPTS_ST, split);
-    const locate = (label) => {
-      for (const t of readTaskDir(dir)) {
-        const i = t.rows.findIndex((r) => r.label === label);
-        if (i >= 0) return { t, i, r: t.rows[i], d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null };
-      }
-      return null;
-    };
+    const locate = (label) => locateRow(dir, label);
     const onA = locate("Handler — `onA`");
     const manual = applyDecision(dir, RUN_ST, { ...OPTS_ST, split, decision: "D3", mode: "wont-do", rowRef: { taskId: onA.t.id, n: String(onA.i + 1) } });
     const before = Object.fromEntries(Object.keys(LABELS).map((k) => [k, locate(LABELS[k])]));
@@ -8371,13 +8373,7 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     const m0 = stManifest(undefined);
     const { base, dir } = cut("status-after-built", runMigration(m0, { decisions: DEC }), { ...optsOf(m0), decisions: DEC });
     const label = LABELS["main#method:onB"];
-    const locate = () => {
-      for (const t of readTaskDir(dir)) {
-        const i = t.rows.findIndex((r) => r.label === label);
-        if (i >= 0) return { t, i, r: t.rows[i], d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null };
-      }
-      return null;
-    };
+    const locate = () => locateRow(dir, label);
     const at = locate();
     const file = path.join(dir, at.t.file);
     fs.writeFileSync(file, setOutcome(fs.readFileSync(file, "utf8"), at.i + 1, "built"));
