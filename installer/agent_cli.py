@@ -16,6 +16,9 @@ MARKETPLACE_NAME = "creatio"
 PLUGIN_SOURCE = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 # Git source every agent registers the CAADT marketplace from.
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
+# Flags for `copilot plugin marketplace remove`: --force detaches the plugins
+# still installed from the marketplace being removed.
+COPILOT_MARKETPLACE_REMOVE_FLAGS: tuple[str, ...] = ("--force",)
 
 
 def preflight_copilot() -> str:

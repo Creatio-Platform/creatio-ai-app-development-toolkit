@@ -114,19 +114,33 @@ def native_update_commands(target_id: str) -> list[list[str]]:
     Codex is not a native target: its CLI has no plugin-update or plugin-install
     subcommand, so it is reinstalled through install.py (see COPY_TARGETS).
     """
+    cli = native_cli_command(target_id)
+    return [
+        [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
+        [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
+    ]
+
+
+def native_cli_command(target_id: str) -> list[str]:
+    """Return the argv prefix that invokes a native agent's CLI.
+
+    The one resolver behind both the update steps and the restore commands a
+    failure hint prints, so the hint names the same executable the update ran.
+    Raises RuntimeError when the CLI is not on PATH and ValueError for a target
+    that has no native CLI.
+    """
     if target_id == "claude":
-        cli = agent_cli.resolve_claude_command()
-        return [
-            [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
-            [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
-        ]
+        return agent_cli.resolve_claude_command()
     if target_id == "copilot":
-        cli = agent_cli.resolve_copilot_command()
-        return [
-            [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
-            [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
-        ]
+        return agent_cli.resolve_copilot_command()
     raise ValueError(f"{target_id!r} has no native update command")
+
+
+# Extra flags each native CLI needs on `plugin marketplace remove`, the same
+# flags install.py passes when it re-registers that agent's marketplace.
+_MARKETPLACE_REMOVE_FLAGS: dict[str, tuple[str, ...]] = {
+    "copilot": agent_cli.COPILOT_MARKETPLACE_REMOVE_FLAGS,
+}
 
 
 def _run_step(command: list[str]) -> None:
@@ -344,6 +358,11 @@ def classify_failure(error: str) -> tuple[str, str | None]:
     return "other", None
 
 
+def _format_command(argv: list[str]) -> str:
+    """Join *argv* for display, double-quoting any part that contains whitespace."""
+    return " ".join(f'"{part}"' if any(ch.isspace() for ch in part) else part for part in argv)
+
+
 def failure_hint(target_id: str, error: str) -> str:
     """Return the remediation hint for *target_id* failing with *error*."""
     kind, branch = classify_failure(error)
@@ -356,11 +375,16 @@ def failure_hint(target_id: str, error: str) -> str:
             # Cursor has no plugin CLI and Codex has no `plugin install`, so there
             # are no restore commands to print for a reinstall target.
             return f"{pinned} {GENERIC_HINT}"
-        # Native targets are named after their own CLI binary.
-        cli = target_id
+        try:
+            cli = _format_command(native_cli_command(target_id))
+        except (RuntimeError, OSError):
+            # An unresolvable CLI falls back to its binary name so the hint
+            # still prints complete restore commands.
+            cli = target_id
+        remove_flags = "".join(f" {flag}" for flag in _MARKETPLACE_REMOVE_FLAGS.get(target_id, ()))
         return (
             f"{pinned} Re-register the release marketplace:\n"
-            f"  {cli} plugin marketplace remove {agent_cli.MARKETPLACE_NAME}\n"
+            f"  {cli} plugin marketplace remove {agent_cli.MARKETPLACE_NAME}{remove_flags}\n"
             f"  {cli} plugin marketplace add {agent_cli.MARKETPLACE_GIT_URL}\n"
             f"  {cli} plugin install {agent_cli.PLUGIN_SOURCE}"
         )

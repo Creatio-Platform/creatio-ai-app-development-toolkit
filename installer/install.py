@@ -1144,7 +1144,7 @@ def install_copilot(repo_root: Path, home: Path) -> None:
     copilot_command = resolve_copilot_command()
     register_remote_marketplace_and_install_plugin(
         copilot_command,
-        marketplace_remove_flags=["--force"],
+        marketplace_remove_flags=list(agent_cli.COPILOT_MARKETPLACE_REMOVE_FLAGS),
     )
 
 

@@ -25,6 +25,13 @@ def load_update():
     return mod
 
 
+def load_install():
+    spec = importlib.util.spec_from_file_location("caadt_install_for_update", ROOT / "installer" / "install.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _make_release_zip(path: Path, version: str) -> None:
     base = f"creatio-ai-app-development-toolkit-{version}"
     with zipfile.ZipFile(path, "w") as archive:
@@ -790,6 +797,11 @@ LOCK_HINT = (
     "Close the agent(s) above and re-run this command."
 )
 RELEASE_MARKETPLACE_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
+# The plugin-update step failing on a marketplace pinned to a deleted branch, as the CLI prints it.
+DELETED_BRANCH_PLUGIN_UPDATE_OUTPUT = (
+    "Failed to clone repository: Cloning into '...\\.claude\\plugins\\cache\\temp_git_...'\n"
+    "fatal: Remote branch claude/migration-orchestrated-todo-build not found in upstream origin"
+)
 
 
 class FailureHintTests(unittest.TestCase):
@@ -797,6 +809,12 @@ class FailureHintTests(unittest.TestCase):
 
     def setUp(self):
         self.upd = load_update()
+        # Hints resolve each agent's CLI the way the update does; pin the result so
+        # the assertions do not depend on what this machine has on PATH.
+        for name, value in (("resolve_claude_command", ["claude"]), ("resolve_copilot_command", ["copilot"])):
+            patcher = patch.object(self.upd.agent_cli, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_marketplace_url_is_shared_with_the_installer(self):
         self.assertEqual(self.upd.agent_cli.MARKETPLACE_GIT_URL, RELEASE_MARKETPLACE_URL)
@@ -823,8 +841,47 @@ class FailureHintTests(unittest.TestCase):
 
     def test_deleted_branch_hint_uses_the_failing_agents_cli(self):
         hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
-        self.assertIn("copilot plugin marketplace remove creatio", hint)
+        self.assertIn("copilot plugin marketplace remove creatio --force\n", hint)
         self.assertNotIn("claude plugin", hint)
+
+    def test_copilot_remove_flags_match_the_installer(self):
+        install = load_install()
+        with (
+            patch.object(install, "resolve_copilot_command", return_value=["copilot"]),
+            patch.object(install, "register_remote_marketplace_and_install_plugin") as register,
+            patch.object(install, "ensure_required_references"),
+            patch.object(install, "remove_tree_if_exists"),
+        ):
+            install.install_copilot(Path("."), Path("."))
+        flags = register.call_args.kwargs["marketplace_remove_flags"]
+        hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn(f"copilot plugin marketplace remove creatio {' '.join(flags)}\n", hint)
+
+    def test_claude_remove_command_carries_no_flags(self):
+        hint = self.upd.failure_hint("claude", DELETED_BRANCH_OUTPUT)
+        self.assertIn("claude plugin marketplace remove creatio\n", hint)
+
+    def test_deleted_branch_hint_uses_the_resolved_cli_path(self):
+        with patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["C:/tools/copilot.cmd"]):
+            hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn("  C:/tools/copilot.cmd plugin marketplace remove creatio --force\n", hint)
+        self.assertIn(f"  C:/tools/copilot.cmd plugin marketplace add {RELEASE_MARKETPLACE_URL}\n", hint)
+        self.assertIn("  C:/tools/copilot.cmd plugin install creatio-ai-app-development-toolkit@creatio", hint)
+        self.assertNotIn("  copilot plugin", hint)
+
+    def test_deleted_branch_hint_quotes_a_resolved_command_with_spaces(self):
+        wrapper = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "C:/Program Files/copilot.ps1"]
+        with patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=wrapper):
+            hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn(
+            '  powershell -ExecutionPolicy Bypass -File "C:/Program Files/copilot.ps1" plugin install ', hint
+        )
+
+    def test_deleted_branch_hint_falls_back_to_the_binary_name_when_the_cli_cannot_be_resolved(self):
+        with patch.object(self.upd.agent_cli, "resolve_claude_command", side_effect=RuntimeError("not in PATH")):
+            hint = self.upd.failure_hint("claude", DELETED_BRANCH_OUTPUT)
+        self.assertIn("  claude plugin marketplace remove creatio\n", hint)
+        self.assertIn("  claude plugin install creatio-ai-app-development-toolkit@creatio", hint)
 
     def test_deleted_branch_hint_for_a_reinstall_target_names_the_branch_without_cli_commands(self):
         for target_id in ("cursor", "codex"):
@@ -891,6 +948,43 @@ class FailureHintTests(unittest.TestCase):
         self.assertIn("Failed  1 agent(s): claude\n", err)
         self.assertIn("claude/migration-orchestrated-todo-build", err)
         self.assertIn("claude plugin marketplace remove creatio", err)
+        self.assertIn(f"claude plugin marketplace add {RELEASE_MARKETPLACE_URL}", err)
+        self.assertIn("claude plugin install creatio-ai-app-development-toolkit@creatio", err)
+        self.assertNotIn("A running agent can lock", err)
+
+    def test_deleted_branch_on_the_plugin_update_step_prints_branch_hint_not_lock_hint(self):
+        def side(cmd, **kw):
+            if cmd[1:3] == ["plugin", "update"]:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=1, stdout="", stderr=DELETED_BRANCH_PLUGIN_UPDATE_OUTPUT
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude"]),
+            patch.object(self.upd.subprocess, "run", side_effect=side) as run,
+            patch.object(self.upd, "refresh_claude_named_workflows", return_value=[]),
+            patch.object(self.upd.os, "chdir"),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.upd.main([])
+
+        err = stderr.getvalue()
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            [call.args[0][1:] for call in run.call_args_list],
+            [
+                ["plugin", "marketplace", "update", "creatio"],
+                ["plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+            ],
+        )
+        self.assertIn(
+            "ERROR updating claude: claude plugin update creatio-ai-app-development-toolkit@creatio failed: ", err
+        )
+        self.assertIn("pinned to branch 'claude/migration-orchestrated-todo-build'", err)
+        self.assertIn("claude plugin marketplace remove creatio\n", err)
         self.assertIn(f"claude plugin marketplace add {RELEASE_MARKETPLACE_URL}", err)
         self.assertIn("claude plugin install creatio-ai-app-development-toolkit@creatio", err)
         self.assertNotIn("A running agent can lock", err)
