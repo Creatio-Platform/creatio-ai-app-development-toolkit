@@ -2638,6 +2638,19 @@ check("placement gate: mode 'new-app' clears the gate (the build creates its own
   planWithPlacement(newAppPlacement).status === 0);
 check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
   /Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
+// (g) 'existing-section' — a reconcile onto an ALREADY-registered section: clears the gate with NO owning app,
+// registers nothing, and KEEPS the list page live (unlike pages-only-no-menu, which drops it).
+const existingSectionPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "existing-section" } };
+check("placement gate: mode 'existing-section' clears the gate with NO owning app (a reconcile registers nothing)",
+  planWithPlacement(existingSectionPlacement).status === 0, () => planWithPlacement(existingSectionPlacement).stderr);
+const clExistingSection = checklistWithPlacement(existingSectionPlacement);
+check("placement: 'existing-section' renders the section row as already-registered / registers-nothing (no gated exactly-ONE row)",
+  /Navigable section already registered — \*\*reconcile registers nothing\*\*/.test(clExistingSection.stdout || "")
+  && !/Navigable section registered in exactly ONE workplace/.test(clExistingSection.stdout || ""),
+  () => (clExistingSection.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
+check("placement: 'existing-section' KEEPS the list page as a real deliverable (not dropped like pages-only-no-menu)",
+  !/NOT built in this run/.test(clExistingSection.stdout || "") && !/List page \(NOT built/.test(clExistingSection.stdout || ""),
+  () => (clExistingSection.stdout || "").split("\n").filter((l) => /List page|NOT built/.test(l)).join("\n"));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],

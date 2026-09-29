@@ -9,6 +9,12 @@ anything on Freedom that does not belong.
 
 Do not create a duplicate Freedom section. One entity → one Freedom section.
 
+**Placement on a reconcile: the section is already registered.** Because the Freedom section already exists in the
+app menu, set `manifest.placement.sectionHost.mode = "existing-section"` — reconcile the pages and register nothing
+(the menu entry and its workplace bindings already exist and are left untouched). Unlike `pages-only-no-menu`, this
+keeps the **list page a real deliverable** (its section-level client delta — a list row-action, a quick filter — is
+reconciled, not dropped); unlike `existing-app` it needs no owning app, because nothing is registered.
+
 ## Two build-time reconcile modes
 
 A reconcile has TWO modes, and they produce different pages from the SAME plan. The developer picks one

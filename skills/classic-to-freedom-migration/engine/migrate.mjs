@@ -871,14 +871,18 @@ function signalUnresolved(k, signals) {
 //     "application":               { "resolved": true, "code": "UsrTasksApp" | null },
 //     "primaryPackage":            { "resolved": true, "name": "UsrTasks" | null, "editable": true },
 //     "targetPackageInApplication":{ "resolved": true, "value": true },
-//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" } }
+//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" | "existing-section" } }
 const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage", "targetPackageInApplication", "sectionHost"];
 // `existing-app` — register into the app that already owns the entity (the only mode that needs the primary ==
 // target match). `new-app` — the build creates its own Freedom app first (the answer when the owning app is a
 // vendor/install wrapper). `pages-only-no-menu` — pages ship, the section is deliberately NOT registered; a
 // legitimate outcome, but an APPROVED one, never a silent fallback: the whole point of this gate is that the
 // missing menu entry is a plan decision, not a surprise found two hours into a build.
-const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu"];
+// `existing-section` — a RECONCILE onto a Freedom section that is ALREADY registered: reconcile its pages and
+// register nothing (the menu entry and its workplace bindings already exist and are left untouched). Unlike
+// `pages-only-no-menu`, the list page stays a real deliverable — it is reconciled, not dropped — and unlike
+// `existing-app` it needs no owning app, because nothing is registered.
+const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", "existing-section"];
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
@@ -910,7 +914,7 @@ export function placementIssues(manifest) {
 // a dead end — it is the fork.
 function existingAppIssues(p, target) {
   const issues = [];
-  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
+  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), 'existing-section' (a reconcile onto a section that is ALREADY registered — register nothing), or 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
   if (!p.application.code) {
     issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
   }

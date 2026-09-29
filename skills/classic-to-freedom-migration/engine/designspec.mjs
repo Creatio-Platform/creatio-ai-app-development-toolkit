@@ -2376,14 +2376,22 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // dropped silently: the reader must still see that the section is unreachable from the menu, and that this
   // was chosen. Any other mode (including a plan that recorded no placement at all) keeps the gated row.
   if (pm.sectionSchema || result.section) {
-    pages.push(opts.sectionHostMode === "pages-only-no-menu"
-      ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
-      : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
+    // An `existing-section` reconcile registers NOTHING — the section and its workplace bindings already exist and
+    // are left untouched — so this is an informational row, not a machine-gated one. It is NOT the exactly-ONE
+    // onstand check the fresh-registration branch runs: an already-registered section can be bound to several
+    // workplaces, and demanding exactly one would be a false red on a section that is correctly in place.
+    if (opts.sectionHostMode === "pages-only-no-menu") {
+      pages.push({ label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" });
+    } else if (opts.sectionHostMode === "existing-section") {
+      pages.push({ label: "Navigable section already registered — **reconcile registers nothing** (`placement.sectionHost.mode = existing-section`): the Freedom section is already in the app menu; this run reconciles its pages and leaves the registration and its workplace bindings untouched" });
+    } else {
+      pages.push({ label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
         // The QUERY, not just the question. The bindings live in `SysModuleInWorkplace` and that is the only read
         // that counts them: `find-app` reports the app's own schemas and is blind to a section registered over a
         // BORROWED entity, which it then reports as absent.
         query: WORKPLACE_HOWTO,
         miss: "the section is not in the menu — its pages are unreachable" } });
+    }
   }
   return pages;
 }
