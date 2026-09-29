@@ -60,7 +60,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
+  applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending, decisionWaitingRows, BUILD_MODE,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -2781,6 +2781,7 @@ const DECIDE_FLAG = "--decide";
 const REVOKE_FLAG = "--revoke";
 const WONT_DO_FLAG = "--wont-do";
 const POSTPONED_FLAG = "--postponed";
+const BUILD_FLAG = "--build";
 const TO_FLAG = "--to";
 const PAGES_FLAG = "--pages";
 const TASK_FLAG = "--task";
@@ -2810,7 +2811,7 @@ const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_F
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
 // for, so the flag that produced them has to be the thing that fails.
 const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG,
-  WONT_DO_FLAG, POSTPONED_FLAG, ...VALUE_FLAGS]);
+  WONT_DO_FLAG, POSTPONED_FLAG, BUILD_FLAG, ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -2895,7 +2896,7 @@ const unroutedNotBuilt = (tasks) => notBuiltOpenItems(tasks).filter((it) => !it.
 
 const REMEDY = {
   "blocked": "the stand or a service was unreachable — a repair round may clear it",
-  "needs-decision": "a scope question — a repair round gives it to a fresh agent holding the evidence",
+  "needs-decision": "a scope question — no repair round is written for it; answer it with `--decide D<N>` (`--build` to build it)",
 };
 function notBuiltFailureText(items) {
   const L = [];
@@ -3000,9 +3001,8 @@ function startRefusalText(set, startId, dir) {
     dispatchGateFailure = { startRefusal: true, dir };
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on an open decision on a subject another task shares:\n`
       + decisionSourceLines(set.blockedByDecision.rows).join("\n")
-      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, or, if the answer is to"
-      + " build that row, re-open it: clear its `Outcome` cell and set its task back to `status: todo`. Then start"
-      + " this task.\n";
+      + `\nRecord the decision on the row named above: \`${DECIDE_FLAG} D<N> ${WONT_DO_FLAG} --row <task>:<n>\`, or, if the answer is`
+      + ` to build that row, \`${DECIDE_FLAG} D<N> ${BUILD_FLAG} --row <task>:<n>\` — the engine re-opens it. Then start this task.\n`;
   }
   if (set.blockedByOverlap) {
     dispatchGateFailure = { startRefusal: true, dir };
@@ -3186,7 +3186,7 @@ const withheldLine = (w) => {
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
   if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
   if (w.cause === HOLD_DECISION) {
-    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row, or re-opening it to build it, releases it:`,
+    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row (\`${DECIDE_FLAG} D<N> ${BUILD_FLAG}\` to build it) releases it:`,
       ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
   }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
@@ -3330,6 +3330,15 @@ const ROUND_EMPTY = {
     + " recorded as NOT BUILT already has a repair task (or its cause is parked).",
 };
 
+// The rows only a person's answer moves. Named instead of ROUND_EMPTY.route when nothing else applies, because
+// "nothing is waiting" would be false and no repair task exists for them.
+function awaitingDecisionLines(awaiting, dir) {
+  return [`migrate.mjs: no repair task written to ${dir} — ${awaiting.length} row(s) wait on a decision, not on a repair round:`,
+    ...awaiting.map((it) => `  · ${it.task.file} row ${it.n} (${it.task.id}:${it.n}) — ${it.row.label}`),
+    `Answer each with \`${DECIDE_FLAG} D<N> ${WONT_DO_FLAG}\` / \`${POSTPONED_FLAG} ${TO_FLAG} <destination>\` to drop it, or`
+      + ` \`${DECIDE_FLAG} D<N> ${BUILD_FLAG} ${ROW_FLAG} <task>:<n>\` to build it — the engine re-opens the row; no task file is edited.`];
+}
+
 // `deliverable` (page) on file, per held-back row.
 const heldRows = (held) => held.map((h) => `\`${h.row.deliverable}\` (${h.pageKey}) on ${h.task.file}`).join(" | ");
 
@@ -3376,7 +3385,9 @@ export function repairRoundLines(res, dir, kind) {
       + ` manufacture one (and would otherwise burn the ${REPAIR_ROUND_CAP}-round cap with nobody having run).`);
   }
   if (!res.written.length && !res.parked.length && !res.pending.length
-    && !res.disputed?.length && !res.stalled?.length) lines.push(`migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+    && !res.disputed?.length && !res.stalled?.length) {
+    lines.push(res.awaiting?.length ? awaitingDecisionLines(res.awaiting, dir).join("\n") : `migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+  }
   if (res.parked.length) {
     const what = res.parked.map((p) => `${p.pageKey}: ${p.cause} (${p.rows} row(s))`).join(" | ");
     lines.push(`migrate.mjs: ⛔ ${res.parked.length} cause(s) PARKED after ${REPAIR_ROUND_CAP} rounds — ${what}.`
@@ -3412,7 +3423,8 @@ function runRouteMode(result, dir, opts) {
   partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
   // This mode's whole stdout, so it carries the block the orchestrator pastes — `--verify`'s repair note is
   // appended to a table that already has one.
-  const lines = [...repairRoundLines(res, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
+  const awaiting = decisionWaitingRows(res.set.tasks);
+  const lines = [...repairRoundLines({ ...res, awaiting }, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
   return lines.join("\n") + "\n";
 }
 
@@ -3470,7 +3482,16 @@ function decideTargetLabel(opts) {
   return `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
 }
 const decidedRowLine = (x) => `  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`;
+function buildTouchedLines(res, opts) {
+  const lines = [`migrate.mjs: reopened ${res.touched.length} row(s) to build under ${opts.decision} — ${decideTargetLabel(opts)}.`,
+    ...res.touched.map(decidedRowLine),
+    ...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`)];
+  if (res.clearedHalts?.length) lines.push(`  · retired the \`declared: blocked\` of ${res.clearedHalts.join(", ")} — the halt was this question.`);
+  lines.push("", `Each task is \`todo\` again: \`${TASKS_FLAG} <dir> ${NEXT_FLAG}\` offers it, and \`${START_FLAG}\` dispatches it. No task file was edited.`);
+  return lines;
+}
 function decideTouchedLines(res, opts) {
+  if (opts.mode === BUILD_MODE) return buildTouchedLines(res, opts);
   const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${decideTargetLabel(opts)}.`];
   if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
   lines.push(...res.touched.map(decidedRowLine));
@@ -3489,6 +3510,14 @@ function decideSiblingLines(res, cmdFor) {
     + " touched. To apply the same answer to them, run:",
     ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
 }
+const decideModeOf = (wontDoFlag, buildFlag) => {
+  if (buildFlag) return BUILD_MODE;
+  return wontDoFlag ? "wont-do" : "postponed";
+};
+const decideModeArgs = (opts) => {
+  if (opts.mode === BUILD_MODE) return [BUILD_FLAG];
+  return opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG];
+};
 function runDecideMode(result, dir, opts, cmdFor = () => "") {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
   // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
@@ -3511,7 +3540,7 @@ function runDecideMode(result, dir, opts, cmdFor = () => "") {
     return { note: lines.join("\n") + "\n", ok: false };
   }
   lines.push(...decideSiblingLines(res, cmdFor),
-    "", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
+    ...(opts.mode === BUILD_MODE ? [] : ["", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination."]));
   return { note: lines.join("\n") + "\n", ok: true };
 }
 function runRevokeMode(result, dir, opts) {
@@ -3521,7 +3550,8 @@ function runRevokeMode(result, dir, opts) {
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
   const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
   if (!res.cleared.length) {
-    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
+    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`
+      + (skipLines.length ? ` Any build-it entry listed below was withdrawn.` : "");
     return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
@@ -3679,6 +3709,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const revokeArg = valueFlagArg(argv, REVOKE_FLAG, `${REVOKE_FLAG} D13`, fail);
   const wontDoFlag = argv.includes(WONT_DO_FLAG);
   const postponedFlag = argv.includes(POSTPONED_FLAG);
+  const buildFlag = argv.includes(BUILD_FLAG);
   const toArg = valueFlagArg(argv, TO_FLAG, `${TO_FLAG} ENG-12345`, fail);
   const pagesArg = valueFlagArg(argv, PAGES_FLAG, `${PAGES_FLAG} typed:Service,typed:Product`, fail);
   const taskArg = valueFlagArg(argv, TASK_FLAG, `${TASK_FLAG} <task-id>`, fail);
@@ -3689,10 +3720,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if ((decideMode || revokeMode) && (verifyMode || routeMode || nextMode || !!startId || !!addFile || !!splitFile)) {
     fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` writes into the folder; every other write / query mode does the same or moves it first, so a single call would describe a state the reader cannot identify. Run them as separate commands.`);
   }
+  if (buildFlag && !decideMode) fail(`\`${BUILD_FLAG}\` is an answer to \`${DECIDE_FLAG} D<N>\` — it names no decision on its own (and does not go with \`${REVOKE_FLAG}\`).`);
   if (decideMode) {
     if (!/^D\d+$/.test(decideArg)) fail(`\`${DECIDE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${DECIDE_FLAG} D13\`) — got \`${decideArg}\`.`);
-    if (!wontDoFlag && !postponedFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\` or \`${POSTPONED_FLAG}\`. The two words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination.`);
+    if (!wontDoFlag && !postponedFlag && !buildFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\`, \`${POSTPONED_FLAG}\` or \`${BUILD_FLAG}\`. The words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination, \`${BUILD_FLAG}\` re-opens the row for a builder.`);
     if (wontDoFlag && postponedFlag) fail(`\`${WONT_DO_FLAG}\` and \`${POSTPONED_FLAG}\` are two answers to one question — pick one.`);
+    if (buildFlag && (wontDoFlag || postponedFlag)) fail(`\`${BUILD_FLAG}\` re-opens the row for a builder; \`${WONT_DO_FLAG}\` / \`${POSTPONED_FLAG}\` close or defer it — two answers to one question, pick one.`);
+    if (buildFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — \`${BUILD_FLAG}\` re-opens the row here, it does not go anywhere.`);
     if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets "later" pass for an answer.`);
     if (wontDoFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — a decision that closes the debt does not go anywhere.`);
     // Refused at the boundary as well as normalised in `decideCellText`, because the destination ends up inside a
@@ -3835,14 +3869,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
   else if (tasksMode && decideMode) {
     const opts = { ...checklistOpts(manifest), decision: decideArg,
-      mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
+      mode: decideModeOf(wontDoFlag, buildFlag), destination: toArg || null,
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
       rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
     // The same answer, addressed to one row, with every element encoded for the shell.
     const cmdFor = (x) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(fromFile ? arg : "-"),
       TASKS_FLAG, shellArg(tasksDir), DECIDE_FLAG, shellArg(opts.decision),
-      ...(opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG]),
+      ...decideModeArgs(opts),
       ROW_FLAG, shellArg(`${x.task.id}:${x.n}`)].join(" ");
     let res;
     try { res = runDecideMode(result, tasksDir, opts, cmdFor); }

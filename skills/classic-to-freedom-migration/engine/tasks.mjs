@@ -786,15 +786,21 @@ const carriedOf = (meta = {}) => meta.status || S_TODO;
 // customer captions, up to a paragraph long, and the front matter is read by a person.
 const REPAIR_KEYS = ["kind", "cause", "repairRound", "covers"];
 
-// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>" | "D<N>+">, where a
+// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>" | "D<N>+" | "D<N>!">, where a
 // trailing `+` marks a cell the CASCADE wrote (the deliverable was closed by deciding a matching row on
 // another task) as opposed to one a person addressed directly. `--revoke` reverses the direct decision but
 // leaves the cascade closures standing, so the two are distinguished here, at the one place the provenance
 // is persisted.
-const CASCADE_MARK = "+";
-export const decisionOf = (v) => String(v || "").replace(/\+$/, "");
+// A trailing `!` marks a "build it" answer: the row was re-opened for a builder, so its Outcome cell holds no
+// closure and the entry records only who decided.
+const CASCADE_MARK = "+", BUILD_MARK = "!";
+export const decisionOf = (v) => String(v || "").replace(/[+!]$/, "");
 export const isCascadeDecision = (v) => String(v || "").endsWith(CASCADE_MARK);
+export const isBuildDecision = (v) => String(v || "").endsWith(BUILD_MARK);
 export const markCascade = (decision) => `${decision}${CASCADE_MARK}`;
+const markBuild = (decision) => `${decision}${BUILD_MARK}`;
+// The `--decide` mode that answers a needs-decision row "build it".
+export const BUILD_MODE = "build";
 export const renderDecisionsMap = (m) => {
   if (!m || (m instanceof Map ? m.size === 0 : Object.keys(m).length === 0)) return "";
   const entries = m instanceof Map ? [...m.entries()] : Object.entries(m);
@@ -809,7 +815,7 @@ export const parseDecisionsMap = (s) => {
     // row key that no real row index (an integer) can ever match, so `--revoke` would silently miss it.
     // `Number.isInteger` fails closed loud: the malformed entry is dropped and never becomes a live
     // decision entry the engine cannot reach. The value keeps its cascade `+` marker verbatim.
-    if (Number.isInteger(num) && num >= 1 && /^D\d+\+?$/.test(String(d || ""))) out.set(num, d);
+    if (Number.isInteger(num) && num >= 1 && /^D\d+[+!]?$/.test(String(d || ""))) out.set(num, d);
   }
   return out;
 };
@@ -1012,7 +1018,7 @@ function outcomeBlock(repair = false) {
       + " them needs the person's authorisation (`D<N>`) recorded before it stands. Raise the question in"
       + " your `## Notes` (`Decision needed (row N): …` — see below) and leave the row `not-built —"
       + " needs-decision`. The developer then runs `--decide D<N> --wont-do` / `--postponed --to"
-      + " <destination>`, which fills the row's Outcome cell for you.",
+      + " <destination>`, which fills the row's Outcome cell for you, or `--decide D<N> --build`, which re-opens the row for a builder.",
   ];
   if (repair) {
     return [
@@ -1667,6 +1673,11 @@ function latestPerDeliverable(items) {
 // list a reader learns to distrust is worse than no list.
 export const notBuiltOpenItems = (tasks) =>
   latestPerDeliverable(notBuiltRows(tasks).filter((it) => !settledByRound(it)));
+
+// The open rows a person's answer is what they wait on: recorded `not-built — needs-decision` and not closed by
+// a `--decide` entry. No repair round is written for them.
+export const decisionWaitingRows = (tasks) => notBuiltOpenItems(tasks).filter((it) => it.cause === CAUSE_NEEDS_DECISION
+  && !hasClosingDecision(it.task, it.n));
 
 // A row whose repair round has built it. Its Outcome cell keeps its `not-built` word, so every reader of open
 // rows filters on this.
@@ -2468,7 +2479,7 @@ function closedByDecision(meta, rows, outcomes) {
     // recorded nothing on the rest is a HALF-RECORDED round, not a decided one: its remaining rows are still
     // somebody's work, and treating it as decided would exempt a round that was in fact attempted.
     if (!mark) return false;
-    if (mark.outcome === O_BUILT || !map.has(i + 1)) return false;
+    if (mark.outcome === O_BUILT || !map.has(i + 1) || isBuildDecision(map.get(i + 1))) return false;
   }
   return true;
 }
@@ -3032,14 +3043,21 @@ function hasDecision(task, n) {
   return !!map?.has(n);
 }
 
-// The rows marked `not-built — needs-decision` with no `--decide` entry and not built by a repair round, by the
-// subject each one opens.
+// A `--decide` entry that closes the row. A build-it entry does not: its row is open work again, and if the
+// builder raises it as needs-decision once more it is an open question again.
+function hasClosingDecision(task, n) {
+  const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
+  return map?.has(n) && !isBuildDecision(map.get(n));
+}
+
+// The rows marked `not-built — needs-decision` with no closing `--decide` entry and not built by a repair round,
+// by the subject each one opens.
 function openDecisionSources(tasks) {
   const open = new Map();
   for (const t of tasks) {
     (t.rows || []).forEach((r, i) => {
       if (!r.subject || r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
-      if (settledByRound(r) || hasDecision(t, i + 1)) return;
+      if (settledByRound(r) || hasClosingDecision(t, i + 1)) return;
       if (!open.has(r.subject)) open.set(r.subject, []);
       open.get(r.subject).push({ task: t, n: i + 1, label: r.label });
     });
@@ -3476,7 +3494,7 @@ function persistAdoptedTask(dir, t, unplaced) {
     unplaced.push({ task: t, n: idx + 1 });
     if (t.decisions instanceof Map) t.decisions.delete(idx + 1);
   }
-  const decisionsArg = dirty.size ? renderDecisionsMap(t.decisions) : null;
+  const decisionsArg = dirty.size || t.decisionsChanged ? renderDecisionsMap(t.decisions) : null;
   // `?? ""` not `|| null`: under the front-matter rule `null` LEAVES the `declared:` line alone and the empty
   // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
   // the task for ever.
@@ -3817,7 +3835,7 @@ function decideCellText({ mode, decision, title, destination }) {
 // the engine cannot resolve is not a decision, and minting one is exactly what the mode exists to prevent.
 function decideGuardProblems({ decision, mode, destination, decisions }) {
   if (!decision || !/^D\d+$/.test(decision)) return [`--decide needs a D<N> (got '${decision || "(none)"}')`];
-  if (mode !== "wont-do" && mode !== "postponed") return [`--decide needs --wont-do or --postponed (got '${mode || "(none)"}')`];
+  if (mode !== "wont-do" && mode !== "postponed" && mode !== BUILD_MODE) return [`--decide needs --wont-do, --postponed or --build (got '${mode || "(none)"}')`];
   if (mode === "postponed" && !String(destination || "").trim()) {
     return ["--postponed needs --to <destination> (an issue key or free text; a key renders as a link)"];
   }
@@ -3927,6 +3945,7 @@ export function applyDecision(dir, result, opts = {}) {
   const merged = mergeTaskSet(fresh, readExisting(dir));
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
+  if (mode === BUILD_MODE) return applyBuildDecision(dir, merged, picked, decision);
 
   const title = decisions.get(decision);
   const cellText = decideCellText({ mode, decision, title, destination });
@@ -3989,6 +4008,69 @@ export function applyDecision(dir, result, opts = {}) {
     siblings: openSubjectSiblings(merged.tasks, placed(touched)) };
 }
 
+// `--decide D<N> --build`: the answer to a needs-decision row is "build it". The row is re-opened for a builder:
+// its Outcome is cleared, the task's `decisions:` names who decided, and the task's status is recomputed off the
+// cells as a freshly re-opened task. Only a row waiting on a decision is re-opened; every other row addressed is
+// skipped with its reason.
+function buildSkipReason(row, task, n) {
+  if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) return "plan-boundary row (engine-owned Outcome)";
+  if (row.outcomeKind === O_BUILT) return "already built — there is nothing to reopen";
+  if (row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED) {
+    const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
+    return `already decided${map?.has(n) ? ` (${decisionOf(map.get(n))})` : ""} — \`--revoke\` that decision first`;
+  }
+  if (row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION) return null;
+  const recorded = row.outcomeKind ? `\`${row.outcomeKind}${row.outcomeCause ? ` — ${row.outcomeCause}` : ""}\`` : "no Outcome";
+  return `recorded ${recorded}, not a \`${CAUSE_NEEDS_DECISION}\` row — a build-it answer re-opens only a row waiting on a decision`;
+}
+function reopenForBuild(task, idx, decision) {
+  const row = task.rows[idx];
+  row.outcome = "";
+  row.outcomeKind = null;
+  row.outcomeCause = null;
+  row.outcomeReason = "";
+  row.naNoReason = false;
+  task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
+  task.decisions.set(idx + 1, markBuild(decision));
+  task.dirtyRows = task.dirtyRows instanceof Set ? task.dirtyRows : new Set();
+  task.dirtyRows.add(idx);
+}
+// A re-opened task is a fresh `todo`: the halt that raised the question is answered, the recorded status is
+// recomputed rather than carried, and the digest it is measured against is the current rows.
+function resetReopenedTask(task) {
+  task.declared = "";
+  task.statusEdited = false;
+  task.drifted = false;
+  task.recordedDigest = task.rowsDigest;
+}
+function applyBuildDecision(dir, merged, picked, decision) {
+  const touched = [];
+  const skipped = [];
+  for (const { task, rowIndices } of picked.targets) {
+    for (const idx of rowIndices) {
+      const why = buildSkipReason(task.rows[idx], task, idx + 1);
+      if (why) { skipped.push({ task, n: idx + 1, why }); continue; }
+      reopenForBuild(task, idx, decision);
+      touched.push({ task, n: idx + 1 });
+    }
+  }
+  if (!touched.length) return { refused: true, problems: ["--decide --build reopened no rows (nothing addressed is a needs-decision row waiting on an answer)"], skipped };
+
+  const reopened = new Set(touched.map((x) => x.task));
+  const hadDeclared = [...reopened].filter((t) => t.declared).map((t) => t.file);
+  reopened.forEach(resetReopenedTask);
+  recomputeDecidedStatuses(reopened, () => S_TODO, () => false);
+
+  fs.mkdirSync(dir, { recursive: true });
+  attachDispatch(merged, dir);
+  resolvePartials(merged);
+  const persisted = persistTaskSet(dir, merged);
+  const unplaced = persisted?.unplaced || [];
+  const placed = touched.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
+  return { refused: false, decision, mode: BUILD_MODE, destination: null, touched: placed, cascaded: [], skipped, unplaced,
+    clearedHalts: hadDeclared, set: merged, siblings: openSubjectSiblings(merged.tasks, placed) };
+}
+
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
 // named in each task's `decisions:` map, so `--revoke` reads that map, clears the Outcome cell for each named
 // row, and drops the entry. Cells written by anything else (an agent-typed `wont-do`, a legacy `n-a`) are
@@ -4020,6 +4102,24 @@ function clearDecidedCell(t, idx) {
     t.dirtyRows.add(idx);
   }
 }
+// A build-it entry wrote no closure, so withdrawing it puts the question back: a row still blank is a
+// `needs-decision` row again, and a row a builder has since recorded keeps that record.
+function withdrawBuildEntry(t, idx, map, decision, cleared, skipped) {
+  const row = t.rows?.[idx];
+  map.delete(idx + 1);
+  t.decisionsChanged = true;
+  if (!row) { skipped.push({ task: t, n: idx + 1, why: "that row no longer exists in this task" }); return; }
+  if (row.outcomeKind || row.outcome) {
+    skipped.push({ task: t, n: idx + 1, why: `its Outcome cell reads \`${row.outcomeKind || row.outcome}\` — the ${decision} entry is withdrawn and the cell stays as recorded` });
+    return;
+  }
+  row.outcome = `${O_NOT_BUILT} — ${CAUSE_NEEDS_DECISION}`;
+  row.outcomeKind = O_NOT_BUILT;
+  row.outcomeCause = CAUSE_NEEDS_DECISION;
+  t.dirtyRows = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
+  t.dirtyRows.add(idx);
+  cleared.push({ task: t, n: idx + 1 });
+}
 function revokeInTask(t, decision, cleared, skipped) {
   const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
   if (!map?.size) return;
@@ -4033,6 +4133,11 @@ function revokeInTask(t, decision, cleared, skipped) {
     // then stands and re-opens what still needs work. Leaving the entry in the map keeps that record.
     if (isCascadeDecision(d)) { skipped.push({ task: t, n, why: `closed by the cascade of ${decision}, not addressed directly — a cascade closure is not revived; the next \`--verify\` re-opens what still needs work` }); continue; }
     const idx = n - 1;
+    if (isBuildDecision(d)) {
+      withdrawBuildEntry(t, idx, map, decision, cleared, skipped);
+      changed = true;
+      continue;
+    }
     const why = revokeSkipReason(t.rows?.[idx], decision);
     if (why) { skipped.push({ task: t, n, why }); continue; }
     clearDecidedCell(t, idx);
@@ -4052,6 +4157,13 @@ export function revokeDecision(dir, result, opts = {}) {
   const cleared = [];
   const skipped = [];
   for (const t of merged.tasks) revokeInTask(t, decision, cleared, skipped);
+  const dropped = merged.tasks.some((t) => t.decisionsChanged);
+  if (!cleared.length && dropped) {
+    fs.mkdirSync(dir, { recursive: true });
+    attachDispatch(merged, dir);
+    resolvePartials(merged);
+    persistTaskSet(dir, merged);
+  }
   if (!cleared.length) return { refused: false, decision, cleared: [], skipped, set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
 
   // The recompute carries the lifecycle word as the previous one, not the pre-revoke closure: treating the file

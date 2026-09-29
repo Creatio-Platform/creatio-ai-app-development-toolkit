@@ -158,12 +158,14 @@ sub-agents before this, one of them caching material nobody else read.
    every task has settled; go to step 8. *Run halted* (exit **2**) → nothing is startable AND
    nothing is running: a task is `blocked` or carries a status nobody recognises, or waits on an
    open decision, and no re-run changes that — read its `## Notes` and decide, or `--decide` the
-   source row it names, or re-open that row if the answer is to build it. *Dispatch ledger broken*
+   source row it names (`--decide D<N> --build` if the answer is to build it). *Dispatch ledger broken*
    (exit **2**) → repair the ledger first; `--start` refuses every id until you do. A task withheld
    with **every open row waiting on a decision** names the source task and row that raised it:
-   answer that decision with `--decide D<N> --row <task>:<n>` and the task is released. When the
-   answer is to build the row, re-open it instead: clear its `Outcome` cell and set its task back to
-   `status: todo`. Do not dispatch the held task first.
+   answer that decision with `--decide D<N> --wont-do|--postponed --row <task>:<n>` and the task is
+   released. When the answer is to build the row, run `--decide D<N> --build --row <task>:<n>`: the
+   engine clears the row, records the decision and puts its task back to `todo`; never edit the task
+   file. `--decide D<N> --build` re-opens only a `not-built — needs-decision` row and names every
+   other row it skipped. Do not dispatch the held task first.
 
    **The queue order it answers in is leaf-first, and that is a build requirement, not a
    preference:** a related list's Add/Edit opens the child's own form, so the child page exists
@@ -571,7 +573,7 @@ names what holds each task. Open each blocked task in the folder it names, read 
 the hold, resolve that hold (a decision, a dependency, an artifact somebody else owns), set the file
 back to `status: todo`, and only then `--start` it. A task held on an open decision is already
 `todo`: record that decision with `--decide` on the source row the block names, or, if the answer is
-to build that row, clear its `Outcome` cell and set its task back to `status: todo`.
+to build that row, `--decide D<N> --build --row <task>:<n>`.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The engine's close artifact is the ONLY sanctioned completion/status report — the migration
