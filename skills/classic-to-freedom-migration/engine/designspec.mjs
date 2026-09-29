@@ -149,8 +149,24 @@ const addModeText = (am) => {
   if (am.service) p.push(`service \`${esc(am.service)}${am.method ? "." + esc(am.method) : ""}\``);
   if (am.editableGrid) { const cols = (am.editableColumns || []).length ? ` (${am.editableColumns.map(esc).join("/")})` : ""; p.push(`inline-editable${cols}`); }
   if (!p.length && am.openCardOverridden) p.push("custom add flow");
-  return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
+  const add = p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
+  const rows = rowActionsNote(am);
+  return add + (rows ? ` — ${rows}` : "");
 };
+// The removed Classic row actions the Freedom rows must drop. Edit is left out: a Freedom related-list row has no
+// separate Edit action — it opens on click, and keeps doing so — so a removed Classic Edit asks nothing of the rows.
+// The one place this rule lives; the plan decision and the Layout note both read it.
+export const freedomRowActionsToDrop = (removed = []) => removed.filter((a) => a !== "Edit");
+
+// A detail's row-action overrides (from migrate.mjs detection) → a short ⚠ note naming what the Freedom rows must not
+// offer, or that an override could not be read and must be checked by hand.
+function rowActionsNote(am) {
+  const drop = freedomRowActionsToDrop(am?.rowActionsRemoved);
+  const notes = [];
+  if (drop.length) notes.push(`⚠ no row ${drop.map(esc).join("/")} (keep open-on-click)`);
+  if (am?.rowActionsUnreadable?.length) notes.push("⚠ row-action override unread — check by hand");
+  return notes.join(" · ");
+}
 
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
@@ -182,7 +198,7 @@ function rowsForDetails(details, tabRegion) {
       // mechanics, not plan content.
       editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
-    const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
+    const add = [cols, editNote, rowActionsNote(d.addMode)].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
 }

@@ -56,7 +56,8 @@ import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  freedomRowActionsToDrop } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
@@ -1250,8 +1251,14 @@ function describeAddMode(am) {
 // disables add-new (the stage-history shape) the override is not the thing to build. ONE predicate for the
 // description and the guidance — split across two conditions they drift, and the guidance then cites a mode the
 // description suppressed while telling the reader to build an add flow the same row forbids.
-const openCardIsTheWholeStory = (am) => !!am.openCardOverridden
-  && !(am.addDisabled || am.customAction || am.lookup || am.service || am.editableGrid || am.fixedFilters);
+const openCardIsTheWholeStory = (am) => !!am.openCardOverridden && !anyAddSignal(am, "openCardOverridden");
+
+// The add-mechanism signals of a detail's add mode, in ONE place: every predicate over "which add modes are set"
+// reads this list, so a new signal cannot be counted by one of them and missed by another.
+const ADD_SIGNALS = ["lookup", "service", "editableGrid", "openCardOverridden", "addDisabled", "customAction", "fixedFilters"];
+const anyAddSignal = (am, ...except) => ADD_SIGNALS.some((k) => !except.includes(k) && am[k]);
+const hasAddMechanism = (am) => anyAddSignal(am);
+const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length);
 
 // What to BUILD for this add mode, as opposed to what it IS (`describeAddMode`). Conditional: one unconditional
 // instruction contradicts the modes it does not fit — "build a CUSTOM add request-handler" on a detail whose own
@@ -1286,17 +1293,67 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
-    const parts = describeAddMode(am);
-    const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    // an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
-    // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
-    // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
-    // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
-    const editableGridOnly = !!am.editableGrid && !(am.lookup || am.service || am.customAction || am.addDisabled || am.fixedFilters || openCardIsTheWholeStory(am));
-    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label, editableGridOnly,
-      reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` });
+    // Two independent signals, two plan lines: the add flow, and what the rows of existing records may do. A detail
+    // that only removes row actions has no add mechanism, so it gets no add-mechanism row (that row would call a
+    // plain add flow "NOT a plain related list" with nothing after it).
+    if (hasAddMechanism(am)) changeSet.needsDecision.push(addMechanismDecision(am, label));
+    if (hasRowActionSignal(am)) changeSet.needsDecision.push(rowActionsDecision(am, label));
   }
+}
+
+function addMechanismDecision(am, label) {
+  const parts = describeAddMode(am);
+  const guidance = addModeGuidance(am);
+  // an INLINE-EDITABLE grid is ALL this detail's add mechanism (no lookup/service/custom-action/add-disabled/
+  // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
+  // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
+  // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays. Removed
+  // row actions do not clear the flag: they raise their own `detail-row-actions` row, which the flag never drops.
+  // An open-card override is a fallback that `openCardIsTheWholeStory` never reports beside an editable grid, so it
+  // does not count against the flag either.
+  const editableGridOnly = !!am.editableGrid && !anyAddSignal(am, "editableGrid", "openCardOverridden");
+  return { kind: "detail-add-mechanism", item: label, editableGridOnly,
+    reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` };
+}
+
+// What the Freedom list rows must LOSE. A Classic Edit row action has no Freedom counterpart — a Freedom related-list
+// row opens its record on click — so a removed Edit is never an instruction to stop records opening; the build keeps
+// open-on-click either way. HOW the rows lose an action (the list's row-toolbar property) is builder mechanics,
+// resolved on the target version, not plan content.
+// An override the scan cannot read (a reference to another function, an over-long body) still gets the row: its
+// effect on the rows is unknown, so the builder reads that Classic member instead of the plan guessing either way.
+function rowActionsDecision(am, label) {
+  const removed = am.rowActionsRemoved || [];
+  const unreadable = am.rowActionsUnreadable || [];
+  const parts = [...removedActionsSentences(removed), ...unreadableOverrideSentences(unreadable, removed.length > 0)];
+  return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
+    reason: `Detail '${label}' ${parts.join(" ")}` };
+}
+
+const plural = (n) => (n > 1 ? "s" : "");
+
+// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing was removed.
+function removedActionsSentences(removed) {
+  if (!removed.length) return [];
+  const drop = freedomRowActionsToDrop(removed);
+  const build = drop.length
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
+    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
+  const edit = removed.includes("Edit")
+    ? ["Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."]
+    : [];
+  return [`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`, build, ...edit];
+}
+
+// The manual-read request for overrides the scan could not read; [] when every override was read.
+function unreadableOverrideSentences(unreadable, afterRemoved) {
+  if (!unreadable.length) return [];
+  const lead = afterRemoved ? "It also overrides" : "overrides";
+  const members = unreadable.map((m) => "`" + m + "`").join(", ");
+  const subject = unreadable.length > 1 ? "they remove" : "it removes";
+  return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
+    "Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click)."];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -1804,6 +1861,175 @@ function resolveDetailBody(name, e, bodyOf) {
   return { body, scanText, p };
 }
 
+// REMOVED ROW ACTIONS — the Classic grid detail builds its row menu in `addRecordOperationsMenuItems` from three item
+// getters, one per standard action. A layer that overrides that method WITHOUT `callParent` keeps only the getters
+// it re-adds; a getter overridden to return nothing drops its own action. Both are about what can be done to EXISTING
+// rows, which is why they are a signal of their own and not part of add-new DISABLED.
+// Linear by construction: one `\b<name>\s*:` global match per member name, a brace walk capped at
+// MAX_MEMBER_SCAN per override read, and at most MAX_OVERRIDE_LAYERS overrides followed through `callParent` — no
+// regex runs over a method body except bounded ones, so the ReDoS goldens on detectAddMode hold here too.
+const ROW_ACTION_GETTERS = [["Copy", "getCopyRecordMenuItem"], ["Edit", "getEditRecordMenuItem"], ["Delete", "getDeleteRecordMenuItem"]];
+const MAX_MEMBER_SCAN = 20000;
+const MAX_OVERRIDE_LAYERS = 8;
+
+// Where each member definition's value starts, in text order: `<name>: …` (value after the colon) or the ES6 method
+// shorthand `<name>(…) {` (value AT the parameter list). The scan text is the layer union base→top, so the LAST
+// definition is the most-derived override. A match that starts inside a comment or a string literal (a commented-out
+// override) is not a definition; a quoted key starts AT its opening quote, so it still counts. A name right after `.`
+// or an identifier character is a call or a longer name (`this.getCopyRecordMenuItem()`), never a definition.
+function memberValueStarts(body, name, spans = literalSpans(body)) {
+  const re = new RegExp(String.raw`(?<![.\w$])(["']?)\b${name}\1\s*(?::\s*|(?=\([^()]{0,200}\)\s{0,20}\{))`, "g");
+  return [...body.matchAll(re)].filter((m) => !insideSpan(spans, m.index)).map((m) => m.index + m[0].length);
+}
+
+// Every comment and quoted literal in the text as [open, close] offsets, in text order — one linear walk.
+function literalSpans(text) {
+  const spans = [];
+  let i = 0;
+  while (i < text.length) {
+    const j = skipLiteral(text, i, text.length);
+    if (j !== i) spans.push([i, j]);
+    i = j + 1;
+  }
+  return spans;
+}
+
+// The text with every comment and quoted literal replaced by one space, so a getter or `callParent` named only in a
+// comment or a string is not read as code.
+function codeOnly(text) {
+  let out = "", from = 0;
+  for (const [open, close] of literalSpans(text)) { out += text.slice(from, open) + " "; from = close + 1; }
+  return out + text.slice(from);
+}
+
+// True when `idx` lies past the opener of one of the sorted, disjoint spans (binary search).
+function insideSpan(spans, idx) {
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [open, close] = spans[mid];
+    if (idx <= open) hi = mid - 1;
+    else if (idx > close) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+// Index of the character that closes the quoted literal or comment opening at `i`, else `i` (not an opener).
+// Keeps a `}` inside a string or comment from ending the method body early. A `'` / `"` string cannot span lines, so
+// an unterminated one ends at the line break: a lone quote the walk misreads as an opener (inside a regex literal such
+// as `/"/g`) then swallows one line, not every definition after it.
+function skipLiteral(text, i, end) {
+  const c = text[i];
+  if (c === '"' || c === "'" || c === "`") return stringEnd(text, i, end);
+  if (c !== "/") return i;
+  if (text[i + 1] === "/") { const e = text.indexOf("\n", i); return e < 0 || e > end ? end : e; }
+  if (text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); return e < 0 || e > end ? end : e + 1; }
+  return i;
+}
+
+// Index of the quote closing the string that opens at `i` (a `\` escapes the next character); a `'` / `"` string also
+// ends at a line break. `end` when the string does not close before it.
+function stringEnd(text, i, end) {
+  const quote = text[i];
+  const stopAtNewline = quote !== "`";
+  let j = i + 1;
+  while (j < end) {
+    const ch = text[j];
+    if (ch === quote || (stopAtNewline && ch === "\n")) return j;
+    j += ch === "\\" ? 2 : 1;
+  }
+  return end;
+}
+
+// The body between the `{` at `open` and its matching `}`, or null when it does not close within the scan cap.
+function braceBody(text, open) {
+  const end = Math.min(text.length, open + MAX_MEMBER_SCAN);
+  let depth = 0, i = open;
+  while (i < end) {
+    i = skipLiteral(text, i, end);
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return text.slice(open + 1, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+// A member's value as `{ empty, code }`: `emptyFn` is an empty body; a `function (…) { … }` or a shorthand `(…) { … }`
+// yields its body with comments and literals blanked (`codeOnly`). Anything else (a reference to another function, an
+// unterminated or over-cap body) is null — UNREADABLE: the callers report it as such rather than read it as either
+// "removes all" or "removes nothing".
+function memberValue(body, start) {
+  const head = body.slice(start, start + 400);
+  if (/^(?:this\.)?(?:Terrasoft\.)?emptyFn\b/.test(head)) return { empty: true, code: "" };
+  const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(head);
+  if (!fm) return null;
+  const text = braceBody(body, start + fm[0].length - 1);
+  return text == null ? null : { empty: false, code: codeOnly(text) };
+}
+
+const ALL_ROW_ACTIONS = ROW_ACTION_GETTERS.map(([a]) => a);
+// A getter re-added by name, as a whole identifier: `getDeleteRecordMenuItemWithConfirm` is a different item.
+const GETTER_REF = new Map(ROW_ACTION_GETTERS.map(([, g]) => [g, new RegExp(String.raw`\b${g}\b`)]));
+// An override that keeps the stock menu (`callParent`) and then edits it — removes, clears or filters its items —
+// changes which actions survive in a way the scan does not follow.
+const MENU_EDIT = /\.(?:remove\w{0,20}|clear|splice|filter)\s{0,20}\(|\bgetItems\s{0,20}\(/;
+
+// What the most-derived `addRecordOperationsMenuItems` override leaves out, as `{ removed, unreadable }`. An override
+// calling `callParent` delegates to the layer below it (so the next definition up the text decides); the stock menu
+// below the lowest override removes nothing. An override in that chain the scan cannot read, or one that edits the
+// inherited menu after `callParent`, makes the answer unknown.
+function menuRemovedActions(body, spans) {
+  const starts = memberValueStarts(body, "addRecordOperationsMenuItems", spans);
+  const readded = new Set();
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k]);
+    if (!v) return { removed: [], unreadable: true };
+    for (const [action, getter] of ROW_ACTION_GETTERS) if (GETTER_REF.get(getter).test(v.code)) readded.add(action);
+    if (!/\bcallParent\b/.test(v.code)) return { removed: ALL_ROW_ACTIONS.filter((a) => !readded.has(a)), unreadable: false };
+    if (MENU_EDIT.test(v.code)) return { removed: [], unreadable: true };
+  }
+  return { removed: [], unreadable: false };
+}
+
+// Whether the most-derived override of a menu-item getter returns nothing: `emptyFn`, an empty body, or a body that
+// is only `return;` / `return null;` / `return undefined;` (comments aside). An override calling `callParent` returns
+// what the layer below returns, so the next definition up the text decides. `false` with no override (or a stock
+// getter at the bottom of the chain); `null` when an override in the chain cannot be read.
+function getterReturnsNothing(body, getter, spans) {
+  const starts = memberValueStarts(body, getter, spans);
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k]);
+    if (!v) return null;
+    const code = v.code.replace(/\s/g, "");
+    if (v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(code)) return true;
+    if (!/\bcallParent\b/.test(code)) return false;
+  }
+  return false;
+}
+
+// The row-action overrides of a detail body: `removed` — the standard row actions it removes, in menu order (Copy,
+// Edit, Delete); `unreadable` — the overridden members whose value the scan cannot read, so what they remove is unknown.
+export function scanRowActions(body) {
+  const spans = literalSpans(body);
+  const menu = menuRemovedActions(body, spans);
+  const removed = new Set(menu.removed);
+  const unreadable = menu.unreadable ? ["addRecordOperationsMenuItems"] : [];
+  for (const [action, getter] of ROW_ACTION_GETTERS) {
+    const nothing = getterReturnsNothing(body, getter, spans);
+    if (nothing) removed.add(action);
+    else if (nothing === null) unreadable.push(getter);
+  }
+  return { removed: ALL_ROW_ACTIONS.filter((a) => removed.has(a)), unreadable };
+}
+// Every function of the row-action scan, for the structural ReDoS golden (a `toString` of detectAddMode does not
+// include the helpers it calls).
+export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, stringEnd, braceBody,
+  memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions];
+
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
 // rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
@@ -1825,12 +2051,13 @@ export function detectAddMode(body) {
   const openCardOverridden = /openCardByMode\s*:/.test(body);
   // Add-new DISABLED — a read-only / attach-only related list. Classic idioms: the add button forced invisible
   // (`getAddRecordButtonVisible … return false` / `addRecordButtonVisible: false` — the system-maintained
-  // stage-history pattern, declared in the BASE replacing layer), the add-record menu emptied
-  // (`addRecordOperationsMenuItems: Terrasoft.emptyFn`), or the add button removed in the diff (`remove … AddTypedRecordButton`).
+  // stage-history pattern, declared in the BASE replacing layer), or the add button removed in the diff
+  // (`remove … AddTypedRecordButton`). An emptied `addRecordOperationsMenuItems` is NOT one of them: that menu holds
+  // the ROW actions (Copy / Edit / Delete on existing records), read separately as `rowActionsRemoved`.
   const addDisabled = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body)
     || /["']?addRecordButtonVisible["']?\s*:\s*false/.test(body)
-    || /addRecordOperationsMenuItems\s*:\s*(?:Terrasoft\.)?emptyFn/.test(body)
     || /["']operation["']\s*:\s*["']remove["'][\s\S]{0,120}?AddTypedRecordButton/.test(body);
+  const rowScan = scanRowActions(body);
   // A CUSTOM grid action (e.g. "attach existing") added via addGridOperationsMenuItems → getButtonMenuItem. Capture
   // the Click handler name — that's the custom add/attach flow the Freedom rebuild must reproduce.
   const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
@@ -1842,9 +2069,10 @@ export function detectAddMode(body) {
     ...[...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
     ...[...body.matchAll(/createColumnInFilterWithParameters\s*\(\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
   ])] : [];
-  if (!(lookup || svcM || editableGrid || openCardOverridden || addDisabled || customAction || fixedFilters)) return null;
-  return { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
-    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols };
+  const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
+    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
+    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };
+  return hasAddMechanism(am) || hasRowActionSignal(am) ? am : null;
 }
 
 // What the detail's own BODY yields. Scan the UNION of layers: a declaration may live in a base replacing layer,
