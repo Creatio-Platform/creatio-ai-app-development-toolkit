@@ -5,14 +5,14 @@ page's build task — the one whose deliverables carry the section-dashboard row
 separate dashboards task. `./references/classic-to-freedom-mapping.md` is a reference: `grep -n '^#'`
 lists its headings and you read every section that applies to your page — a pointer below names the
 section most tasks need, not the only one — never the file whole. Do this part after the list page
-body is built, within that task, because it writes into the built list page. SKILL.md step 2 found the dashboards and step
-4.2's `signals.dashboards` recorded them and the plan's delivery split. The state, scope and
-existence-check rules in `build-task-execution.md` bind every call below.
+body is built, within that task, because it writes into the built list page. Discovery listed the
+dashboards in `discovery.md`, the manifest's `signals.dashboards` recorded them, and the plan names
+how they are delivered. The state, scope and existence-check rules in `build-task-execution.md`
+bind every call below.
 
 **You cannot reach the user; the driver can.** Every step below that needs the user goes through
 your task file: a question is a `not-built — needs-decision` row with its `Decision needed (row N):`
-line under `## Notes`, a hand-off is a line under `## Notes` the driver relays (step 7.7 of
-`./references/orchestrate-build.md`).
+line under `## Notes`, a hand-off is a line under `## Notes` the driver relays to the user.
 
 **7.7 Classic dashboards (from step 2).** If `discovery.md` lists any, install the Dashboards
 Migrator through clio:

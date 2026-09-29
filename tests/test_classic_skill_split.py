@@ -175,6 +175,45 @@ class BriefRoutingTableTests(unittest.TestCase):
             self.assertIn("build-task-execution.md", paths)
 
 
+class BriefSelfSufficiencyTests(unittest.TestCase):
+    """A sub-agent's brief carries the facts it needs instead of pointing at the driver's files.
+
+    A fresh context that follows a pointer into SKILL.md or orchestrate-build.md reads the
+    driver's whole instructions to find one fact, and pays for them on every later turn.
+    """
+
+    DRIVER_FILES = ("SKILL.md", "orchestrate-build.md")
+
+    def test_no_brief_names_a_driver_file(self):
+        # Briefs are read whole; the references the 7.3 table hands a builder are read by
+        # section, and a pointer inside any section sends the reader to the same files.
+        handed = set(BRIEFS) | {n for _, paths in brief_table(read(ORCHESTRATE), column=3) for n in paths}
+        self.assertIn("classic-to-freedom-mapping.md", handed)
+        hits = []
+        for name in sorted(handed):
+            for number, line in enumerate(read(REFERENCES / name).splitlines(), 1):
+                hits += [f"{name}:{number} names {f}" for f in self.DRIVER_FILES if f in line]
+        self.assertFalse(hits, "a brief points into the driver's files; state the fact instead: "
+                               f"{hits}")
+
+    def test_judge_brief_carries_its_hand_off_and_what_its_verdict_feeds(self):
+        text = read(REFERENCES / "judge-brief.md")
+        handed = section(text, "## What you are handed", "\n## ")
+        for fact in ("`group: Quality gates`", "`dependsOn:`", "`agentNonce:`", "`refs/`"):
+            self.assertIn(fact, handed)
+        report = section(text + "\n## end", "## What your verdict does in the final report", "\n## end")
+        self.assertIn("--verify --from <migration-folder> --tasks <migration-folder>/build-tasks", report)
+        # The brief quotes the report's wording, and the engine writes that wording: each label
+        # the brief promises must be one the engine prints, or the judge rules on words it never sees.
+        engine = read(SKILL_DIR / "engine/designspec.mjs") + read(SKILL_DIR / "engine/migrate.mjs")
+        for label in ("✅ Done", "❌ MISSING", "⚠ verify", "⛔ EVIDENCE MIS-FILED"):
+            self.assertIn(f"`{label}`", report)
+            self.assertIn(label, engine, f"the engine no longer writes {label!r}")
+        for phrase in ("judged convincing", "the judge REJECTED the evidence", "NOT judged", "DISAGREES"):
+            self.assertIn(phrase, report)
+            self.assertIn(phrase, engine, f"the engine no longer writes {phrase!r}")
+
+
 class ReferencePlacementTests(unittest.TestCase):
     """Each moved block is cited from the step that needs it, not only listed."""
 

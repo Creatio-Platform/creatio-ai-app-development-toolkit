@@ -14,7 +14,7 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    not because the next task looks small, not because you already have the page body open. This holds for the
    NEXT chunk of the very page you just built: those are separate tasks and separate sub-agents, and taking them
    one after another in this session is the violation, not a way of finishing the page. (The one run this does
-   not bind is `Route: inline` — SKILL.md step 7.0 — where the orchestrator's own session builds every task,
+   not bind is `Route: inline`, where the orchestrator's own session builds every task,
    still one at a time.) Your task's front matter names the artifact it writes (`writesTo:`) and the tasks that had to close before it (`dependsOn:`); everything
    your task needs from those is in their `## Notes`, which you read rather than redo. Before you finish, copy the
    **dispatch token** you were handed when this task was started into `agentNonce:`, verbatim. Do not invent one:
@@ -128,9 +128,9 @@ you.
   line, where the shell would run it instead of storing it. Run it only while no other task writes
   `evidence.json`: two read-modify-writes at once keep the later one's copy, and the other task's
   record is lost.
-- Section sequencing at whole-package scope is the orchestrator's (step 7.6,
-  `./references/orchestrate-build.md`): one section is sliced, built and validated before the next
-  one starts. Your task belongs to exactly one section — never reach into another.
+- Section sequencing at whole-package scope is the orchestrator's: one section is sliced, built and
+  validated before the next one starts. Your task belongs to exactly one section — never reach into
+  another.
 - Your `writesTo:` names the one artifact you may write. Write that artifact and no other: reaching
   into another task's artifact is how two sub-agents write the same schema.
 - **Re-check for an existing Freedom artifact before every create** — an app, a section, a page, a

@@ -27,6 +27,19 @@ page. You read what the builders filed and rule on it; you write nothing on the 
   applies to your task. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
+## What you are handed
+
+Your task file is `group: Quality gates`, read-only, with `writesTo:` empty: you write no artifact
+and nothing on the stand. The orchestrator passes, as paths: your task file (its contract, its
+deliverables, the tasks it waits on), the migration folder, the environment name, the manifest, the
+path to `engine/migrate.mjs`, the approved `plan.md`, and the `refs/` folder when the run has a
+`Reference cache` task. This brief is the only one you are handed — no build brief and no mapping
+reference, because you rule on records and do not build. What the tasks named under `dependsOn:`
+did on the stand is in their `## Notes`, including the reference page and the components each
+builder diffed. Close your task by its file's own rules: an outcome for every deliverable row, and
+the dispatch token you were handed copied into `agentNonce:`; a review task closed by a builder of
+the work it judges fails the run's dispatch gate.
+
 ## What the records are
 
 - **The judge's and the builder's records are FILES, not reads.** `evidence.json`, `judge.json` and
@@ -68,3 +81,26 @@ page. You read what the builders filed and rule on it; you write nothing on the 
   looks like from the outside. Rule it `convincing: false` with the admission quoted; the row then
   stays open and its deliverable is routed like any other unbuilt row rather than closing on a
   verdict nobody could check.
+
+## What your verdict does in the final report
+
+The orchestrator's closing command
+`node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`
+reads `judge.json` beside `evidence.json` and settles each evidence row from the pair. The report
+it writes is what the person who owns the migration is shown, and it quotes you:
+
+- `convincing: true` on a complete evidence record — the row is `✅ Done`, "judged convincing". A
+  `true` does not close a row whose record is incomplete: that row stays `⚠ verify`.
+- `convincing: false` — the row is `❌ MISSING`, "the judge REJECTED the evidence", followed by your
+  `why` verbatim. The row stays open and comes back as a repair task, so `why` has to say what is
+  wrong with the record in words a builder can act on.
+- `null` left in place — the row is `⚠ verify`, "NOT judged": a record nobody reviewed does not
+  close its row, so every id you were asked to rule on needs a verdict before you close.
+- A record the builder filed as `false` stays `❌ MISSING` whatever you rule: you rule on records and
+  do not create them. When you found the deliverable on the page and wrote `true`, the report says
+  the judge DISAGREES and quotes your `why`, so name there the elements you found.
+- A verdict under an id the run does not publish is `⛔ EVIDENCE MIS-FILED`: nothing reads it. File
+  each verdict under the exact id of the record you ruled on.
+
+The report's task ledger shows how each task was verified — machine, evidence + judge, or by hand —
+so a row closed on your verdict is named as closed by a judge.
