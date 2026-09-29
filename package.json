@@ -1,0 +1,34 @@
+{
+  "name": "creatio-ai-app-development-toolkit-dev",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Contributor tooling only (lint + coverage report). Never shipped: this file is outside .release-manifest.json plugin_runtime, and nothing under skills/ or hooks/ imports these packages.",
+  "scripts": {
+    "lint": "eslint .",
+    "coverage:report": "c8 report"
+  },
+  "c8": {
+    "temp-directory": "coverage/tmp",
+    "reports-dir": "coverage",
+    "reporter": [
+      "text",
+      "lcov",
+      "html",
+      "json-summary"
+    ],
+    "all": true,
+    "include": [
+      "skills/**/*.mjs"
+    ],
+    "exclude": [
+      "skills/classic-to-freedom-migration/engine/vendor/**",
+      "skills/classic-to-freedom-migration/engine/registry/**"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "c8": "12.0.0",
+    "eslint": "10.11.0",
+    "globals": "17.12.0"
+  }
+}

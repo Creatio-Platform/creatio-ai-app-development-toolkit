@@ -56,7 +56,7 @@ export function floorPersistentlyRejected(sessionId, lastAttempt) {
 // sends, for the whole session, on every session, until clio is upgraded.
 export const VOCABULARY_UNKNOWN_CODE = 'unknown-event-name';
 
-// A one-time local signal for the case raised in review of PR #96: a clio that rejects
+// A one-time local signal for the case where a clio rejects
 // `workflow_started` on every attempt leaves the session with zero telemetry and, before this, zero
 // indication anything was ever tried, so a maintainer would only learn a whole install's floor was
 // dead from the metrics it never sent. Two things about the line. It carries clio's own rejection code
@@ -79,7 +79,7 @@ export function noteFloorExhausted(sessionId, lastAttempt = FLOOR_ATTEMPT_LIMIT 
 			+ 'docs/telemetry-transport-decision.md, "The floor\'s exactly-once contract")\n';
 		if (code === VOCABULARY_UNKNOWN_CODE) {
 			text += `caadt telemetry: '${VOCABULARY_UNKNOWN_CODE}' means the connected clio predates the `
-				+ 'flow-agnostic telemetry vocabulary (ENG-92551) and will reject every stage this toolkit '
+				+ 'flow-agnostic telemetry vocabulary and will reject every stage this toolkit '
 				+ 'sends; upgrade clio, nothing is recorded until then\n';
 		}
 		process.stderr.write(text);

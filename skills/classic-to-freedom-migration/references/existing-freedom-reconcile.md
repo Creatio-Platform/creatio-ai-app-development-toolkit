@@ -9,7 +9,7 @@ anything on Freedom that does not belong.
 
 Do not create a duplicate Freedom section. One entity → one Freedom section.
 
-## Two build-time reconcile modes (ENG-99192)
+## Two build-time reconcile modes
 
 A reconcile has TWO modes, and they produce different pages from the SAME plan. The developer picks one
 at the **start of implementation** — `migrate.mjs … --tasks <dir> --reconcile-mode <overlay|classic-layout>`

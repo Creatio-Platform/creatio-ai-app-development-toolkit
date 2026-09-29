@@ -51,6 +51,18 @@ migrations/<app-or-section-slug>/
   roadmap.md           # living execution tracker (status of every task)
   decisions.md         # decision and approval log (append-only; the plan approval lives here at BOTH scopes)
   worklog.md           # session log and runtime read-back evidence (append-only)
+  reads/               # engine-written (`migrate.mjs --reads`): the read plan, and the raw stand answers copied into it
+    index.json           # which reads the gate needs and the file each one goes into — the composing half reads it back
+    NN-meta-<key>.json   # one page's `.clio-pages/<schema>/meta.json`, copied whole
+    NN-bundle-<key>.json # …and its `bundle.json` (the merged view), copied whole
+    NN-rules-<key>.json  # the page's persisted `BusinessRule_*` schemas, for the keys that gate rules
+    NN-reachability-<key>.json # one on-stand check's answer — the value for that `reachability` key
+    NN-dashboards-migration-log.json # `DashboardMigrationLog` rows, when the plan moves dashboards — one file per run
+  evidence.json        # engine-written skeleton (`--reads`): every published evidence id already a key — fill VALUES, never keys
+  judge.json           # the same, for the independent verdict on each of those records
+  recorded.json        # engine-written skeleton (`--reads`): the on-stand keys the BUILD agent records rather than reads — replace each `null`
+  built.json           # engine-written (`migrate.mjs --verify --from`): the payload COMPOSED from reads/ — never hand-authored
+  verify.md            # engine-written (same run): the Plan-vs-Done table that payload was gated on
   build-tasks/         # engine-written (`migrate.mjs --tasks`): the approved plan cut into one-task files
     task-<slug>-<id>.md  # one task; its `status` front matter is that task's record
     index.md             # derived — regenerated from the task files on every run
@@ -132,7 +144,7 @@ Append-only, chronological. One entry per working session.
 Engine-written, and not documentation: it is how the orchestrator schedules work and how a killed session resumes.
 - **A task file is the record of that task** — the `Outcome` column of its `## Deliverables` table and its `## Notes` are written by the sub-agent that did the work, never transcribed by the orchestrator.
 - `index.md` is derived. Never hand-author a task list, a status table or a progress summary beside it.
-- `status` is derived too: the engine computes `done` / `partial` from the Outcome cells and overwrites the front matter. Only `blocked` and `n/a` are set by hand. A `partial` task's unbuilt rows are re-filed as repair tasks by the next `--verify --tasks` or `--tasks --route`, and each row computes `done` when the repair round covering it records it built. A repair task is no exception — it carries an `Outcome` column and its status is computed from it like any other task's.
+- `status` is derived, and `declared` is the only status field an agent writes. `status` is the engine's output — derived from the Outcome cells on every pass and written back by the one write phase, which runs after any repair round that command opened, so the file can never disagree with `index.md`. `declared` holds the agent's one word, `blocked`, and nothing else — a whole-task scope decision (`not-applicable` / `wont-do` / `postponed`) is a person's answer recorded through `--decide D<N>`, never written into the file; a word typed into `status` is named on `## Attention` (`statusFrom` stamps what the engine derived) and discarded. A `partial` task's unbuilt rows are re-filed as repair tasks by the next `--verify --tasks` or `--tasks --route`, and each row computes `done` when the repair round covering it records it built. No task is an exception: every task file is written by the engine (`--tasks --add` for one the orchestrator declares), so every task carries an `Outcome` table and the derivation always has cells to read. For an adopted file — a repair round's or a declared one's — only the `status:` line is written back and the body stays as authored.
 - Do not hand-edit an engine task file's `## Deliverables` table apart from that `Outcome` column; the engine rewrites the rest from the plan on every re-slice.
 - What a task must do, and the statuses it may record, are in `references/build-task-execution.md`; the folder's own modes and gates are SKILL.md step 7.
 
@@ -149,7 +161,7 @@ Use exactly these statuses everywhere in the DOCUMENT set:
 | `VALIDATED` | Implemented and validated with recorded evidence (see Definition Of Done). |
 | `DROPPED` | Intentionally not migrated. Must record the reason. |
 
-**A build task file uses its own vocabulary and this table does not apply to it:** `todo` / `in-progress` / `done` / `blocked` / `n/a` / `partial` in its front matter (`references/build-task-execution.md`). A build task's status is its own file's, rolled up by `build-tasks/index.md`; an artifact's is this table's.
+**A build task file uses its own vocabulary and this table does not apply to it:** `todo` / `in-progress` / `done` / `blocked` / `not-applicable` / `wont-do` / `postponed` / `partial` in its front matter (`references/build-task-execution.md`). A build task's status is its own file's, rolled up by `build-tasks/index.md`; an artifact's is this table's.
 
 ## Task Identifiers
 

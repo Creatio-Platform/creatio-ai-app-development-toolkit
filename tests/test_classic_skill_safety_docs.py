@@ -11,10 +11,10 @@ REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-f
 SURFACE_RESOLUTION = ROOT / "skills/classic-ui-expert/references/01-surface-resolution.md"
 CLASSIC_SKILL = ROOT / "skills/classic-ui-expert/SKILL.md"
 PLATFORM_PATTERNS = ROOT / "skills/classic-ui-expert/references/06-platform-patterns.md"
-# ENG-99192 — the two build-time reconcile modes.
+# The two build-time reconcile modes.
 RECONCILE_DOC = ROOT / "skills/classic-to-freedom-migration/references/existing-freedom-reconcile.md"
 BUILD_EXEC_DOC = ROOT / "skills/classic-to-freedom-migration/references/build-task-execution.md"
-RECONCILE_MODE_GATE_HEAD = "**Before you cut — on a RECONCILE, choose the reconcile mode (ENG-99192)."
+RECONCILE_MODE_GATE_HEAD = "**Before you cut — on a RECONCILE, choose the reconcile mode."
 
 EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
 GATE_HEAD = "**Gate-toggle safety (shared stand).**"
@@ -81,7 +81,7 @@ def bullet(text, head):
 class ClassicSkillSafetyDocTests(unittest.TestCase):
     """Pin the normative phrases of prose-only safety guarantees.
 
-    Each guarantee below regressed at least once during ENG-94529 review — raw-value
+    Each guarantee below is fragile in the same way — raw-value
     logging (bf31563), the toggle fail-safe (7944948), the card contract's closed set
     (65266ce), and the Evidence rule closing on the instruction it supersedes. Prose
     review caught each one late; these locks catch the next one at commit time.
@@ -122,7 +122,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"per-AC evidence rule incomplete; missing {missing}")
 
     def test_evidence_placement_never_accepts_the_card_citation(self):
-        # The regression this replaces: the paragraph used to close on "copy from there"
+        # A paragraph closing on "copy from there" is what this replaces:
         # / "It goes in the Evidence column", whose referent is the card+AC *citation* —
         # the weaker rule the per-AC rule supersedes.
         content = read_text(MIGRATION_SKILL)
@@ -203,7 +203,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
     def test_feature_flag_gates_get_a_procedure_not_a_refusal(self):
         # Feature toggles outnumber system-setting gates on a customized stand (156 vs 106
-        # schemas, ENG-94529 census), so refusing to exercise them costs more coverage than
+        # schemas, a workspace census), so refusing to exercise them costs more coverage than
         # the secret-exposure risk it avoids. Same four steps, different tools.
         para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
         missing = missing_markers(
@@ -360,8 +360,8 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
 
     def test_message_counterpart_search_is_run_once_and_widened(self):
-        # Two failures to hold apart. Deferring the search left 18 of 30 threads open
-        # (ENG-94529), so it must actually run; re-running it per scope is unbounded on a
+        # Two failures to hold apart. A deferred search leaves counterpart threads
+        # open, so it must actually run; re-running it per scope is unbounded on a
         # customer stand, so it runs ONCE and the caller owns it when there is one.
         content = read_text(REFERENCE_FOLLOWING)
         missing = missing_markers(
@@ -433,7 +433,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"per-audience read must redact literals; missing {missing}")
 
     def test_classic_dashboards_go_through_the_migrator_not_a_rebuild(self):
-        # A section's Classic dashboards used to be invisible to the skill, so a run
+        # A section's Classic dashboards must not be invisible to the skill, or a run
         # either redrew them as a Freedom page or dropped them silently. The install is a
         # destructive clio tool (configuration build + restart), so the route and the hand-off
         # to the user are pinned, not only the tool name.
@@ -456,7 +456,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
 
 class ReconcileModeDocTests(unittest.TestCase):
-    """ENG-99192 — pin the two-reconcile-mode contract across SKILL + the two references.
+    """Pin the two-reconcile-mode contract across SKILL + the two references.
 
     The mode is a build-time choice that changes HOW a reconcile places elements, never the
     plan. Each phrase below is load-bearing: drop the "on-page control only" qualifier and a
@@ -511,7 +511,7 @@ class ReconcileModeDocTests(unittest.TestCase):
         self.assertIn("In `overlay` mode this parity check does not apply", content)
 
     def test_mode2_removal_is_machine_enforced_not_asserted(self):
-        # ENG-99192 Step 5 — the measured failure was sub-agents ASSERTING "base non-plan elements
+        # The measured failure was sub-agents ASSERTING "base non-plan elements
         # removed" while emitting no removes. Both docs must say removal is gated by --verify (❌ EXTRA),
         # not a documentation-only claim, so the enforcement can't quietly regress to prose.
         reconcile = flat(read_text(RECONCILE_DOC))

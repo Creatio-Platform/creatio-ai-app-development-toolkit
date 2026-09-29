@@ -100,7 +100,7 @@ identified by the `workflow` field, so do not invent `mobile_*` event names — 
 | `plan_presented` | — | present the plain-language plan |
 | `plan_approved` | — | get approval at **Gate M** — before the first write |
 | `build_started` | — | begin writing the mobile page |
-| `work_item_completed` | `variant=page` | finish and validate a mobile page body, once per page |
+| `work_item_completed` | `variant=page` | finish and validate a mobile page body, once per page — including each missing-target-page follow-up converted via the playbook's step 8a |
 | `work_item_completed` | `variant=section` | complete section/workplace registration after **Gate S** |
 | `workflow_completed` / `workflow_failed` | — | reach the end of the run |
 | `changes_requested` | — | the developer asks for further changes AFTER the conversion completed. Emit before starting that follow-up work |
@@ -121,6 +121,12 @@ request collapse this into a single unattended pass. The invariants:
   `create-related-page-addon` with `schema-type=mobile`).
 - **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
   and END THE TURN without writing — never self-approve.
+- **Missing target pages are converted one at a time, never as a batch — and the offer is one level
+  deep.** The playbook's step 8a proposes converting the pages listed in the conversion report's "Missing
+  pages" block, but each accepted page is a full separate run of this flow with its own Gate M (and Gate S
+  if applicable). The developer accepting the sequential-conversion offer is not blanket approval for
+  every page in the list. A follow-up page's OWN missing targets are reported in its own step 8 report but
+  are never offered for further sequential conversion — converting those is a new, separate request.
 
 The AUTHORITATIVE, detailed gate rules — the two-choice (View details / Adjust vs Approve) flow, what the
 plan must contain, and the exact FORBIDDEN-until-approved tool lists — live in the "Gate M" / "Gate S"

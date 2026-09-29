@@ -55,12 +55,46 @@ This is not inference. The end-to-end run of 2026-09-17 migrated `UsrToMigrate2A
 before producing a working Feed, working Attachments and a correctly bound `crt.TagSelect`. Gating
 the route on template family would have broken that run.
 
+## Why the plan does not decide merge vs insert
+
+The route is unconditional; the merge-vs-insert **verdict** is not printed at all. A guided Layout
+Source cell names the form template the plan targets and hands the decision to the builder:
+
+> ⚠ resolve on-stand — read `<the plan's form template>`'s merged bundle (`get-page`) before writing:
+> present → MERGE onto it, never a second element of the same name; absent → INSERT · configure it
+> from `get-guidance name=page-modification-standard-components` …
+
+**The engine cannot hold that verdict honestly.** Whether a template ships Feed or Attachments is a
+fact about *that* template's merged bundle, readable only on a stand. `migrate.mjs` renders the plan
+offline, so the only thing available to it is `meta.templateProvided` — a flat per-row flag that
+answers the same for every template. One of its two answers is therefore always wrong.
+
+**Both wrong answers are damaging, and the ADD direction is silent.** `insert` over a container the
+template already filled puts a second element of the same name on the page, and `update-page`
+validates the *diff* it was sent rather than the merged result — so the duplicate ships with nothing
+raised. Template inheritance makes that ordinary rather than exotic:
+`PageWithTabsAndProgressBarTemplate` inherits `FeedTabContainer` and a `crt.Feed` from
+`PageWithTabsFreedomTemplate` without declaring either itself. The opposite answer fails the other
+way: a component claimed template-provided over a template that omits it is never built at all.
+
+**Why not a measured capability table.** A static table of measured verdicts covers only the
+templates somebody measured, and either says nothing about the rest or guesses at them. The
+instruction above is uniformly correct for every template, measured or not, and it asks for a read
+that can actually be performed, at the moment it matters. STEP 1 of the guidance item already owns
+the merge-vs-insert rule in full; the plan's job is to route to it and to name the template, not to
+pre-empt it with an answer it cannot check.
+
+**What the plan still owes, and still gates.** The component's own coverage row and the companion
+`AttachmentListDS` evidence row are untouched: those are deliverables, not verdicts, and `--verify`
+gates their presence on either path. No expected *count* is filed for a guided component, because a
+count is itself a claim that the template does not ship it.
+
 ### The acceptance criterion this contradicts, said plainly
 
 ENG-94756's fourth acceptance criterion reads *"When a basic template is used, existing migration
 behavior is not affected"*, and the approved requirement derived from it (**R8**) says basic-template
-migrations behave exactly as before. **That is not what ships.** Basic-template plans gain the route,
-deliberately, for the reason measured above.
+migrations behave exactly as before. **That is not what ships.** Basic-template plans gain the route
+and the on-stand-read instruction, deliberately, for the reasons above.
 
 The criterion was written from the ticket's framing — the reported defect was about *non-basic*
 templates, so leaving the basic path alone read as the safe default. The 2026-09-17 run shows the
@@ -81,6 +115,7 @@ substituted, so nothing *else* varies by template family.
 | R7 GUARD (source) | `run-mapper.mjs` | a canonical value typed into any engine `*.mjs` |
 | R7 GUARD (paste detection) | `run-mapper.mjs` | the value table pasted in as JSONC, a table, or `const` assignments |
 | One-spelling scan | `run-mapper.mjs` | a second hardcoded spelling of a guided feature name |
+| Guided-cell contract | `run-mapper.mjs` | a guided Source cell that omits the template name or the on-stand read, or that grows a merge-vs-insert verdict back |
 | Decision-record check | `run-mapper.mjs` | this document drifting from the constants it describes |
 
 The guard splits **values** from **names** on purpose: a property *name* is a route to the catalog,

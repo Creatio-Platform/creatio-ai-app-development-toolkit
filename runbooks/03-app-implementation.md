@@ -127,7 +127,7 @@ For each dashboard in the plan:
   3. **Edge case only** — if no workplace hosts the app's sections at all, a workplace must be
      created. clio cannot create one today (`SysWorkplace` + `SysModuleInWorkplace` +
      `SysAdminUnitInWorkplace` span tables set up in the Creatio UI); a create-workplace tool is
-     tracked under ENG-88474 — resolve it through `get-tool-contract` so it is used automatically once
+     not yet available — resolve it through `get-tool-contract` so it is used automatically once
      it lands. Until then, in this rare case, stop and ask the developer to create the workplace in the
      UI, then bind. Do not treat this as the normal path: normally the workplace already exists (step 2).
 
@@ -141,7 +141,7 @@ For each dashboard in the plan:
   to everyone with access to it — a wider audience than just this app's users. The pre-write clobber
   check above makes an overwrite explicit (surfaced and confirmed) instead of silent, but it does not
   remove the limitation: a truly app-scoped workplace (each app owning its own home page and audience)
-  depends on the create-workplace capability tracked under ENG-88474.
+  depends on the create-workplace capability, which is not yet available.
 - **Access** — this applies to **§7.1 dashboards only**. Section-dashboard access is a **static
   default: `All Employees`**: every §7.1 dashboard is created visible to everyone (the plan states
   `access rights: All Employees` per dashboard for transparency). Ship the grant with the package per
@@ -215,7 +215,7 @@ proceed — the "same-name retry" rule does not apply to real validation failure
 
 ## Coordination
 
-The clio-side error wording for this failure is being improved under ENG-93089 (clio owns the
+The clio-side error wording for this failure is being improved upstream (clio owns the
 diagnostic message and the entity-existence probe). Because this playbook triggers on the failure
 **class** rather than one exact string, it holds for both the old wording and the improved
 diagnostic — no change is required here when the clio-side wording lands.
