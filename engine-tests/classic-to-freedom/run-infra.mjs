@@ -861,9 +861,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   };
   const jobSrc = jobBoundarySlice(prYml, "name: Classic\u2192Freedom engine goldens");
   // Both sides reduced to the same vocabulary: the REPO-RELATIVE file each command executes, plus `--check`.
-  // Comparing bare basenames let the two sides agree while running from different folders — `npm test` from the
-  // engine folder broke on a cwd the CI steps never had, and this check stayed green. Each command is resolved
-  // against the directory it runs in: a CI step's `working-directory` (repo root when absent), and the engine
+  // Each command is resolved against the directory it runs in: a CI step's `working-directory` (repo root when absent), and the engine
   // folder for `scripts.test`, which npm runs from there.
   // Tokenised rather than matched with one unanchored regex (super-linear on a long file, S8786): every test
   // below looks at one short whitespace-free token.
@@ -893,16 +891,13 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   // The runners the job's steps execute, in step order. Only the flat single-line `working-directory:` / `run:`
   // pair is understood; anything else that mentions a runner or a working directory — a `run: |` block, a job-level
   // `defaults:` — lands in `unresolved`, and the check fails on it rather than skipping the step.
-  const ciStepRunners = (job) => {
-    const lines = job.split("\n").map(stripComment).filter((l) => l.trim());
-    const runners = [], unresolved = [];
-    const stepsAt = lines.findIndex((l) => l.trim() === "steps:");
-    if (stepsAt < 0) return { runners, unresolved: ["no `steps:` block in the job"] };
-    const mentionsRunner = (l) => l.includes(".mjs") || l.includes("working-directory");
-    lines.slice(0, stepsAt).filter(mentionsRunner).forEach((l) => unresolved.push(l.trim()));
-    const steps = [];
+  const mentionsRunner = (l) => l.includes(".mjs") || l.includes("working-directory");
+  const BLOCK_SCALARS = new Set(["|", ">"]);
+  // Groups the lines after `steps:` into one entry list per step item; a runner mention before the first item is unresolved.
+  const groupSteps = (stepLines) => {
+    const steps = [], unresolved = [];
     let itemIndent = null;
-    for (const line of lines.slice(stepsAt + 1)) {
+    for (const line of stepLines) {
       const item = /^( *)- /.exec(line);
       if (item && (itemIndent === null || item[1].length === itemIndent)) {
         itemIndent = item[1].length;
@@ -910,16 +905,33 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
       } else if (steps.length) steps.at(-1).push(line.trim());
       else if (mentionsRunner(line)) unresolved.push(line.trim());
     }
-    for (const entries of steps) {
-      let cwd = ".", run = null;
-      for (const entry of entries) {
-        const kv = /^([A-Za-z-]+):\s*(\S.*)?$/.exec(entry);
-        if (kv && kv[1] === "working-directory" && kv[2]) cwd = kv[2].trim();
-        else if (kv && kv[1] === "run" && kv[2] && kv[2].trim() !== "|" && kv[2].trim() !== ">") run = kv[2].trim();
-        else if (mentionsRunner(entry)) unresolved.push(entry);
-      }
-      if (run === null) continue;
-      const r = runnersOfCommand(run, cwd);
+    return { steps, unresolved };
+  };
+  // A step's single-line `working-directory:` (repo root when absent) and `run:`; any other runner mention is unresolved.
+  const stepCommand = (entries) => {
+    let cwd = ".", run = null;
+    const unresolved = [];
+    for (const entry of entries) {
+      const kv = /^([A-Za-z-]+):\s*(\S.*)?$/.exec(entry);
+      const value = kv?.[2]?.trim();
+      if (kv?.[1] === "working-directory" && value) cwd = value;
+      else if (kv?.[1] === "run" && value && !BLOCK_SCALARS.has(value)) run = value;
+      else if (mentionsRunner(entry)) unresolved.push(entry);
+    }
+    return { cwd, run, unresolved };
+  };
+  const ciStepRunners = (job) => {
+    const lines = job.split("\n").map(stripComment).filter((l) => l.trim());
+    const stepsAt = lines.findIndex((l) => l.trim() === "steps:");
+    if (stepsAt < 0) return { runners: [], unresolved: ["no `steps:` block in the job"] };
+    const grouped = groupSteps(lines.slice(stepsAt + 1));
+    const runners = [];
+    const unresolved = [...lines.slice(0, stepsAt).filter(mentionsRunner).map((l) => l.trim()), ...grouped.unresolved];
+    for (const entries of grouped.steps) {
+      const step = stepCommand(entries);
+      unresolved.push(...step.unresolved);
+      if (step.run === null) continue;
+      const r = runnersOfCommand(step.run, step.cwd);
       runners.push(...r.runners);
       unresolved.push(...r.unresolved);
     }
@@ -959,7 +971,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   const wdLine = jobLines.findIndex((l, i) => i > mapperStep && l.includes("working-directory:"));
   const swapped = jobLines.map((l, i) => (i === wdLine ? l.replace(/working-directory:.*/, "working-directory: engine-tests/build-workflows") : l)).join("\n");
   const swappedParity = parityOf(swapped, enginePkg.scripts?.test || "");
-  check("(negative) a CI step with its working-directory swapped fails the parity check, and the mismatch NAMES the runner that moved — the basename comparison passed this",
+  check("(negative) a CI step with its working-directory swapped fails the parity check, and the mismatch NAMES the runner that moved",
     mapperStep >= 0 && wdLine > mapperStep && swapped !== jobSrc
       && swappedParity.mismatches.length === 1 && swappedParity.mismatches[0].includes("run-mapper.mjs")
       && swappedParity.mismatches[0].includes("engine-tests/build-workflows/run-mapper.mjs"),

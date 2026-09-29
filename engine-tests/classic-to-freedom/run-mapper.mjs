@@ -23,8 +23,8 @@ const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migr
 const FIX = path.join(DIR, "fixtures");
 // Every migrate.mjs child process goes through here, so the CLI goldens see the same working directory wherever
 // the runner was started from. A manifest piped on stdin (`-`) takes the child's cwd as its base directory, and
-// the path containment in migrate.mjs rejects a `file:` outside it — the goldens name fixtures under FIX, so an
-// inherited cwd made `npm test` from the engine folder fail them while the same goldens passed from here.
+// the path containment in migrate.mjs rejects a `file:` outside it — the goldens name fixtures under FIX, so the
+// child must run from DIR.
 const runMigrate = (args, opts = {}) =>
   spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { cwd: DIR, encoding: "utf8", ...opts });
 const load =(dir, order) => order.map(fn =>
