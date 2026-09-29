@@ -8134,7 +8134,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     const fpB = other ? taskFilePath(dir, other.id) : null;
     if (fpB) fs.writeFileSync(fpB, setOutcome(fs.readFileSync(fpB, "utf8"), 2, NOT_BUILT_BLOCKED));
     const route = cliB(base, "--tasks", dir, "--route");
-    check("--route (T2): a folder that HAS a repairable row writes its repair task and reports it — the decision-waiting rows do not replace that report",
+    check("--route: a folder that HAS a repairable row writes its repair task and reports it — the decision-waiting rows do not replace that report",
       () => !!fpB && /wrote \d+ repair task\(s\)/.test(route.stdout || "") && !/nothing there is waiting to be routed/.test(route.stdout || ""),
       () => route.stdout);
     fs.rmSync(base, { recursive: true, force: true });
@@ -8342,8 +8342,8 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     build(dir, { rowRef: { taskId: t.id, n: "1" } });
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"));
     const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
-    check("CLI `--revoke D5`: over a build-it entry whose row a builder has since built, exits 0 and says the build-it entries listed below were withdrawn",
-      () => cli.status === 0 && /The build-it entries listed below were withdrawn/.test(cli.stdout || ""),
+    check("CLI `--revoke D5`: over a build-it entry whose row a builder has since built, exits 0 and opens with `withdrew 1 build-it entry`, never with the no-op text",
+      () => cli.status === 0 && /^migrate\.mjs: withdrew 1 build-it entry under D5/.test(cli.stdout || "") && !/nothing to revoke/.test(cli.stdout || ""),
       () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -8391,6 +8391,9 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       () => res.refused && res.skipped?.some((x) => x.n === 1 && /in-progress/.test(x.why) && /second agent/.test(x.why))
         && readTaskDir(dir).find((x) => x.id === t.id).status === "in-progress" && fs.readFileSync(fp, "utf8") === before,
       () => ({ refused: res.refused, skipped: res.skipped?.map((x) => x.why), status: readTaskDir(dir).find((x) => x.id === t.id).status }));
+    const offered = startableTasks(syncTaskDir(dir, RUN, { ...BO, now: AT(802) }), dir).startable.map((x) => x.id);
+    check("--next: the skipped task is not offered for dispatch while it is still in-progress",
+      () => !offered.includes(t.id), () => offered);
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
@@ -8446,8 +8449,9 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     fs.writeFileSync(fp, setOutcome(setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"), 2, "built"));
     const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
     const left = String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim();
-    check("CLI `--revoke D5` over a withdrawn build-it entry and a cell still in force: exits 1, lists the withdrawn entry and the skipped cell separately, and the folder keeps only the entry still in force",
-      () => cli.status === 1 && /nothing revoked/.test(cli.stderr || "") && /withdrawn .* row 1/.test(cli.stderr || "")
+    check("CLI `--revoke D5` over a withdrawn build-it entry and a cell still in force: exits 1, opens by reporting the withdrawal rather than `nothing revoked`, lists the withdrawn entry and the skipped cell separately, and the folder keeps only the entry still in force",
+      () => cli.status === 1 && /^migrate\.mjs: withdrew 1 build-it entry under D5/.test(cli.stderr || "") && !/nothing revoked/.test(cli.stderr || "")
+        && /withdrawn .* row 1/.test(cli.stderr || "")
         && /skipped .* row 2/.test(cli.stderr || "") && left === "2:D5",
       () => ({ status: cli.status, stderr: cli.stderr, left }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -8895,6 +8899,34 @@ const locateRow = (dir, label) => {
         && onBoundary.refused && onBoundary.skipped.length === 1 && onBoundary.skipped[0].why.includes("plan-boundary")
         && JSON.stringify(before) === JSON.stringify(fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"))),
       () => ({ status: onStatus.skipped?.map((x) => x.why), boundary: onBoundary.skipped?.map((x) => x.why), problems: [onStatus.problems, onBoundary.problems] }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A build-it entry withdrawn beside a cell whose `manifest.deliverableStatus` entry still cites the same D<N>.
+    // The CLI slices with its own opts, so the folder is cut with them.
+    const cliOpts = { ...checklistOpts(M1), decisions: DEC };
+    const { base, dir, set } = cut("status-revoke-mixed", RUN_ST, cliOpts);
+    const open = locateRow(dir, "Handler — `onA`");
+    const fpOpen = path.join(dir, open.t.file);
+    fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(M1));
+    // Every open row of the task is built but the one asked about, so the task is settled and awaits the answer.
+    open.t.rows.forEach((r, i) => {
+      if (!r.outcomeKind) fs.writeFileSync(fpOpen, setOutcome(fs.readFileSync(fpOpen, "utf8"), i + 1, i === open.i ? "not-built — needs-decision" : "built"));
+    });
+    syncTaskDir(dir, RUN_ST, { ...cliOpts, now: AT(910) });
+    const cliS = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, ...args], { encoding: "utf8" });
+    const decided = cliS("--decide", "D6", "--build", "--row", `${open.t.id}:${open.i + 1}`);
+    fs.writeFileSync(fpOpen, setOutcome(fs.readFileSync(fpOpen, "utf8"), open.i + 1, "built"));
+    const cli = cliS("--revoke", "D6");
+    const entriesOf = (x) => [...(x.t.decisions instanceof Map ? x.t.decisions : parseDecisionsMap(x.t.decisions)).entries()].map(([n, d]) => `${n}:${d}`);
+    const onA = locateRow(dir, "Handler — `onA`");
+    const onB = locateRow(dir, LABELS["main#method:onB"]);
+    check("CLI `--decide D6 --build` then `--revoke D6` where a `deliverableStatus` entry still cites D6: exits 1, the head line reports the withdrawal (not `nothing revoked`), the status cell is listed as skipped, and `decisions:` on disk drops the build-it entry and keeps the status cell's",
+      () => !set.refused && decided.status === 0 && cli.status === 1 && /^migrate\.mjs: withdrew 1 build-it entry under D6/.test(cli.stderr || "")
+        && !/nothing revoked/.test(cli.stderr || "") && /skipped .*manifest\.deliverableStatus/.test(cli.stderr || "")
+        && !entriesOf(onA).some((e) => /D6!/.test(e)) && onB.r.outcomeKind === "wont-do" && entriesOf(onB).some((e) => e.startsWith(`${onB.i + 1}:D6`)),
+      () => ({ decided: [decided.status, decided.stderr], status: cli.status, stderr: cli.stderr, onA: entriesOf(onA), onB: entriesOf(onB) }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {

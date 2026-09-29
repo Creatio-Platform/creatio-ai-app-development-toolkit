@@ -3826,16 +3826,18 @@ function runRevokeMode(result, dir, opts) {
   const skipped = res.skipped || [];
   const withdrawnLines = skipped.filter((s) => s.withdrawn).map((s) => `  · withdrawn ${s.task.file} row ${s.n}: ${s.why}`);
   const inForceLines = skipped.filter((s) => !s.withdrawn).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  // The head line of a run that withdrew build-it entries says so, so it cannot read as a no-op.
+  const entryWord = withdrawnLines.length === 1 ? "entry" : "entries";
+  const withdrewHead = `withdrew ${withdrawnLines.length} build-it ${entryWord} under ${opts.decision}`;
   if (!res.cleared.length) {
     if (!withdrawnLines.length && !inForceLines.length) return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
     if (!inForceLines.length) {
-      return { note: [`migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}. The build-it entries listed below were withdrawn.`, ...withdrawnLines].join("\n") + "\n", ok: true };
+      return { note: [`migrate.mjs: ${withdrewHead}; no other cell was written under ${opts.decision}.`, ...withdrawnLines].join("\n") + "\n", ok: true };
     }
-    // No cell written under the decision was cleared: every one that exists was skipped and stays in force.
-    const head = `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`;
-    const lines = [head, ...inForceLines];
-    if (withdrawnLines.length) lines.push("", `The build-it entries under ${opts.decision} were withdrawn:`, ...withdrawnLines);
-    return { note: lines.join("\n") + "\n", ok: false };
+    // Every other cell written under the decision was skipped and stays in force: a failure, whatever was withdrawn.
+    const skippedHead = `every other cell in ${dir} written under ${opts.decision} was skipped and stays in force:`;
+    const head = withdrawnLines.length ? `migrate.mjs: ${withdrewHead}; ${skippedHead}` : `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`;
+    return { note: [head, ...inForceLines, ...withdrawnLines].join("\n") + "\n", ok: false };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
