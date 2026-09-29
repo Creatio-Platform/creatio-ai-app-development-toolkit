@@ -8535,6 +8535,10 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
   {
     const { base, dir, t, fp } = buildItFixture("build-declared");
     fs.writeFileSync(fp, fs.readFileSync(fp, "utf8").replace(/^declared:.*$/m, "declared: blocked"));
+    const routeBlocked = cliB(base, "--tasks", dir, "--route");
+    check("--route (T1): a needs-decision row on a task that declares `blocked` is still named as waiting on a decision — the halt IS the question",
+      () => waits(routeBlocked.stdout) && !/nothing there is waiting to be routed/.test(routeBlocked.stdout || ""),
+      () => routeBlocked.stdout);
     build(dir, { rowRef: { taskId: t.id, n: "1" } });
     const back = readTaskDir(dir).find((x) => x.id === t.id);
     check("--decide --build: a `declared: blocked` that raised the question is retired with the answer, so the task reads `todo`, not halted",
@@ -8575,6 +8579,38 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       () => !all.refused && all.touched.length === 1 && all.skipped.length === t.rows.length - 1
         && back.rows[0].outcomeKind === null && back.rows.slice(1).every((r) => r.outcomeKind === "built"),
       () => ({ touched: all.touched?.length, skipped: all.skipped?.length, problems: all.problems }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, t, fp } = buildItFixture("build-bypass");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — x (D5)"));
+    const set = syncTaskDir(dir, RUN, { ...BO, now: AT(902) });
+    const key = verifyRowKey(t.pageKey, t.rows[0].label);
+    check("a build-it entry is not a closure: a `wont-do` typed by hand into the re-opened cell is named on Attention and does not hide the row from `--verify`",
+      () => /but the row is NOT in/.test(readIndex(dir))
+        && !decidedRowKeys(set).has(key),
+      () => readIndex(dir).slice(readIndex(dir).indexOf("## Attention")).split("\n").slice(0, 8));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // An adopted body (a repair task) is written in place, not re-rendered.
+    const { base, dir, rep } = repairMirrorFixture("build-adopted", "D5", "build the typed forms");
+    const fpR = taskFilePath(dir, rep.id);
+    fs.writeFileSync(fpR, setOutcome(fs.readFileSync(fpR, "utf8"), 1, NEEDS_DECISION));
+    const res = build(dir, { ...OPTS, rowRef: { taskId: rep.id, n: "1" } });
+    const back = readTaskDir(dir).find((x) => x.id === rep.id);
+    const meta = parseTaskFile(fs.readFileSync(fpR, "utf8")).meta;
+    check("--decide --build: a repair task's needs-decision row is re-opened in place — cell cleared, `decisions:` written, task back to `todo`",
+      () => !res.refused && back.rows[0].outcomeKind === null && String(meta.decisions).trim() === "1:D5!" && back.status === "todo",
+      () => ({ res: res.problems, kinds: back.rows.map((r) => r.outcomeKind), decisions: meta.decisions, status: back.status }));
+    const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D5" });
+    const again = readTaskDir(dir).find((x) => x.id === rep.id);
+    check("--revoke D5: withdrawing a build-it entry on a repair task puts the question back in place and drops the entry",
+      () => !rev.refused && again.rows[0].outcomeCause === "needs-decision"
+        && String(parseTaskFile(fs.readFileSync(fpR, "utf8")).meta.decisions || "").trim() === "",
+      () => ({ rev: rev.problems, cell: again.rows[0].outcome }));
     fs.rmSync(base, { recursive: true, force: true });
   }
 

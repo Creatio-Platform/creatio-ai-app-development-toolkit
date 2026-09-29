@@ -1489,7 +1489,7 @@ export function undecidedDecisionCells(tasks) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     (t.rows || []).forEach((r, i) => {
       if (r.outcomeKind !== O_WONT_DO && r.outcomeKind !== O_POSTPONED) return;
-      if (map?.has(i + 1)) return;
+      if (closingEntry(map, i + 1)) return;
       out.push({ task: t, row: r, n: i + 1 });
     });
   }
@@ -1676,8 +1676,19 @@ export const notBuiltOpenItems = (tasks) =>
 
 // The open rows a person's answer is what they wait on: recorded `not-built — needs-decision` and not closed by
 // a `--decide` entry. No repair round is written for them.
-export const decisionWaitingRows = (tasks) => notBuiltOpenItems(tasks).filter((it) => it.cause === CAUSE_NEEDS_DECISION
-  && !hasClosingDecision(it.task, it.n));
+// A `blocked` task is read too: the question that raised the halt is still the thing it waits on.
+export function decisionWaitingRows(tasks) {
+  const out = [];
+  for (const t of tasks || []) {
+    if (t.unread || !(SETTLED.has(t.status) || t.status === S_BLOCKED)) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
+      if (settledByRound(r) || hasClosingDecision(t, i + 1)) return;
+      out.push({ task: t, row: r, n: i + 1 });
+    });
+  }
+  return out;
+}
 
 // A row whose repair round has built it. Its Outcome cell keeps its `not-built` word, so every reader of open
 // rows filters on this.
@@ -3045,9 +3056,9 @@ function hasDecision(task, n) {
 
 // A `--decide` entry that closes the row. A build-it entry does not: its row is open work again, and if the
 // builder raises it as needs-decision once more it is an open question again.
+const closingEntry = (map, n) => !!map?.has(n) && !isBuildDecision(map.get(n));
 function hasClosingDecision(task, n) {
-  const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
-  return map?.has(n) && !isBuildDecision(map.get(n));
+  return closingEntry(task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions), n);
 }
 
 // The rows marked `not-built — needs-decision` with no closing `--decide` entry and not built by a repair round,
@@ -3382,7 +3393,7 @@ function isDecidedDescope(t) {
   return rows.every((r, i) => {
     if (r.outcomeKind === O_BUILT) return false;
     if (r.outcomeKind === O_NOT_APPLICABLE && r.na) return true;
-    return (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && map.has(i + 1);
+    return (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && closingEntry(map, i + 1);
   });
 }
 
@@ -3736,7 +3747,7 @@ const DECIDED_ROW_KINDS = new Set([O_WONT_DO, O_POSTPONED, O_NOT_APPLICABLE]);
 // key would keep the source row hidden after its own decision was cleared.
 function rowClosureIsAuthored(r, i, map) {
   if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) {
-    return !!map?.has(i + 1) && !isCascadeDecision(map.get(i + 1));
+    return closingEntry(map, i + 1) && !isCascadeDecision(map.get(i + 1));
   }
   if (r.outcomeKind === O_NOT_APPLICABLE) return !!r.na;
   return false;
