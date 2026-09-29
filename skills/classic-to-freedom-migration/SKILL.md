@@ -131,7 +131,7 @@ Every migration is tracked through a persisted document set — the shared sourc
 - **Scale to scope:** single-section → a lightweight `plan.md` + `worklog.md` + `decisions.md`; whole-package → the full set (`README.md`, `discovery.md`, `plan.md`, `roadmap.md`, `decisions.md`, `worklog.md`). `decisions.md` is in BOTH lists because the plan approval is recorded there and the step-7 build reads it as a precondition — at single-section scope that one entry may be all it holds.
 - `plan.md` is the **engine-written `--plan --out plan.md` output** (Contract rule 2), its values supplied via `manifest.planMeta`, plus its provenance; it is **frozen after approval** — changes go through `decisions.md` and re-approval.
 - `customizations.md` is the **`classic-ui-expert` sub-agent's report** (step 5.1) when that run applies — behaviour cards with acceptance criteria, written by that skill, linked from the plan's `Adjustments`, and never hand-edited.
-- Cardinal rule: read `README.md` + `roadmap.md` at the start of every session (single-section: `plan.md` + `worklog.md`); after every meaningful action update `roadmap.md` and append to `worklog.md`.
+- Cardinal rule: at each session start recover state, never whole — `grep -n '^#'` on `README.md` + `roadmap.md` (single-section: `plan.md`), read the active section and the tail of `worklog.md`; after every meaningful action update `roadmap.md` and append to `worklog.md`. **Read discipline** binds all your reads: big output goes to a file and back as a `grep -n` + `sed -n` window, JSON is queried, a held file is not re-read — full block: `./references/orchestrate-build.md`.
 
 ## Workflow
 

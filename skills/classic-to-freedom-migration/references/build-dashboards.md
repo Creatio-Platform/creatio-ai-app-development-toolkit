@@ -1,10 +1,11 @@
 # Migrating a section's Classic dashboards (step 7.7)
 
-Handed, with `./references/build-task-execution.md`, `./references/build-page.md` and
-`./references/classic-to-freedom-mapping.md`, to the list page's build task — the one whose
-deliverables carry the section-dashboard rows; the engine emits no separate dashboards task. Do this
-part after the list page body is built, within that task, because it writes into the built list
-page. SKILL.md step 2 found the dashboards and step
+Handed, with `./references/build-task-execution.md` and `./references/build-page.md`, to the list
+page's build task — the one whose deliverables carry the section-dashboard rows; the engine emits no
+separate dashboards task. `./references/classic-to-freedom-mapping.md` is a reference: `grep -n '^#'`
+lists its headings and you read every section that applies to your page — a pointer below names the
+section most tasks need, not the only one — never the file whole. Do this part after the list page
+body is built, within that task, because it writes into the built list page. SKILL.md step 2 found the dashboards and step
 4.2's `signals.dashboards` recorded them and the plan's delivery split. The state, scope and
 existence-check rules in `build-task-execution.md` bind every call below.
 
