@@ -2452,14 +2452,13 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   for (const w of cs.cardWidgets || [])
     cover.push({ deliverableId: `card-widget:${w.recordId}:${w.widgetKey}`, label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${regionOf(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", recordedBy: "builder", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ deliverableId: "tabs", label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
-  cover.push(...relatedListItemRows(cs, expDetails));
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
   // published as the row's verify type, so it must be a type the built page really
   // carries and the stand really resolves. It comes from the SHARED MAPPING TABLE rather than from a
   // local `FEATURE_TYPE` map — a SECOND home for the same knowledge the mapper asserted in prose, so the gate and
   // the plan could disagree about which component a feature means. The table's types are checked against the
   // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
-  cover.push(...standardFeatureRows(cs, pageKey));
+  cover.push(...relatedListItemRows(cs, expDetails), ...standardFeatureRows(cs, pageKey));
   // `cs.dcmActive` (from the mapper) scopes DCM to THIS page's entity — a child edit page does not inherit the
   // parent's case, so it demands no case bar. The mapper sets it on every real changeSet; a hand-built changeSet
   // (no `dcmActive` key) falls back to the raw resolved signal, which is the unscoped main-page reading it always
