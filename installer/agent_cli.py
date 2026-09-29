@@ -14,6 +14,8 @@ from pathlib import Path
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 PLUGIN_SOURCE = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
+# Git source every agent registers the CAADT marketplace from.
+MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 
 
 def preflight_copilot() -> str:

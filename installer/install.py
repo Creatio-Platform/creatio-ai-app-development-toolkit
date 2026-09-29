@@ -22,6 +22,7 @@ if str(_INSTALLER_DIR) not in sys.path:
 
 import agent_cli  # noqa: E402  (bound for test patch targets: installer.agent_cli.*)
 from agent_cli import (  # noqa: E402
+    MARKETPLACE_GIT_URL,
     MARKETPLACE_NAME,
     PLUGIN_NAME,
     PLUGIN_SOURCE,
@@ -30,7 +31,6 @@ from agent_cli import (  # noqa: E402
     resolve_copilot_command,
 )
 
-MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
 NAMED_WORKFLOW_DIR_NAME = "workflows"
 WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -269,19 +270,20 @@ def update_agents(
     fresh_root: Path | None = None,
     silent: bool = False,
     home: Path | None = None,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], dict[str, str]]:
     """Update each agent: native command in place, or a reinstall from the release source (Cursor, Codex).
 
     Updates every id in *target_ids*; the caller is responsible for scoping that
     list (e.g. for --target). A failure on one agent is recorded and the rest
-    continue. Returns (updated, failed) lists of target IDs.
+    continue. Returns (updated, failed): the updated target IDs, and each failed
+    target ID mapped to its error text, both in *target_ids* order.
 
     *home* overrides the home directory the Claude named-workflow refresh writes
     into; it exists so a test can exercise the update without touching the real
     ``~/.claude/workflows``.
     """
     updated: list[str] = []
-    failed: list[str] = []
+    failed: dict[str, str] = {}
 
     for target_id in target_ids:
         error = _update_one_agent(target_id, fresh_root, home)
@@ -295,11 +297,76 @@ def update_agents(
                 # adac-setup-wizard repo if you change the wording.
                 print(f"Updated {target_id}.")
         else:
-            failed.append(target_id)
+            failed[target_id] = error
             if not silent:
                 print(f"ERROR updating {target_id}: {error}", file=sys.stderr)
 
     return updated, failed
+
+
+# -------------------------------------------------------------------------
+# Failure classification (which remediation hint fits a failed agent)
+# -------------------------------------------------------------------------
+
+# git's two phrasings for a marketplace pinned to a branch missing on the remote.
+_DELETED_BRANCH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"remote branch (\S+) not found", re.IGNORECASE),
+    re.compile(r"couldn't find remote ref (\S+)", re.IGNORECASE),
+)
+# Windows and Node wordings for a file another process holds open.
+_LOCK_PATTERN = re.compile(
+    r"\bEBUSY\b|\bEPERM\b|being used by another process|access (?:is )?denied",
+    re.IGNORECASE,
+)
+
+LOCK_HINT = (
+    "A running agent can lock its plugin files and block the update. "
+    "Close the agent(s) above and re-run this command."
+)
+GENERIC_HINT = "See the error above for the cause, fix it, and re-run this command."
+
+
+def classify_failure(error: str) -> tuple[str, str | None]:
+    """Classify a failed update's error text.
+
+    Returns ("deleted_branch", <branch>) when the agent's marketplace is pinned
+    to a branch missing on the remote, ("lock", None) when a plugin file is held
+    open, and ("other", None) for everything else. The deleted-branch check runs
+    first because it is the more specific cause.
+    """
+    for pattern in _DELETED_BRANCH_PATTERNS:
+        match = pattern.search(error)
+        if match:
+            branch = match.group(1).strip("'\"`.,;")
+            return "deleted_branch", branch.removeprefix("refs/heads/")
+    if _LOCK_PATTERN.search(error):
+        return "lock", None
+    return "other", None
+
+
+def failure_hint(target_id: str, error: str) -> str:
+    """Return the remediation hint for *target_id* failing with *error*."""
+    kind, branch = classify_failure(error)
+    if kind == "deleted_branch":
+        pinned = (
+            f"{target_id}: the CAADT marketplace is pinned to branch '{branch}', "
+            "which no longer exists on the remote."
+        )
+        if target_id not in NATIVE_TARGETS:
+            # Cursor has no plugin CLI and Codex has no `plugin install`, so there
+            # are no restore commands to print for a reinstall target.
+            return f"{pinned} {GENERIC_HINT}"
+        # Native targets are named after their own CLI binary.
+        cli = target_id
+        return (
+            f"{pinned} Re-register the release marketplace:\n"
+            f"  {cli} plugin marketplace remove {agent_cli.MARKETPLACE_NAME}\n"
+            f"  {cli} plugin marketplace add {agent_cli.MARKETPLACE_GIT_URL}\n"
+            f"  {cli} plugin install {agent_cli.PLUGIN_SOURCE}"
+        )
+    if kind == "lock":
+        return LOCK_HINT
+    return GENERIC_HINT
 
 
 # -------------------------------------------------------------------------
@@ -500,14 +567,11 @@ def main(argv: list[str] | None = None) -> int:
             print("Start a new agent session to load the updated version.")
         if failed:
             print(f"Failed  {len(failed)} agent(s): {', '.join(failed)}", file=sys.stderr)
-            # A common, non-obvious cause is a still-running agent holding a lock
-            # on its own plugin files (the raw CLI error rarely says so). Phrased
-            # conditionally so it stays correct for network/timeout failures too.
-            print(
-                "A running agent can lock its plugin files and block the update. "
-                "Close the agent(s) above and re-run this command.",
-                file=sys.stderr,
-            )
+            # The raw CLI error rarely names the real cause, so each failure gets
+            # the hint its error text matches; agents sharing a hint print it once.
+            hints = dict.fromkeys(failure_hint(tid, error) for tid, error in failed.items())
+            for hint in hints:
+                print(hint, file=sys.stderr)
 
     return 1 if failed else 0
 
