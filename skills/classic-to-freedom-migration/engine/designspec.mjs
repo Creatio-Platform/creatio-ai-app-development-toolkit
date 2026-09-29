@@ -3089,21 +3089,28 @@ function buildDashboardRows(result, opts) {
 // table's card-action rows) fold into the native row. A custom action such as `calculateSaaSMetrics` is not shipped
 // by any template, so folding it there would read a correct page as missing it.
 const TEMPLATE_CARD_ACTIONS = knownCardActions();
-// The standard Print / Run-process controls name no specific action, so any crt.Button is their evidence. Matched by
-// exact name: a custom hint that merely contains "print" or "process" (`printContract`) still needs its own element.
-const BUTTON_ONLY_CARD_ACTIONS = new Set(["PrintButton", "ProcessButton", "RunProcess"]);
+// The standard Print / Run-process controls name no specific action, so the platform request they fire is their
+// evidence. Matched by exact name: a custom hint that merely contains "print" or "process" (`printContract`) still
+// needs its own element.
+const REQUEST_OF_CARD_ACTION = new Map([
+  ["PrintButton", "crt.PrintablesRequest"],
+  ["ProcessButton", "crt.RunBusinessProcessRequest"],
+  ["RunProcess", "crt.RunBusinessProcessRequest"],
+]);
+// The plan builds nothing for the page view-options control, so the native row does not ask the page to show one.
+const UNBUILT_NATIVE_CARD_ACTIONS = new Set(["ViewOptionsButton"]);
 function buildCardActionRows(cs) {
   const acts = cs.cardActions || [];
-  const isNative = (a) => TEMPLATE_CARD_ACTIONS.has(a) && !BUTTON_ONLY_CARD_ACTIONS.has(a);
+  const isNative = (a) => TEMPLATE_CARD_ACTIONS.has(a) && !REQUEST_OF_CARD_ACTION.has(a);
   // A custom action also carries its name: `hasType("crt.Button")` alone is satisfied by the template's own Actions
   // button, so the name is what tells a built custom action from an unbuilt one.
   // Every custom hint of the card rides on each custom row as `siblings`, so a text that spells a longer sibling
   // (`ApproveAllMenuItem` for `approveAll`) is not also credited to the shorter hint it starts with (`approve`).
-  const customs = acts.filter((a) => !isNative(a) && !BUTTON_ONLY_CARD_ACTIONS.has(a)).map((a) => a.replace(/Button$/, ""));
+  const customs = acts.filter((a) => !isNative(a) && !REQUEST_OF_CARD_ACTION.has(a)).map((a) => a.replace(/Button$/, ""));
   const rows = acts.filter((a) => !isNative(a))
     .map((a) => ({ deliverableId: cardActionId(a.replace(/Button$/, "")), action: a, label: `Card action — ${esc(a.replace(/Button$/, ""))}`,
-      vk: BUTTON_ONLY_CARD_ACTIONS.has(a) ? { type: "card" } : { type: "card", names: [a.replace(/Button$/, "")], siblings: customs } }));
-  const natives = acts.filter(isNative);
+      vk: REQUEST_OF_CARD_ACTION.has(a) ? { type: "card", request: REQUEST_OF_CARD_ACTION.get(a) } : { type: "card", names: [a.replace(/Button$/, "")], siblings: customs } }));
+  const natives = acts.filter((a) => isNative(a) && !UNBUILT_NATIVE_CARD_ACTIONS.has(a));
   if (natives.length) {
     // the template ships these controls under stable element names, so the row is machine-checkable.
     rows.push({ deliverableId: NATIVE_CARD_ACTIONS_ID, label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`,
@@ -3616,7 +3623,16 @@ export function resolveComponentVk(vk, ctx) {
   if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`, "ok"] : ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``, "missing"]; }
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
   if ((vk.names || []).length) return resolveCustomCardActionVk(vk, ctx);
-  return hasType("crt.Button") ? ["✅ Done", "a crt.Button is present — confirm it triggers the action", "ok"] : ["⚠ verify", "no crt.Button found — confirm the action", "unverified"]; // card
+  return resolveRequestCardActionVk(vk, ctx); // card
+}
+// A standard Print / Run-process action is Done only when a built element fires its platform request. Any
+// crt.Button is not evidence — the template's own Save and Close buttons are ones — and a `remove` op takes the
+// element away rather than building it.
+function resolveRequestCardActionVk(vk, ctx) {
+  if (!vk.request) return ["⚠ verify", "the row names neither the action nor its request — confirm the action is built", "unverified"];
+  const carrier = ctx.ops.find((o) => !isRemove(o) && opRequest(o) === vk.request);
+  if (carrier) return ["✅ Done", `\`${esc(carrier.name)}\` fires \`${esc(vk.request)}\``, "ok"];
+  return ["⚠ verify", `no built element fires \`${esc(vk.request)}\` — wire the action to that request, or confirm it is built`, "unverified"];
 }
 // A custom `getActions` item is Done only when a built element identifies the action: its name, its caption (the
 // raw binding or the resolved text) or its `clicked.request` contains the action name, compared as lowercase letters
@@ -4328,16 +4344,18 @@ function resolveLayoutTab(vk, ctx, judge) {
   else if (fits.length > 1) why = "and more than one tab could hold it by content";
   return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words, ${why} — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
-// The template's native card controls, by the element names it ships them under.
-// Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
-// (tokens ["tag","select"]) but NOT `StageProgressBar` (["stage","progress","bar"] — "tag" is only a substring of
-// "stage", never a token). `/Tag/i.test("StageField")` would close a Tag control that was never built.
-const CARD_NATIVE_TOKENS = new Map([
-  ["ViewOptions", [["view", "options"], ["card", "actions"], ["action", "buttons"]]],
-  ["ReloadData", [["reload"]]],
-  ["Tag", [["tag"]]],
+// The template's native card controls, by the element name AND the kind of component that can be one.
+// Names as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect` (tokens ["tag","select"]) but
+// NOT `StageProgressBar` (["stage","progress","bar"] — "tag" is only a substring of "stage", never a token).
+// The kind keeps a container or field that happens to share the name out: a reload is an element that can fire an
+// action (`canCarryAction`), a tag control is a `crt.TagSelect`. An op with no type at all (a `merge` of the
+// template's own control) is kept, since nothing says what it is.
+const isTagControl = (o) => { const type = o.type || o.values?.type; return !type || type === "crt.TagSelect"; };
+const CARD_NATIVE_CONTROLS = new Map([
+  ["ReloadData", { seqs: [["reload"]], accepts: canCarryAction }],
+  ["Tag", { seqs: [["tag"]], accepts: isTagControl }],
 ]);   // a Map, not an object literal, so a schema-derived name like `constructor` cannot reach Object.prototype
-// A contiguous token subsequence match (`["card","actions"]` inside `["card","actions","button"]`).
+// A contiguous token subsequence match (`["reload"]` inside `["reload","data","menu","item"]`).
 function tokenSeqIn(tokens, seq) {
   for (let i = 0; i + seq.length <= tokens.length; i++) {
     if (seq.every((s, j) => tokens[i + j] === s)) return true;
@@ -4347,12 +4365,13 @@ function tokenSeqIn(tokens, seq) {
 export function resolveCardNativeVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the native card actions");
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the card actions cannot exist", "missing"];
-  const builtTokens = ctx.ops.map((o) => tokensOf(o.name));
+  const built = ctx.ops.filter((o) => !isRemove(o)).map((o) => ({ op: o, toks: tokensOf(o.name) }));
   const all = vk.names || [];
-  // An unknown native name falls back to its OWN camelCase tokens — boundary-safe, never a raw substring.
+  // An unknown native name falls back to its OWN camelCase tokens on an action carrier — boundary-safe, never a
+  // raw substring.
   const missing = all.filter((n) => {
-    const seqs = CARD_NATIVE_TOKENS.get(n) || [tokensOf(n)];
-    return !builtTokens.some((toks) => seqs.some((seq) => seq.length && tokenSeqIn(toks, seq)));
+    const { seqs, accepts } = CARD_NATIVE_CONTROLS.get(n) || { seqs: [tokensOf(n)], accepts: canCarryAction };
+    return !built.some(({ op, toks }) => accepts(op) && seqs.some((seq) => seq.length && tokenSeqIn(toks, seq)));
   });
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];

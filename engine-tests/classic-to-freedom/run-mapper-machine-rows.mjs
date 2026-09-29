@@ -162,10 +162,26 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     }, () => L({ region: "header", widgets: ["crt.EntityStageProgressBar", "crt.Feed"] }));
 
   // native card actions
-  check("cardnative: the template's native controls are matched by element name (CardActionsBtn / ReloadDataBtn / TagSelect) — all three ✅, a missing one named",
-    () => st(resolveVk({ type: "cardnative", names: ["ViewOptions", "ReloadData", "Tag"] }, ctx)) === "✅ Done"
-      && /missing: Print/.test(ev(resolveVk({ type: "cardnative", names: ["ViewOptions", "Print"] }, ctx))),
-    () => [resolveVk({ type: "cardnative", names: ["ViewOptions", "ReloadData", "Tag"] }, ctx), resolveVk({ type: "cardnative", names: ["ViewOptions", "Print"] }, ctx)]);
+  check("cardnative: the template's native controls are matched by element name and kind (ReloadDataBtn / TagSelect) — both ✅, a missing one named",
+    () => st(resolveVk({ type: "cardnative", names: ["ReloadData", "Tag"] }, ctx)) === "✅ Done"
+      && /missing: Print/.test(ev(resolveVk({ type: "cardnative", names: ["Tag", "Print"] }, ctx))),
+    () => [resolveVk({ type: "cardnative", names: ["ReloadData", "Tag"] }, ctx), resolveVk({ type: "cardnative", names: ["Tag", "Print"] }, ctx)]);
+  {
+    // A component that shares the control's name but cannot be that control does not close it: a container or a
+    // field is not a reload action, a field is not the tag control. A type-less `merge` of the template's own
+    // control still counts, and a removed one does not.
+    const only = (items) => verifyCtx({ pages: { main: page({ viewConfig: { items } }) } }, "main");
+    const opsOnly = (ops) => verifyCtx({ pages: { main: { ...page(), viewConfig: undefined, ops } } }, "main");
+    const NAT = (names, c) => resolveVk({ type: "cardnative", names }, c);
+    const lookalikes = only([{ type: "crt.FlexContainer", name: "ReloadDataContainer" }, { type: "crt.Input", name: "TagField" }]);
+    const merged = opsOnly([{ operation: "merge", name: "TagSelect" }, { operation: "insert", name: "ReloadDataMenuItem", values: { type: "crt.MenuItem" } }]);
+    const removed = opsOnly([{ operation: "remove", name: "TagSelect" }]);
+    check("cardnative (guard): a container or field named like a native control does not close it; a type-less merge of the template's control and a reload menu item do; a removed control does not",
+      () => /missing: ReloadData, Tag/.test(ev(NAT(["ReloadData", "Tag"], lookalikes)))
+        && st(NAT(["ReloadData", "Tag"], merged)) === "✅ Done"
+        && /missing: Tag/.test(ev(NAT(["Tag"], removed))),
+      () => [NAT(["ReloadData", "Tag"], lookalikes), NAT(["ReloadData", "Tag"], merged), NAT(["Tag"], removed)]);
+  }
 
   // the checklist publishes them + the info row + the dropped twin
   const g = checklistGroups(m12Run, m12Opts).flatMap((x) => x.rows);
@@ -180,14 +196,35 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const acts = checklistGroups({ entity: "X", changeSet: { cardActions: ["PrintButton", "ViewOptionsButton", "ReloadDataButton", "TagButton", "calculateSaaSMetrics", "RunProcess"] } }, {})
       .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
     const native = acts.find((r) => r.label.startsWith("Card actions — native"));
-    check("checklist: a custom card action (calculateSaaSMetrics) gets its own `card` row; the native row holds only the template's controls",
-      () => native?.vk?.type === "cardnative" && native.vk.names.join() === "ViewOptions,ReloadData,Tag"
+    check("checklist: a custom card action (calculateSaaSMetrics) gets its own `card` row; Print / RunProcess rows carry the request they must fire; the native row holds only the template controls the plan builds (nothing is built for ViewOptions)",
+      () => native?.vk?.type === "cardnative" && native.vk.names.join() === "ReloadData,Tag"
         && acts.some((r) => r.label === "Card action — calculateSaaSMetrics" && r.vk?.type === "card")
-        && acts.some((r) => r.label === "Card action — RunProcess" && r.vk?.type === "card")
-        && acts.some((r) => r.label === "Card action — Print" && r.vk?.type === "card"),
+        && acts.some((r) => r.label === "Card action — RunProcess" && r.vk?.request === "crt.RunBusinessProcessRequest")
+        && acts.some((r) => r.label === "Card action — Print" && r.vk?.request === "crt.PrintablesRequest"),
       () => acts.map((r) => [r.label, r.vk]));
-    check("cardnative: the Contract native row (ViewOptions / ReloadData / Tag) closes ✅ against a page carrying the template's controls",
+    check("cardnative: the Contract native row (ReloadData / Tag) closes ✅ against a page carrying the template's controls",
       () => st(resolveVk(native.vk, ctx)) === "✅ Done", () => resolveVk(native.vk, ctx));
+    // Print / Run process close on the platform request a built element fires, never on any crt.Button: the
+    // fixture page carries plain buttons and must read ⚠ verify for both.
+    const printVk = acts.find((r) => r.label === "Card action — Print").vk;
+    const processVk = acts.find((r) => r.label === "Card action — RunProcess").vk;
+    const wired = verifyCtx({ pages: { main: page({ viewConfig: { items: [{ type: "crt.Button", name: "ActionsButton", menuItems: [
+      { type: "crt.MenuItem", name: "RunSecurityCheckMenuItem", clicked: { request: "crt.RunBusinessProcessRequest" } },
+      { type: "crt.MenuItem", name: "PrintContractMenuItem", clicked: { request: "crt.PrintablesRequest" } }] }] } }) } }, "main");
+    const unwired = verifyCtx({ pages: { main: { ...page(), viewConfig: undefined, ops: [
+      { operation: "remove", name: "PrintContractMenuItem", values: { clicked: { request: "crt.PrintablesRequest" } } }] } } }, "main");
+    check("card (request): Print / RunProcess close ✅ on an element firing their request and name it; plain buttons or a removed element read ⚠ verify",
+      () => st(resolveVk(printVk, wired)) === "✅ Done" && /PrintContractMenuItem/.test(ev(resolveVk(printVk, wired)))
+        && st(resolveVk(processVk, wired)) === "✅ Done"
+        && st(resolveVk(printVk, ctx)) === "⚠ verify" && st(resolveVk(processVk, ctx)) === "⚠ verify"
+        && st(resolveVk(printVk, unwired)) === "⚠ verify",
+      () => [resolveVk(printVk, wired), resolveVk(processVk, wired), resolveVk(printVk, ctx), resolveVk(processVk, ctx), resolveVk(printVk, unwired)]);
+    check("card (guard): a `card` row naming neither an action nor a request reads ⚠ verify even on a page full of buttons",
+      () => st(resolveVk({ type: "card" }, ctx)) === "⚠ verify", () => resolveVk({ type: "card" }, ctx));
+    const viewOnly = checklistGroups({ entity: "X", changeSet: { cardActions: ["ViewOptionsButton"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
+    check("checklist: a card whose only native control is ViewOptions gets no native row — the plan builds nothing for it",
+      () => viewOnly.length === 0, () => viewOnly);
     const custom = acts.find((r) => r.label === "Card action — calculateSaaSMetrics").vk;
     const withItem = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
       menuItems: [{ type: "crt.MenuItem", name: "CalculateSaaSMetricsMenuItem" }] }] } } } }, "main");
@@ -511,7 +548,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
   // The `columns` skip is load-bearing: grid column DATA must not enter the op list, while a sibling under `items` must.
   {
     const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
-      { type: "crt.DataGrid", name: "Grid", columns: [{ code: "PDS_x", name: "ReloadData" }], items: [{ type: "crt.MenuItem", name: "TagSelectItem" }] }] } }) } }, "main");
+      { type: "crt.DataGrid", name: "Grid", columns: [{ code: "PDS_x", name: "ReloadData" }], items: [{ type: "crt.TagSelect", name: "TagSelect" }] }] } }) } }, "main");
     const colProbe = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
     const sibProbe = resolveVk({ type: "cardnative", names: ["Tag"] }, c);
     check("walkViewConfig (guard): grid `columns` DATA does not enter the op list (a column named `ReloadData` does not close a cardnative row), while a sibling control under `items` does",

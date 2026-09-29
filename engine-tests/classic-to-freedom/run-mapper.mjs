@@ -13631,7 +13631,7 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   const open = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] }, signals: { printables: PRESENT } });
   check("T2: an unresolved or present signal leaves Print / Process open",
     () => open.filter((r) => r.deliverableId?.startsWith("card-action:")).every((r) => !r.na && r.vk?.type === "card"), () => open);
-  const child = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "RunProcess", "ViewOptionsButton"] }, signals: { printables: PRESENT } },
+  const child = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "RunProcess", "ViewOptionsButton", "TagButton"] }, signals: { printables: PRESENT } },
     { isChildPage: true, pageKey: "child:X" });
   check("T2: the standard card actions on a child page (Print, Process, the native row) arrive `na`; RunProcess stays open",
     () => ["card-action:Print", "card-action:Process", "card-actions:native"].every((d) => /child edit page/.test(byId(child, d)?.na || ""))
