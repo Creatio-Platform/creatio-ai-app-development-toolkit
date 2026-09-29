@@ -4089,7 +4089,7 @@ function clearStaleStatusCells(tasks) {
   const cleared = new Set();
   for (const t of tasks) {
     if (!isEngineTask(t) || !(t.decisions instanceof Map)) continue;
-    for (const [n, d] of [...t.decisions.entries()]) {
+    for (const [n, d] of t.decisions) {
       const row = t.rows?.[n - 1];
       if (!isStatusDecision(d) || (row?.status?.kind === STATUS_WONT_DO && row.status.decision === decisionOf(d))) continue;
       if (row?.outcomeKind === O_WONT_DO) clearDecidedCell(t, n - 1);
