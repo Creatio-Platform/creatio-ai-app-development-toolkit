@@ -525,7 +525,7 @@ class ReleaseStructureTests(unittest.TestCase):
     def test_release_workflow_uses_canonical_manifest_and_safe_input_variable(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("RELEASE_VERSION: ${{ inputs.version }}", workflow)
+        self.assertIn("RELEASE_VERSION: ${{ inputs.version || needs.detect.outputs.version }}", workflow)
         direct_input_lines = [
             line
             for line in workflow.splitlines()
