@@ -337,14 +337,17 @@ function cardActionVerdict(action, signals, opts) {
   if (sig?.resolved !== true) return { key, kind: "unresolved" };
   return sig.present ? { key, kind: "present", sig } : { key, kind: "absent", reason: NOTHING_BEHIND[key] };
 }
-// The Additional-cell note for a Run-process / Print card action whose signal is unresolved or present.
-function processActionNote(v, sigList) {
+// The Additional-cell note for a Run-process / Print card action whose signal is unresolved or present; null for
+// any other verdict.
+export function processActionNote(v, sigList) {
   if (v.kind === "unresolved") return { type: "Action", note: PROCESS_HOWTO };
+  if (v.kind !== "present") return null;
   const namePart = sigList(v.sig) ? `: ${sigList(v.sig)}` : " (name unresolved — resolve via `VwSysProcess` by Id)";
   return { type: "Action", note: `Connected process${namePart} → wire as a Freedom **Run process** card action.` };
 }
-function printActionNote(v, sigList) {
+export function printActionNote(v, sigList) {
   if (v.kind === "unresolved") return { type: "Action", note: PRINT_HOWTO };
+  if (v.kind !== "present") return null;
   const namePart = sigList(v.sig) ? `: ${sigList(v.sig)}` : "s present";
   return { type: "Action", note: `Printable${namePart} → wire as the Freedom **print** action.` };
 }
@@ -413,7 +416,8 @@ function cardActionNote(action, result, opts) {
   // Same `Array.isArray` guard as `sigLine`: a bare-string answer must degrade to "no list", not throw mid-render.
   const sigList = (s) => { const raw = s?.cases || s?.items || s?.names; return (Array.isArray(raw) ? raw : []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", "); };
   const verdict = cardActionVerdict(action, result.signals ?? opts.signals, opts);
-  if (verdict) return verdict.key === "processes" ? processActionNote(verdict, sigList) : printActionNote(verdict, sigList);
+  const signalNote = verdict && (verdict.key === "processes" ? processActionNote : printActionNote)(verdict, sigList);
+  if (signalNote) return signalNote;
   if (action === "RunProcess") return { type: "Action", note: RUN_PROCESS_NOTE };
   if (name === "ViewOptions") return { type: "—", note: "Native — the template ships the standard page view-options control; nothing bespoke to build." };
   if (name === "Tag") return tagActionNote(result);

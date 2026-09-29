@@ -8336,6 +8336,64 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
+    // An existing folder re-cut with one resolvable and one unresolvable D<N>: nothing is written, the resolvable
+    // cell included.
+    const m0 = stManifest(undefined);
+    const { base, dir } = cut("status-existing-refusal", runMigration(m0, { decisions: DEC }), { ...optsOf(m0), decisions: DEC });
+    const snap = () => fs.readdirSync(dir, { recursive: true }).filter((f) => fs.statSync(path.join(dir, f)).isFile()).sort((a, b) => a.localeCompare(b))
+      .map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]);
+    const before = snap();
+    const ONLY_D3 = new Map([["D3", DEC.get("D3")]]);
+    const mixed = stManifest({ "main#field:MainG": WONT("D3"), "main#method:onB": WONT("D6") });
+    const refused = syncTaskDir(dir, runMigration(mixed, { decisions: DEC }), { ...optsOf(mixed), decisions: ONLY_D3 });
+    check("existing folder: a re-cut whose statuses cite one resolvable and one unresolvable D<N> is refused `deliverable-status`, naming the row and the D<N>",
+      () => refused.refused && refused.refusal === "deliverable-status" && refused.problems.length === 1
+        && refused.problems[0].includes(LABELS["main#method:onB"]) && /`D6`/.test(refused.problems[0]),
+      () => ({ refusal: refused.refusal, problems: refused.problems }));
+    check("existing folder: the refused re-cut leaves every file byte-identical — the resolvable D3 cell is not written either",
+      () => JSON.stringify(snap()) === JSON.stringify(before), () => snap().map(([f]) => f));
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D3 — not carried over\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(mixed));
+    const cli = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir], { encoding: "utf8" });
+    check("existing folder: `--tasks` over the same statuses exits 2 with NOTHING WRITTEN, names D6, prints its remedy and leaves every file as it was",
+      () => cli.status === 2 && /NOTHING WRITTEN/.test(cli.stdout) && /D6/.test(cli.stdout) && /fix the manifest \/ the stand, re-run `--plan`/.test(cli.stdout)
+        && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: cli.status, out: cli.stdout.slice(0, 900), err: cli.stderr.slice(0, 300) }));
+    const resolvable = stManifest({ "main#field:MainG": WONT("D3") });
+    syncTaskDir(dir, runMigration(resolvable, { decisions: ONLY_D3 }), { ...optsOf(resolvable), decisions: ONLY_D3 });
+    const mainG = readTaskDir(dir).flatMap((t) => t.rows).find((r) => r.label === LABELS["main#field:MainG"]);
+    check("existing folder (anti-vacuity): the same re-cut with only the resolvable status writes its cell",
+      () => mainG?.outcome === "wont-do — not carried over (D3)", () => mainG);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A row recorded `built` keeps its cell when a `wont-do` status arrives for it.
+    const m0 = stManifest(undefined);
+    const { base, dir } = cut("status-after-built", runMigration(m0, { decisions: DEC }), { ...optsOf(m0), decisions: DEC });
+    const label = LABELS["main#method:onB"];
+    const locate = () => {
+      for (const t of readTaskDir(dir)) {
+        const i = t.rows.findIndex((r) => r.label === label);
+        if (i >= 0) return { t, i, r: t.rows[i], d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null };
+      }
+      return null;
+    };
+    const at = locate();
+    const file = path.join(dir, at.t.file);
+    fs.writeFileSync(file, setOutcome(fs.readFileSync(file, "utf8"), at.i + 1, "built"));
+    const built = fs.readFileSync(file, "utf8");
+    // The status changes the plan, so `planVersion:` moves; every other byte of the task file stays.
+    const samePastPlanVersion = (a, b) => a.replace(/^planVersion: .*$/m, "") === b.replace(/^planVersion: .*$/m, "");
+    const m = stManifest({ "main#method:onB": WONT("D6") });
+    const resynced = syncTaskDir(dir, runMigration(m, { decisions: DEC }), { ...optsOf(m), decisions: DEC });
+    const after = locate();
+    check("a row recorded `built` stays `built` when its deliverable later gets a `wont-do` status — no cell rewrite, no `decisions:` entry",
+      () => locate() && !resynced.refused && after.r.outcomeKind === "built" && after.r.outcome === "built" && after.d === null
+        && samePastPlanVersion(fs.readFileSync(file, "utf8"), built),
+      () => ({ refused: resynced.problems, outcome: after?.r.outcome, decision: after?.d }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
     const status = { "main#card-action:Print": WONT("D6"), "main#method:onA": WONT("D3"), "main#method:onB": WONT("D3") };
     const m = stManifest(status);
     const run = runMigration(m, { decisions: DEC });
@@ -8404,8 +8462,8 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     fs.writeFileSync(path.join(onCli.base, "decisions.md"), DEC_MD);
     fs.writeFileSync(path.join(onCli.base, "manifest.json"), JSON.stringify(M1));
     const cli = spawnSync(process.execPath, [MIGRATE, path.join(onCli.base, "manifest.json"), "--tasks", onCli.dir, "--revoke", "D6"], { encoding: "utf8" });
-    check("`--revoke` of a D<N> only manifest statuses cite prints each skipped row with the entry to remove",
-      () => cli.status === 0 && bornKeys.every((k) => cli.stdout.includes(`\`${k}\``)) && /skipped/.test(cli.stdout),
+    check("`--revoke` of a D<N> only manifest statuses cite revokes nothing, exits 1 and prints each skipped row with the entry to remove",
+      () => cli.status === 1 && /nothing revoked/.test(cli.stderr) && bornKeys.every((k) => cli.stderr.includes(`\`${k}\``)) && /skipped/.test(cli.stderr),
       () => ({ status: cli.status, out: cli.stdout.slice(0, 900), err: cli.stderr.slice(0, 300) }));
     fs.rmSync(onCli.base, { recursive: true, force: true });
   }

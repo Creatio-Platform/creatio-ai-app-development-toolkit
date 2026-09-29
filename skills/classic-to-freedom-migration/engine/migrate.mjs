@@ -3565,11 +3565,11 @@ function runRevokeMode(result, dir, opts) {
   // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
   const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  // No cell written under the decision is a no-op. Every such cell skipped leaves the decision in force: a failure.
   if (!res.cleared.length) {
-    const head = skipLines.length
-      ? `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`
-      : `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
-    return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
+    if (!skipLines.length) return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
+    const head = `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`;
+    return { note: [head, ...skipLines].join("\n") + "\n", ok: false };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);

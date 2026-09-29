@@ -13,7 +13,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -7750,6 +7750,20 @@ check("#8 the STANDARD card actions are DROPPED from a CHILD edit page (inherite
 const paChildCustom = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "calculateSaaSMetricsButton"] }, signals: {} }, { isChildPage: true });
 check("#8 a child's OWN custom card action still renders on a CHILD page (only the standard base ones are dropped)",
   /\| calculateSaaSMetrics \|/.test(paChildCustom) && !/\| Print \|/.test(paChildCustom));
+{
+  // Only `unresolved` and `present` get a signal note; `absent` and `child` get none, so no other verdict reads as
+  // "present → wire".
+  const names = (s) => (s?.names || []).join(", ");
+  const notesOf = (v) => [processActionNote(v, names), printActionNote(v, names)];
+  const present = notesOf({ key: "x", kind: "present", sig: { names: ["A"] } });
+  const unresolved = notesOf({ key: "x", kind: "unresolved" });
+  const others = ["absent", "child", "other"].map((kind) => notesOf({ key: "x", kind, reason: "r" }));
+  check("#8 the Print / Run-process signal notes: `present` wires, `unresolved` keeps the how-to, any other verdict kind gets no note",
+    /Connected process: A → wire/.test(present[0]?.note) && /Printable: A → wire/.test(present[1]?.note)
+    && /ProcessInModules/.test(unresolved[0]?.note) && /SysModuleReport/.test(unresolved[1]?.note)
+    && others.every((pair) => pair.every((n) => n === null)),
+    () => ({ present, unresolved, others }));
+}
 
 
 /* ---- inverse call graph: a body-called method is not an orphan ---- */
