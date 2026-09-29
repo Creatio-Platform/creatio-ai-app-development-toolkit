@@ -3829,7 +3829,7 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
       // …and says what the row is waiting on WITHOUT claiming nothing can be scheduled for it: `notBuiltOpenRows`
       // filters on no cause, so `--route` opens a round over a `needs-decision` row like any other.
       return /⚠ partial 1/.test(prog) && /⚠ NOT BUILT — 1 deliverable/.test(prog)
-        && /a decision settles it, not a re-run — route it once that decision exists/.test(prog)
+        && /a decision settles it, not a re-run: `--decide D<N> \[--build\|--wont-do\|--postponed\]`/.test(prog)
         && !/not re-dispatched/.test(prog);
     }, () => renderProgress(second, dir));
 
@@ -8503,6 +8503,21 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       () => route.stdout);
     fs.rmSync(base, { recursive: true, force: true });
   }
+  {
+    const { base, dir } = buildItFixture("build-route-mixed");
+    const other = readTaskDir(dir).find((x) => x.rows.length >= 2 && x.rows.every((r) => r.outcomeKind === "built"));
+    const fpB = other ? taskFilePath(dir, other.id) : null;
+    if (fpB) fs.writeFileSync(fpB, setOutcome(fs.readFileSync(fpB, "utf8"), 2, NOT_BUILT_BLOCKED));
+    const first = cliB(base, "--tasks", dir, "--route");
+    const second = cliB(base, "--tasks", dir, "--route");
+    for (const [what, out, re] of [["writes a repair task", first, /wrote \d+ repair task\(s\)/], ["holds one already open", second, /already have an OPEN repair task/]]) {
+      check(`--route (F4): a run that ${what} beside a needs-decision row keeps the repair report, never claims nothing is waiting, and the progress block still points the decision row at \`--decide D<N>\``,
+        () => !!fpB && re.test(out.stdout || "") && !/nothing there is waiting to be routed/.test(out.stdout || "")
+          && /--decide D<N>/.test(out.stdout || ""),
+        () => out.stdout);
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 
   // ---- T3 / T4: --decide --build reopens the row -------------------------------------------------------------
   {
@@ -8543,6 +8558,28 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     const back = readTaskDir(dir).find((x) => x.id === t.id);
     check("--decide --build: a `declared: blocked` that raised the question is retired with the answer, so the task reads `todo`, not halted",
       () => back.declared === "" && back.status === "todo", () => ({ declared: back.declared, status: back.status }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, t, fp } = buildItFixture("build-declared-kept");
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED).replace(/^declared:.*$/m, "declared: blocked"));
+    const res = build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--decide --build (F3): a `declared: blocked` that another row of the task still backs is KEPT — the reopen answers one row's question, not the task's halt",
+      () => !res.refused && back.declared === "blocked" && back.status === "blocked"
+        && (res.keptHalts || []).includes(t.file) && !(res.clearedHalts || []).length,
+      () => ({ declared: back.declared, status: back.status, kept: res.keptHalts, cleared: res.clearedHalts }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t } = buildItFixture("build-drift-said");
+    const fpD = taskFilePath(dir, t.id);
+    fs.writeFileSync(fpD, fs.readFileSync(fpD, "utf8").replace(/^rowsDigest:.*$/m, "rowsDigest: stale0000"));
+    const res = build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    check("--decide --build (F3): a drift warning the reopen clears is REPORTED, not dropped silently",
+      () => !res.refused && (res.clearedWarnings || []).some((w) => w.includes(t.file) && /drift/.test(w)),
+      () => res.clearedWarnings);
     fs.rmSync(base, { recursive: true, force: true });
   }
 
@@ -8629,6 +8666,21 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
+    const { base, dir, t, fp } = buildItFixture("build-revoke-started");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    startTask(dir, t.id, RUN, { ...BO, dispatchToken: "tok-started" }, null, AT(902));
+    const mid = readTaskDir(dir).find((x) => x.id === t.id);
+    const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--revoke D5 (F4): withdrawing a build-it entry on a task already started puts the question back and drops the entry, with no status-edited or drift warning",
+      () => mid.status === "in-progress" && !rev.refused && rev.cleared.length === 1
+        && back.rows[0].outcomeCause === "needs-decision" && back.status === "partial" && !back.statusEdited
+        && String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim() === ""
+        && !/edited after the engine wrote it|OLDER set|CHANGED since/.test(readIndex(dir)),
+      () => ({ mid: mid.status, rev: rev.refused ? rev.problems : rev.cleared?.length, back: back.status, cell: back.rows[0].outcome }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
     const { base, dir, t, fp } = buildItFixture("build-revoke-built");
     build(dir, { rowRef: { taskId: t.id, n: "1" } });
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"));
@@ -8676,6 +8728,9 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
   check("prompts (S5): no engine text tells the reader to edit a task file to build a needs-decision row",
     () => !/re-open it: clear its `Outcome` cell/.test(fs.readFileSync(MIGRATE, "utf8"))
       && !/re-opening it to build it/.test(fs.readFileSync(MIGRATE, "utf8")));
+  check("prompts (S5): no progress or Attention text tells the reader to route a needs-decision row once a decision exists",
+    () => !/route it once that decision exists/.test(fs.readFileSync(path.join(path.dirname(MIGRATE), "tasks.mjs"), "utf8"))
+      && !/route it once that decision exists/.test(fs.readFileSync(MIGRATE, "utf8")));
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

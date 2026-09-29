@@ -1529,7 +1529,7 @@ function attnNotBuilt(tasks) {
   return notBuiltOpenItems(tasks).map((it) => {
     let why;
     if (it.row?.naNoReason) why = "recorded `not-applicable` with NO reason — a row closed without building it needs one, so it counts as not built";
-    else if (it.cause) why = `cause \`${it.cause}\`${RETRYABLE_CAUSES.has(it.cause) ? " — a re-run may clear it" : " — a decision settles it, not a re-run; route it once that decision exists"}`;
+    else if (it.cause) why = `cause \`${it.cause}\`${RETRYABLE_CAUSES.has(it.cause) ? " — a re-run may clear it" : " — a decision settles it, not a re-run: `--decide D<N> [--build|--wont-do|--postponed]`"}`;
     else why = "NOT ACCOUNTED FOR — the task recorded a closing status without marking this row either way";
     const where = (it.task.notes || "").trim()
       ? "The detail is under that file's `## Notes`."
@@ -1954,7 +1954,7 @@ function whyNotBuilt(cause) {
   if (!cause) return "unaccounted — the task closed without recording this row";
   // BOTH causes are routed — `notBuiltOpenRows` filters on neither. What differs is what CLOSES the row: a re-run
   // for `blocked`, a person for `needs-decision`. Neither says the row cannot be scheduled.
-  const tail = RETRYABLE_CAUSES.has(cause) ? " (a re-run may clear it)" : " (a decision settles it, not a re-run — route it once that decision exists)";
+  const tail = RETRYABLE_CAUSES.has(cause) ? " (a re-run may clear it)" : " (a decision settles it, not a re-run: `--decide D<N> [--build|--wont-do|--postponed]`)";
   return `${cause}${tail}`;
 }
 
@@ -4028,10 +4028,12 @@ function buildSkipReason(row, task, n) {
   if (row.outcomeKind === O_BUILT) return "already built — there is nothing to reopen";
   if (row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED) {
     const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
-    return `already decided${map?.has(n) ? ` (${decisionOf(map.get(n))})` : ""} — \`--revoke\` that decision first`;
+    const decidedBy = map?.has(n) ? ` (${decisionOf(map.get(n))})` : "";
+    return `already decided${decidedBy} — \`--revoke\` that decision first`;
   }
   if (row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION) return null;
-  const recorded = row.outcomeKind ? `\`${row.outcomeKind}${row.outcomeCause ? ` — ${row.outcomeCause}` : ""}\`` : "no Outcome";
+  const cause = row.outcomeCause ? ` — ${row.outcomeCause}` : "";
+  const recorded = row.outcomeKind ? `\`${row.outcomeKind}${cause}\`` : "no Outcome";
   return `recorded ${recorded}, not a \`${CAUSE_NEEDS_DECISION}\` row — a build-it answer re-opens only a row waiting on a decision`;
 }
 function reopenForBuild(task, idx, decision) {
@@ -4046,13 +4048,21 @@ function reopenForBuild(task, idx, decision) {
   task.dirtyRows = task.dirtyRows instanceof Set ? task.dirtyRows : new Set();
   task.dirtyRows.add(idx);
 }
-// A re-opened task is a fresh `todo`: the halt that raised the question is answered, the recorded status is
-// recomputed rather than carried, and the digest it is measured against is the current rows.
+// A re-opened task is a fresh `todo`: the recorded status is recomputed rather than carried, and the digest it is
+// measured against is the current rows. The `declared: blocked` halt is retired only when no other row of the task
+// is still recorded `not-built — blocked`; a halt raised for another row stands. Returns what was cleared so the
+// caller can say so.
+const isBlockedRow = (r) => r.outcomeKind === O_NOT_BUILT && r.outcomeCause === CAUSE_BLOCKED;
 function resetReopenedTask(task) {
-  task.declared = "";
+  const cleared = { halt: false, drift: !!task.drifted, edit: !!task.statusEdited };
+  if (task.declared && !task.rows.some(isBlockedRow)) {
+    task.declared = "";
+    cleared.halt = true;
+  }
   task.statusEdited = false;
   task.drifted = false;
   task.recordedDigest = task.rowsDigest;
+  return cleared;
 }
 function applyBuildDecision(dir, merged, picked, decision) {
   const touched = [];
@@ -4068,8 +4078,17 @@ function applyBuildDecision(dir, merged, picked, decision) {
   if (!touched.length) return { refused: true, problems: ["--decide --build reopened no rows (nothing addressed is a needs-decision row waiting on an answer)"], skipped };
 
   const reopened = new Set(touched.map((x) => x.task));
-  const hadDeclared = [...reopened].filter((t) => t.declared).map((t) => t.file);
-  reopened.forEach(resetReopenedTask);
+  const clearedHalts = [];
+  const clearedWarnings = [];
+  const keptHalts = [];
+  for (const t of reopened) {
+    const hadHalt = !!t.declared;
+    const cleared = resetReopenedTask(t);
+    if (cleared.halt) clearedHalts.push(t.file);
+    else if (hadHalt) keptHalts.push(t.file);
+    if (cleared.drift) clearedWarnings.push(`${t.file}: the drift warning (its deliverables changed since the status was recorded)`);
+    if (cleared.edit) clearedWarnings.push(`${t.file}: the status-edited warning`);
+  }
   recomputeDecidedStatuses(reopened, () => S_TODO, () => false);
 
   fs.mkdirSync(dir, { recursive: true });
@@ -4079,7 +4098,7 @@ function applyBuildDecision(dir, merged, picked, decision) {
   const unplaced = persisted?.unplaced || [];
   const placed = touched.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
   return { refused: false, decision, mode: BUILD_MODE, destination: null, touched: placed, cascaded: [], skipped, unplaced,
-    clearedHalts: hadDeclared, set: merged, siblings: openSubjectSiblings(merged.tasks, placed) };
+    clearedHalts, keptHalts, clearedWarnings, set: merged, siblings: openSubjectSiblings(merged.tasks, placed) };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are

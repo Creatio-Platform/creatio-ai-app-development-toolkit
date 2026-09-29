@@ -3487,7 +3487,9 @@ function buildTouchedLines(res, opts) {
     ...res.touched.map(decidedRowLine),
     ...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`)];
   if (res.clearedHalts?.length) lines.push(`  · retired the \`declared: blocked\` of ${res.clearedHalts.join(", ")} — the halt was this question.`);
-  lines.push("", `Each task is \`todo\` again: \`${TASKS_FLAG} <dir> ${NEXT_FLAG}\` offers it, and \`${START_FLAG}\` dispatches it. No task file was edited.`);
+  if (res.keptHalts?.length) lines.push(`  · kept the \`declared: blocked\` of ${res.keptHalts.join(", ")} — another row is still recorded blocked, so the task stays blocked.`);
+  for (const w of res.clearedWarnings || []) lines.push(`  · cleared ${w} — a re-opened task is measured against its current rows.`);
+  lines.push("", `Each task without a kept halt is \`todo\` again: \`${TASKS_FLAG} <dir> ${NEXT_FLAG}\` offers it, and \`${START_FLAG}\` dispatches it. No task file was edited.`);
   return lines;
 }
 function decideTouchedLines(res, opts) {
