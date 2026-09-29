@@ -1871,20 +1871,25 @@ function insideSpan(spans, idx) {
 // as `/"/g`) then swallows one line, not every definition after it.
 function skipLiteral(text, i, end) {
   const c = text[i];
-  if (c === '"' || c === "'" || c === "`") {
-    const stopAtNewline = c !== "`";
-    let j = i + 1;
-    while (j < end) {
-      const ch = text[j];
-      if (ch === c || (stopAtNewline && ch === "\n")) return j;
-      j += ch === "\\" ? 2 : 1;
-    }
-    return end;
-  }
+  if (c === '"' || c === "'" || c === "`") return stringEnd(text, i, end);
   if (c !== "/") return i;
   if (text[i + 1] === "/") { const e = text.indexOf("\n", i); return e < 0 || e > end ? end : e; }
   if (text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); return e < 0 || e > end ? end : e + 1; }
   return i;
+}
+
+// Index of the quote closing the string that opens at `i` (a `\` escapes the next character); a `'` / `"` string also
+// ends at a line break. `end` when the string does not close before it.
+function stringEnd(text, i, end) {
+  const quote = text[i];
+  const stopAtNewline = quote !== "`";
+  let j = i + 1;
+  while (j < end) {
+    const ch = text[j];
+    if (ch === quote || (stopAtNewline && ch === "\n")) return j;
+    j += ch === "\\" ? 2 : 1;
+  }
+  return end;
 }
 
 // The body between the `{` at `open` and its matching `}`, or null when it does not close within the scan cap.
@@ -1972,7 +1977,7 @@ export function scanRowActions(body) {
 }
 // Every function of the row-action scan, for the structural ReDoS golden (a `toString` of detectAddMode does not
 // include the helpers it calls).
-export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, braceBody,
+export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, stringEnd, braceBody,
   memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
