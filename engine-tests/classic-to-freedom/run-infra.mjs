@@ -889,15 +889,23 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
     return line;
   };
   // The runners the job's steps execute, in step order. Only the flat single-line `working-directory:` / `run:`
-  // pair is understood; anything else that mentions a runner or a working directory — a `run: |` block, a job-level
-  // `defaults:` — lands in `unresolved`, and the check fails on it rather than skipping the step.
+  // pair is understood; anything else that mentions a runner or a working directory — a `run: |` block, a
+  // `defaults:` at job or workflow level — lands in `unresolved`, and the check fails on it rather than skipping the step.
   const mentionsRunner = (l) => l.includes(".mjs") || l.includes("working-directory");
-  const BLOCK_SCALARS = new Set(["|", ">"]);
+  // Every YAML block-scalar header (`|` or `>`, with or without a chomping or indentation indicator) opens a multi-line value.
+  const isBlockScalar = (value) => value.startsWith("|") || value.startsWith(">");
+  const indentOf = (line) => line.length - line.trimStart().length;
   // Groups the lines after `steps:` into one entry list per step item; a runner mention before the first item is unresolved.
-  const groupSteps = (stepLines) => {
+  // The list ends at the first line indented no deeper than the `steps:` key: that line and the rest belong to the
+  // job, so a job-level key after the list is reported, never read as part of the last step.
+  const groupSteps = (stepLines, stepsIndent) => {
     const steps = [], unresolved = [];
     let itemIndent = null;
-    for (const line of stepLines) {
+    for (const [i, line] of stepLines.entries()) {
+      if (indentOf(line) <= stepsIndent) {
+        unresolved.push(...stepLines.slice(i).filter(mentionsRunner).map((l) => l.trim()));
+        break;
+      }
       const item = /^( *)- /.exec(line);
       if (item && (itemIndent === null || item[1].length === itemIndent)) {
         itemIndent = item[1].length;
@@ -915,7 +923,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
       const kv = /^([A-Za-z-]+):\s*(\S.*)?$/.exec(entry);
       const value = kv?.[2]?.trim();
       if (kv?.[1] === "working-directory" && value) cwd = value;
-      else if (kv?.[1] === "run" && value && !BLOCK_SCALARS.has(value)) run = value;
+      else if (kv?.[1] === "run" && value && !isBlockScalar(value)) run = value;
       else if (mentionsRunner(entry)) unresolved.push(entry);
     }
     return { cwd, run, unresolved };
@@ -924,7 +932,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
     const lines = job.split("\n").map(stripComment).filter((l) => l.trim());
     const stepsAt = lines.findIndex((l) => l.trim() === "steps:");
     if (stepsAt < 0) return { runners: [], unresolved: ["no `steps:` block in the job"] };
-    const grouped = groupSteps(lines.slice(stepsAt + 1));
+    const grouped = groupSteps(lines.slice(stepsAt + 1), indentOf(lines[stepsAt]));
     const runners = [];
     const unresolved = [...lines.slice(0, stepsAt).filter(mentionsRunner).map((l) => l.trim()), ...grouped.unresolved];
     for (const entries of grouped.steps) {
@@ -945,19 +953,34 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   const sequenceMismatches = (pkg, ci) => Array.from({ length: Math.max(pkg.length, ci.length) }, (_, i) => i)
     .filter((i) => pkg[i] !== ci[i])
     .map((i) => `#${i + 1}: scripts.test runs ${pkg[i] ?? "(nothing)"}, the CI job runs ${ci[i] ?? "(nothing)"}`);
-  const parityOf = (job, scriptsTest) => {
+  // The workflow's `working-directory` lines outside its `jobs:` map — where a workflow-level `defaults:` sits, which
+  // would move every step that does not set its own directory. Top-level keys are the lines with no indentation.
+  const workflowLevelDirs = (yml) => {
+    const found = [];
+    let inJobs = false;
+    for (const line of yml.split("\n").map(stripComment)) {
+      if (/^\S/.test(line)) inJobs = line.startsWith("jobs:");
+      if (!inJobs && line.includes("working-directory")) found.push(line.trim());
+    }
+    return found;
+  };
+  const parityOf = (job, scriptsTest, workflowDirs = []) => {
     const pkg = scriptRunners(scriptsTest), ci = ciStepRunners(job);
-    return { scriptsTest: pkg.runners, ciSteps: ci.runners, unresolved: [...pkg.unresolved, ...ci.unresolved],
+    return { scriptsTest: pkg.runners, ciSteps: ci.runners, unresolved: [...pkg.unresolved, ...ci.unresolved, ...workflowDirs],
       mismatches: sequenceMismatches(pkg.runners, ci.runners) };
   };
+  // The one predicate the real check and every negative golden share.
+  const parityHolds = (p) => p.ciSteps.length > 0 && p.unresolved.length === 0 && p.mismatches.length === 0;
+  const missingRunners = (runners) => runners.filter((r) => !existsSync(path.join(repoRoot, r.replace(/ --check$/, ""))));
 
-  const real = parityOf(jobSrc, enginePkg.scripts?.test || "");
+  const scriptsTest = enginePkg.scripts?.test || "";
+  const real = parityOf(jobSrc, scriptsTest, workflowLevelDirs(prYml));
   check("the CI job and `engine/package.json` `scripts.test` run the SAME runner files in the SAME order, resolved from where each actually runs — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
-    real.ciSteps.length > 0 && real.unresolved.length === 0 && real.mismatches.length === 0,
+    parityHolds(real),
     () => real);
   check("every runner both sides resolve to exists in the repo — two declarations that agree on a path nothing is at would still pass the parity check",
-    real.scriptsTest.every((r) => existsSync(path.join(repoRoot, r.replace(/ --check$/, "")))),
-    () => real.scriptsTest.filter((r) => !existsSync(path.join(repoRoot, r.replace(/ --check$/, "")))));
+    missingRunners(real.scriptsTest).length === 0,
+    () => missingRunners(real.scriptsTest));
   check("the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
     [`${ENGINE_REL}/verify-vendor.mjs`, "engine-tests/classic-to-freedom/run.mjs", "engine-tests/classic-to-freedom/run-mapper.mjs",
       "engine-tests/classic-to-freedom/run-infra.mjs", "scripts/build-workflows.mjs --check", "engine-tests/classic-to-freedom/run-workflow-core.mjs",
@@ -970,32 +993,96 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   const mapperStep = jobLines.findIndex((l) => l.includes("name: Run mapper goldens"));
   const wdLine = jobLines.findIndex((l, i) => i > mapperStep && l.includes("working-directory:"));
   const swapped = jobLines.map((l, i) => (i === wdLine ? l.replace(/working-directory:.*/, "working-directory: engine-tests/build-workflows") : l)).join("\n");
-  const swappedParity = parityOf(swapped, enginePkg.scripts?.test || "");
+  const swappedParity = parityOf(swapped, scriptsTest);
   check("(negative) a CI step with its working-directory swapped fails the parity check, and the mismatch NAMES the runner that moved",
-    mapperStep >= 0 && wdLine > mapperStep && swapped !== jobSrc
+    mapperStep >= 0 && wdLine > mapperStep && swapped !== jobSrc && !parityHolds(swappedParity)
       && swappedParity.mismatches.length === 1 && swappedParity.mismatches[0].includes("run-mapper.mjs")
       && swappedParity.mismatches[0].includes("engine-tests/build-workflows/run-mapper.mjs"),
     () => ({ mapperStep, wdLine, mismatches: swappedParity.mismatches }));
-  const blockJob = [
-    "    steps:",
-    "      - name: Block-scalar step",
-    "        working-directory: engine-tests/classic-to-freedom",
-    "        run: |",
-    "          node run.mjs",
-  ].join("\n");
-  const blockParity = ciStepRunners(blockJob);
-  check("(negative) a runner the walker cannot place — here inside a `run: |` block — is reported unresolved, so the parity check fails closed instead of silently dropping the step",
-    blockParity.runners.length === 0 && blockParity.unresolved.some((u) => u.includes("run.mjs")),
-    () => blockParity);
-  check("(negative) a job-level working-directory the walker does not model is reported unresolved, not ignored",
-    ciStepRunners(["    defaults:", "      run:", "        working-directory: engine-tests", "    steps:", "      - run: node run.mjs"].join("\n"))
-      .unresolved.some((u) => u.includes("working-directory")),
-    () => ciStepRunners(["    defaults:", "      run:", "        working-directory: engine-tests", "    steps:", "      - run: node run.mjs"].join("\n")));
+  const pkgSwapped = scriptsTest.replace("../../../engine-tests/classic-to-freedom/run-mapper.mjs", "../../engine-tests/classic-to-freedom/run-mapper.mjs");
+  const pkgSwappedParity = parityOf(jobSrc, pkgSwapped);
+  check("(negative) a `scripts.test` runner path with one `../` too few fails the parity check, and the mismatch names the file it resolves to",
+    pkgSwapped !== scriptsTest && !parityHolds(pkgSwappedParity) && pkgSwappedParity.mismatches.length === 1
+      && pkgSwappedParity.mismatches[0].includes("skills/engine-tests/classic-to-freedom/run-mapper.mjs"),
+    () => pkgSwappedParity.mismatches);
+  check("(negative) a runner path that points at no file is reported missing, and only that one",
+    JSON.stringify(missingRunners(["engine-tests/classic-to-freedom/no-such-runner.mjs", "scripts/build-workflows.mjs --check"]))
+      === JSON.stringify(["engine-tests/classic-to-freedom/no-such-runner.mjs"]),
+    () => missingRunners(["engine-tests/classic-to-freedom/no-such-runner.mjs", "scripts/build-workflows.mjs --check"]));
+  // Each synthetic job below is paired with a `scripts.test` that runs the same file, so the only thing that can
+  // break parity is the construct under test.
+  const J = (lines) => lines.join("\n");
+  const RUN_IN_C2F = "node ../../../engine-tests/classic-to-freedom/run.mjs";
+  for (const header of ["|", "|-", ">+", ">2"]) {
+    const blockParity = parityOf(J(["    steps:", "      - name: Block-scalar step", "        working-directory: engine-tests/classic-to-freedom",
+      `        run: ${header}`, "          node run.mjs"]), RUN_IN_C2F);
+    check(`(negative) a runner inside a \`run: ${header}\` block is reported unresolved, so the parity check fails closed instead of silently dropping the step`,
+      !parityHolds(blockParity) && blockParity.ciSteps.length === 0 && blockParity.unresolved.some((u) => u.includes("run.mjs")),
+      () => blockParity);
+  }
+  const jobDefaultsFirst = parityOf(J(["    defaults:", "      run:", "        working-directory: engine-tests", "    steps:", "      - run: node run.mjs"]), "node ../../../run.mjs");
+  check("(negative) a job-level working-directory before `steps:` is reported unresolved and fails the parity check",
+    !parityHolds(jobDefaultsFirst) && jobDefaultsFirst.unresolved.some((u) => u.includes("working-directory")),
+    () => jobDefaultsFirst);
+  const jobDefaultsAfter = parityOf(J(["    steps:", "      - working-directory: engine-tests/classic-to-freedom", "        run: node run.mjs",
+    "    defaults:", "      run:", "        working-directory: elsewhere"]), RUN_IN_C2F);
+  check("(negative) a job-level working-directory AFTER `steps:` is reported unresolved and never rewrites the last step's directory",
+    !parityHolds(jobDefaultsAfter) && JSON.stringify(jobDefaultsAfter.ciSteps) === JSON.stringify(["engine-tests/classic-to-freedom/run.mjs"])
+      && jobDefaultsAfter.unresolved.some((u) => u.includes("working-directory: elsewhere")),
+    () => jobDefaultsAfter);
+  const workflowDefaults = J(["name: PR checks", "defaults:", "  run:", "    working-directory: elsewhere", "jobs:", "  goldens:", "    steps:", "      - run: node run.mjs"]);
+  const workflowDefaultsParity = parityOf(jobBoundarySlice(workflowDefaults, "goldens:"), "node ../../../run.mjs", workflowLevelDirs(workflowDefaults));
+  check("(negative) a workflow-level `defaults:` working-directory outside the job slice is reported unresolved and fails the parity check",
+    !parityHolds(workflowDefaultsParity) && workflowDefaultsParity.unresolved.some((u) => u.includes("working-directory: elsewhere"))
+      && ciStepRunners(jobBoundarySlice(workflowDefaults, "goldens:")).unresolved.length === 0 && workflowLevelDirs(prYml).length === 0,
+    () => ({ unresolved: workflowDefaultsParity.unresolved, real: workflowLevelDirs(prYml) }));
   // And the README states no claim nothing enforces.
   const readme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
   check("the README does not prescribe its own two-runner subset, nor claim it is 'exactly what the CI job runs' — it points at the one declaration instead",
     !/This is exactly what the CI job/.test(readme) && /scripts\.test/.test(readme) && /npm test/.test(readme),
     () => readme.split("\n").filter((l) => /CI job|npm test|scripts\.test/.test(l)).slice(0, 5).join("\n"));
+}
+
+// The parity check above proves both declarations run the same FILES; it cannot prove a runner works from any
+// directory, because the two declarations run from different ones by design. That half is held here: a manifest
+// piped on stdin (`-`) makes migrate.mjs take its base directory from the process cwd, so every runner call that
+// spawns it that way must pin `cwd`. A manifest passed as a file path sets its own base and needs nothing.
+{
+  const runnersDir = path.dirname(fileURLToPath(import.meta.url));
+  // The source of every `spawnSync(` call, sliced to its balanced closing parenthesis. A scan, not a regex (S8786).
+  const spawnCalls = (src) => {
+    const calls = [];
+    for (let at = src.indexOf("spawnSync("); at >= 0; at = src.indexOf("spawnSync(", at + 1)) {
+      let depth = 0, end = at + "spawnSync".length;
+      for (; end < src.length; end++) {
+        if (src[end] === "(") depth++;
+        else if (src[end] === ")" && --depth === 0) break;
+      }
+      calls.push(src.slice(at, end + 1));
+    }
+    return calls;
+  };
+  // migrate.mjs followed by `"-"` or a spread (a wrapper forwarding its caller's arguments, which may be `-`).
+  const spawnsStdinMigrate = (call) => /(?:migrate\.mjs"\)|MIGRATE), *(?:"-"|\.\.\.)/.test(call);
+  const unpinned = (call) => spawnsStdinMigrate(call) && !/\bcwd:/.test(call);
+  // run-infra.mjs is left out: the synthetic calls below are string literals in it.
+  const runnerFiles = readdirSync(runnersDir).filter((f) => f.endsWith(".mjs") && f !== "run-infra.mjs");
+  const calls = runnerFiles.flatMap((f) => spawnCalls(readFileSync(path.join(runnersDir, f), "utf8")).map((call) => ({ f, call })));
+  const offenders = calls.filter(({ call }) => unpinned(call)).map(({ f, call }) => `${f}: ${call.slice(0, 140)}`);
+  check("every golden runner that spawns migrate.mjs with a manifest on stdin pins the child's `cwd`, so the goldens pass from any directory (`npm test` runs them from the engine folder, CI from engine-tests/)",
+    offenders.length === 0, () => offenders);
+  check("the stdin-spawn scan sees the real call sites (run-mapper's runMigrate and run-tasks' stdin helpers), so a green result is not an empty scan",
+    calls.filter(({ call }) => spawnsStdinMigrate(call)).length >= 7,
+    () => calls.filter(({ call }) => spawnsStdinMigrate(call)).map(({ f }) => f));
+  check("(negative) an unpinned stdin spawn is flagged, while a pinned one and a file-path spawn are not",
+    unpinned('spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: m, encoding: "utf8" })')
+      && unpinned('spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: m })')
+      && !unpinned('spawnSync(process.execPath, [MIGRATE, "-"], { cwd: DIR, input: m })')
+      && !unpinned('spawnSync(process.execPath, [MIGRATE, manifestPath, "--next"], { encoding: "utf8" })'),
+    () => "scan predicate");
+  check("(negative) the call slicer follows nested parentheses to the call's own closing one",
+    spawnCalls('x = spawnSync(a, [b(c)], { input: JSON.stringify(m) }); y = 1;')[0] === 'spawnSync(a, [b(c)], { input: JSON.stringify(m) })',
+    () => spawnCalls('x = spawnSync(a, [b(c)], { input: JSON.stringify(m) }); y = 1;'));
 }
 
 
