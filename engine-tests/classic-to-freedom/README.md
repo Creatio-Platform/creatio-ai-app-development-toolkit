@@ -61,29 +61,26 @@ npm run coverage:report
 ```
 
 `coverage:report` prints the per-file table (statements, branches, functions, lines; `All files` is the overall
-total) and writes `coverage/lcov.info`, `coverage/index.html` and `coverage/coverage-summary.json`. It reports
-every `.mjs` file in the lint scope, including ones no runner loads, which therefore show 0%. No threshold is
-enforced. In CI the ubuntu leg of **Classic→Freedom engine goldens** collects coverage across all of its steps,
-publishes the table in the job summary and uploads the report as the `engine-coverage` artifact; the windows leg
-runs without coverage.
+total) and writes `coverage/lcov.info`, `coverage/index.html` and `coverage/coverage-summary.json`. It covers
+`skills/**/*.mjs` — the engine and `_workflow-core`, the code these goldens exercise — including files no runner
+loads, which would show 0%. `hooks/` (tested by the pytest suite, in its own job) and `scripts/` are not in the
+report. No threshold is enforced. In CI the ubuntu leg of **Classic→Freedom engine goldens** collects coverage
+across all of its steps, publishes the table in the job summary and uploads the report as the `engine-coverage`
+artifact; the windows leg runs without coverage, and a failing report step never fails the job.
 
-**Baseline.** The first CI measurement, taken before any threshold existed
-([run 36423655995](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/actions/runs/36423655995),
-ubuntu leg, commit `0a79fda`):
+**Baseline** (CI ubuntu leg,
+[run 36530688521](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/actions/runs/36530688521)):
 
 | Scope | Statements / lines | Branches | Functions |
 |---|---|---|---|
-| All files | 90.64% | 87.94% | 97.87% |
+| All files | 98.61% | 88.16% | 98.87% |
 | `skills/classic-to-freedom-migration/engine` | 98.58% | 88.53% | 98.85% |
 | `skills/_workflow-core` | 98.54% | 80.14% | 100% |
 | `skills/_workflow-core/adapters` | 100% | 80.64% | 100% |
 | `skills/_workflow-core/behaviour-analysis` | 98.97% | 84.50% | 98.11% |
-| `scripts` | 52.62% | 71.42% | 77.77% |
-| `hooks` | 0% | 0% | 0% |
 
 Per engine module (lines / branches): `tasks.mjs` 99.40 / 87.37, `assemble.mjs` 100 / 95.21, `report.mjs`
 99.28 / 82.83, `split.mjs` 100 / 90.47, `designspec.mjs` 98.56 / 90.26, `engine.mjs` 98.72 / 87.51, `mapper.mjs`
 99.80 / 89.10, `migrate.mjs` 97.60 / 87.92, `reads.mjs` 90.36 / 78.87, `verify-vendor-upstream.mjs` 61.68 / 76.00
-(its network path runs only in the separate upstream-authenticity job). `hooks/` reads 0% because its tests are
-the pytest suite, which runs in its own job without coverage; `scripts/` is low because two of its four `.mjs`
-scripts are never started by this job. V8 line coverage over-counts slightly, so branches are the stricter number.
+(its network path runs only in the separate upstream-authenticity job). V8 line coverage over-counts slightly, so
+branches are the stricter number.
