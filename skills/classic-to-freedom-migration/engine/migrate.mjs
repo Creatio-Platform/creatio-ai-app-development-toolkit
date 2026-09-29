@@ -1796,9 +1796,34 @@ const MAX_MEMBER_SCAN = 20000;
 const MAX_OVERRIDE_LAYERS = 8;
 
 // Where each `<name>: …` member definition's value starts, in text order. The scan text is the layer union
-// base→top, so the LAST definition is the most-derived override.
-function memberValueStarts(body, name) {
-  return [...body.matchAll(new RegExp(String.raw`\b${name}["']?\s*:\s*`, "g"))].map((m) => m.index + m[0].length);
+// base→top, so the LAST definition is the most-derived override. A match that starts inside a comment or a string
+// literal (a commented-out override) is not a definition; a quoted key starts AT its opening quote, so it still counts.
+function memberValueStarts(body, name, spans = literalSpans(body)) {
+  const re = new RegExp(String.raw`(["']?)\b${name}\1\s*:\s*`, "g");
+  return [...body.matchAll(re)].filter((m) => !insideSpan(spans, m.index)).map((m) => m.index + m[0].length);
+}
+
+// Every comment and quoted literal in the text as [open, close] offsets, in text order — one linear walk.
+function literalSpans(text) {
+  const spans = [];
+  for (let i = 0; i < text.length; i++) {
+    const j = skipLiteral(text, i, text.length);
+    if (j !== i) { spans.push([i, j]); i = j; }
+  }
+  return spans;
+}
+
+// True when `idx` lies past the opener of one of the sorted, disjoint spans (binary search).
+function insideSpan(spans, idx) {
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [open, close] = spans[mid];
+    if (idx <= open) hi = mid - 1;
+    else if (idx > close) lo = mid + 1;
+    else return true;
+  }
+  return false;
 }
 
 // Index of the character that closes the quoted literal or comment opening at `i`, else `i` (not an opener).
@@ -1847,8 +1872,8 @@ function memberValue(body, start) {
 // Actions the most-derived `addRecordOperationsMenuItems` override leaves out. An override calling `callParent`
 // delegates to the layer below it (so the next definition up the text decides); the stock menu below the lowest
 // override removes nothing.
-function menuRemovedActions(body) {
-  const starts = memberValueStarts(body, "addRecordOperationsMenuItems");
+function menuRemovedActions(body, spans) {
+  const starts = memberValueStarts(body, "addRecordOperationsMenuItems", spans);
   const readded = new Set();
   for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
     const v = memberValue(body, starts[k]);
@@ -1861,9 +1886,9 @@ function menuRemovedActions(body) {
 
 // True when the most-derived override of a menu-item getter returns nothing: `emptyFn`, an empty body, or a body
 // that is only `return;` / `return null;` / `return undefined;` (comments aside).
-function getterReturnsNothing(body, getter) {
-  const starts = memberValueStarts(body, getter);
-  const v = starts.length ? memberValue(body, starts[starts.length - 1]) : null;
+function getterReturnsNothing(body, getter, spans) {
+  const starts = memberValueStarts(body, getter, spans);
+  const v = starts.length ? memberValue(body, starts.at(-1)) : null;
   if (!v) return false;
   const code = v.text.replace(/\/\*[^*]{0,2000}\*\/|\/\/[^\n]{0,2000}/g, "").replace(/\s/g, "");
   return v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(code);
@@ -1871,14 +1896,15 @@ function getterReturnsNothing(body, getter) {
 
 // The standard row actions a detail removes, in menu order (Copy, Edit, Delete); [] for the stock menu.
 export function detectRemovedRowActions(body) {
-  const removed = new Set(menuRemovedActions(body));
-  for (const [action, getter] of ROW_ACTION_GETTERS) if (getterReturnsNothing(body, getter)) removed.add(action);
+  const spans = literalSpans(body);
+  const removed = new Set(menuRemovedActions(body, spans));
+  for (const [action, getter] of ROW_ACTION_GETTERS) if (getterReturnsNothing(body, getter, spans)) removed.add(action);
   return ROW_ACTION_GETTERS.map(([a]) => a).filter((a) => removed.has(a));
 }
 // Every function of the row-action scan, for the structural ReDoS golden (a `toString` of detectAddMode does not
 // include the helpers it calls).
-export const ROW_ACTION_SCAN_FNS = [memberValueStarts, skipLiteral, braceBody, memberValue, menuRemovedActions,
-  getterReturnsNothing, detectRemovedRowActions];
+export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, insideSpan, skipLiteral, braceBody, memberValue,
+  menuRemovedActions, getterReturnsNothing, detectRemovedRowActions];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom

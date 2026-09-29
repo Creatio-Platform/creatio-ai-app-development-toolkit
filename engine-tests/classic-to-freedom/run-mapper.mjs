@@ -7733,6 +7733,48 @@ check("#12 control: the TOP layer ALONE (base not supplied) does NOT detect the 
     () => editOnlyCs.needsDecision.length === 1 && /Nothing to remove from the Freedom list rows/.test(editOnlyCs.needsDecision[0].reason)
       && /open-on-click/.test(editOnlyCs.needsDecision[0].reason),
     () => editOnlyCs.needsDecision);
+  // A commented-out override is not a definition: the stock menu still provides every row action.
+  const noRa = (m) => !(detectAddMode(detBody(m))?.rowActionsRemoved || []).length;
+  check("a `//`-commented-out `addRecordOperationsMenuItems: Terrasoft.emptyFn` removes NO row actions",
+    () => noRa("// addRecordOperationsMenuItems: Terrasoft.emptyFn,\n getX: function(){}"),
+    () => detectAddMode(detBody("// addRecordOperationsMenuItems: Terrasoft.emptyFn,\n getX: function(){}")));
+  check("a `/* */`-commented-out getter emptyFn removes NO row actions",
+    () => noRa("/* getDeleteRecordMenuItem: Terrasoft.emptyFn */ getX: function(){}"),
+    () => detectAddMode(detBody("/* getDeleteRecordMenuItem: Terrasoft.emptyFn */ getX: function(){}")));
+  check("an override named only inside a string literal removes NO row actions",
+    () => noRa("getX: function(){ return 'addRecordOperationsMenuItems: Terrasoft.emptyFn'; }"));
+  const quotedKey = detectAddMode(detBody(`"addRecordOperationsMenuItems": Terrasoft.emptyFn`));
+  check("a QUOTED `\"addRecordOperationsMenuItems\"` key is still read as the override → [Copy, Edit, Delete]",
+    () => quotedKey?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => quotedKey);
+  // An override the scan cannot read claims nothing.
+  check("a BY-REFERENCE `addRecordOperationsMenuItems: this.fn` override removes NO row actions (unreadable)",
+    () => noRa("addRecordOperationsMenuItems: this.fn"), () => detectAddMode(detBody("addRecordOperationsMenuItems: this.fn")));
+  check("an override body past the scan cap removes NO row actions (unreadable)",
+    () => noRa(`addRecordOperationsMenuItems: function(){ var x = 1;${" ".repeat(20001)}this.getEditRecordMenuItem(); }`));
+  const litPartial = detectAddMode(detBody("addRecordOperationsMenuItems: function(){ var s='}'; // }\n this.getEditRecordMenuItem(); }"));
+  check("a partial override with `}` inside a string and inside a `//` comment still reads to its real end → [Copy, Delete]",
+    () => litPartial?.rowActionsRemoved?.join(",") === "Copy,Delete", () => litPartial);
+  // The typed-entity Shared section renders a detail's removed row actions as ONE suffix after the related-list text;
+  // a removed Edit alone adds no suffix there either.
+  const typedRaBase = `define("XPage",[],function(){return{entitySchemaName:"X",diff:[],details:{D1:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}},D2:{schemaName:"EoDetail",entitySchemaName:"EoChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;
+  const typedRaForm = `define("XICPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"GT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.GenInfoCaption"}},{operation:"insert",name:"Acc",parentName:"GT",propertyName:"items",values:{bindTo:"Acc"}}]};});`;
+  const typedRa = runMigration({
+    entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: typedRaBase }], section: [{ pkg: "S", body: docSecBody }],
+    typedPages: [{ schema: "XICPage", type: "Incoming" }],
+    typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: typedRaForm }] } },
+    detailSchemas: { RaDetail: { body: detBody("addRecordOperationsMenuItems:Terrasoft.emptyFn"), editPage: false },
+      EoDetail: { body: detBody("getEditRecordMenuItem:Terrasoft.emptyFn"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS,
+  });
+  const sharedStart = typedRa.plan.indexOf("### Shared across all typed forms");
+  const sharedLines = sharedStart < 0 ? [] : typedRa.plan.slice(sharedStart, typedRa.plan.indexOf("### Typed page mappings")).split("\n");
+  const raBullet = sharedLines.find((l) => /^- \*\*/.test(l) && /RaChild/.test(l)) || "";
+  const eoBullet = sharedLines.find((l) => /^- \*\*/.test(l) && /EoChild/.test(l)) || "";
+  check("typed Shared section: an emptied-menu detail ends with ONE ' — ' + 'no row Copy/Delete (keep open-on-click)'",
+    () => raBullet.endsWith(" — ⚠ no row Copy/Delete (keep open-on-click)") && raBullet.split(" — ").length === 3,
+    () => sharedLines);
+  check("typed Shared section: a removed Edit ALONE adds no row-actions suffix",
+    () => eoBullet !== "" && !/no row/.test(eoBullet), () => sharedLines);
 }
 // review (Applicant #13): a DCM object with SEVERAL case versions → the On-stand signals line advises using the
 // ACTIVE/published one (both widgets auto-populate); a single case gets no such note.
