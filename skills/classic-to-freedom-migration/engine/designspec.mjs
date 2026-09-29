@@ -153,12 +153,19 @@ const addModeText = (am) => {
   const rows = rowActionsNote(am);
   return add + (rows ? ` — ${rows}` : "");
 };
-// A detail's REMOVED row actions (from migrate.mjs detection) → a short ⚠ note naming what the Freedom rows must not
-// offer. Edit is left out: a Freedom related-list row has no separate Edit action — it opens on click, and keeps doing
-// so — so a removed Classic Edit asks nothing of the rows.
+// The removed Classic row actions the Freedom rows must drop. Edit is left out: a Freedom related-list row has no
+// separate Edit action — it opens on click, and keeps doing so — so a removed Classic Edit asks nothing of the rows.
+// The one place this rule lives; the plan decision and the Layout note both read it.
+export const freedomRowActionsToDrop = (removed = []) => removed.filter((a) => a !== "Edit");
+
+// A detail's row-action overrides (from migrate.mjs detection) → a short ⚠ note naming what the Freedom rows must not
+// offer, or that an override could not be read and must be checked by hand.
 function rowActionsNote(am) {
-  const drop = (am?.rowActionsRemoved || []).filter((a) => a !== "Edit");
-  return drop.length ? `⚠ no row ${drop.map(esc).join("/")} (keep open-on-click)` : "";
+  const drop = freedomRowActionsToDrop(am?.rowActionsRemoved);
+  const notes = [];
+  if (drop.length) notes.push(`⚠ no row ${drop.map(esc).join("/")} (keep open-on-click)`);
+  if (am?.rowActionsUnreadable?.length) notes.push("⚠ row-action override unread — check by hand");
+  return notes.join(" · ");
 }
 
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.

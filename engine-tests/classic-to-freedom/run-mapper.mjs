@@ -2966,7 +2966,7 @@ try {
   const raSrc = ROW_ACTION_SCAN_FNS.map((f) => f.toString()).join("\n");
   const unboundedRun = /\[\\s\\S\][*+]|\.[*+]/g;
   check("ReDoS (structural): the removed-row-actions scan has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` / `.*` / `.+` run, and detectAddMode reaches it",
-    () => ROW_ACTION_SCAN_FNS.length >= 4 && daSrc.includes("detectRemovedRowActions") && !raSrc.match(unboundedRun),
+    () => ROW_ACTION_SCAN_FNS.length >= 4 && daSrc.includes("scanRowActions") && !raSrc.match(unboundedRun),
     () => raSrc.match(unboundedRun));
   const unit3 = "addRecordOperationsMenuItems: function(m){ getDeleteRecordMenuItem: function(){ " + "z".repeat(60) + "\n";
   const raAdversarial = unit3.repeat(6000);
@@ -7746,11 +7746,71 @@ check("#12 control: the TOP layer ALONE (base not supplied) does NOT detect the 
   const quotedKey = detectAddMode(detBody(`"addRecordOperationsMenuItems": Terrasoft.emptyFn`));
   check("a QUOTED `\"addRecordOperationsMenuItems\"` key is still read as the override → [Copy, Edit, Delete]",
     () => quotedKey?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => quotedKey);
-  // An override the scan cannot read claims nothing.
-  check("a BY-REFERENCE `addRecordOperationsMenuItems: this.fn` override removes NO row actions (unreadable)",
-    () => noRa("addRecordOperationsMenuItems: this.fn"), () => detectAddMode(detBody("addRecordOperationsMenuItems: this.fn")));
-  check("an override body past the scan cap removes NO row actions (unreadable)",
-    () => noRa(`addRecordOperationsMenuItems: function(){ var x = 1;${" ".repeat(20001)}this.getEditRecordMenuItem(); }`));
+  // An override the scan cannot read claims no removal, and is reported as UNREAD so the plan still raises its row.
+  const byRef = detectAddMode(detBody("addRecordOperationsMenuItems: this.fn"));
+  check("a BY-REFERENCE `addRecordOperationsMenuItems: this.fn` override claims no removal and is reported as unreadable",
+    () => noRa("addRecordOperationsMenuItems: this.fn") && byRef?.rowActionsUnreadable?.join(",") === "addRecordOperationsMenuItems",
+    () => byRef);
+  const overCap = detectAddMode(detBody(`addRecordOperationsMenuItems: function(){ var x = 1;${" ".repeat(20001)}this.getEditRecordMenuItem(); }`));
+  check("an override body past the scan cap claims no removal and is reported as unreadable",
+    () => !(overCap?.rowActionsRemoved || []).length && overCap?.rowActionsUnreadable?.join(",") === "addRecordOperationsMenuItems",
+    () => overCap);
+  const byRefGetter = detectAddMode(detBody("getDeleteRecordMenuItem: this.makeDeleteItem"));
+  check("a by-reference getter override is reported as unreadable under the GETTER's name",
+    () => byRefGetter?.rowActionsUnreadable?.join(",") === "getDeleteRecordMenuItem" && !(byRefGetter.rowActionsRemoved || []).length,
+    () => byRefGetter);
+  const unreadCs = { details: [{ detailSchema: "S", caption: "Items", entity: "RaChild" }], needsDecision: [] };
+  attachDetailAddModes(unreadCs, { S: { addMode: byRef } });
+  check("an unreadable override still raises a detail-row-actions decision that asks for the Classic member to be read by hand",
+    () => unreadCs.needsDecision.length === 1 && unreadCs.needsDecision[0].kind === "detail-row-actions"
+      && /cannot read/.test(unreadCs.needsDecision[0].reason) && /UNKNOWN/.test(unreadCs.needsDecision[0].reason)
+      && /open-on-click/.test(unreadCs.needsDecision[0].reason),
+    () => unreadCs.needsDecision);
+  // A getter or `callParent` named only in a comment or a string is not code.
+  const commentedGetter = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ /* getCopyRecordMenuItem dropped */ m.addItem(this.getEditRecordMenuItem()); }"));
+  check("a getter named only in a comment inside the menu override is NOT re-added → [Copy, Delete]",
+    () => commentedGetter?.rowActionsRemoved?.join(",") === "Copy,Delete", () => commentedGetter);
+  const stringGetter = detectAddMode(detBody(`addRecordOperationsMenuItems: function(m){ var n = "getDeleteRecordMenuItem"; }`));
+  check("a getter named only in a string inside the menu override is NOT re-added → [Copy, Edit, Delete]",
+    () => stringGetter?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => stringGetter);
+  const commentedParent = detectAddMode(detBody("addRecordOperationsMenuItems: function(){\n // this.callParent(arguments);\n }"));
+  check("an emptied menu with a commented-out `callParent` still removes all three row actions",
+    () => commentedParent?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => commentedParent);
+  const docCommentGetter = detectAddMode(detBody("getDeleteRecordMenuItem: function(){ /** removed */ return null; }"));
+  check("a `/** */`-commented getter returning null removes that one action → [Delete]",
+    () => docCommentGetter?.rowActionsRemoved?.join(",") === "Delete", () => docCommentGetter);
+  // A lone quote the walk misreads as a string opener (here inside a regex literal) swallows its own line only.
+  const strayQuote = detectAddMode(detBody(`fmt: function(v){ return v.replace(/"/g, ""); },\naddRecordOperationsMenuItems: Terrasoft.emptyFn`));
+  check("a quote inside a regex literal before the override does not hide it → [Copy, Edit, Delete]",
+    () => strayQuote?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => strayQuote);
+  // The ES6 method shorthand is a definition like `name: function`; a call through `this.` is not.
+  const shorthand = detectAddMode(detBody("addRecordOperationsMenuItems(m) { m.addItem(this.getEditRecordMenuItem()); }"));
+  check("an ES6 shorthand `addRecordOperationsMenuItems(m) { … }` override is read → [Copy, Delete]",
+    () => shorthand?.rowActionsRemoved?.join(",") === "Copy,Delete" && !(shorthand.rowActionsUnreadable || []).length,
+    () => shorthand);
+  check("a `this.getDeleteRecordMenuItem()` CALL is not read as a getter definition",
+    () => detectAddMode(detBody("getX: function(){ return this.getDeleteRecordMenuItem(); }")) === null,
+    () => detectAddMode(detBody("getX: function(){ return this.getDeleteRecordMenuItem(); }")));
+  // The most-derived layer decides: a top override can restore what a base layer removed.
+  const restoredMenu = detectAddMode([detBody("addRecordOperationsMenuItems: Terrasoft.emptyFn"),
+    detBody("addRecordOperationsMenuItems: function(m){ m.addItem(this.getCopyRecordMenuItem()); m.addItem(this.getEditRecordMenuItem()); m.addItem(this.getDeleteRecordMenuItem()); }")].join("\n"));
+  check("a base emptyFn menu with a top override re-adding all three getters removes NO row actions",
+    () => !(restoredMenu?.rowActionsRemoved || []).length, () => restoredMenu);
+  const restoredGetter = detectAddMode([detBody("getDeleteRecordMenuItem: Terrasoft.emptyFn"),
+    detBody(`getDeleteRecordMenuItem: function(){ return this.getButtonMenuItem({Caption:"Del",Click:{"bindTo":"deleteRecords"}}); }`)].join("\n"));
+  check("a base emptyFn Delete getter with a top getter returning a real item removes NO row actions",
+    () => !(restoredGetter?.rowActionsRemoved || []).length, () => restoredGetter);
+  // An inline-editable grid that also drops a row action: the grid-only add row is dropped from ⚠ Confirm as a
+  // restatement of the Layout note, the row-actions row is not.
+  const gridRa = runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { RaDetail: { body: detBody("getCellControlsConfig: function(){ var enabledColumns = [\"Name\"]; }, getDeleteRecordMenuItem: Terrasoft.emptyFn"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const gridRaRows = checklistGroups(gridRa, checklistOpts(gridRa)).flatMap((g) => g.rows);
+  check("an editable-grid-only detail that drops Delete keeps its ⚠ Confirm row-actions line and checklist row, and drops the grid-only add row",
+    () => /\[detail-row-actions\][^\n]{0,400}Delete/.test(gridRa.plan) && !/\[detail-add-mechanism\]/.test(gridRa.plan)
+      && gridRaRows.some((r) => r.confirm?.kind === "detail-row-actions"),
+    () => ({ lines: gridRa.plan.split("\n").filter((l) => /\[detail-/.test(l)), kinds: gridRaRows.map((r) => r.confirm?.kind).filter(Boolean) }));
   const litPartial = detectAddMode(detBody("addRecordOperationsMenuItems: function(){ var s='}'; // }\n this.getEditRecordMenuItem(); }"));
   check("a partial override with `}` inside a string and inside a `//` comment still reads to its real end → [Copy, Delete]",
     () => litPartial?.rowActionsRemoved?.join(",") === "Copy,Delete", () => litPartial);
