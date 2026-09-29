@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdir
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { readTarEntry, integrityOk, assertTarballIntegrity, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
@@ -84,6 +84,29 @@ check("integrity: accepts the correct sha512 SRI string", integrityOk(blob, good
 check("integrity: rejects a wrong hash", integrityOk(blob, "sha512-" + createHash("sha512").update(Buffer.from("other")).digest("base64")) === false);
 check("integrity: rejects a malformed / empty integrity string", integrityOk(blob, "") === false && integrityOk(blob, "not-an-sri") === false);
 check("integrity: supports the sha256 algorithm prefix too", integrityOk(blob, "sha256-" + createHash("sha256").update(blob).digest("base64")) === true);
+check("integrity: supports the sha384 algorithm prefix", integrityOk(blob, "sha384-" + createHash("sha384").update(blob).digest("base64")) === true);
+// A digest that matches is not enough: md5 and sha1 are collision-broken, so a registry string naming either
+// is rejected even when the bytes hash to it. Only sha256 / sha384 / sha512 are accepted.
+// The md5 / sha1 digests of `blob` are literals so the suite never calls a weak hash itself.
+const blobMd5 = "org/RlCQeA+N8htTVK/wSg==";
+const blobSha1 = "/E/s5arNOx4tFwtf3u5DV0m5BBc=";
+check("integrity: rejects a correct md5 digest (weak algorithm)", integrityOk(blob, "md5-" + blobMd5) === false);
+check("integrity: rejects a correct sha1 digest (weak algorithm)", integrityOk(blob, "sha1-" + blobSha1) === false);
+check("integrity: rejects a correct digest under an algorithm outside the allow-list",
+  integrityOk(blob, "sha224-" + createHash("sha224").update(blob).digest("base64")) === false);
+check("integrity: the SRI algorithm prefix must be lowercase (an uppercase prefix does not parse)",
+  integrityOk(blob, "SHA512-" + createHash("sha512").update(blob).digest("base64")) === false);
+
+// The registry record is checked fail-closed: a missing integrity string is an error, not a skipped check.
+const throwsWith = (fn, re) => { try { fn(); return false; } catch (e) { return re.test(e.message); } };
+check("integrity: a registry record whose integrity matches is accepted",
+  !throwsWith(() => assertTarballIntegrity(blob, { tarball: "x", integrity: good }), /./));
+check("integrity: a registry record with no dist.integrity throws",
+  throwsWith(() => assertTarballIntegrity(blob, { tarball: "x" }), /no dist\.integrity/));
+check("integrity: a registry record with an empty dist.integrity throws",
+  throwsWith(() => assertTarballIntegrity(blob, { tarball: "x", integrity: "" }), /no dist\.integrity/));
+check("integrity: a registry record whose integrity does not match throws",
+  throwsWith(() => assertTarballIntegrity(Buffer.from("other"), { tarball: "x", integrity: good }), /failed the registry's own dist\.integrity check/));
 
 console.log("\n===== glob → regex matcher (offline) =====");
 check("glob: `*` stays within a path segment (does NOT cross `/`)",

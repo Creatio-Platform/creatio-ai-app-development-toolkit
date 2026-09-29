@@ -200,6 +200,7 @@ SKIPPED_DIR_PARTS = frozenset({
 # Every entry is asserted to exist.
 EXEMPT_PATHS = (
     "RELEASE-NOTES.md",
+    "docs/engine-zero-dependency-decision.md",
     "docs/guidance-item-contract-decision.md",
     "docs/telemetry-transport-decision.md",
     ".ai/specs",
