@@ -89,8 +89,8 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
   instructions tell you to read whole — read those in full, once.
 - **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
   `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
-  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
-  need. A file read with no offset or limit is a whole read, whichever tool reads it.
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read each section that
+  applies to your task. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 ## Before and during every write
@@ -107,14 +107,21 @@ you.
   page's heading, and you read that section alone — never the whole plan. A `customizations-*`
   behaviour card your rows cite is read by its id the same way (`grep -n '<scope>/C03'` in the part
   file, then that card's lines), not the whole part file. For a page, read your page's `--spec`
-  slice. You do NOT record the approval — the orchestrator did that in `decisions.md` before
-  slicing, and a build that finds no approval entry is a stop for the orchestrator, not something
-  you work around.
+  slice. The mapping reference is looked up the same way: `grep -n '^#'` lists its headings, and
+  you read every section that applies to your page — a pointer below names the section most tasks
+  need, not the only one. You do NOT record the approval — the orchestrator did that in
+  `decisions.md` before slicing, and a build that finds no approval entry is a stop for the
+  orchestrator, not something you work around.
 - **Re-filing one evidence record (a repair round).** `evidence.json` and `judge.json` hold every
   task's records, so never `cat` `evidence.json` or `judge.json`. Query your own id in `judge.json`
-  to see why the record was refused (the `node -e` query above), then change your one key with a
-  single read-modify-write, leaving every other key as it is:
-  `node -e "const fs=require('fs'); const j=JSON.parse(fs.readFileSync('evidence.json','utf8')); j['<id>'] = { ...j['<id>'], referencePage: '<page>', components: ['<component>'] }; fs.writeFileSync('evidence.json', JSON.stringify(j, null, 2))"`
+  to see why the record was refused (the `node -e` query above), then set the one field the
+  judge's refusal names with a single read-modify-write, leaving every other key as it is.
+  `<migration-folder>` is the folder your task file names; `<field>` is the field the refusal
+  names and `<value>` what you now file for it, written as a literal (`'UsrContactPage'`,
+  `['crt.Button']`):
+  `node -e "const fs=require('fs'); const f='<migration-folder>/evidence.json'; const j=JSON.parse(fs.readFileSync(f,'utf8')); j['<id>'] = { ...j['<id>'], '<field>': <value> }; fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n')"`
+  Run it only while no other task writes `evidence.json`: two read-modify-writes at once keep the
+  later one's copy, and the other task's record is lost.
 - Section sequencing at whole-package scope is the orchestrator's (step 7.6,
   `./references/orchestrate-build.md`): one section is sliced, built and validated before the next
   one starts. Your task belongs to exactly one section — never reach into another.

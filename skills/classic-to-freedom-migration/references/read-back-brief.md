@@ -25,8 +25,8 @@ goes into. Run those reads; nothing else.
   instructions tell you to read whole — read those in full, once.
 - **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
   `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
-  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
-  need. A file read with no offset or limit is a whole read, whichever tool reads it.
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read each section that
+  applies to your task. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 - **The read-back**: one sub-agent with stand access but NO write access runs the reads that plan
@@ -37,10 +37,12 @@ goes into. Run those reads; nothing else.
   one is reported as unread. **A page the stand DENIES is different from one it could not read** —
   write the literal `false` into that page's slot and the gate reports it ❌ MISSING (a repair),
   rather than ⚠ unread (a re-read).
-- **Copy, do not print.** Put each response into its slot with `cp`, a shell redirect (`> <slot>`)
-  or a tool's `--output-file`, so the body goes from the stand to the file without passing through
-  your conversation; confirm it landed with a byte count, not by printing it. A page body printed
-  to be copied by hand costs its whole size in your context and invites the slice this read forbids.
+- **Copy, do not print.** Use `--output-file` where the command supports it, so the body goes
+  from the stand straight to its slot; otherwise put it there with `cp` or a shell redirect
+  (`> <slot>`). A response an MCP tool returns is already in your conversation once it arrives:
+  write it to its slot once and do not print it again. Confirm each file landed with a byte count,
+  not by printing it. A page body printed to be copied by hand costs its size a second time and
+  invites the slice this read forbids.
 
 When every read is done or deliberately left unwritten, say which is which and stop. The engine
 composes the payload from the files; you do not write one.

@@ -2,8 +2,9 @@
 
 Handed, with `./references/build-task-execution.md`, to every page build and repair task, which is
 also pointed at `./references/classic-to-freedom-mapping.md`. The mapping is a reference: look up by
-heading the section a pointer below names (`grep -n '^#'`, then that section's lines) — it is never
-read whole. The five rules in `build-task-execution.md` override every convenience in this file.
+heading (`grep -n '^#'` lists them) and read every section that applies to your page — a pointer
+below names the section most tasks need, not the only one — but it is never read whole. The five
+rules in `build-task-execution.md` override every convenience in this file.
 
 ## Everything else about building a page
 

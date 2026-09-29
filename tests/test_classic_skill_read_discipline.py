@@ -9,7 +9,11 @@ block present and identical everywhere it is inlined, and keep the role-specific
 instructions from sliding back to whole reads.
 """
 
+import json
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -106,13 +110,28 @@ class ReadDisciplineBlockTests(unittest.TestCase):
         missing = [what for what, phrase in required.items() if phrase not in text]
         self.assertFalse(missing, f"read-discipline block lacks: {missing}")
 
-    def test_skill_body_points_at_the_block_within_budget(self):
+    def skill_rule_line(self):
         lines = [line for line in read(SKILL).splitlines() if "**Read discipline**" in line]
         self.assertEqual(len(lines), 1, "SKILL.md must carry exactly one read-discipline pointer")
-        pointer = lines[0]
+        return lines[0]
+
+    def test_skill_body_points_at_the_block_within_budget(self):
+        line = self.skill_rule_line()
+        pointer = line[line.index("**Read discipline**"):]
         self.assertIn("./references/orchestrate-build.md", pointer)
         size = len(pointer.encode("utf-8"))
         self.assertLessEqual(size, POINTER_MAX_BYTES, f"the pointer is {size} bytes")
+
+    def test_session_start_recovery_is_targeted_not_whole(self):
+        # The cardinal rule is the orchestrator's first read of every session, so it
+        # is where a whole read of plan.md and worklog.md would come back. It shares
+        # one line with the pointer: the body has no bytes left for a second one.
+        whole_reads = "at the start of every session (single-section: `plan.md` + `worklog.md`)"
+        self.assertFalse(whole_reads in read(SKILL), f"SKILL.md still orders: {whole_reads}")
+        line = self.skill_rule_line()
+        self.assertTrue(line.startswith("- Cardinal rule:"), "the cardinal rule and the pointer share one line")
+        for phrase in ("grep -n '^#'", "the active section", "the tail of `worklog.md`", "never whole"):
+            self.assertIn(phrase, line)
 
 
 class BuilderReadTests(unittest.TestCase):
@@ -144,11 +163,69 @@ class BuilderReadTests(unittest.TestCase):
             "never `cat` `evidence.json` or `judge.json`",
         ):
             self.assertIn(phrase, self.text)
-        self.assertRegex(self.text, r"node -e \"[^\"]*writeFileSync\('evidence\.json'")
+        self.assertIsNotNone(repair_recipe(), "the repair recipe is not a runnable node -e command")
+
+    def test_repair_recipe_takes_its_values_from_the_refusal(self):
+        # The field and the value come from the judge's refusal, and the file from the
+        # migration folder the task file names - not a fixed key set, not the cwd.
+        recipe = repair_recipe()
+        for placeholder in ("<id>", "<field>", "<value>", "<migration-folder>/evidence.json"):
+            self.assertIn(placeholder, recipe)
+        self.assertNotIn("referencePage: '<page>'", recipe)
+        self.assertIn("the judge's refusal", self.text)
+        self.assertIn("only while no other task writes `evidence.json`", self.text)
+
+    def test_the_mapping_is_listed_by_heading_and_every_applying_section_read(self):
+        self.assertIn("every section that applies to your page", self.text)
 
 
 def headings(path):
     return [line.lstrip("#").strip() for line in read(path).splitlines() if line.startswith("#")]
+
+
+# Where a heading's own title ends and its gloss begins: `Section dashboards (7x
+# analytics → …)` is pointed at as *Section dashboards*.
+HEADING_GLOSS = re.compile(r" \(| — | → |: ")
+
+
+def heading_titles(path):
+    """Every heading of a file, whole, and its title part before the gloss."""
+    titles = set()
+    for heading in headings(path):
+        titles.add(heading)
+        titles.add(HEADING_GLOSS.split(heading, 1)[0].strip())
+    return titles
+
+
+def mapping_pointers(text):
+    """(context, section name) for every pointer at the mapping reference in `text`.
+
+    Two spellings point at it: `the mapping reference → *X*` and
+    `./references/classic-to-freedom-mapping.md` → *X*. The name is None when the
+    pointer names no section.
+    """
+    found = []
+    pattern = r"(?:the mapping reference(?:'s)?|`\./references/classic-to-freedom-mapping\.md`)(.{0,90})"
+    for match in re.finditer(pattern, text):
+        named = re.match(r"\s*→\s*\*([^*]+)\*", match.group(1))
+        found.append((match.group(0)[:70], named.group(1).strip() if named else None))
+    return found
+
+
+def header(text):
+    """A brief's title and the paragraph under it - where it says what it is handed with."""
+    title, _, rest = text.partition("\n\n")
+    return title + "\n\n" + rest.split("\n\n", 1)[0]
+
+
+def repair_recipe():
+    """The node -e script of the builder's evidence re-file recipe, or None."""
+    text = flat(read(REFERENCES / "build-task-execution.md"))
+    begin = text.find("Re-filing one evidence record")
+    if begin < 0:
+        return None
+    match = re.search(r'`node -e "([^`]*writeFileSync[^`]*)"`', text[begin:])
+    return match.group(1) if match else None
 
 
 class ReferenceLookupTests(unittest.TestCase):
@@ -178,22 +255,31 @@ class ReferenceLookupTests(unittest.TestCase):
             self.assertIn("classic-to-freedom-mapping.md", row[3], row[0])
 
     def test_build_page_calls_the_mapping_a_reference_to_look_up(self):
-        text = read(REFERENCES / "build-page.md")
-        header = flat(text[: text.find("\n## ")])
-        self.assertIn("look up by heading", header)
-        self.assertIn("never read whole", header)
+        first = flat(header(read(REFERENCES / "build-page.md")))
+        self.assertIn("look up by heading", first)
+        self.assertIn("never read whole", first)
 
     def test_every_mapping_pointer_names_a_real_heading(self):
-        text = flat(read(REFERENCES / "build-page.md"))
-        known = headings(REFERENCES / "classic-to-freedom-mapping.md")
-        pointers = re.findall(r"the mapping reference(?:'s)?(.{0,90})", text)
-        self.assertTrue(pointers, "build-page.md no longer points at the mapping reference")
-        unnamed = []
-        for tail in pointers:
-            named = re.match(r"\s*→\s*\*([^*]+)\*", tail)
-            if not named or not any(h.startswith(named.group(1).rstrip("…. ")) for h in known):
-                unnamed.append(tail[:60])
-        self.assertFalse(unnamed, f"mapping pointers without a real heading: {unnamed}")
+        # A pointer is compared to a heading's WHOLE title, not to a prefix of it: a
+        # pointer cut down to its first words matches several headings and names none.
+        known = heading_titles(REFERENCES / "classic-to-freedom-mapping.md")
+        for name in ("build-page.md", "build-task-execution.md", "build-dashboards.md"):
+            text = read(REFERENCES / name)
+            # The header names the mapping as a whole; every pointer after it names a section.
+            body = flat(text[len(header(text)) :])
+            pointers = mapping_pointers(body)
+            self.assertTrue(pointers, f"{name} no longer points at the mapping reference")
+            wrong = [where for where, title in pointers if title not in known]
+            self.assertFalse(wrong, f"{name}: mapping pointers naming no whole heading: {wrong}")
+
+    def test_builders_read_every_mapping_section_that_applies(self):
+        # A pointer names the section most tasks need, not every one a page needs:
+        # the builder lists the headings and reads each section its page touches.
+        for name in ("build-page.md", "build-dashboards.md"):
+            first = flat(header(read(REFERENCES / name)))
+            self.assertIn("every section that applies to your page", first, name)
+            self.assertIn("grep -n '^#'", first, name)
+        self.assertIn("reads every section that applies to its page", flat(read(REFERENCES / "orchestrate-build.md")))
 
 
 class UiGuidelinesPointerTests(unittest.TestCase):
@@ -220,19 +306,76 @@ class UiGuidelinesPointerTests(unittest.TestCase):
         self.assertIn("read `./references/review-checklists.md` whole only for a full audit", self.text)
 
 
+def outside_block(name):
+    """A brief's own text, the shared block removed, so a phrase the block holds does not count."""
+    text = read(REFERENCES / name)
+    return flat(text.replace(block(text, name), ""))
+
+
 class ReadBackAndJudgeTests(unittest.TestCase):
     def test_read_back_copies_files_instead_of_printing_them(self):
-        text = flat(read(REFERENCES / "read-back-brief.md"))
+        text = outside_block("read-back-brief.md")
         self.assertIn("whole, never a slice", text)
         self.assertIn("Copy, do not print", text)
         for route in ("`cp`", "redirect", "--output-file"):
             self.assertIn(route, text)
+
+    def test_fetch_briefs_say_what_an_mcp_response_costs(self):
+        # --output-file keeps a body out of the conversation only where the command
+        # has one; an MCP tool's response is in the conversation once it returns.
+        for name in ("read-back-brief.md", "reference-cache-brief.md"):
+            text = outside_block(name)
+            self.assertNotIn("without passing through your conversation", text, name)
+            self.assertIn("`--output-file` where the command supports it", text, name)
+            self.assertIn("already in your conversation", text, name)
+
+    def test_judge_fills_a_null_with_one_key_write(self):
+        text = outside_block("judge-brief.md")
+        self.assertIn("Fill a `null` in place", text)
+        self.assertRegex(text, r"node -e \"[^\"]*'<migration-folder>/judge\.json'[^\"]*readFileSync[^\"]*writeFileSync")
+        self.assertIn("never print the file whole or rewrite it", text)
 
     def test_judge_queries_its_records_by_id(self):
         text = flat(read(REFERENCES / "judge-brief.md"))
         self.assertIn("Query the records by id, never print them whole", text)
         for record in ("`evidence.json`", "`judge.json`", "`findings.md`"):
             self.assertIn(record, text)
+
+
+class OrchestratorWholeReadTests(unittest.TestCase):
+    def test_the_orchestrators_own_whole_reads_are_named_once(self):
+        # The first paragraph after the block: the orchestrator is handed no task
+        # file, so it is told which of its own files are read whole.
+        text = read(REFERENCES / "orchestrate-build.md")
+        after = flat(text[text.index(END) + len(END) :].lstrip("\n").split("\n\n", 1)[0])
+        for phrase in ("`plan.md`", "at approval", "`decisions.md`", "`--- progress ---`", "once"):
+            self.assertIn(phrase, after)
+
+
+@unittest.skipIf(shutil.which("node") is None, "node is not on PATH")
+class RepairRecipeRunTests(unittest.TestCase):
+    """The recipe is run, not only read: it changes one key of one record."""
+
+    def test_the_recipe_changes_only_the_target_record(self):
+        before = {
+            "E1": {"referencePage": "UsrOther", "components": ["crt.Button"]},
+            "E2": {"referencePage": None, "components": ["crt.Input"]},
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "evidence.json"
+            path.write_text(json.dumps(before, indent=2) + "\n", encoding="utf-8")
+            script = (
+                repair_recipe()
+                .replace("<migration-folder>", Path(folder).as_posix())
+                .replace("<id>", "E2")
+                .replace("<field>", "referencePage")
+                .replace("<value>", "'UsrContactPage'")
+            )
+            subprocess.run(["node", "-e", script], check=True, capture_output=True, timeout=60)
+            after = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(after["E1"], before["E1"], "the recipe touched another record")
+        self.assertEqual(after["E2"], {"referencePage": "UsrContactPage", "components": ["crt.Input"]})
+        self.assertEqual(set(after), set(before))
 
 
 if __name__ == "__main__":

@@ -24,13 +24,17 @@ yours.
   instructions tell you to read whole — read those in full, once.
 - **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
   `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
-  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
-  need. A file read with no offset or limit is a whole read, whichever tool reads it.
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read each section that
+  applies to your task. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 - **What you fetch:** the clio guidance articles this build needs — resolve the set from the routing
   map (`get-guidance name=routing`), one `refs/guidance-<topic>.md` per topic — and the design spec
   (`--spec`) verbatim as `refs/spec.md`, with the plan's `Adjustments` list in full.
+- **Write each file without printing it.** Use `--output-file` where the command supports it (the
+  engine's `--spec` takes `--out <file>`); otherwise a shell redirect. A response an MCP tool returns
+  — a `get-guidance` article — is already in your conversation once it arrives: write it to its
+  `refs/` file once and do not print it again.
 - **What you do NOT fetch:** tool contracts and component docs. Each build task calls
   `get-tool-contract` and `get-component-info` itself, for the tools and components its own task
   touches, and reads the answer whole.

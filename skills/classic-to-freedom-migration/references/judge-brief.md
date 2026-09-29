@@ -23,8 +23,8 @@ page. You read what the builders filed and rule on it; you write nothing on the 
   instructions tell you to read whole — read those in full, once.
 - **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
   `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
-  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
-  need. A file read with no offset or limit is a whole read, whichever tool reads it.
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read each section that
+  applies to your task. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 ## What the records are
@@ -39,6 +39,10 @@ page. You read what the builders filed and rule on it; you write nothing on the 
   `findings.md` hold every page's records, and you rule on one at a time: pull the record under the
   evidence id you are ruling on — `node -e` over the JSON, `grep -n '<id>' findings.md` and then a
   `sed -n` window over the lines it names — instead of `cat`-ing the files.
+- **Fill a `null` in place.** Each verdict you file replaces one `null` in `judge.json` with a
+  single read-modify-write of that one key, leaving every other key as it is — never print the file
+  whole or rewrite it from memory (a `'` inside `why` goes in as `\'`):
+  `node -e "const fs=require('fs'); const f='<migration-folder>/judge.json'; const j=JSON.parse(fs.readFileSync(f,'utf8')); j['<id>'] = { convincing: <true|false>, why: '<the sentence you quote>' }; fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n')"`
 
 ## How to rule
 

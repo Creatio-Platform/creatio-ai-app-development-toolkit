@@ -436,20 +436,26 @@ const happyAnswer = (item) => {
     () => asked.map((i) => i.id).join(","));
 }
 {
-  // Every phase shares the rules() preamble, so the read rule rides on every prompt; the
-  // critique reads cards by id, while the merge still reads each part whole to merge it.
+  // Every phase shares the rules() preamble, so the read rule rides on every prompt. The
+  // critique and the merge each need every card, so both read each part whole, once.
   const RULES = prompts.rules({ surface: "Deal", environment: "dev", outDir: "out", digest: "d.json", manifest: "m.json" });
   const critique = prompts.critiquePrompt({ RULES, allKeys: ["a"], described: [], uncoveredKeys: [], wiringOnly: [], sharedCardList: "", messageRegister: [] });
   const merge = prompts.mergePrompt({ RULES, sharedCorePath: "out/shared.md", described: [], critique: {}, covered: 0, total: 0, uncoveredKeys: [], wiringOnly: [], outDir: "out" });
+  const context = prompts.contextPrompt(RULES, "out/shared.md");
   check("prompts: the shared rules carry the read rule — big output to a file, grep -n + sed -n windows, chunked paging counts as a full read, JSON is queried, a held file is not re-read",
     /READ WHAT YOU NEED/.test(RULES) && /~200 lines or ~8 KB/.test(RULES) && /grep -n/.test(RULES) && /sed -n/.test(RULES)
-      && /in chunks is a full read/.test(RULES) && /node -e/.test(RULES) && /do not re-read/i.test(RULES)
-      && /prompt tells you to read/.test(RULES),
+      && /in chunks is a full read/.test(RULES) && /node -e/.test(RULES) && /do not re-read/i.test(RULES),
     () => RULES);
-  check("prompts: the critique locates each card by its id in the part files and reads that card, not the whole part",
-    critique.includes(RULES) && /locate each card you check by its id/.test(critique) && /not the whole part/.test(critique)
-      && !/read them — do not judge/.test(critique),
+  check("prompts: the rules say when a whole read is right — a file you need every line of, read once — not only when a phase's prompt says so",
+    /Read a file whole when you need every line of it, and only once/.test(RULES) && !/prompt tells you to read/.test(RULES),
+    () => RULES);
+  check("prompts: the critique reads each part file whole, once — coverage and conflicts need every card, so a card-by-id lookup misses the card nobody named",
+    critique.includes(RULES) && /read each part file whole, once/.test(critique)
+      && !/locate each card you check by its id/.test(critique) && !/not the whole part/.test(critique),
     () => critique.slice(0, 2400));
+  check("prompts: the context phase still reads the digest whole — every key in it is copied",
+    context.includes(RULES) && /READ THE DIGEST at the path above — read it whole/.test(context),
+    () => context.slice(0, 2400));
   check("prompts: the merge still reads every part whole — it cannot merge a card it did not read",
     merge.includes(RULES) && /read each file whole/.test(merge), () => merge.slice(0, 1200));
 }

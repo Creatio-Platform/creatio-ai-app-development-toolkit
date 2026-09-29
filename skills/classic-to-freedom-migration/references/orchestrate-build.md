@@ -25,9 +25,13 @@ mean. No sub-agent is handed this file — each gets the briefs its task kind na
   instructions tell you to read whole — read those in full, once.
 - **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
   `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
-  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
-  need. A file read with no offset or limit is a whole read, whichever tool reads it.
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read each section that
+  applies to your task. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
+
+**Your own whole reads, each once:** `plan.md` at approval (7.1 records its version), `decisions.md`,
+and the `--- progress ---` block the engine prints — you paste that block, you do not re-read it.
+Everything else you open during the build is a targeted read.
 
 ## Step 7 — slice the plan, then orchestrate one task at a time
 
@@ -294,7 +298,8 @@ answered on the stand is recorded there and is not repeated in its own file.
 
 **A brief is read whole; a reference is looked up by heading.** Say which is which in the hand-off:
 the mapping reference is several times a brief's size and a builder needs a few of its sections, so
-it is handed as a path to `grep -n '^#'`, never as a file to read.
+it is handed as a path to `grep -n '^#'`, never as a file to read: the builder lists its headings and
+reads every section that applies to its page, not only the ones a pointer in its brief names.
 
 **A task that matches several rows gets every brief those rows name.** The engine files the
 section-dashboard rows into the list page's own build task, so that task is both a page build and
