@@ -149,8 +149,17 @@ const addModeText = (am) => {
   if (am.service) p.push(`service \`${esc(am.service)}${am.method ? "." + esc(am.method) : ""}\``);
   if (am.editableGrid) { const cols = (am.editableColumns || []).length ? ` (${am.editableColumns.map(esc).join("/")})` : ""; p.push(`inline-editable${cols}`); }
   if (!p.length && am.openCardOverridden) p.push("custom add flow");
-  return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
+  const add = p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
+  const rows = rowActionsNote(am);
+  return add + (rows ? ` — ${rows}` : "");
 };
+// A detail's REMOVED row actions (from migrate.mjs detection) → a short ⚠ note naming what the Freedom rows must not
+// offer. Edit is left out: a Freedom related-list row has no separate Edit action — it opens on click, and keeps doing
+// so — so a removed Classic Edit asks nothing of the rows.
+function rowActionsNote(am) {
+  const drop = (am?.rowActionsRemoved || []).filter((a) => a !== "Edit");
+  return drop.length ? `⚠ no row ${drop.map(esc).join("/")} (keep open-on-click)` : "";
+}
 
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
@@ -182,7 +191,7 @@ function rowsForDetails(details, tabRegion) {
       // mechanics, not plan content.
       editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
-    const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
+    const add = [cols, editNote, rowActionsNote(d.addMode)].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
 }

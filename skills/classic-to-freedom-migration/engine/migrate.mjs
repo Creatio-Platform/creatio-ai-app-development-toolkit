@@ -1237,17 +1237,46 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
-    const parts = describeAddMode(am);
-    const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    // an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
-    // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
-    // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
-    // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
-    const editableGridOnly = !!am.editableGrid && !(am.lookup || am.service || am.customAction || am.addDisabled || am.fixedFilters || openCardIsTheWholeStory(am));
-    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label, editableGridOnly,
-      reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` });
+    // Two independent signals, two plan lines: the add flow, and what the rows of existing records may do. A detail
+    // that only removes row actions has no add mechanism, so it gets no add-mechanism row (that row would call a
+    // plain add flow "NOT a plain related list" with nothing after it).
+    if (hasAddMechanism(am)) changeSet.needsDecision.push(addMechanismDecision(am, label));
+    if (am.rowActionsRemoved?.length) changeSet.needsDecision.push(rowActionsDecision(am.rowActionsRemoved, label));
   }
+}
+
+const hasAddMechanism = (am) => !!(am.lookup || am.service || am.editableGrid || am.openCardOverridden || am.addDisabled
+  || am.customAction || am.fixedFilters);
+
+function addMechanismDecision(am, label) {
+  const parts = describeAddMode(am);
+  const guidance = addModeGuidance(am);
+  // an INLINE-EDITABLE grid is ALL this detail's add mechanism (no lookup/service/custom-action/add-disabled/
+  // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
+  // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
+  // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays. Removed
+  // row actions do not clear the flag: they raise their own `detail-row-actions` row, which the flag never drops.
+  const editableGridOnly = !!am.editableGrid && !(am.lookup || am.service || am.customAction || am.addDisabled || am.fixedFilters || openCardIsTheWholeStory(am));
+  return { kind: "detail-add-mechanism", item: label, editableGridOnly,
+    reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` };
+}
+
+// What the Freedom list rows must LOSE. A Classic Edit row action has no Freedom counterpart — a Freedom related-list
+// row opens its record on click — so a removed Edit is never an instruction to stop records opening; the build keeps
+// open-on-click either way. HOW the rows lose an action (the list's row-toolbar property) is builder mechanics,
+// resolved on the target version, not plan content.
+function rowActionsDecision(removed, label) {
+  const drop = removed.filter((a) => a !== "Edit");
+  const plural = (n) => (n > 1 ? "s" : "");
+  const build = drop.length
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
+    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
+  const editNote = removed.includes("Edit")
+    ? " Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."
+    : "";
+  return { kind: "detail-row-actions", item: label, actions: removed,
+    reason: `Detail '${label}' removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic. ${build}${editNote}` };
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -1755,6 +1784,102 @@ function resolveDetailBody(name, e, bodyOf) {
   return { body, scanText, p };
 }
 
+// REMOVED ROW ACTIONS — the Classic grid detail builds its row menu in `addRecordOperationsMenuItems` from three item
+// getters, one per standard action. A layer that overrides that method WITHOUT `callParent` keeps only the getters
+// it re-adds; a getter overridden to return nothing drops its own action. Both are about what can be done to EXISTING
+// rows, which is why they are a signal of their own and not part of add-new DISABLED.
+// Linear by construction: one `\b<name>\s*:` global match per member name, a brace walk capped at
+// MAX_MEMBER_SCAN per override read, and at most MAX_OVERRIDE_LAYERS overrides followed through `callParent` — no
+// regex runs over a method body except bounded ones, so the ReDoS goldens on detectAddMode hold here too.
+const ROW_ACTION_GETTERS = [["Copy", "getCopyRecordMenuItem"], ["Edit", "getEditRecordMenuItem"], ["Delete", "getDeleteRecordMenuItem"]];
+const MAX_MEMBER_SCAN = 20000;
+const MAX_OVERRIDE_LAYERS = 8;
+
+// Where each `<name>: …` member definition's value starts, in text order. The scan text is the layer union
+// base→top, so the LAST definition is the most-derived override.
+function memberValueStarts(body, name) {
+  return [...body.matchAll(new RegExp(String.raw`\b${name}["']?\s*:\s*`, "g"))].map((m) => m.index + m[0].length);
+}
+
+// Index of the character that closes the quoted literal or comment opening at `i`, else `i` (not an opener).
+// Keeps a `}` inside a string or comment from ending the method body early.
+function skipLiteral(text, i, end) {
+  const c = text[i];
+  if (c === '"' || c === "'" || c === "`") {
+    let j = i + 1;
+    while (j < end && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
+    return Math.min(j, end);
+  }
+  if (c !== "/") return i;
+  if (text[i + 1] === "/") { const e = text.indexOf("\n", i); return e < 0 || e > end ? end : e; }
+  if (text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); return e < 0 || e > end ? end : e + 1; }
+  return i;
+}
+
+// The body between the `{` at `open` and its matching `}`, or null when it does not close within the scan cap.
+function braceBody(text, open) {
+  const end = Math.min(text.length, open + MAX_MEMBER_SCAN);
+  let depth = 0, i = open;
+  while (i < end) {
+    i = skipLiteral(text, i, end);
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return text.slice(open + 1, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+// A member's value as `{ empty, text }`: `emptyFn` is an empty body; a `function (…) { … }` yields its body text.
+// Anything else (a reference to another function, a shorthand, an unterminated body) is null — unreadable, so the
+// callers claim nothing from it.
+function memberValue(body, start) {
+  const head = body.slice(start, start + 400);
+  if (/^(?:this\.)?(?:Terrasoft\.)?emptyFn\b/.test(head)) return { empty: true, text: "" };
+  const fm = /^function\b[^(){}]{0,80}\([^)]{0,200}\)\s{0,20}\{/.exec(head);
+  if (!fm) return null;
+  const text = braceBody(body, start + fm[0].length - 1);
+  return text == null ? null : { empty: false, text };
+}
+
+// Actions the most-derived `addRecordOperationsMenuItems` override leaves out. An override calling `callParent`
+// delegates to the layer below it (so the next definition up the text decides); the stock menu below the lowest
+// override removes nothing.
+function menuRemovedActions(body) {
+  const starts = memberValueStarts(body, "addRecordOperationsMenuItems");
+  const readded = new Set();
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k]);
+    if (!v) return [];
+    for (const [action, getter] of ROW_ACTION_GETTERS) if (v.text.includes(getter)) readded.add(action);
+    if (!/\bcallParent\b/.test(v.text)) return ROW_ACTION_GETTERS.map(([a]) => a).filter((a) => !readded.has(a));
+  }
+  return [];
+}
+
+// True when the most-derived override of a menu-item getter returns nothing: `emptyFn`, an empty body, or a body
+// that is only `return;` / `return null;` / `return undefined;` (comments aside).
+function getterReturnsNothing(body, getter) {
+  const starts = memberValueStarts(body, getter);
+  const v = starts.length ? memberValue(body, starts[starts.length - 1]) : null;
+  if (!v) return false;
+  const code = v.text.replace(/\/\*[^*]{0,2000}\*\/|\/\/[^\n]{0,2000}/g, "").replace(/\s/g, "");
+  return v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(code);
+}
+
+// The standard row actions a detail removes, in menu order (Copy, Edit, Delete); [] for the stock menu.
+export function detectRemovedRowActions(body) {
+  const removed = new Set(menuRemovedActions(body));
+  for (const [action, getter] of ROW_ACTION_GETTERS) if (getterReturnsNothing(body, getter)) removed.add(action);
+  return ROW_ACTION_GETTERS.map(([a]) => a).filter((a) => removed.has(a));
+}
+// Every function of the row-action scan, for the structural ReDoS golden (a `toString` of detectAddMode does not
+// include the helpers it calls).
+export const ROW_ACTION_SCAN_FNS = [memberValueStarts, skipLiteral, braceBody, memberValue, menuRemovedActions,
+  getterReturnsNothing, detectRemovedRowActions];
+
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
 // rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
@@ -1776,12 +1901,13 @@ export function detectAddMode(body) {
   const openCardOverridden = /openCardByMode\s*:/.test(body);
   // Add-new DISABLED — a read-only / attach-only related list. Classic idioms: the add button forced invisible
   // (`getAddRecordButtonVisible … return false` / `addRecordButtonVisible: false` — the system-maintained
-  // stage-history pattern, declared in the BASE replacing layer), the add-record menu emptied
-  // (`addRecordOperationsMenuItems: Terrasoft.emptyFn`), or the add button removed in the diff (`remove … AddTypedRecordButton`).
+  // stage-history pattern, declared in the BASE replacing layer), or the add button removed in the diff
+  // (`remove … AddTypedRecordButton`). An emptied `addRecordOperationsMenuItems` is NOT one of them: that menu holds
+  // the ROW actions (Copy / Edit / Delete on existing records), read separately as `rowActionsRemoved`.
   const addDisabled = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body)
     || /["']?addRecordButtonVisible["']?\s*:\s*false/.test(body)
-    || /addRecordOperationsMenuItems\s*:\s*(?:Terrasoft\.)?emptyFn/.test(body)
     || /["']operation["']\s*:\s*["']remove["'][\s\S]{0,120}?AddTypedRecordButton/.test(body);
+  const rowActionsRemoved = detectRemovedRowActions(body);
   // A CUSTOM grid action (e.g. "attach existing") added via addGridOperationsMenuItems → getButtonMenuItem. Capture
   // the Click handler name — that's the custom add/attach flow the Freedom rebuild must reproduce.
   const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
@@ -1793,9 +1919,11 @@ export function detectAddMode(body) {
     ...[...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
     ...[...body.matchAll(/createColumnInFilterWithParameters\s*\(\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
   ])] : [];
-  if (!(lookup || svcM || editableGrid || openCardOverridden || addDisabled || customAction || fixedFilters)) return null;
+  if (!(lookup || svcM || editableGrid || openCardOverridden || addDisabled || customAction || fixedFilters
+    || rowActionsRemoved.length)) return null;
   return { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
-    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols };
+    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
+    rowActionsRemoved };
 }
 
 // What the detail's own BODY yields. Scan the UNION of layers: a declaration may live in a base replacing layer,
