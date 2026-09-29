@@ -21,7 +21,13 @@ import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
-const load = (dir, order) => order.map(fn =>
+// Every migrate.mjs child process goes through here, so the CLI goldens see the same working directory wherever
+// the runner was started from. A manifest piped on stdin (`-`) takes the child's cwd as its base directory, and
+// the path containment in migrate.mjs rejects a `file:` outside it — the goldens name fixtures under FIX, so an
+// inherited cwd made `npm test` from the engine folder fail them while the same goldens passed from here.
+const runMigrate = (args, opts = {}) =>
+  spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { cwd: DIR, encoding: "utf8", ...opts });
+const load =(dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 
 // SupportUnit entity column types (from get-entity-schema-properties) — lets the mapper pick precise controls.
@@ -886,11 +892,11 @@ check("migrate.mjs: entity '?' falls back to the merged effective entity",
   runMigration({ entity: "?", schemas: [
     { pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" },
     { pkg: "SupportService", file: "supportunitemployee/SupportService.js" }] }, { baseDir: FIX }).entity === "SupportUnit");
-const migBad = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "{ not json", encoding: "utf8" });
+const migBad = runMigrate(["-"], { input: "{ not json", encoding: "utf8" });
 check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdout (not a raw stack)",
   migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
 // a manifest whose schemas[].file does not exist on disk → clean diagnostic + exit 1 (NOT an unhandled stack)
-const migNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], {
+const migNoFile = runMigrate(["-"], {
   input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", file: "does_not_exist_zzz.js" }] }), encoding: "utf8" });
 check("migrate.mjs CLI: a missing schema file exits 1 with a clean diagnostic (no stdout, no raw stack)",
   migNoFile.status === 1 && /migrate\.mjs:/.test(migNoFile.stderr || "") && /ENOENT|no such file|cannot/i.test(migNoFile.stderr || "")
@@ -898,10 +904,10 @@ check("migrate.mjs CLI: a missing schema file exits 1 with a clean diagnostic (n
   () => ({ status: migNoFile.status, stderr: (migNoFile.stderr || "").slice(0, 160) }));
 // `--out` without a path must FAIL LOUDLY, not silently fall back to stdout (trailing) or swallow a flag.
 const okManifest = JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[]};});` }] });
-const migOutTrail = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out"], { input: okManifest, encoding: "utf8" });
+const migOutTrail = runMigrate(["-", "--plan", "--out"], { input: okManifest, encoding: "utf8" });
 check("migrate.mjs CLI: trailing --out (no path) exits 1 with a clear diagnostic — not a silent stdout fallback",
   migOutTrail.status === 1 && /--out/.test(migOutTrail.stderr || "") && (migOutTrail.stdout || "").trim() === "");
-const migOutFlag = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--out", "--plan"], { input: okManifest, encoding: "utf8" });
+const migOutFlag = runMigrate(["-", "--out", "--plan"], { input: okManifest, encoding: "utf8" });
 check("migrate.mjs CLI: --out followed by a flag (--plan) exits 1 — does not swallow the flag as a filename",
   migOutFlag.status === 1 && /--out/.test(migOutFlag.stderr || ""));
 
@@ -912,7 +918,7 @@ const brokenBody = 'define("X", function() { return { entitySchemaName: "X", dif
 const brokenRun = runMigration({ schemas: [{ pkg: "Broken", body: brokenBody }] });
 check("migrate.mjs: broken body -> parseErrors > 0 (parse error propagated, not swallowed)", brokenRun.parseErrors.length > 0);
 check("migrate.mjs: broken body -> gate.blocked (a corrupt plan does NOT read as gate-clean)", brokenRun.gate.blocked === true);
-const migGate = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: JSON.stringify({ schemas: [{ pkg: "Broken", body: brokenBody }] }), encoding: "utf8" });
+const migGate = runMigrate(["-"], { input: JSON.stringify({ schemas: [{ pkg: "Broken", body: brokenBody }] }), encoding: "utf8" });
 check("migrate.mjs CLI: gate-blocked broken body exits 2 with a GATE BLOCKED diagnostic", migGate.status === 2 && /GATE BLOCKED/.test(migGate.stderr || ""));
 
 /* ---- DoS: a pathologically DEEP-nested (untrusted) body must degrade cleanly, never crash the process.
@@ -922,7 +928,7 @@ const deepBody = `define("P",[],function(){ return {entitySchemaName:"X", diff: 
 const deepIn = runMigration({ entity: "X", schemas: [{ pkg: "P", body: deepBody }] });
 check("deep-nest DoS: a deeply nested body degrades to gate-blocked in-process (no throw, no clean pass)",
   deepIn.gate?.blocked === true && deepIn.parseErrors.length > 0);
-const deepCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], {
+const deepCli = runMigrate(["-"], {
   input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: deepBody }] }), encoding: "utf8" });
 check("deep-nest DoS: the CLI exits cleanly (2, GATE BLOCKED) — not an uncaught RangeError stack",
   deepCli.status === 2 && /GATE BLOCKED/.test(deepCli.stderr || "") && !/RangeError|Maximum call stack/.test(deepCli.stderr || ""),
@@ -1219,7 +1225,7 @@ const SU_DETAILS = {
   SupportUnitLogDetail: { entity: "SupportUnitLog", editPage: false },
   SupportScheduleLogDetail: { entity: "SupportScheduleLog", editPage: false },
 };
-const specRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
+const specRun = runMigrate(["-", "--spec"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS }), encoding: "utf8" });
 check("migrate.mjs --spec: gate-clean run prints pure design-spec Markdown (## Design spec…), no JSON envelope, exit 0",
   specRun.status === 0 && (specRun.stdout || "").trim().startsWith("## Design spec") && !/"changeSet"/.test(specRun.stdout || "") && !/GATE BLOCKED/.test(specRun.stdout || ""));
@@ -2576,7 +2582,7 @@ const FULL_PLACEMENT = {
   targetPackageInApplication: { resolved: true, value: true },
   sectionHost: { resolved: true, mode: "existing-app" },
 };
-const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
+const planRun = runMigrate(["-", "--plan"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || "") && !/PLAN INCOMPLETE/.test(planRun.stdout || ""));
@@ -2585,7 +2591,7 @@ check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan ske
 // package, its one package was locked, and the editable target package was not in the app's composition. Each leg
 // below is one of those three, plus the "never checked" case the whole gate exists for.
 const placementBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS };
-const runWithPlacement = (placement, mode) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", mode], {
+const runWithPlacement = (placement, mode) => runMigrate(["-", mode], {
   input: JSON.stringify(placement === undefined ? placementBase : { ...placementBase, placement }), encoding: "utf8" });
 const planWithPlacement = (placement) => runWithPlacement(placement, "--plan");
 // The section-registration DELIVERABLE lives in the control table (`--checklist`), not in the plan body — the
@@ -2675,7 +2681,7 @@ check("reconcile: planMeta.freedomExists → Main-scope Call is 'Update (reconci
 const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
 try {
   fs.rmSync(outPath, { force: true });
-  const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
+  const outRun = runMigrate(["-", "--plan", "--out", outPath], {
     input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
   const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
   check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
@@ -2691,11 +2697,11 @@ try {
 // the exit code is driven by VERIFY, not the gate.
 const verifyManifest = JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS });
 // (a) --verify with NO --built → arg validation fails loudly (exit 1), nothing on stdout (not a silent false-done).
-const vNoBuilt = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify"], { input: verifyManifest, encoding: "utf8" });
+const vNoBuilt = runMigrate(["-", "--verify"], { input: verifyManifest, encoding: "utf8" });
 check("migrate.mjs --verify: missing --built → exit 1 with an actionable arg error, empty stdout (no false done)",
   vNoBuilt.status === 1 && /--built/.test(vNoBuilt.stderr || "") && (vNoBuilt.stdout || "").trim() === "");
 // (b) --built points at a non-existent file → exit 1 ('cannot read --built'), surfaced, not a crash or false 0.
-const vNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", path.join(os.tmpdir(), `c2f_verify_absent_${process.pid}.json`)], { input: verifyManifest, encoding: "utf8" });
+const vNoFile = runMigrate(["-", "--verify", "--built", path.join(os.tmpdir(), `c2f_verify_absent_${process.pid}.json`)], { input: verifyManifest, encoding: "utf8" });
 check("migrate.mjs --verify: unreadable --built file → exit 1 ('cannot read --built')",
   vNoFile.status === 1 && /cannot read --built/.test(vNoFile.stderr || ""));
 const builtPath = path.join(os.tmpdir(), `c2f_built_${process.pid}.json`);
@@ -2707,7 +2713,7 @@ try {
   // end-to-end proof that a MISSING deliverable drives exit 2, so it must never collapse into the exit-1 shape
   // guard asserted by (c2) below (that would leave the exit-2 done-gate with NO end-to-end coverage at all).
   fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111" } } }));
-  const vIncomplete = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  const vIncomplete = runMigrate(["-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
@@ -2720,7 +2726,7 @@ try {
     evidence: { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
     judge: { "main#quality-gates-de6871bb": { convincing: true, why: "diffed against AccountPage" } },
   }));
-  const vOrphan = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  const vOrphan = runMigrate(["-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: an id this run does not publish exits 2 and says EVIDENCE MIS-FILED, naming the key",
     vOrphan.status === 2 && /EVIDENCE MIS-FILED/.test(vOrphan.stderr || "") && /main#quality-gates-de6871bb/.test(vOrphan.stderr || ""),
     () => ({ status: vOrphan.status, stderr: (vOrphan.stderr || "").slice(0, 200) }));
@@ -2745,7 +2751,7 @@ try {
   // page. Assert the SHAPE message specifically (not just `status === 1`): without that this case is
   // indistinguishable from (d)'s unreadable-file exit 1 and would prove nothing about the guard.
   fs.writeFileSync(builtPath, JSON.stringify({ ops: [], parentSchemaName: "SupportUnitPage", miniPageBuilt: null }));
-  const vFlatShape = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  const vFlatShape = runMigrate(["-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: the OLD FLAT `{ ops, … }` payload → exit 1 naming the missing `pages` map + the `--checklist` page keys to key it by (shape REJECTED, not degraded into a green-looking table)",
     vFlatShape.status === 1 && /has no `pages` object/.test(vFlatShape.stderr || "")
     && /Key it by the page keys `--checklist` groups by/.test(vFlatShape.stderr || "") && (vFlatShape.stdout || "").trim() === "",
@@ -2755,14 +2761,14 @@ try {
   // built nothing, i.e. the executor authoring the very evidence it is gated on. The rejection lives ONLY in the
   // CLI (`validBuiltPageEntry`) — a direct `renderVerify` call still reads `ops` — so it MUST be asserted here.
   fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: { ops: [{ name: "Contact", type: "crt.ComboBox" }], parentSchemaName: "SupportUnitPage" } } }));
-  const vHandOps = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  const vHandOps = runMigrate(["-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: a page entry carrying hand-authored `ops` instead of `viewConfig` → exit 1 (naming the bad entry), never a green gate on self-authored evidence",
     vHandOps.status === 1 && /neither `false` nor an object carrying `viewConfig`/.test(vHandOps.stderr || "")
     && /main/.test(vHandOps.stderr || "") && (vHandOps.stdout || "").trim() === "",
     () => ({ status: vHandOps.status, stderr: (vHandOps.stderr || "").slice(0, 240) }));
   // (d) --built with INVALID JSON → exit 1 ('cannot read --built …'), distinct from the exit-2 done-gate.
   fs.writeFileSync(builtPath, "{ not valid json");
-  const vBadJson = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  const vBadJson = runMigrate(["-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: invalid-JSON built file → exit 1 ('cannot read --built'), NOT the exit-2 gate",
     vBadJson.status === 1 && /cannot read --built/.test(vBadJson.stderr || ""));
 } finally {
@@ -2792,7 +2798,7 @@ try {
       },
       reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
     }));
-    const vFull = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath], { input: bareManifest, encoding: "utf8" });
+    const vFull = runMigrate(["-", "--verify", "--built", bareBuiltPath], { input: bareManifest, encoding: "utf8" });
     check("a 0-MISSING / evidence-only build through the whole-tree `--verify` still exits 2 — AC7/AC8: an unconfirmed row blocks 'done', and the stderr line says 0 MISSING so the caller knows there is nothing left to BUILD",
       vFull.status === 2
       && /⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 0 MISSING \+ [1-9]\d* unconfirmed/.test(vFull.stderr || "")
@@ -2836,7 +2842,7 @@ try {
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
-const blockedRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
+const blockedRun = runMigrate(["-", "--plan"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, detailSchemas: SU_DETAILS }), encoding: "utf8" });
 check("HARD GATE: a no-seed run is blocked — CLI exits non-zero, stderr + top-of-plan ⛔ banner",
   blockedRun.status !== 0 && /GATE BLOCKED/.test(blockedRun.stderr || "")
@@ -4314,11 +4320,11 @@ check("F6: entity/planMeta cannot inject a new Markdown heading into the plan (v
 // F8 — a --plan run missing required planMeta is INCOMPLETE: exit 2 + PLAN INCOMPLETE banner (not exit 0);
 // --spec/default (which need no planMeta) are unaffected.
 const noPmManifest = JSON.stringify({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] });
-const f8plan = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: noPmManifest, encoding: "utf8" });
+const f8plan = runMigrate(["-", "--plan"], { input: noPmManifest, encoding: "utf8" });
 check("F8: --plan with unfilled required planMeta exits 2 with a PLAN INCOMPLETE banner (not a clean exit 0)",
   f8plan.status === 2 && /PLAN INCOMPLETE/.test(f8plan.stderr || "") && /PLAN INCOMPLETE/.test(f8plan.stdout || ""),
   () => ({ status: f8plan.status, stderr: (f8plan.stderr || "").slice(0, 160) }));
-const f8spec = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], { input: noPmManifest, encoding: "utf8" });
+const f8spec = runMigrate(["-", "--spec"], { input: noPmManifest, encoding: "utf8" });
 check("F8: --spec is NOT gated on planMeta (design spec needs none) — exit 0", f8spec.status === 0 && !/PLAN INCOMPLETE/.test(f8spec.stderr || ""));
 
 // F5 — a legitimately DEEP child tree (parent → child → grandchild) maps fully (the grandchild is mapped),
@@ -5722,7 +5728,7 @@ check("signals gate: all resolved → signalsMissing empty + resolved summary (p
   () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables|Section dashboards/i.test(l)));
 check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
   (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
-const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
+const sigCli = runMigrate(["-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
@@ -5740,7 +5746,7 @@ const dashMani = (dashboards) => ({
   signals: dashboards === undefined ? OTHER_SIGNALS : { ...OTHER_SIGNALS, dashboards },
   placement: { ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "P", editable: true } },
 });
-const dashCliRun = (mani, args = ["--plan"]) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", ...args], { input: JSON.stringify(mani), encoding: "utf8" });
+const dashCliRun = (mani, args = ["--plan"]) => runMigrate(["-", ...args], { input: JSON.stringify(mani), encoding: "utf8" });
 const dashRow = (md, needle) => md.split("\n").find((l) => l.includes(needle)) || "";
 // The dashboards rows gate under the LIST page's key - the element lives on that page - so the payload
 // names which page it describes. A flat payload is the FORM page only, and the list row then correctly
@@ -6180,7 +6186,7 @@ check("dedup gate: present:true with `serviceConfigured` UNRECORDED is INCOMPLET
 check("dedup gate: `serviceConfigured` is required only when a rule EXISTS — the nine present:false answers stay valid (nothing to lose ⇒ no service question)",
   (dedupSig({ resolved: true, present: false }).signalsMissing || []).length === 0
   && (dedupSvc.signalsMissing || []).length === 0 && (dedupNoSvc.signalsMissing || []).length === 0);
-const dedupHalfCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
+const dedupHalfCli = runMigrate(["-", "--plan"], {
   input: JSON.stringify({ ...sigBase, signals: {
     dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
     printables: { resolved: true, present: false }, deduplication: { resolved: true, present: true, names: ["R1"] },
@@ -6696,7 +6702,7 @@ check("coverage gate: a disposition WITHOUT resolved:true does not clear it (a h
     changeSet: { needsDecision: [], accountedFor: [] },
     manifest: { memberDispositions: { ghostMethod: { disposition: "dropped" } } } }).complete === false);
 // CLI wiring: a coverage-incomplete run must exit 2 with the ⛔ banner, exactly like the other completeness gates.
-const covCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
+const covCli = runMigrate(["-", "--spec"], {
   input: JSON.stringify({ entity: "X", seed: CLEAN_SEED,
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{ghost:function(){this.doSomething();}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }),
   encoding: "utf8" });
@@ -8312,7 +8318,7 @@ check("⚠ Confirm: no `message` / `mixin` / `module-dep` / `attribute-*` bullet
   () => hoConfirm.split("\n").filter((l) => l.startsWith("- **[")));
 
 // `--stubs` is a separate CLI artifact on purpose: the full result JSON carries megabytes the analysis run never reads.
-const stubsCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--stubs"],
+const stubsCli = runMigrate(["-", "--stubs"],
   { input: JSON.stringify(handoffManifest), encoding: "utf8" });
 const stubsOut = (() => { try { return JSON.parse(stubsCli.stdout); } catch { return null; } })();
 check("handoff OUT: `--stubs` prints ONLY the digest (entity + totals + scopes), no ChangeSet or rendered plan",
@@ -8321,7 +8327,7 @@ check("handoff OUT: `--stubs` prints ONLY the digest (entity + totals + scopes),
 // The gates still apply to `--stubs`: a broken merge produces unreliable rows, so a digest taken from a blocked run
 // must not read as a clean handoff. (This fixture has no seed and no fields, so it IS blocked — same exit as a
 // plain run of it.) The digest is still printed, so the caller sees what it would have handed over.
-const stubsPlain = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"],
+const stubsPlain = runMigrate(["-"],
   { input: JSON.stringify(handoffManifest), encoding: "utf8" });
 check("handoff OUT: `--stubs` does not mask the gates — same exit code as a plain run of the same manifest",
   stubsCli.status === stubsPlain.status && stubsCli.status !== 0 && !!stubsOut);
@@ -8768,7 +8774,7 @@ const kcBuiltFull = path.join(os.tmpdir(), `c2f_kc_built_full_${process.pid}.jso
 const kcBuiltPart = path.join(os.tmpdir(), `c2f_kc_built_part_${process.pid}.json`);
 try {
   fs.writeFileSync(kcManifestPath, JSON.stringify(KC_MANIFEST));
-  const kcCli = (args) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { encoding: "utf8" });
+  const kcCli = (args) => runMigrate([...args], { encoding: "utf8" });
   const kcRows = kcGroups.flatMap((g) => g.rows);
   // Everything the checklist asks for, filed honestly: every evidence id gets a complete record and a judge verdict,
   // every reachability key a gated `onstand` row reads is confirmed, and every page gets the components IT expects.
@@ -9602,7 +9608,7 @@ try {
   const e2Table = path.join(e2Dir, "verify.md");
   fs.writeFileSync(e2Manifest, JSON.stringify(E2_MANIFEST));
   fs.writeFileSync(e2Built, JSON.stringify({ pages: {} }));   // valid payload, nothing fetched ⇒ every page is open
-  const e2Cli = (args) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { encoding: "utf8" });
+  const e2Cli = (args) => runMigrate([...args], { encoding: "utf8" });
   /* ---- Y7(h) — the `--out` note is MODE-AWARE. "Incomplete" means two opposite things: an incomplete `--plan`
      is not approvable and must NOT be presented, while an incomplete `--verify` table IS the report of what is
      short and the executor skill tells the agent to present it. One wording for both had the CLI and the skill
@@ -9634,7 +9640,7 @@ try {
   const pvBuilt = path.join(os.tmpdir(), `c2f_pv_built_${process.pid}.json`);
   try {
     fs.writeFileSync(pvManifest, JSON.stringify(KC_MANIFEST));
-    const pvCli = (args) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { encoding: "utf8" });
+    const pvCli = (args) => runMigrate([...args], { encoding: "utf8" });
     const pvRun = (pages) => {
       fs.writeFileSync(pvBuilt, JSON.stringify({ pages }));
       const r = pvCli(["--verify", "--built", pvBuilt, pvManifest]);
@@ -12133,7 +12139,7 @@ check("the rendered read plan tells the agent to write the WHOLE response verbat
   const rpDir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_reads_"));
   try {
     const rpManifest = JSON.stringify(LP_MANIFEST);
-    const rpCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--reads", rpDir],
+    const rpCli = runMigrate(["-", "--reads", rpDir],
       { input: rpManifest, encoding: "utf8" });
     const rpIdxPath = path.join(rpDir, READS_DIR, READS_INDEX_FILE);
     const rpIdx = fs.existsSync(rpIdxPath) ? JSON.parse(fs.readFileSync(rpIdxPath, "utf8")) : null;
@@ -12142,7 +12148,7 @@ check("the rendered read plan tells the agent to write the WHOLE response verbat
         && rpIdx.reads.every((x) => typeof x.file === "string" && typeof x.what === "string")
         && /Read plan/.test(rpCli.stdout || ""),
       () => ({ status: rpCli.status, reads: rpIdx && rpIdx.reads.length, stderr: (rpCli.stderr || "").slice(0, 200) }));
-    const rpClash = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--reads", rpDir, "--verify", "--built", "x.json"],
+    const rpClash = runMigrate(["-", "--reads", rpDir, "--verify", "--built", "x.json"],
       { input: rpManifest, encoding: "utf8" });
     check("(CLI): `--reads` paired with `--verify` is a LOUD refusal at exit 1, not a silent precedence win — it plans reads for a gate that has not run yet",
       () => rpClash.status === 1 && /`--reads` cannot be combined with/.test(rpClash.stderr || ""),
@@ -12357,7 +12363,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
   const d = asFolder();
   try {
     const manifest = JSON.stringify(LP_MANIFEST);
-    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+    const r = runMigrate(["-", "--verify", "--from", d],
       { input: manifest, encoding: "utf8" });
     const bf = path.join(d, "built.json");
     // The TABLE goes to `verify.md` in the same folder (the `--from` default), so stdout carries the
@@ -12367,12 +12373,12 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
         && /Plan-vs-Done/.test(fs.readFileSync(path.join(d, "verify.md"), "utf8"))
         && /composed the verify payload/.test(r.stdout || ""),
       () => ({ status: r.status, wrote: fs.existsSync(bf), stderr: (r.stderr || "").slice(0, 200) }));
-    const both = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d, "--built", "x.json"],
+    const both = runMigrate(["-", "--verify", "--from", d, "--built", "x.json"],
       { input: manifest, encoding: "utf8" });
     check("(CLI): `--from` and `--built` together are refused at exit 1 — two sources for one payload, and silently preferring either would make the table a report on a file the caller did not think it ran against",
       () => both.status === 1 && /two sources for ONE payload/.test(both.stderr || ""),
       () => ({ status: both.status, stderr: (both.stderr || "").slice(0, 200) }));
-    const alone = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--from", d],
+    const alone = runMigrate(["-", "--from", d],
       { input: manifest, encoding: "utf8" });
     check("(CLI): `--from` without `--verify` is refused — it composes the payload one gate reads, and on its own it would write a file nothing checks",
       () => alone.status === 1 && /only means something with `--verify`/.test(alone.stderr || ""),
@@ -12384,7 +12390,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
   // re-read, not a repair, and the table cannot tell them apart (an omitted key reads ⚠ like any other).
   const d = asFolder({ bundle: null });
   try {
-    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+    const r = runMigrate(["-", "--verify", "--from", d],
       { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
     check("(CLI): an unread file fails the run at exit 2 and says on stderr that the rows are NOT CHECKED rather than missing — a re-read, not a repair",
       () => r.status === 2 && /COULD NOT READ/.test(r.stderr || "")
@@ -12410,7 +12416,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
       () => built.pages.main === undefined && problems.length === 1
         && problems[0].file === "reads/01-meta-main.json",
       () => ({ pages: Object.keys(built.pages), problems }));
-    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+    const r = runMigrate(["-", "--verify", "--from", d],
       { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
     check("(CLI): …and the run exits 2 naming the file, not exit 1 naming `schemaUId` — the caller is told to re-read, which is the thing that actually happened",
       () => r.status === 2 && /COULD NOT READ/.test(r.stderr || "")
@@ -12497,7 +12503,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
   // nothing.
   const d = asFolder();
   try {
-    const run = () => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+    const run = () => runMigrate(["-", "--verify", "--from", d],
       { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
     run();
     const first = fs.readFileSync(path.join(d, "verify.md"), "utf8");
@@ -12520,7 +12526,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
   // checks is out of this ticket's scope.
   const d = asFolder({ bundle: null });
   try {
-    spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+    runMigrate(["-", "--verify", "--from", d],
       { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
     const md = fs.readFileSync(path.join(d, "verify.md"), "utf8");
     check("the verify artifact ITSELF says which reads could not be opened — a ⚠ whose cause is only on stderr is, to the reader holding the file, the same as a page nobody built",
@@ -12600,7 +12606,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
     check("a literal `false` in a page's slot composes to the payload's `false` entry — the stand was asked and answered no, which is a repair, not a re-read",
       () => built.pages.main === false && problems.length === 0,
       () => ({ page: built.pages.main, problems }));
-    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+    const r = runMigrate(["-", "--verify", "--from", d],
       { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
     // The ❌ is the point: an unread page renders ⚠ and tells the reader to re-read, while this one tells them to
     // build. (The folder's index is a fixture and does not match this manifest's full read list, so the run also
@@ -12781,8 +12787,7 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
   const mf = path.join(d, "manifest.json");
   try {
     fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
-    const eng = path.join(ENGINE_DIR, "migrate.mjs");
-    const plan = spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    const plan = runMigrate([mf, "--reads", d], { encoding: "utf8" });
     const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
     // Filled from the index ITSELF, by kind — never from a hand-written list. A kind the engine emits
     // that this switch does not know leaves its file unwritten, and the `problems` assertion below
@@ -12812,11 +12817,11 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
 
     // AC 6's recorded-payload replay: the composed `built.json` is what `--built` is documented to
     // take, and the stdout line, the README and SKILL.md all promise the run replays offline from it.
-    const fromRun = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d], { encoding: "utf8" });
+    const fromRun = runMigrate([mf, "--verify", "--from", d], { encoding: "utf8" });
     const composedTable = fs.readFileSync(path.join(d, "verify.md"), "utf8");
     const replayOut = path.join(d, "replay.md");
-    const replay = spawnSync(process.execPath,
-      [eng, mf, "--verify", "--built", path.join(d, "built.json"), "--out", replayOut], { encoding: "utf8" });
+    const replay = runMigrate(
+      [mf, "--verify", "--built", path.join(d, "built.json"), "--out", replayOut], { encoding: "utf8" });
     check("(AC6 replay): the payload the engine composed replays through `--verify --built` and reproduces the SAME table — the offline-replay property the stdout note, the README and SKILL.md all promise",
       () => fs.existsSync(replayOut) && fs.readFileSync(replayOut, "utf8") === composedTable
         && replay.status === fromRun.status,
@@ -12918,10 +12923,9 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   const mf = path.join(d, "manifest.json");
   try {
     fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
-    const eng = path.join(ENGINE_DIR, "migrate.mjs");
     const tasks = path.join(d, "build-tasks");
-    spawnSync(process.execPath, [eng, mf, "--tasks", tasks], { encoding: "utf8" });
-    spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    runMigrate([mf, "--tasks", tasks], { encoding: "utf8" });
+    runMigrate([mf, "--reads", d], { encoding: "utf8" });
     const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
     const uid = (n) => `be76666d-10f9-47e4-a420-80ebc8099${String(700 + n).slice(-3)}`;
     // Every file EXCEPT one page bundle, so the run has a genuine read problem to react to.
@@ -12939,7 +12943,7 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
       if (body) asWrite(d, r.file, body());
     });
     const before = fs.existsSync(tasks) ? fs.readdirSync(tasks).length : 0;
-    const run = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d, "--tasks", tasks], { encoding: "utf8" });
+    const run = runMigrate([mf, "--verify", "--from", d, "--tasks", tasks], { encoding: "utf8" });
     const after = fs.existsSync(tasks) ? fs.readdirSync(tasks).length : 0;
     check("`--verify --from --tasks` writes NO repair round while a read could not be used — those rows say nobody looked, and dispatching a build agent at them burns a capped round on a page that was never checked",
       // The SPECIFIC cause, not the generic banner: the dispatch gate refuses a round for its own reasons and
@@ -12965,8 +12969,7 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   const mf = path.join(d, "manifest.json");
   try {
     fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
-    const eng = path.join(ENGINE_DIR, "migrate.mjs");
-    spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    runMigrate([mf, "--reads", d], { encoding: "utf8" });
     const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
     const uid = (n) => `be76666d-10f9-47e4-a420-80ebc8099${String(700 + n).slice(-3)}`;
     index.reads.forEach((r, n) => {
@@ -12980,7 +12983,7 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
       }[r.kind];
       if (body) asWrite(d, r.file, body());
     });
-    const run = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d], { encoding: "utf8" });
+    const run = runMigrate([mf, "--verify", "--from", d], { encoding: "utf8" });
     const table = fs.readFileSync(path.join(d, "verify.md"), "utf8");
     check("an UNFILLED evidence/judge skeleton closes nothing — the engine writes the keys now, so presence carries no information and every evidence row must still report unconfirmed",
       () => run.status === 2 && /no complete evidence record under/.test(table),
