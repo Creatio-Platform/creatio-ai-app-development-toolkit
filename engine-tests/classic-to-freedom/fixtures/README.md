@@ -19,5 +19,8 @@ Provenance (important):
   `WorkContractsProcess.js` → trimmed to ~6 asserted ops. The remaining layers (notably `CoreContracts.js`)
   are **intentionally kept with real bodies** — that fidelity is exactly what this golden is meant to guard.
 - The base seed `_base/BaseModulePageV2_skeleton.js` is a synthetic minimal parent-template skeleton.
+- `tasks-aggregate-rows/` — a task folder (its build task only) in the one-row coverage format (`Fields — N expected`,
+  `Related lists — N expected`) with a `built` cell on the main page's Fields row and a `wont-do (D3)` cell on its
+  Related lists row. `run-tasks.mjs` copies it and never edits it in place.
 
 `employeescore/` was removed — no runner loaded it.

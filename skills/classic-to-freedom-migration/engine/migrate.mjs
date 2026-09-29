@@ -27,6 +27,7 @@
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
+//     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
 // THE PLAN VERSION: `--plan` prints `**Plan version:** \`plan-<hash>\`` in its Overview — a deterministic hash over
@@ -55,13 +56,13 @@ import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS,
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -147,7 +148,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // signal-driven row — the DCM widget gate, and the on-save duplicate check — would silently vanish
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -798,6 +799,50 @@ function unmatchedIndexKeys(index, stubIndex) {
 // through the repair round. They are separate functions on purpose — the workflow script is evaluated as a
 // function body and may not `import`, which is pinned by the `workflow sandbox: … imports nothing` test — so a
 // change to the membership or the strength of either leg has to be applied to both by hand.
+// Every `manifest.deliverableStatus` entry that cannot stand, as `{ key, kind, problem, valid }` (`kind` from STATUS_ISSUE): an address that names
+// no deliverable (with the page's valid ids), a status other than wont-do / build, a wont-do without a D<N> that
+// decisions.md holds, an entry on a deliverable the engine already closed, and a wont-do whose subject (behaviour
+// card, confirm item, fold chain) other deliverables share without a status of their own. Nothing is closed on a
+// related deliverable's behalf.
+function deliverableStatusIssues(groups, opts) {
+  const entries = Object.entries(plainObject(opts.deliverableStatus));
+  if (!entries.length) return [];
+  const rows = (groups || []).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, groupTitle: g.baseTitle })));
+  const byKey = new Map(rows.filter((r) => r.deliverableId).map((r) => [statusKey(r.pageKey, r.deliverableId), r]));
+  const own = entries.flatMap(([key, entry]) => entryProblems(key, entry, byKey, rows, opts));
+  return own.length ? own : relatedStatusIssues(rows, opts.deliverableStatus);
+}
+function validIdsOf(page, rows) {
+  const ids = rows.filter((r) => r.pageKey === page && r.deliverableId).map((r) => statusKey(page, r.deliverableId));
+  return ids.length ? ids : [...new Set(rows.map((r) => r.pageKey))].map((k) => `${k}#…`);
+}
+function entryProblems(key, entry, byKey, rows, opts) {
+  const e = entry && typeof entry === "object" ? entry : {};
+  const row = byKey.get(key);
+  const page = key.includes("#") ? key.slice(0, key.indexOf("#")) : "";
+  if (!row) return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no deliverable of this plan", valid: validIdsOf(page, rows) }];
+  if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, kind: STATUS_ISSUE.status, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
+  const closedBy = row.na || engineStatusReason(row, opts);
+  if (closedBy) return [{ key, kind: STATUS_ISSUE.engineClosed, problem: `is already closed by the engine: ${closedBy}`, valid: [] }];
+  if (e.status === STATUS_BUILD) return [];
+  return decisionProblems(key, e.decision, opts);
+}
+function decisionProblems(key, decision, { decisions, decisionsOptional }) {
+  if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${STATUS_WONT_DO}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
+  if (!decisions && decisionsOptional) return [];
+  if (!decisions) return [{ key, kind: STATUS_ISSUE.decision, problem: `no decisions.md was read, so \`${decision}\` cannot be resolved — plan with \`--out\` into the migration folder that holds decisions.md`, valid: [] }];
+  if (!decisions.has(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${decision}\` does not resolve to an entry in decisions.md — add it there first`, valid: [] }];
+  return [];
+}
+function relatedStatusIssues(rows, map) {
+  const subjects = rowSubjects(rows);
+  const hasStatus = (r) => !!r.na || Object.hasOwn(map, statusKey(r.pageKey, r.deliverableId));
+  return rows.flatMap((r, i) => {
+    if (!subjects[i] || map[statusKey(r.pageKey, r.deliverableId)]?.status !== STATUS_WONT_DO) return [];
+    const open = rows.filter((o, j) => j !== i && subjects[j] === subjects[i] && o.deliverableId && !hasStatus(o));
+    return open.length ? [{ key: statusKey(r.pageKey, r.deliverableId), kind: STATUS_ISSUE.related, problem: `shares its subject \`${subjects[i]}\` with deliverables that have no status — give each its own (\`${STATUS_WONT_DO}\` with a D<N>, or \`${STATUS_BUILD}\`)`, valid: open.map((o) => statusKey(o.pageKey, o.deliverableId)) }] : [];
+  });
+}
 function wiringOnlyKeys(index, stubIndex) {
   const map = plainObject(index);
   if (!Object.keys(map).length) return [];
@@ -951,6 +996,10 @@ export function checklistOpts(manifest, opts = {}) {
   // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
   const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   return {
+    // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
+    deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
+    decisions: opts.decisions instanceof Map ? opts.decisions : null,
+    decisionsOptional: opts.decisionsOptional === true,
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
@@ -1028,15 +1077,15 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
 // and one whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at
 // all and keep only the parent's identity row — a gated row there would be a permanent false red, and the last two
 // are PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
-function publishUnfoldedChild(c, pageKey) {
+function publishUnfoldedChild(c, pageKey, foldCtx) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-    publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c));
+    publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c, foldCtx.checklistOpts));
     return;
   }
   if (!childPageIssue(c)) return;
   // Nothing was folded, so the only physical identity available is the base key itself — two unresolved children
   // that reach the SAME base key stay one entry, exactly as before. The disambiguator is the detail it opens from.
-  publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
+  publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c, foldCtx.checklistOpts));
 }
 // The needsDecision kinds that represent REAL ported logic (as opposed to widget / registry / cosmetic / placement
 // advisories) — tells a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
@@ -1044,7 +1093,7 @@ const LOGIC_BEARING_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-depe
 function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
   // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
-  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey, foldCtx);
   // THE SECTION BOUNDARY, and the reason this ticket exists: the child's page is NOT FOLDED. No recursive
   // sub-migration, so no sub-run gate, so no `c.childBlocked` — and `migrate.mjs`'s `filter(c => c.childBlocked)`
   // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card would otherwise be mandatory, and
@@ -1054,9 +1103,9 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Routed through `publishUnfoldedChild`, which publishes NOTHING here — `childPageIssue` resolves the boundary, so
   // it falls out with no page key, exactly like a verified `editPage: false`. No units, no checklist gate, no verify
   // row: nothing about this child can be reported MISSING, because nothing about it is a deliverable.
-  if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey);
+  if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey, foldCtx);
   const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
-  if (!key) return publishUnfoldedChild(c, pageKey);
+  if (!key) return publishUnfoldedChild(c, pageKey, foldCtx);
   const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
   if (f.status === "cycle") { c.cyclic = true; return; }   // mapped higher on this branch
   if (f.status === "error") { c.specError = f.error; return; } // malformed child manifest — keep the listed row
@@ -2685,13 +2734,17 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
+  // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
+  // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
+  const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
+  if (!opts.scopeSchema) out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, specOpts);
+  out.plan = renderPlan(out, { ...specOpts, planGroups });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
@@ -3031,6 +3084,14 @@ function splitDriftLines(set) {
 // A PLAN-LEVEL GAP TOUCHES NOTHING. `gate` / `structure` / `coverage` describe the PLAN and no build round closes
 // one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
 // refusal are two chances for one of them to soften.
+// The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
+// migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
+// require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
+function planDecisions(outFile, tasksDir) {
+  if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
+  if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
+  return null;
+}
 function planGapRefusal(result) {
   const gaps = planGaps(result);
   if (!gaps.length) return null;
@@ -3049,7 +3110,9 @@ function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
   if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
+  if (set.refusal === REFUSED_RETIRED) return `recorded cells in ${dir} sit on an aggregate coverage row, and this plan has one row per item`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
+  if (set.refusal === REFUSED_STATUS) return "a deliverable status in `manifest.deliverableStatus` does not resolve against decisions.md";
   if (set.refusal === REFUSED_COVERAGE) {
     return handedIn(set)
       ? `the split passed with ${SPLIT_FLAG} does not cover this plan`
@@ -3059,6 +3122,11 @@ function refusalCause(set, dir) {
 }
 
 function refusalRemedy(set) {
+  if (set.refusal === REFUSED_STATUS) return " Add the decision to decisions.md, or correct the entry, then re-run.";
+  if (set.refusal === REFUSED_RETIRED) {
+    return " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
+      + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row.";
+  }
   if (set.refusal === REFUSED_CUT) {
     return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
       + " produced it.";
@@ -3152,21 +3220,8 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // round), or parked after its rounds. The gate reads the same folder state in either mode.
   const notBuilt = unroutedNotBuilt(set.tasks);
   if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
-  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set),
-    ...unappliedDecisionLines(set, dir, startId));
+  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set));
   return lines.join("\n") + "\n";
-}
-
-// Before the first dispatch only: the decisions.md entries no row cites. Printed, never written, and no gate.
-function unappliedDecisionLines(set, dir, startedId = null) {
-  if (!firstDispatchPending(dir, startedId, set.tasks)) return [];
-  const open = unappliedDecisions(set.tasks, readDecisions(path.join(dir, "..")));
-  if (!open.length) return [];
-  return ["", `${open.length} decision(s) in decisions.md are applied to no row — no task's \`decisions:\` line cites them:`,
-    ...open.map((d) => `  · ${d.id} — ${d.title}`),
-    `If one drops or postpones a deliverable, record it with \`${TASKS_FLAG} ${shellArg(dir)} ${DECIDE_FLAG} D<N>`
-      + ` ${WONT_DO_FLAG} | ${POSTPONED_FLAG} ${TO_FLAG} <destination>\`, addressed by \`${PAGES_FLAG} <keys>\`,`
-      + ` \`${TASK_FLAG} <task-id>\` or \`${ROW_FLAG} <task-id>:<n>\`, before dispatch.`];
 }
 
 // `--tasks <dir> --next` — WHICH TASKS ARE STARTABLE RIGHT NOW, answered by the engine.
@@ -3282,7 +3337,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return [...nextAnswerLines(answer, dir, cmdFor), ...unappliedDecisionLines(set, dir)].join("\n") + "\n";
+  return nextAnswerLines(answer, dir, cmdFor).join("\n") + "\n";
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -3481,21 +3536,12 @@ function decideTouchedLines(res, opts) {
   lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
   return lines;
 }
-// The open rows, in any task, that share a subject with a decided row, each with the command that applies the
-// same answer to it. Listed only: each row is closed by the person running its command.
-function decideSiblingLines(res, cmdFor) {
-  if (!res.siblings?.length) return [];
-  return ["", `${res.siblings.length} open row(s) share a subject with the decided row(s) and were NOT`
-    + " touched. To apply the same answer to them, run:",
-    ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
-}
-function runDecideMode(result, dir, opts, cmdFor = () => "") {
+function runDecideMode(result, dir, opts) {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
-  // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
-  // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
+  // the migration folder, one level up. `opts.decisions` is that decisions.md, read by the same reader the final
+  // report uses, so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
   const migrationDir = path.join(dir, "..");
-  const decisions = readDecisions(migrationDir);
-  const res = applyDecision(dir, result, { ...opts, decisions });
+  const res = applyDecision(dir, result, opts);
   if (res.refused) {
     return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems,
       decideRefusalHelp(res, opts, migrationDir)), ok: false };
@@ -3510,8 +3556,7 @@ function runDecideMode(result, dir, opts, cmdFor = () => "") {
       ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
     return { note: lines.join("\n") + "\n", ok: false };
   }
-  lines.push(...decideSiblingLines(res, cmdFor),
-    "", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
+  lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 function runRevokeMode(result, dir, opts) {
@@ -3520,9 +3565,11 @@ function runRevokeMode(result, dir, opts) {
   // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
   const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  // No cell written under the decision is a no-op. Every such cell skipped leaves the decision in force: a failure.
   if (!res.cleared.length) {
-    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
-    return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
+    if (!skipLines.length) return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
+    const head = `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`;
+    return { note: [head, ...skipLines].join("\n") + "\n", ok: false };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
@@ -3726,7 +3773,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
   let result;
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
+  const decisions = planDecisions(outFile, tasksDir);
+  const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
@@ -3785,7 +3834,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { decl = JSON.parse(text); }
     catch (e) { fail(`${ADD_FLAG} '${addFile}' is not valid JSON: ${e.message}. Expected shape: ${DECL_SHAPE}`); }
     let res;
-    try { res = addTasks(tasksDir, result, decl, checklistOpts(manifest)); }
+    try { res = addTasks(tasksDir, result, decl, taskOpts()); }
     catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
     if (res.refused) {
       // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing. A CUT that does not resolve is named
@@ -3818,7 +3867,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       return [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(manifestArg),
         TASKS_FLAG, shellArg(tasksDir), START_FLAG, shellArg(id)].join(" ");
     };
-    try { output = runNextMode(result, tasksDir, checklistOpts(manifest), cmdFor); }
+    try { output = runNextMode(result, tasksDir, taskOpts(), cmdFor); }
     catch (e) { fail(`cannot read the task folder '${tasksDir}': ${e.message}`); }
     // …and when the manifest came in on stdin there is no path to print, so the command carries `-` and would
     // BLOCK on a terminal if it were pasted as it stands. Said here rather than left for the reader to discover.
@@ -3834,18 +3883,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
   // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
   else if (tasksMode && decideMode) {
-    const opts = { ...checklistOpts(manifest), decision: decideArg,
+    const opts = { ...taskOpts(), decision: decideArg,
       mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
       rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
-    // The same answer, addressed to one row, with every element encoded for the shell.
-    const cmdFor = (x) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(fromFile ? arg : "-"),
-      TASKS_FLAG, shellArg(tasksDir), DECIDE_FLAG, shellArg(opts.decision),
-      ...(opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG]),
-      ROW_FLAG, shellArg(`${x.task.id}:${x.n}`)].join(" ");
     let res;
-    try { res = runDecideMode(result, tasksDir, opts, cmdFor); }
+    try { res = runDecideMode(result, tasksDir, opts); }
     catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
     if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
     output = res.note;
@@ -3879,7 +3923,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
+    try { output = runTaskMode(result, tasksDir, taskOpts(), split, splitText, startId); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {
@@ -3991,7 +4035,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // banner, so an operator (and the build executor, which reads the exit code / `planGaps`, not the Markdown)
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
-  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
+  // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply.
+  const statusBad = (result.statusIssues || []).length > 0;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || statusBad || verifyIncomplete
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
     || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
