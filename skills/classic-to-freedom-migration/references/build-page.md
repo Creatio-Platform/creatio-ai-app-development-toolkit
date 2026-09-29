@@ -278,3 +278,16 @@ rules. The plan-phase half stays in `SKILL.md`.
   a naive add-new — and if a service is named, **verify it is deployed on-stand** (else port its
   logic). Do not ship a plain read-only related list for such a detail. → step 4.2
   (`detailSchemas`).
+- **Removed row actions are their own line.** A Classic detail that overrides
+  `addRecordOperationsMenuItems` without `callParent` (e.g. `Terrasoft.emptyFn`), or overrides
+  `getCopyRecordMenuItem` / `getEditRecordMenuItem` / `getDeleteRecordMenuItem` to return nothing,
+  removes those row actions from existing records. The engine raises a separate
+  `detail-row-actions` ⚠ (and a `⚠ no row Copy/Delete` note in the Layout table), independent of
+  the add flow: an add-disabled detail can keep its row actions and vice versa. Build the Freedom
+  list rows without the named Copy/Delete actions — the row-action property comes from
+  `get-component-info` on the target version — and keep records opening from the list on click. A
+  removed Classic Edit maps to nothing: Freedom has no separate Edit row action, so it never means
+  "stop records opening". When the override is in a form the engine cannot read (a reference to
+  another function, an over-long body), the same ⚠ says its effect is **UNKNOWN** and the Layout
+  note reads `⚠ row-action override unread — check by hand`: read that Classic member and drop
+  every Copy/Delete it leaves out.
