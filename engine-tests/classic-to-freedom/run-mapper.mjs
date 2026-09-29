@@ -9247,6 +9247,36 @@ check("the `--plan` artifact PRINTS the engine's version (one string, recorded v
 check("a result with no engine-computed version renders NO version line — never the string 'undefined'",
   !renderPlan({ entity: "X", changeSet: {} }, {}).includes("Plan version"));
 
+// The plan repeats the run-diagnostics block, so a plan file alone names the skill build, clio and stand. The block
+// describes the machine, not the plan, so it stays outside the plan version: a plugin or clio update between plan and
+// build must not ask for re-approval.
+const RUN_DIAG = { skillVersion: "1.12.0", git: { branch: "feature/x", commit: "a5d7e1f", registry: true },
+  clioVersion: "8.1.0.134", gateVersion: "2.0.0.53", environment: "demo", uri: "https://demo.example",
+  stand: { coreVersion: "10.0.0.941", productName: "unknown (cliogate not installed)", dbEngine: "PostgreSql", framework: ".NET 8" } };
+const pvDiag = runMigration({ ...PG_MANIFEST, runDiagnostics: RUN_DIAG }, { baseDir: FIX });
+check("`runDiagnostics` prints the `### Run diagnostics` block in the plan: skill build, clio and stand, one line each",
+  pvDiag.plan.includes("### Run diagnostics")
+    && pvDiag.plan.includes("classic-to-freedom-migration `1.12.0` · branch `feature/x` (marketplace ref) · commit `a5d7e1f`")
+    && pvDiag.plan.includes("**clio:** `8.1.0.134` (CLI on PATH) · bundled cliogate `2.0.0.53`")
+    && pvDiag.plan.includes("**Environment:** `demo` · `https://demo.example`")
+    && pvDiag.plan.includes("Creatio `10.0.0.941` · product unknown (cliogate not installed) · DB `PostgreSql` · `.NET 8`"),
+  () => pvDiag.plan.split("\n").slice(0, 24).join(" ⏎ "));
+check("`runDiagnostics` is NOT part of the plan version — the same plan produced with another skill build or clio keeps its version",
+  pvDiag.planVersion === pvA
+    && runMigration({ ...PG_MANIFEST, runDiagnostics: { ...RUN_DIAG, clioVersion: "8.2.0.1" } }, { baseDir: FIX }).planVersion === pvA,
+  () => ({ base: pvA, withDiagnostics: pvDiag.planVersion }));
+check("a plan with no `runDiagnostics` says the block was not supplied, and the plan is still produced",
+  pgRun.plan.includes("### Run diagnostics") && pgRun.plan.includes("- unknown (not supplied — put the `diagnostics.mjs --json` output into `manifest.runDiagnostics`)"),
+  () => pgRun.plan.split("\n").slice(0, 24).join(" ⏎ "));
+check("a stand error in `runDiagnostics` reads `unknown (<error>)` on the plan's Stand line",
+  runMigration({ ...PG_MANIFEST, runDiagnostics: { ...RUN_DIAG, stand: { error: "timeout" } } }, { baseDir: FIX }).plan.includes("- **Stand:** unknown (timeout)"));
+check("a registry branch is labelled as the marketplace ref in the plan",
+  pvDiag.plan.includes("branch `feature/x` (marketplace ref) · commit `a5d7e1f`"), () => pvDiag.plan.split("### Run diagnostics")[1]?.slice(0, 300));
+const pvDiagOdd = runMigration({ ...PG_MANIFEST, runDiagnostics: { skillVersion: "1.0`\n## Boom", git: { commit: 42 }, stand: "down" } }, { baseDir: FIX }).plan;
+check("`runDiagnostics` values cannot break out of their code span or add a heading, and a field of the wrong type reads `unknown (not supplied)` instead of throwing",
+  !pvDiagOdd.includes("\n## Boom") && pvDiagOdd.includes("**clio:** unknown (not supplied)") && !/commit/.test(pvDiagOdd.split("**Skill:**")[1].split("\n")[0]),
+  () => pvDiagOdd.split("### Run diagnostics")[1]?.slice(0, 400));
+
 /* ==================================================================================================
    Defects three adversarial checkers DEMONSTRATED against the first engine.
    Each block below reproduces one of them and pins the fix.

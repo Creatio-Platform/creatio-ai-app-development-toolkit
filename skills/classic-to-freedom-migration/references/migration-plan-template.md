@@ -18,6 +18,7 @@
 ## 1. Input And Resolved Target
 
 - Original input:
+- Run diagnostics (skill build, clio, stand — the `diagnostics.mjs` block):
 - Resolved environment:
 - Resolved section:
 - Entity schema:
