@@ -8178,12 +8178,13 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       () => next.status === 0 && /STARTABLE NOW/.test(next.stdout || "") && (next.stdout || "").includes(t.id)
         && !/edited by hand|edited after|OLDER set|CHANGED since|drift/i.test(`${next.stdout}${next.stderr}`),
       () => ({ status: next.status, stdout: next.stdout, stderr: next.stderr }));
+    const closedUnder = readTimingsFile(dir).samples.find((x) => x.id === t.id)?.token;
     const started = startTask(dir, t.id, RUN, { ...BO, dispatchToken: "tok-again" }, null, AT(901));
     check("--start: the reopened task is dispatched under the new token (not the one it closed under), is `in-progress`, and its earlier signature is not overwritten — no dispatch-gate block and no filled-cell refusal",
       () => !!started.started && !started.blockedByDispatch && !started.filledCells
         && readTaskDir(dir).find((x) => x.id === t.id).status === "in-progress"
-        && readTimingsFile(dir).running[t.id]?.token === "tok-again" && `tok-${t.id}` !== "tok-again"
-        && readTaskDir(dir).find((x) => x.id === t.id).agentNonce === `tok-${t.id}`,
+        && !!closedUnder && closedUnder !== "tok-again" && readTimingsFile(dir).running[t.id]?.token === "tok-again"
+        && readTaskDir(dir).find((x) => x.id === t.id).agentNonce === closedUnder,
       () => ({ keys: Object.keys(started), running: readTimingsFile(dir).running[t.id], status: readTaskDir(dir).find((x) => x.id === t.id).status }));
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -8214,22 +8215,27 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
   {
     const { base, dir, t, fp } = buildItFixture("build-declared-kept");
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED).replace(/^declared:.*$/m, "declared: blocked"));
-    const res = build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    const cli = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    const res = { keptHalts: [t.file], clearedHalts: [] };
     const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("CLI `--decide --build`: a kept halt is REPORTED — the output names the `declared: blocked` it kept",
+      () => cli.status === 0 && (cli.stdout || "").includes("kept the `declared: blocked` of") && (cli.stdout || "").includes(t.file)
+        && !/retired the `declared: blocked`/.test(cli.stdout || ""),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
     check("--decide --build: a `declared: blocked` that another row of the task still backs is KEPT — the reopen answers one row's question, not the task's halt",
-      () => !res.refused && back.declared === "blocked" && back.status === "blocked"
+      () => back.declared === "blocked" && back.status === "blocked"
         && (res.keptHalts || []).includes(t.file) && !(res.clearedHalts || []).length,
-      () => ({ declared: back.declared, status: back.status, kept: res.keptHalts, cleared: res.clearedHalts }));
+      () => ({ declared: back.declared, status: back.status }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
     const { base, dir, t } = buildItFixture("build-drift-said");
     const fpD = taskFilePath(dir, t.id);
     fs.writeFileSync(fpD, fs.readFileSync(fpD, "utf8").replace(/^rowsDigest:.*$/m, "rowsDigest: stale0000"));
-    const res = build(dir, { rowRef: { taskId: t.id, n: "1" } });
-    check("--decide --build: a drift warning the reopen clears is REPORTED, not dropped silently",
-      () => !res.refused && (res.clearedWarnings || []).some((w) => w.includes(t.file) && /drift/.test(w)),
-      () => res.clearedWarnings);
+    const cli = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    check("CLI `--decide --build`: a drift warning the reopen clears is REPORTED, not dropped silently",
+      () => cli.status === 0 && /cleared .*drift warning/.test(cli.stdout || "") && (cli.stdout || "").includes(t.file),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
   }
 
@@ -8282,6 +8288,81 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
+    // A build-it entry writes no closure: a `wont-do` typed by hand into the reopened cell leaves the task
+    // outside the decided-descope exemption, so the dispatch audit still asks for a builder's record.
+    const descopeFixture = (label, rowOneDecision) => {
+      const base = tmp(label);
+      const dir = path.join(base, "build-tasks");
+      fs.writeFileSync(path.join(base, "decisions.md"), "## D5 — build the typed forms\n## D6 — drop the rest\n");
+      const decisions = new Map([["D5", "build the typed forms"], ["D6", "drop the rest"]]);
+      syncTaskDir(dir, RUN, BO);
+      const t = readTaskDir(dir).filter((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair"
+        && !x.rows.some((r) => r.na) && !(x.dependsOn || []).length).sort((a, b) => a.order - b.order)[0];
+      const fp = taskFilePath(dir, t.id);
+      let txt = fs.readFileSync(fp, "utf8");
+      for (let i = 1; i <= t.rows.length; i++) txt = setOutcome(txt, i, NEEDS_DECISION);
+      fs.writeFileSync(fp, txt);
+      syncTaskDir(dir, RUN, { ...BO, now: AT(900) });
+      const answer = (n, mode, decision) => applyDecision(dir, RUN, { ...BO, decision, mode, decisions, rowRef: { taskId: t.id, n: String(n) } });
+      answer(1, rowOneDecision, "D5");
+      for (let i = 2; i <= t.rows.length; i++) answer(i, "wont-do", "D6");
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — x (D5)"));
+      syncTaskDir(dir, RUN, { ...BO, now: AT(902) });
+      return { base, dir, t };
+    };
+    const decided = descopeFixture("build-descope-decided", "wont-do");
+    check("a task whose every row a person closed with `--decide wont-do` is decided descope: the dispatch audit asks for no builder record",
+      () => !dispatchAudit(readTaskDir(decided.dir), decided.dir).never.some((x) => x.id === decided.t.id),
+      () => dispatchAudit(readTaskDir(decided.dir), decided.dir).never.map((x) => x.id));
+    fs.rmSync(decided.base, { recursive: true, force: true });
+    const viaBuild = descopeFixture("build-descope-build", "build");
+    check("a build-it entry is no closure for the task: with every cell `wont-do` and row 1 typed by hand over a `--decide --build` entry, the dispatch audit still flags the task as never dispatched",
+      () => dispatchAudit(readTaskDir(viaBuild.dir), viaBuild.dir).never.some((x) => x.id === viaBuild.t.id),
+      () => dispatchAudit(readTaskDir(viaBuild.dir), viaBuild.dir).never.map((x) => x.id));
+    fs.rmSync(viaBuild.base, { recursive: true, force: true });
+  }
+  {
+    // A repair round whose every cell reads `wont-do` is a decided round, and spends no attempt, only when each
+    // cell is closed by a `--decide` entry. A build-it entry with a hand-typed cell is an attempt.
+    const capFixture = (label, mode) => {
+      const base = tmp(label);
+      const dir = path.join(base, "build-tasks");
+      fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope the handlers\n");
+      const decisions = new Map([["D13", "descope the handlers"]]);
+      syncTaskDir(dir, RUN, OPTS);
+      let res = null;
+      for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
+        res = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+        const rt = res.written.find((x) => x.cause === "missing:handlers");
+        if (!rt || r > REPAIR_ROUND_CAP) break;
+        const fpR = taskFilePath(dir, rt.id);
+        const rows = readTaskDir(dir).find((x) => x.id === rt.id).rows.length;
+        const fill = (word) => {
+          let txt = fs.readFileSync(fpR, "utf8");
+          for (let i = 1; i <= rows; i++) txt = setOutcome(txt, i, word);
+          fs.writeFileSync(fpR, txt);
+        };
+        if (mode === "build") {
+          fill(NEEDS_DECISION);
+          applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "build", decisions, taskId: rt.id });
+          fill("wont-do — x (D13)");
+        } else {
+          applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", decisions, taskId: rt.id });
+        }
+      }
+      fs.rmSync(base, { recursive: true, force: true });
+      return res;
+    };
+    const byDecision = capFixture("build-cap-decided", "wont-do");
+    check(`${REPAIR_ROUND_CAP} repair rounds closed by \`--decide wont-do\` spend no attempt: the next round for the cause is still written`,
+      () => byDecision.written.some((x) => x.cause === "missing:handlers") && !byDecision.parked.some((p) => p.cause === "missing:handlers"),
+      () => ({ written: byDecision.written.map((x) => x.cause), parked: byDecision.parked.map((p) => p.cause) }));
+    const byBuild = capFixture("build-cap-build", "build");
+    check(`${REPAIR_ROUND_CAP} repair rounds each reopened through \`--decide --build\` and typed \`wont-do\` by hand are attempts: the cause is parked and no further round is written`,
+      () => byBuild.parked.some((p) => p.cause === "missing:handlers") && !byBuild.written.some((x) => x.cause === "missing:handlers"),
+      () => ({ written: byBuild.written.map((x) => x.cause), parked: byBuild.parked.map((p) => p.cause) }));
+  }
+  {
     // An adopted body (a repair task) is written in place, not re-rendered.
     const { base, dir, rep } = repairMirrorFixture("build-adopted", "D5", "build the typed forms");
     const fpR = taskFilePath(dir, rep.id);
@@ -8329,12 +8410,25 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     const mid = readTaskDir(dir).find((x) => x.id === t.id);
     const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
     const back = readTaskDir(dir).find((x) => x.id === t.id);
-    check("--revoke D5: withdrawing a build-it entry on a task already started puts the question back and drops the entry, with no status-edited or drift warning",
-      () => mid.status === "in-progress" && !rev.refused && rev.cleared.length === 1
-        && back.rows[0].outcomeCause === "needs-decision" && back.status === "partial" && !back.statusEdited
+    check("--revoke D5: withdrawing a build-it entry on a task a builder is running drops only the entry — the cell stays blank for the builder, the task stays in-progress, the live clock is kept, and the withdrawal is reported with its reason",
+      () => mid.status === "in-progress" && !rev.refused && rev.cleared.length === 0
+        && rev.skipped.some((x) => x.withdrawn && x.n === 1 && /in-progress/.test(x.why))
+        && back.rows[0].outcomeKind === null && back.rows[0].outcome === "" && back.status === "in-progress" && !back.statusEdited
+        && readTimingsFile(dir).running[t.id]?.token === "tok-started"
         && String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim() === ""
         && !/edited after the engine wrote it|OLDER set|CHANGED since/.test(readIndex(dir)),
-      () => ({ mid: mid.status, rev: rev.refused ? rev.problems : rev.cleared?.length, back: back.status, cell: back.rows[0].outcome }));
+      () => ({ mid: mid.status, rev: rev.refused ? rev.problems : rev.cleared?.length, skipped: rev.skipped?.map((x) => x.why), back: back.status, cell: back.rows[0].outcome }));
+    const cliStarted = (() => {
+      const f = buildItFixture("build-revoke-started-cli");
+      build(f.dir, { rowRef: { taskId: f.t.id, n: "1" } });
+      startTask(f.dir, f.t.id, RUN, { ...BO, dispatchToken: "tok-started" }, null, AT(902));
+      const out = cliB(f.base, "--tasks", f.dir, "--revoke", "D5");
+      fs.rmSync(f.base, { recursive: true, force: true });
+      return out;
+    })();
+    check("CLI `--revoke D5` over a build-it entry of a running task: exits 0 and opens with `withdrew 1 build-it entry`, naming the task as in-progress",
+      () => cliStarted.status === 0 && (cliStarted.stdout || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D5") && /in-progress/.test(cliStarted.stdout || ""),
+      () => ({ status: cliStarted.status, stdout: cliStarted.stdout, stderr: cliStarted.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
@@ -8391,9 +8485,36 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       () => res.refused && res.skipped?.some((x) => x.n === 1 && /in-progress/.test(x.why) && /second agent/.test(x.why))
         && readTaskDir(dir).find((x) => x.id === t.id).status === "in-progress" && fs.readFileSync(fp, "utf8") === before,
       () => ({ refused: res.refused, skipped: res.skipped?.map((x) => x.why), status: readTaskDir(dir).find((x) => x.id === t.id).status }));
+    const route = cliB(base, "--tasks", dir, "--route");
+    const routeHead = (route.stdout || "").split("--- progress")[0];
+    check("--route: a needs-decision row of a task that is still in-progress is named as a question on a task that has not closed, with its status; no repair task is claimed and none is written",
+      () => (route.stdout || "").includes(t.file) && routeHead.includes(`(${t.id}:1)`) && /has not closed yet/.test(routeHead)
+        && routeHead.includes("(task in-progress)") && !/already has a repair task/.test(routeHead)
+        && !/nothing there is waiting to be routed/.test(routeHead) && !waits(routeHead) && !/wrote \d+ repair task/.test(routeHead)
+        && readTaskDir(dir).some((x) => x.kind === "repair") === false,
+      () => route.stdout);
     const offered = startableTasks(syncTaskDir(dir, RUN, { ...BO, now: AT(802) }), dir).startable.map((x) => x.id);
     check("--next: the skipped task is not offered for dispatch while it is still in-progress",
       () => !offered.includes(t.id), () => offered);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A needs-decision row on a task nobody has dispatched is a question on a task that has not closed.
+    const base = tmp("build-inflight-todo");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, BO);
+    const t = readTaskDir(dir).filter((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair"
+      && !x.rows.some((r) => r.na) && !(x.dependsOn || []).length).sort((a, b) => a.order - b.order)[0];
+    const fp = taskFilePath(dir, t.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, NEEDS_DECISION));
+    syncTaskDir(dir, RUN, { ...BO, now: AT(801) });
+    const status = readTaskDir(dir).find((x) => x.id === t.id).status;
+    const route = cliB(base, "--tasks", dir, "--route");
+    const routeHead = (route.stdout || "").split("--- progress")[0];
+    check("--route: a needs-decision row of a task that is not closed (todo or in-progress) is named as a question on a task that has not closed and never as having a repair task",
+      () => ["todo", "in-progress"].includes(status) && routeHead.includes(`(${t.id}:1)`) && /has not closed yet/.test(routeHead)
+        && routeHead.includes(`(task ${status})`) && !/already has a repair task/.test(routeHead) && !/nothing there is waiting to be routed/.test(routeHead),
+      () => ({ status, head: routeHead }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {

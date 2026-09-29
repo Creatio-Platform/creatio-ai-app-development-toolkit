@@ -1702,16 +1702,22 @@ export const awaitsAnswer = (t) => !t.unread && (SETTLED.has(t.status) || t.stat
 const isOpenDecisionRow = (task, row, n) => row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION
   && !settledByRound(row) && !hasClosingDecision(task, n);
 
-export function decisionWaitingRows(tasks) {
+// Open question rows of tasks a person is asked about (`answerable`), or of tasks a builder may still be writing.
+function decisionRows(tasks, answerable) {
   const out = [];
   for (const t of tasks || []) {
-    if (!awaitsAnswer(t)) continue;
+    if (awaitsAnswer(t) !== answerable) continue;
     (t.rows || []).forEach((r, i) => {
       if (isOpenDecisionRow(t, r, i + 1)) out.push({ task: t, row: r, n: i + 1 });
     });
   }
   return out;
 }
+
+export const decisionWaitingRows = (tasks) => decisionRows(tasks, true);
+
+// Open question rows on a task that is not closed or halted yet: no `--decide --build` reaches them until it is.
+export const decisionPendingRows = (tasks) => decisionRows(tasks, false);
 
 // A row whose repair round has built it. Its Outcome cell keeps its `not-built` word, so every reader of open
 // rows filters on this.
@@ -4141,7 +4147,8 @@ function clearDecidedCell(t, idx) {
   }
 }
 // A build-it entry wrote no closure, so withdrawing it puts the question back: a row still blank is a
-// `needs-decision` row again, and a row a builder has since recorded keeps that record.
+// `needs-decision` row again, a row a builder has since recorded keeps that record, and a row of a task a builder is
+// running stays blank.
 function withdrawBuildEntry(t, idx, map, decision, cleared, skipped) {
   const row = t.rows?.[idx];
   map.delete(idx + 1);
@@ -4149,6 +4156,11 @@ function withdrawBuildEntry(t, idx, map, decision, cleared, skipped) {
   if (!row) { skipped.push({ task: t, n: idx + 1, withdrawn: true, why: "that row no longer exists in this task" }); return; }
   if (row.outcomeKind || row.outcome) {
     skipped.push({ task: t, n: idx + 1, withdrawn: true, why: `its Outcome cell reads \`${row.outcomeKind || row.outcome}\` — the ${decision} entry is withdrawn and the cell stays as recorded` });
+    return;
+  }
+  // A dispatched builder is filling this row: the cell stays blank for it to record, not a question it never raised.
+  if (t.status === S_IN_PROGRESS) {
+    skipped.push({ task: t, n: idx + 1, withdrawn: true, why: `its task is ${S_IN_PROGRESS} — the ${decision} entry is withdrawn and the cell is left for the builder to fill` });
     return;
   }
   row.outcome = `${O_NOT_BUILT} — ${CAUSE_NEEDS_DECISION}`;

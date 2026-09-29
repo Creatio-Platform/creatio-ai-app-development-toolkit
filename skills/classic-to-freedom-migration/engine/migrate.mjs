@@ -62,7 +62,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, decisionWaitingRows, BUILD_MODE,
+  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -3615,11 +3615,21 @@ const ROUND_EMPTY = {
 
 // The rows only a person's answer moves. Named instead of ROUND_EMPTY.route when nothing else applies, because
 // "nothing is waiting" would be false and no repair task exists for them.
-function awaitingDecisionLines(awaiting, dir) {
-  return [`migrate.mjs: no repair task written to ${dir} — ${awaiting.length} row(s) wait on a decision, not on a repair round:`,
-    ...awaiting.map((it) => `  · ${it.task.file} row ${it.n} (${it.task.id}:${it.n}) — ${it.row.label}`),
-    `Answer each with \`${DECIDE_FLAG} D<N> ${WONT_DO_FLAG}\` / \`${POSTPONED_FLAG} ${TO_FLAG} <destination>\` to drop it, or`
-      + ` \`${DECIDE_FLAG} D<N> ${BUILD_FLAG} ${ROW_FLAG} <task>:<n>\` to build it — the engine re-opens the row; no task file is edited.`];
+function awaitingDecisionLines(awaiting, awaitingClose, dir) {
+  const rowLine = (it) => `  · ${it.task.file} row ${it.n} (${it.task.id}:${it.n}) — ${it.row.label}`;
+  const lines = [];
+  if (awaiting.length) {
+    lines.push(`migrate.mjs: no repair task written to ${dir} — ${awaiting.length} row(s) wait on a decision, not on a repair round:`,
+      ...awaiting.map(rowLine),
+      `Answer each with \`${DECIDE_FLAG} D<N> ${WONT_DO_FLAG}\` / \`${POSTPONED_FLAG} ${TO_FLAG} <destination>\` to drop it, or`
+        + ` \`${DECIDE_FLAG} D<N> ${BUILD_FLAG} ${ROW_FLAG} <task>:<n>\` to build it — the engine re-opens the row; no task file is edited.`);
+  }
+  if (awaitingClose.length) {
+    lines.push(`migrate.mjs: no repair task written to ${dir} — ${awaitingClose.length} row(s) record a decision question on a task`
+      + " that has not closed yet; no repair task exists for them and none is routed. Answer them once the task closes:",
+    ...awaitingClose.map((it) => `${rowLine(it)} (task ${it.task.status})`));
+  }
+  return lines;
 }
 
 // `deliverable` (page) on file, per held-back row.
@@ -3669,7 +3679,8 @@ export function repairRoundLines(res, dir, kind) {
   }
   if (!res.written.length && !res.parked.length && !res.pending.length
     && !res.disputed?.length && !res.stalled?.length) {
-    lines.push(res.awaiting?.length ? awaitingDecisionLines(res.awaiting, dir).join("\n") : `migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+    const awaiting = res.awaiting || [], awaitingClose = res.awaitingClose || [];
+    lines.push(awaiting.length || awaitingClose.length ? awaitingDecisionLines(awaiting, awaitingClose, dir).join("\n") : `migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
   }
   if (res.parked.length) {
     const what = res.parked.map((p) => `${p.pageKey}: ${p.cause} (${p.rows} row(s))`).join(" | ");
@@ -3707,7 +3718,8 @@ function runRouteMode(result, dir, opts) {
   // This mode's whole stdout, so it carries the block the orchestrator pastes — `--verify`'s repair note is
   // appended to a table that already has one.
   const awaiting = decisionWaitingRows(res.set.tasks);
-  const lines = [...repairRoundLines({ ...res, awaiting }, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
+  const awaitingClose = decisionPendingRows(res.set.tasks);
+  const lines = [...repairRoundLines({ ...res, awaiting, awaitingClose }, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
   return lines.join("\n") + "\n";
 }
 
