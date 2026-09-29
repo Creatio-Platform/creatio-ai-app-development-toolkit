@@ -8343,7 +8343,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"));
     const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
     check("CLI `--revoke D5`: over a build-it entry whose row a builder has since built, exits 0 and opens with `withdrew 1 build-it entry`, never with the no-op text",
-      () => cli.status === 0 && /^migrate\.mjs: withdrew 1 build-it entry under D5/.test(cli.stdout || "") && !/nothing to revoke/.test(cli.stdout || ""),
+      () => cli.status === 0 && (cli.stdout || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D5") && !/nothing to revoke/.test(cli.stdout || ""),
       () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -8450,7 +8450,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
     const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
     const left = String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim();
     check("CLI `--revoke D5` over a withdrawn build-it entry and a cell still in force: exits 1, opens by reporting the withdrawal rather than `nothing revoked`, lists the withdrawn entry and the skipped cell separately, and the folder keeps only the entry still in force",
-      () => cli.status === 1 && /^migrate\.mjs: withdrew 1 build-it entry under D5/.test(cli.stderr || "") && !/nothing revoked/.test(cli.stderr || "")
+      () => cli.status === 1 && (cli.stderr || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D5") && !/nothing revoked/.test(cli.stderr || "")
         && /withdrawn .* row 1/.test(cli.stderr || "")
         && /skipped .* row 2/.test(cli.stderr || "") && left === "2:D5",
       () => ({ status: cli.status, stderr: cli.stderr, left }));
@@ -8923,7 +8923,7 @@ const locateRow = (dir, label) => {
     const onA = locateRow(dir, "Handler — `onA`");
     const onB = locateRow(dir, LABELS["main#method:onB"]);
     check("CLI `--decide D6 --build` then `--revoke D6` where a `deliverableStatus` entry still cites D6: exits 1, the head line reports the withdrawal (not `nothing revoked`), the status cell is listed as skipped, and `decisions:` on disk drops the build-it entry and keeps the status cell's",
-      () => !set.refused && decided.status === 0 && cli.status === 1 && /^migrate\.mjs: withdrew 1 build-it entry under D6/.test(cli.stderr || "")
+      () => !set.refused && decided.status === 0 && cli.status === 1 && (cli.stderr || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D6")
         && !/nothing revoked/.test(cli.stderr || "") && /skipped .*manifest\.deliverableStatus/.test(cli.stderr || "")
         && !entriesOf(onA).some((e) => /D6!/.test(e)) && onB.r.outcomeKind === "wont-do" && entriesOf(onB).some((e) => e.startsWith(`${onB.i + 1}:D6`)),
       () => ({ decided: [decided.status, decided.stderr], status: cli.status, stderr: cli.stderr, onA: entriesOf(onA), onB: entriesOf(onB) }));
