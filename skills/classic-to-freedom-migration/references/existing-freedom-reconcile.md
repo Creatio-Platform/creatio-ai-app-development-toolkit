@@ -63,6 +63,36 @@ You have two inputs and one output:
   by meaning, not by control name — and note **where** each already sits (its container), because a
   base element being "present" is not the same as being present in the RIGHT place (Mode 2).
 
+## Standard Freedom components — keep them, do NOT migrate their Classic counterpart (BOTH modes)
+
+Some Classic details/tabs have a **standard Freedom component** the Freedom page already ships. These
+are NOT client customizations and NOT plain related lists — the platform owns them:
+
+| Standard Freedom component | Classic counterpart (do NOT migrate) |
+| --- | --- |
+| **Feed** (`crt.Feed` + its tab/panel) | ESN / Feed tab (`ESNTab`, the `ESNFeedContainer`) |
+| **Attachments** (`crt.FileList` + its expansion panel / toolbar) | files detail (`FileDetailV2`, "Attachments and notes") |
+| **Connected to** (the connection group the Freedom page ships) | connections detail (`EntityConnectionsDetailV2`, «Связи объекта» / "Connected to") |
+| **Timeline** (`crt.Timeline` + its tab/panel) | Timeline tab (`TimelineTab`) |
+
+The rule, **in both `overlay` and `classic-layout`**:
+
+- **Present on the existing Freedom page → KEEP it as-is.** Same container, tab, position, order and
+  settings. Do NOT move, re-insert, reorder, restyle or remove it. `classic-layout` does NOT re-lay it
+  to its Classic slot — it is a standard component, not a plan field/detail.
+- **Its Classic counterpart is NOT migrated.** No insert, no related list, no tab and no tab-order
+  entry taken from the Classic element. The plan/task row for it closes **`n-a — standard Freedom
+  component kept`**. This is a documented disposition, not a user decision, and nothing is rebuilt
+  beside the kept component.
+- **Absent on the Freedom page → migrate the Classic element as usual**, placed per the mode.
+- **Contents stay with the component.** A plan field the kept component already renders (e.g. Account /
+  Contact inside Connected to) is NOT inserted a second time elsewhere; it becomes a `decisions.md`
+  item ONLY when the client's Classic delta explicitly moved that field somewhere else (e.g. into the
+  header).
+- **Ordinary fields that shared the Classic tab are still migrated** per the mode — e.g. the Notes
+  field on the Classic "Attachments and notes" tab. Only the standard component itself is left to the
+  Freedom page.
+
 ## Mode 1 — Overlay (default)
 
 ### Step 3 — Build the reconciliation diff
@@ -106,8 +136,11 @@ Read the plan's Layout table — its `Region` (tab / group / island) and `Positi
 - **a base LAYOUT element NOT in the plan** → **`remove`** it. This removes only the on-page control,
   **NOT** the entity column or its data — so it is safe. ("Not described → not on the page.")
 - **a Freedom-only NON-field value-add component with no Classic analog** (charts, DCM progress bar,
-  Account/Contact compact profile cards, Feed, Next steps, …) → **KEEP as-is.** Mode 2 transfers the
+  Account/Contact compact profile cards, Next steps, …) → **KEEP as-is.** Mode 2 transfers the
   field/detail structure, not these widgets.
+- **a standard Freedom component (Feed, Attachments, Connected to, Timeline)** → **KEEP as-is** and do
+  NOT migrate its Classic counterpart — see "Standard Freedom components" above. The rule is the same in
+  both modes; `classic-layout` does NOT re-lay it to a Classic slot.
 - field STATUS where Classic and Freedom differ → **Classic wins** (the plan's `Rule` cell).
 
 ### Step 4 (M2) — Conflicts
@@ -142,6 +175,10 @@ Handlers, business rules, and auto-fills are ported **exactly as in a normal mig
 - **Mode 2 — the plan IS the field/detail set.** A base layout element not in the plan is **removed**
   (the on-page control only, never the entity column or its data); a Freedom-only value-add component is
   always **kept**; a removal you cannot tie to the plan is a decision, not a silent act.
+- **Both — keep the standard Freedom components.** Feed, Attachments, Connected to and Timeline the page
+  already ships are kept as-is, and their Classic counterparts (`ESNTab` / `FileDetailV2` /
+  `EntityConnectionsDetailV2` / `TimelineTab`) are NOT migrated; that row closes `n-a — standard Freedom
+  component kept`. Only when the component is ABSENT on the Freedom page is the Classic element migrated.
 - **Both — no duplicates.** Always target the existing Freedom section; never fork a second section for
   the same entity. `validate-page` before saving. Every removal must trace to evidence (a Classic delta
   op in Mode 1, the plan's field/detail set in Mode 2); if you cannot show it, treat it as a manual

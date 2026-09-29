@@ -20,7 +20,8 @@ Give an existing-Freedom **reconcile** two explicit **build-time modes**. The de
 - Mechanism: `move` / `remove` / `insert` in the **section page's replacing schema** (client package). **No template change, no new page.** The base template and base package are untouched.
 - Base Freedom **fields/details that ARE in the plan** → **moved** to the Classic position; field status (readonly/required/visible) follows **Classic** where it differs.
 - Base Freedom **fields/details NOT in the plan** → **`remove`** the layout element (this removes only the on-page control, NOT the entity column or its data).
-- Freedom-only **non-field value-add components with no Classic analog** (charts, DCM progress bar, Account/Contact compact profile cards, Feed, Next steps, …) → **kept as-is**.
+- Freedom-only **non-field value-add components with no Classic analog** (charts, DCM progress bar, Account/Contact compact profile cards, Next steps, …) → **kept as-is**.
+- **Standard Freedom components** (Feed, Attachments, Connected to, Timeline) present on the page → **kept as-is** and their Classic counterparts are NOT migrated (decision 8). These DO have a Classic analog (ESN/Feed tab, files detail, connections detail, Timeline tab) but the platform owns the Freedom component, so the reconcile keeps it rather than reproducing the counterpart.
 - **Conflict** = a Classic field/detail wants a slot occupied by a kept Freedom-only element → keep the Freedom element, place the field/detail in the nearest suitable container, **record as a decision**.
 - **Logic** (handlers, business rules, auto-fills) → ported as in a normal migration (mode-independent).
 
@@ -28,10 +29,11 @@ Give an existing-Freedom **reconcile** two explicit **build-time modes**. The de
 1. Mode = explicit developer choice, at **start of implementation**, not at plan start. Plan unaffected.
 2. Placement source of truth in Mode 2 = the **effective merged Classic layout** (tab/group/order/columns 1:1; pixel gaps ignored).
 3. Mechanism = the **section page's replacing schema** (move/remove/insert), NOT the template.
-4. Keep Freedom-only value-add elements (charts, DCM, compact cards, Feed, Next steps); Mode 2 transfers only **field + detail structure** (+ logic).
+4. Keep Freedom-only value-add elements with **no Classic analog** (charts, DCM, compact cards, Next steps); Mode 2 transfers only **field + detail structure** (+ logic). (Feed is NOT one of these — it has a Classic analog; see decision 8.)
 5. (=3) Same OOTB page, no template swap, no new page.
 6. Field status conflict → **Classic wins**; plan describes the field and its status; not-described = not present.
 7. Removing a base field not in the plan = **`remove` the layout element only** (column/data stay) → safe.
+8. **Standard Freedom components (Feed, Attachments, Connected to, Timeline) are kept as-is in BOTH modes, and their Classic counterparts are NOT migrated.** These four have Classic analogs (ESNTab, FileDetailV2, EntityConnectionsDetailV2, TimelineTab), but the Freedom page ships the platform component, so the reconcile keeps it and the counterpart row closes `n-a — standard Freedom component kept`. Only when the component is ABSENT on the Freedom page is the Classic element migrated. The component's contents stay with it (a field it already renders is not inserted twice). Engine: Feed / Attachments / Timeline are recognized as real Freedom components (`uiShape: "component"` in `mapping-table.mjs`, each with a registry component type), so `--verify` checks the kept component is present rather than demanding a related list. "Connected to" has NO single Freedom component — it is a group of connection lookups — so it stays a Classic detail and the keep is a purely build-time disposition: the sub-agent sees "Connected to" on the Freedom page and closes the row `n-a — standard Freedom component kept`, which `--verify --tasks` reads back through the decided rows (the engine does not read the base Freedom page).
 
 ## Implementation perimeter (to detail next)
 - `engine/tasks.mjs` — Mode 2 generates extra **move/remove** tasks (relocate base fields/details to Classic positions; remove base layout elements not in the plan). Mode is a `--tasks` input.
