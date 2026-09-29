@@ -2972,7 +2972,7 @@ try {
   const raAdversarial = unit3.repeat(6000);
   const r0 = Date.now(); const raRes = detectAddMode(raAdversarial); const raMs = Date.now() - r0;
   check(`ReDoS (timing): detectAddMode on ~${Math.round(raAdversarial.length / 1024)}KB of unterminated row-menu overrides stays linear — ${raMs}ms vs ceiling ${ceiling}ms`,
-    raAdversarial.length > 600 * 1024 && raMs < ceiling && (raRes === null || typeof raRes === "object"),
+    raAdversarial.length > 600 * 1024 && raMs < ceiling && raRes?.rowActionsUnreadable?.includes("addRecordOperationsMenuItems"),
     () => ({ raMs, ceiling, raRes }));
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
@@ -7811,6 +7811,44 @@ check("#12 control: the TOP layer ALONE (base not supplied) does NOT detect the 
     () => /\[detail-row-actions\][^\n]{0,400}Delete/.test(gridRa.plan) && !/\[detail-add-mechanism\]/.test(gridRa.plan)
       && gridRaRows.some((r) => r.confirm?.kind === "detail-row-actions"),
     () => ({ lines: gridRa.plan.split("\n").filter((l) => /\[detail-/.test(l)), kinds: gridRaRows.map((r) => r.confirm?.kind).filter(Boolean) }));
+  // An override that keeps the stock menu and then edits it is not "removes nothing": what survives is unknown.
+  for (const edit of ["menu.removeByKey(\"Delete\");", "var items = menu.getItems();"]) {
+    const edited = detectAddMode(detBody(`addRecordOperationsMenuItems: function(menu){ this.callParent(arguments); ${edit} }`));
+    check(`a callParent menu override that then edits the menu (\`${edit}\`) is reported as unreadable, not as removing nothing`,
+      () => edited?.rowActionsUnreadable?.join(",") === "addRecordOperationsMenuItems" && !(edited.rowActionsRemoved || []).length,
+      () => edited);
+  }
+  const longerName = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ m.addItem(this.getDeleteRecordMenuItemWithConfirm()); }"));
+  check("a longer getter name that CONTAINS a stock getter's name does not re-add that stock action → [Copy, Edit, Delete]",
+    () => longerName?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => longerName);
+  const passThroughGetter = detectAddMode([detBody("getDeleteRecordMenuItem: Terrasoft.emptyFn"),
+    detBody("getDeleteRecordMenuItem: function(){ return this.callParent(arguments); }")].join("\n"));
+  check("a top getter that passes through callParent to a base emptyFn getter still removes that action → [Delete]",
+    () => passThroughGetter?.rowActionsRemoved?.join(",") === "Delete", () => passThroughGetter);
+  check("a getter that calls callParent over the STOCK getter removes nothing",
+    () => detectAddMode(detBody("getDeleteRecordMenuItem: function(){ var item = this.callParent(arguments); return item; }")) === null);
+  // Literal edge cases of the brace walk.
+  const escapedQuote = detectAddMode(detBody(String.raw`addRecordOperationsMenuItems: function(m){ var s='it\'s }'; m.addItem(this.getEditRecordMenuItem()); }`));
+  check("an escaped quote inside a string does not end the string early → [Copy, Delete]",
+    () => escapedQuote?.rowActionsRemoved?.join(",") === "Copy,Delete", () => escapedQuote);
+  const multiLineTemplate = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ var t = `a\n}\nb`; m.addItem(this.getEditRecordMenuItem()); }"));
+  check("a template literal spanning lines with a `}` in it does not end the body early → [Copy, Delete]",
+    () => multiLineTemplate?.rowActionsRemoved?.join(",") === "Copy,Delete", () => multiLineTemplate);
+  const regexBrace = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ var r = /}/; m.addItem(this.getEditRecordMenuItem()); }"));
+  check("a `}` inside a REGEX literal ends the body there: the getter after it is not seen as re-added → [Copy, Edit, Delete]",
+    () => regexBrace?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => regexBrace);
+  // Mixed removed + unreadable: both Layout notes, and one decision carrying both instructions.
+  const mixed = runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { RaDetail: { body: detBody("getDeleteRecordMenuItem: Terrasoft.emptyFn, getCopyRecordMenuItem: this.makeCopy"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const mixedLine = mixed.plan.split("\n").find((l) => /\[detail-row-actions\]/.test(l)) || "";
+  check("removed + unreadable overrides: the Layout row carries both notes joined by ' · '",
+    () => mixed.plan.split("\n").some((l) => /^\|/.test(l) && /no row Delete \(keep open-on-click\) · ⚠ row-action override unread — check by hand/.test(l)),
+    () => mixed.plan.split("\n").filter((l) => /^\|/.test(l) && /Related list/.test(l)));
+  check("removed + unreadable overrides: ONE decision line says to build WITHOUT the Delete action AND names the unread getter",
+    () => /WITHOUT the Delete/.test(mixedLine) && /It also overrides .getCopyRecordMenuItem. in a form/.test(mixedLine) && /UNKNOWN/.test(mixedLine),
+    () => mixedLine);
   const litPartial = detectAddMode(detBody("addRecordOperationsMenuItems: function(){ var s='}'; // }\n this.getEditRecordMenuItem(); }"));
   check("a partial override with `}` inside a string and inside a `//` comment still reads to its real end → [Copy, Delete]",
     () => litPartial?.rowActionsRemoved?.join(",") === "Copy,Delete", () => litPartial);

@@ -1276,25 +1276,34 @@ function addMechanismDecision(am, label) {
 function rowActionsDecision(am, label) {
   const removed = am.rowActionsRemoved || [];
   const unreadable = am.rowActionsUnreadable || [];
-  const drop = freedomRowActionsToDrop(removed);
-  const plural = (n) => (n > 1 ? "s" : "");
-  const parts = [];
-  if (removed.length) {
-    parts.push(`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`);
-    parts.push(drop.length
-      ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
-      : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).");
-    if (removed.includes("Edit")) parts.push("Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click.");
-  }
-  if (unreadable.length) {
-    const lead = removed.length ? "It also overrides" : "overrides";
-    const members = unreadable.map((m) => "`" + m + "`").join(", ");
-    const subject = unreadable.length > 1 ? "they remove" : "it removes";
-    parts.push(`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`);
-    parts.push("Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click).");
-  }
+  const parts = [...removedActionsSentences(removed), ...unreadableOverrideSentences(unreadable, removed.length > 0)];
   return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
     reason: `Detail '${label}' ${parts.join(" ")}` };
+}
+
+const plural = (n) => (n > 1 ? "s" : "");
+
+// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing was removed.
+function removedActionsSentences(removed) {
+  if (!removed.length) return [];
+  const drop = freedomRowActionsToDrop(removed);
+  const build = drop.length
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
+    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
+  const edit = removed.includes("Edit")
+    ? ["Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."]
+    : [];
+  return [`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`, build, ...edit];
+}
+
+// The manual-read request for overrides the scan could not read; [] when every override was read.
+function unreadableOverrideSentences(unreadable, afterRemoved) {
+  if (!unreadable.length) return [];
+  const lead = afterRemoved ? "It also overrides" : "overrides";
+  const members = unreadable.map((m) => "`" + m + "`").join(", ");
+  const subject = unreadable.length > 1 ? "they remove" : "it removes";
+  return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
+    "Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click)."];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -1863,9 +1872,14 @@ function insideSpan(spans, idx) {
 function skipLiteral(text, i, end) {
   const c = text[i];
   if (c === '"' || c === "'" || c === "`") {
+    const stopAtNewline = c !== "`";
     let j = i + 1;
-    while (j < end && text[j] !== c && (c === "`" || text[j] !== "\n")) j += text[j] === "\\" ? 2 : 1;
-    return Math.min(j, end);
+    while (j < end) {
+      const ch = text[j];
+      if (ch === c || (stopAtNewline && ch === "\n")) return j;
+      j += ch === "\\" ? 2 : 1;
+    }
+    return end;
   }
   if (c !== "/") return i;
   if (text[i + 1] === "/") { const e = text.indexOf("\n", i); return e < 0 || e > end ? end : e; }
@@ -1903,31 +1917,43 @@ function memberValue(body, start) {
 }
 
 const ALL_ROW_ACTIONS = ROW_ACTION_GETTERS.map(([a]) => a);
+// A getter re-added by name, as a whole identifier: `getDeleteRecordMenuItemWithConfirm` is a different item.
+const GETTER_REF = new Map(ROW_ACTION_GETTERS.map(([, g]) => [g, new RegExp(String.raw`\b${g}\b`)]));
+// An override that keeps the stock menu (`callParent`) and then edits it — removes, clears or filters its items —
+// changes which actions survive in a way the scan does not follow.
+const MENU_EDIT = /\.(?:remove\w{0,20}|clear|splice|filter)\s{0,20}\(|\bgetItems\s{0,20}\(/;
 
 // What the most-derived `addRecordOperationsMenuItems` override leaves out, as `{ removed, unreadable }`. An override
 // calling `callParent` delegates to the layer below it (so the next definition up the text decides); the stock menu
-// below the lowest override removes nothing. An override in that chain the scan cannot read makes the answer unknown.
+// below the lowest override removes nothing. An override in that chain the scan cannot read, or one that edits the
+// inherited menu after `callParent`, makes the answer unknown.
 function menuRemovedActions(body, spans) {
   const starts = memberValueStarts(body, "addRecordOperationsMenuItems", spans);
   const readded = new Set();
   for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
     const v = memberValue(body, starts[k]);
     if (!v) return { removed: [], unreadable: true };
-    for (const [action, getter] of ROW_ACTION_GETTERS) if (v.code.includes(getter)) readded.add(action);
+    for (const [action, getter] of ROW_ACTION_GETTERS) if (GETTER_REF.get(getter).test(v.code)) readded.add(action);
     if (!/\bcallParent\b/.test(v.code)) return { removed: ALL_ROW_ACTIONS.filter((a) => !readded.has(a)), unreadable: false };
+    if (MENU_EDIT.test(v.code)) return { removed: [], unreadable: true };
   }
   return { removed: [], unreadable: false };
 }
 
 // Whether the most-derived override of a menu-item getter returns nothing: `emptyFn`, an empty body, or a body that
-// is only `return;` / `return null;` / `return undefined;` (comments aside). `false` with no override; `null` when
-// the override exists but cannot be read.
+// is only `return;` / `return null;` / `return undefined;` (comments aside). An override calling `callParent` returns
+// what the layer below returns, so the next definition up the text decides. `false` with no override (or a stock
+// getter at the bottom of the chain); `null` when an override in the chain cannot be read.
 function getterReturnsNothing(body, getter, spans) {
   const starts = memberValueStarts(body, getter, spans);
-  if (!starts.length) return false;
-  const v = memberValue(body, starts.at(-1));
-  if (!v) return null;
-  return v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(v.code.replace(/\s/g, ""));
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k]);
+    if (!v) return null;
+    const code = v.code.replace(/\s/g, "");
+    if (v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(code)) return true;
+    if (!/\bcallParent\b/.test(code)) return false;
+  }
+  return false;
 }
 
 // The row-action overrides of a detail body: `removed` — the standard row actions it removes, in menu order (Copy,
@@ -1944,12 +1970,10 @@ export function scanRowActions(body) {
   }
   return { removed: ALL_ROW_ACTIONS.filter((a) => removed.has(a)), unreadable };
 }
-// The standard row actions a detail removes, in menu order (Copy, Edit, Delete); [] for the stock menu.
-export const detectRemovedRowActions = (body) => scanRowActions(body).removed;
 // Every function of the row-action scan, for the structural ReDoS golden (a `toString` of detectAddMode does not
 // include the helpers it calls).
 export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, braceBody,
-  memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions, detectRemovedRowActions];
+  memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
