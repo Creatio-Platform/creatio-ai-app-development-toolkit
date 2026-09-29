@@ -84,6 +84,15 @@ check("integrity: accepts the correct sha512 SRI string", integrityOk(blob, good
 check("integrity: rejects a wrong hash", integrityOk(blob, "sha512-" + createHash("sha512").update(Buffer.from("other")).digest("base64")) === false);
 check("integrity: rejects a malformed / empty integrity string", integrityOk(blob, "") === false && integrityOk(blob, "not-an-sri") === false);
 check("integrity: supports the sha256 algorithm prefix too", integrityOk(blob, "sha256-" + createHash("sha256").update(blob).digest("base64")) === true);
+check("integrity: supports the sha384 algorithm prefix", integrityOk(blob, "sha384-" + createHash("sha384").update(blob).digest("base64")) === true);
+// A digest that matches is not enough: md5 and sha1 are collision-broken, so a registry string naming either
+// is rejected even when the bytes hash to it. Only sha256 / sha384 / sha512 are accepted.
+check("integrity: rejects a correct md5 digest (weak algorithm)", integrityOk(blob, "md5-" + createHash("md5").update(blob).digest("base64")) === false);
+check("integrity: rejects a correct sha1 digest (weak algorithm)", integrityOk(blob, "sha1-" + createHash("sha1").update(blob).digest("base64")) === false);
+check("integrity: rejects a correct digest under an algorithm outside the allow-list",
+  integrityOk(blob, "sha224-" + createHash("sha224").update(blob).digest("base64")) === false);
+check("integrity: the algorithm name is matched exactly, not case-folded",
+  integrityOk(blob, "SHA512-" + createHash("sha512").update(blob).digest("base64")) === false);
 
 console.log("\n===== glob → regex matcher (offline) =====");
 check("glob: `*` stays within a path segment (does NOT cross `/`)",

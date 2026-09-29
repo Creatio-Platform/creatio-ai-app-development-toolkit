@@ -51,9 +51,12 @@ function readTarEntry(tar, wanted) {
 }
 
 // Verify the tarball against the registry's published Subresource-Integrity string (e.g. "sha512-<base64>").
+// Only the SRI algorithms sha256 / sha384 / sha512 are accepted, matched exactly: md5 and sha1 are
+// collision-broken, so a string naming either (or any other algorithm) fails even when the bytes hash to it.
+const SRI_ALGORITHMS = new Set(["sha256", "sha384", "sha512"]);
 function integrityOk(tarball, integrity) {
   const m = /^([a-z0-9]+)-(.+)$/.exec(String(integrity || ""));
-  if (!m) return false;
+  if (!m || !SRI_ALGORITHMS.has(m[1])) return false;
   try { return createHash(m[1]).update(tarball).digest("base64") === m[2]; } catch { return false; }
 }
 
