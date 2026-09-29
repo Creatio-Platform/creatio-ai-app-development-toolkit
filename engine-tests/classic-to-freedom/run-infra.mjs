@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdir
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { readTarEntry, integrityOk, assertTarballIntegrity, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
@@ -96,6 +96,17 @@ check("integrity: rejects a correct digest under an algorithm outside the allow-
   integrityOk(blob, "sha224-" + createHash("sha224").update(blob).digest("base64")) === false);
 check("integrity: the SRI algorithm prefix must be lowercase (an uppercase prefix does not parse)",
   integrityOk(blob, "SHA512-" + createHash("sha512").update(blob).digest("base64")) === false);
+
+// The registry record is checked fail-closed: a missing integrity string is an error, not a skipped check.
+const throwsWith = (fn, re) => { try { fn(); return false; } catch (e) { return re.test(e.message); } };
+check("integrity: a registry record whose integrity matches is accepted",
+  !throwsWith(() => assertTarballIntegrity(blob, { tarball: "x", integrity: good }), /./));
+check("integrity: a registry record with no dist.integrity throws",
+  throwsWith(() => assertTarballIntegrity(blob, { tarball: "x" }), /no dist\.integrity/));
+check("integrity: a registry record with an empty dist.integrity throws",
+  throwsWith(() => assertTarballIntegrity(blob, { tarball: "x", integrity: "" }), /no dist\.integrity/));
+check("integrity: a registry record whose integrity does not match throws",
+  throwsWith(() => assertTarballIntegrity(Buffer.from("other"), { tarball: "x", integrity: good }), /failed the registry's own dist\.integrity check/));
 
 console.log("\n===== glob → regex matcher (offline) =====");
 check("glob: `*` stays within a path segment (does NOT cross `/`)",

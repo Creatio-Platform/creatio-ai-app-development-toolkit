@@ -1,7 +1,7 @@
 # Decision: shipped toolkit code takes no runtime dependency
 
-**Status:** accepted · **Scope:** everything the plugin ships and runs on the developer's machine —
-`skills/`, `hooks/`, `runtime/` and `installer/` · **Raised in** the Technology Principles audit
+**Status:** accepted · **Scope:** the code the release ships and runs on the developer's machine —
+`skills/`, `hooks/` and `runtime/` (`plugin_runtime`) plus `installer/` (`release_extras`) · **Raised in** the Technology Principles audit
 ENG-99929, recorded under ENG-100096
 
 ## The observation
@@ -53,9 +53,10 @@ for any future vendored file too:
    and fails on any mismatch.
 3. **Upstream authenticity.** The pin lives in the same commit as the file, so a change to both would
    pass step 2. `verify-vendor-upstream.mjs` closes that: in CI it downloads `<package>@<version>` from
-   the public npm registry, checks the tarball against the registry's own `dist.integrity` — accepting
-   only `sha256`, `sha384` or `sha512`, since an `md5` or `sha1` digest can be forged — extracts the
-   pinned file and asserts its hash equals the pin.
+   the public npm registry and always checks the tarball against the registry's own `dist.integrity`:
+   a registry record with no integrity string fails the job rather than skipping the check, and only
+   `sha256`, `sha384` or `sha512` are accepted, since an `md5` or `sha1` digest can be forged. It then
+   extracts the pinned file and asserts its hash equals the pin.
 4. **Loaded only after the check passes.** `engine.mjs` never imports acorn statically. It runs the
    integrity check first, requires `acorn.cjs` itself to be one of the verified entries, and only then
    loads it with `createRequire`, so a tampered file's top-level code never runs. A failed check throws
@@ -66,12 +67,20 @@ notice of a CVE against the pinned version.
 
 ## Where the rule stops
 
+The scope follows `.release-manifest.json`. `plugin_runtime` is what the plugin installs; `release_extras`
+ships in the release zip without being installed into the agent's home.
+
 | In scope — no runtime dependency | Out of scope — npm / pip dev dependencies allowed |
 | --- | --- |
-| `skills/**` (the migration engine and every other skill script) | `scripts/` (CI and maintenance scripts) |
-| `hooks/**` | `engine-tests/` (goldens and their runners) |
-| `runtime/**` | `tests/` (the pytest suite) |
-| `installer/**` (runs before anything else is installed) | `.github/` (workflow steps) |
+| `skills/**` (`plugin_runtime`; the migration engine and every other skill script) | `.github/workflows/` (workflow steps; never shipped) |
+| `hooks/**` (`plugin_runtime`) | `scripts/` (CI and maintenance scripts) |
+| `runtime/**` (`plugin_runtime`) | `engine-tests/` (goldens and their runners) |
+| `installer/**` (`release_extras`; runs before anything else is installed) | `tests/` (the pytest suite) |
+
+The other `plugin_runtime` entries — `.github/plugin`, the `.claude-plugin` / `.codex-plugin` /
+`.cursor-plugin` / `.agents` manifests, `.mcp.json`, `context/`, `rules/`, `runbooks/` and the top-level
+Markdown files — ship but carry data only (JSON manifests, Markdown and `.mdc` rule files), so the rule has nothing to bind
+there. It applies the moment one of them gains code.
 
 The boundary is *what runs on the developer's machine from the release*, not *which directory a file
 sits in*, and one file straddles it: **`verify-vendor-upstream.mjs` is CI-only although it lives under

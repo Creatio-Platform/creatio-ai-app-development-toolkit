@@ -32,9 +32,11 @@ By submitting a pull request you agree that your contribution is licensed under 
 
 ## Dependencies
 
-Code the plugin ships (`skills/`, `hooks/`, `runtime/`, `installer/`) imports only the standard library
-and files shipped next to it: it runs inside the coding agent's sandbox with no install step. CI, test
-and maintenance code (`scripts/`, `engine-tests/`, `tests/`, `.github/`) may take npm dev dependencies.
+Code the release ships (`skills/`, `hooks/` and `runtime/` from `plugin_runtime`, plus `installer/` from
+`release_extras` in `.release-manifest.json`) imports only the standard library and files shipped next to
+it: it runs on the developer's machine with no install step. The other shipped entries, `.github/plugin`
+included, carry data only. CI, test and maintenance code (`.github/workflows/`, `scripts/`,
+`engine-tests/`, `tests/`) may take npm dev dependencies.
 The reasoning, the vendored-parser exception and the exact boundary are in
 [`docs/engine-zero-dependency-decision.md`](docs/engine-zero-dependency-decision.md).
 
