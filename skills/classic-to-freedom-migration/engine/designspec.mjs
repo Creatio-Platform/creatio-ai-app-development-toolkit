@@ -26,6 +26,7 @@ import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS } from "./mapper.mjs"; 
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
+  // eslint-disable-next-line no-control-regex -- deliberate: removes C0/C1 controls from untrusted input
   .replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]+/g, " ") // control/CR/LF/tab + Unicode line/para separators -> space
   .trim());
 // `esc` is for STAND-DERIVED VALUES placed in table cells / inline code spans. On top of strip it (a)
@@ -1339,108 +1340,11 @@ function sourceText(h) {
   return h.lines ? `L${h.lines.start}-${h.lines.end}` : DASH;
 }
 
-// Calls that say nothing about what a body DOES: the base call, attribute access (already rendered in
-// `Reads → writes`), and plain JS/utility helpers. Listing them as "unclassified" would bury the one call that
-// actually matters under noise. A Set rather than one alternation — exact names, and no regex complexity to carry.
-// Both namespaces carry the same predicates, so an entry added on one side needs its twin on the other — filtering
-// `Ext.isEmpty` but not `Terrasoft.isEmpty` (which real bodies use) leaves a warning pointing at nothing.
-// A call that says something about the RECORD or the USER is not noise: `Terrasoft.isCurrentUserSsp` is a real
-// condition and stays visible.
-const BODY_CALL_NOISE = new Set([
-  "callParent", "get", "set", "log",
-  ...["isEmpty", "isObject", "isFunction", "isString", "isNumber", "isArray", "isDate"]
-    .flatMap((p) => [`Ext.${p}`, `Terrasoft.${p}`]),
-  "Ext.String.format", "Terrasoft.each", "Terrasoft.findItem", "Terrasoft.chain",
-  "Terrasoft.clearTime", "Terrasoft.dateDiffDays", "Terrasoft.getFormattedNumberValue",
-  "Boolean", "Number", "String", "Date", "Array", "Object",
-]);
-// whole namespaces that are computation, whatever member is called on them
-const BODY_CALL_NOISE_NS = new Set(["JSON", "Math"]);
-const bareCall = (c) => c.replace(/^this\./, "");
-
-// The framework calls a body makes that the classifier did NOT recognise, minus noise and minus calls to sibling
-// rows (an internal call is the call graph's business, not this cell's). Named rather than counted, so the cell
-// says WHICH call it could not read — an actionable gap instead of a dead end.
-// Rendered as WRITTEN in the body (`this.` kept), so a reader can search the source for it; the tests below are
-// on the bare name.
-const UNCLASSIFIED_SHOWN = 4;
-function unclassifiedCalls(h, siblings) {
-  const drop = (c) => {
-    const b = bareCall(c);
-    return BODY_CALL_NOISE.has(b) || BODY_CALL_NOISE_NS.has(b.split(".")[0])
-      || siblings.has(b) || siblings.has(b.split(".")[0]);
-  };
-  const kept = h.evidence?.calls || [];
-  const open = kept.filter((c) => !drop(c));
-  // The cap keeps the cell readable, but a silent truncation is the failure this column exists to prevent — the
-  // reader would take four names for the whole list. Same `…and N more` overflow the CLI's gap lines use.
-  const shown = open.slice(0, UNCLASSIFIED_SHOWN).map(esc);
-  const over = Math.max(0, open.length - UNCLASSIFIED_SHOWN);
-  if (over) shown.push(`…and ${over} more`);
-  // TWO things can be hidden and they are DIFFERENT hidings, so they are reported apart. The parser keeps only the
-  // first N callee paths in locale order, and every noise namespace (`Boolean`, `Ext.`, `Math.`, `Terrasoft.`) sorts
-  // ahead of `this.`, so a call-dense body can arrive here as nothing but noise. Those calls never passed the noise
-  // and sibling filters above, so adding them to `…and N more` claims unclassified calls nobody established — a
-  // method whose only forwarded call was a SIBLING then rendered `⚠ unclassified: …and 4 more`, a warning naming
-  // nothing. Counted on its own as "not read", which is what it is.
-  return { shown, unread: Math.max(0, (h.evidence?.callsTotal ?? kept.length) - kept.length) };
-}
-
-// What the body does, from evidence. Distinct states, kept apart on purpose: body elsewhere · nothing of its own ·
-// recognised calls · writes but no recognised call · nothing recognised (a ⚠, and it names what it could not read).
-// `callParent` is NOT recognition — it is the base call, present in most overrides, and counting it would report a
-// method whose real work went unread as "it just calls the base".
-function bodyDoesText(h, siblings = new Set()) {
-  if (h.externalRef) return "defined in another module";
-  if (h.trivial) return "passthrough (base only)";
-  const kinds = (h.evidence?.kinds || []).filter((k) => k !== "callParent");
-  if (kinds.length) return kinds.map(esc).join(", ");
-  const { shown, unread } = unclassifiedCalls(h, siblings);   // already escaped at the sink, plus an overflow marker
-  // What the PARSER never forwarded is stated wherever this cell enumerates calls, so the list cannot read as the
-  // whole one. Kept out of the unclassified names themselves — see `unclassifiedCalls`.
-  const hidden = unread ? ` (+${unread} call(s) the parser did not forward)` : "";
-  // Attribute writes ARE evidence — the same evidence `categorize` promotes to `set-values`, so this row is not a ⚠.
-  // But writing an attribute does not make an unread call read. BOTH signals are true at once, and returning only
-  // the first hid the second whenever a method happened to do both — the unread call is exactly what a step-5.1
-  // resolver needs before marking the row resolved (SKILL.md rule 7), so it is composed in, not swallowed.
-  // The cell is the ONLY place this is reported: `categorize` still answers `set-values` (the writes are real, and
-  // so is the handler target that follows from them) — what the unread call changes is how much of the row is read.
-  if ((h.evidence?.writesAttrs || []).length)
-    return (shown.length ? `sets values; ⚠ also calls: ${shown.join(", ")}` : "sets values") + hidden;
-  return (shown.length ? `⚠ unclassified: ${shown.join(", ")}` : "⚠ nothing recognised") + hidden;
-}
-
-function readsWritesText(ev) {
-  if (!ev || (!ev.readsAttrs.length && !ev.writesAttrs.length)) return DASH;
-  const reads = ev.readsAttrs.map(esc).join(", ") || DASH;
-  const writes = ev.writesAttrs.map(esc).join(", ") || DASH;
-  return `${reads} → ${writes}`;
-}
-
 function targetText(h) {
   if (h.externalRef) return "read that module, then port its behaviour";
   if (h.trivial) return "confirm template provides it";
   return freedomTargetFor(h.category);
 }
-
-const IMPERATIVE_LOGIC_PREAMBLE = [
-  "> Each row is a method the classic page defines, and each must end up **ported** (naming the Freedom handler /",
-  "> converter / virtual attribute you built), **dropped** (with the reason) or **blocked** — recorded on this page's",
-  "> Plan-vs-Done checklist row, to the same standard as an ⚠ Confirm item.",
-  "> `⚠ unresolved` means the engine found nothing in this schema that calls it and no declaration that binds it.",
-  "> Resolve it from the control / hook / message — never from the method's name; a row still unresolved after the",
-  "> static pass is what the step-5.1 `classic-ui-expert` run answers, and its reported trigger replaces this cell on",
-  "> the next `--plan`. An `internal call` trigger means the engine",
-  "> found the CALLING method, and where the chain reaches one, the declaration or platform lifecycle hook that starts",
-  "> it. A row marked **`↳`** is a helper the engine traced to the single row above it: port it WITH that caller as one",
-  "> unit — it still needs its own ported / dropped / blocked mark, but not a Freedom artifact of its own. A helper with",
-  "> SEVERAL callers is deliberately NOT folded: it is usually the row that becomes a shared converter.",
-  "> **Described in** names the behaviour card and the",
-  "> acceptance criteria a step-5.1 `classic-ui-expert` run established for the row — port against those criteria,",
-  "> not against the method's name; `⚠ not described` means no run has covered it yet.", "",
-  "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
-  "| --- | --- | --- | --- | --- | --- | --- |",
-];
 
 // Fold a helper under the row that calls it. A method the inverse call graph traced to ONE caller present in this
 // same table is part of that caller's implementation, not a handler of its own — so it is ordered directly beneath it
@@ -1757,6 +1661,8 @@ function renderPlanBanners(result, opts) {
   P.push(...renderBehaviourIndexBanners(result));
   if ((result.statusIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.statusIssues.length} \`manifest.deliverableStatus\` entr(y/ies) cannot be applied:**`,
     ...result.statusIssues.map((x) => `> - ${esc(statusIssueText(x))}`), "");
+  if ((result.noDeliverableIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.noDeliverableIssues.length} \`manifest.decisionsWithoutDeliverable\` item(s) cannot be applied:**`,
+    ...result.noDeliverableIssues.map((x) => `> - ${esc(noDeliverableIssueText(x))}`), "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];
@@ -2831,7 +2737,16 @@ function renderWontDoList(opts) {
   const rows = opts.planGroups.flatMap((g) => g.rows
     .filter((r) => (r.na || r.status?.kind === STATUS_WONT_DO) && !printed.has(statusKey(g.pageKey, r.deliverableId)))
     .map((r) => `- \`${esc(statusKey(g.pageKey, r.deliverableId))}\` ${r.label.split(" — ")[0]} — ${statusText(r.na ? { kind: "not-applicable", reason: r.na } : r.status, opts)}`));
-  return rows.length ? ["", "### Won't do", "", ...rows, ""] : [];
+  const none = noDeliverableLines(opts);
+  if (!rows.length && !none.length) return [];
+  return ["", "### Won't do", "", ...rows, ...(rows.length && none.length ? [""] : []), ...none, ""];
+}
+// The decisions that close no deliverable, listed for the approver; nothing when the list is empty.
+function noDeliverableLines(opts) {
+  const list = opts.decisionsWithoutDeliverable || [];
+  if (!list.length) return [];
+  return ["Decisions that close no deliverable (`manifest.decisionsWithoutDeliverable`):", "",
+    ...list.map((d) => `- ${esc(String(d))} — ${esc(opts.decisions?.get?.(d) || "?")}`)];
 }
 function pageGroup(pageKey, title, rows, ctx = {}) {
   return {
@@ -2987,32 +2902,6 @@ export function unresolvedChildGroups(pageKey, c, ctx = {}) {
 // The WALK is over NODES, and the row splice is a projection of it — one traversal, so the key set the checklist
 // publishes and the keys stamped on the spliced rows cannot drift apart (they are the same nodes, in the same
 // order, deduped by the same `pageDedupeId`).
-// THE PARENT EDGE, from the tree the engine itself folded. It is not published, so a builder
-// reconstructed it by parsing the nested `### Child page mappings` out of `plan.md` — a machine fact recovered from
-// prose the same engine had printed. When that parse came back partial the park arithmetic degraded to
-// "approximated" and a parked page blocked `main` instead of only its own ancestors.
-//
-// MIRRORS `subPageNodes` deliberately: same order, same first-seen dedupe, so every key that walk publishes gets an
-// entry here and the map is never partial (a partial map is worse than none —
-// unmapped keys would read as roots).
-function parentEdge(result) {
-  const parents = { main: null };
-  const seen = new Set();
-  function claim(node, parentKey) {
-    const key = node?.pageKey;
-    if (!key || !node.pageRows || seen.has(key)) return false;
-    seen.add(key);
-    parents[key] = parentKey;
-    return true;
-  }
-  function walk(node, parentKey) {
-    for (const c of node.childPages || []) if (claim(c, parentKey)) walk(c, c.pageKey);
-    for (const t of node.typedPages || []) claim(t, parentKey);
-    claim(node.miniPage, parentKey);
-  }
-  walk(result, "main");
-  return parents;
-}
 // Exported so `--spec --page <key>` resolves a key through the SAME walk that publishes it. Looking only
 // at `result.childPages` / `typedPages` / `miniPage` — one level — while this walk recurses, so every GRANDCHILD
 // was a published, scheduled build unit whose slice the CLI said did not exist. Two traversals, two answers about
@@ -4204,7 +4093,6 @@ const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
 
 // ===== the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
 const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-const tokenIn = (src, name) => new RegExp(String.raw`(?<![\w$])${reEsc(name)}(?![\w$])`).test(src);
 // Comments and string/template literals blanked, so a method name that appears only in prose cannot close a row.
 // Approximate (template ${} expressions are blanked too) — a false negative there is the safe direction (⚠, not ✅).
 const codeOnly = (s) => String(s)
@@ -4710,6 +4598,7 @@ export function planGaps(result) {
   // page built from an unreadable section `diff` as buildable. Same shape as the legs above so no caller changes.
   if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   if ((result?.statusIssues || []).length) g.push(`deliverableStatus INVALID (${result.statusIssues.map(statusIssueText).join("; ")})`);
+  if ((result?.noDeliverableIssues || []).length) g.push(`decisionsWithoutDeliverable INVALID (${result.noDeliverableIssues.map(noDeliverableIssueText).join("; ")})`);
   return g;
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.
@@ -4718,6 +4607,7 @@ function statusIssueText(x) {
   const ids = (x.valid || []).length ? ` — ${idsLabel}: ${x.valid.join(", ")}` : "";
   return `\`${x.key}\` ${x.problem}${ids}`;
 }
+const noDeliverableIssueText = (x) => `\`${x.key}\` ${x.problem}`;
 // THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.
 // A mis-filed record blocks the run without touching a row, so a verdict computed from rows alone would read
 // positive beside the banner that blocks it.

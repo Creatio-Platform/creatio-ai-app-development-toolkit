@@ -5,7 +5,7 @@
 // in vendor/provenance.json. But that pin lives in the SAME commit as the file it pins, so a determined attacker
 // who edits BOTH the file and the pin in one commit passes it (and the weekly OSV audit, which queries by the
 // self-declared version). This script closes that gap: it independently fetches `<package>@<version>` from the
-// public npm registry, verifies the tarball against the registry's OWN published `dist.integrity` (sha512),
+// public npm registry, verifies the tarball against the registry's OWN published `dist.integrity` (required; sha256/384/512),
 // extracts the pinned dist file, LF-normalizes it, and asserts its SHA-256 equals the pinned one — so
 // provenance.json cannot *assert* an upstream hash it was never checked against.
 //
@@ -51,10 +51,20 @@ function readTarEntry(tar, wanted) {
 }
 
 // Verify the tarball against the registry's published Subresource-Integrity string (e.g. "sha512-<base64>").
+// Only the SRI algorithms sha256 / sha384 / sha512 are accepted, matched exactly: md5 and sha1 are
+// collision-broken, so a string naming either (or any other algorithm) fails even when the bytes hash to it.
+const SRI_ALGORITHMS = new Set(["sha256", "sha384", "sha512"]);
 function integrityOk(tarball, integrity) {
   const m = /^([a-z0-9]+)-(.+)$/.exec(String(integrity || ""));
-  if (!m) return false;
+  if (!m || !SRI_ALGORITHMS.has(m[1])) return false;
   try { return createHash(m[1]).update(tarball).digest("base64") === m[2]; } catch { return false; }
+}
+
+// Fail closed on the registry's `dist` record: a tarball is accepted only when `dist.integrity` is present
+// and the bytes match it. A record with no integrity string throws instead of skipping the check.
+function assertTarballIntegrity(tarball, dist) {
+  if (!dist?.integrity) throw new Error("registry record has no dist.integrity, so the tarball cannot be authenticated");
+  if (!integrityOk(tarball, dist.integrity)) throw new Error("tarball failed the registry's own dist.integrity check");
 }
 
 // Anchor ONE pin to upstream npm: fetch the published tarball, extract the vendored file, compare its
@@ -70,7 +80,7 @@ async function anchorOnePin(name, pin) {
     const tgzRes = await fetch(dist.tarball);
     if (!tgzRes.ok) throw new Error(`tarball HTTP ${tgzRes.status}`);
     const tgz = Buffer.from(await tgzRes.arrayBuffer());
-    if (dist.integrity && !integrityOk(tgz, dist.integrity)) throw new Error("tarball failed the registry's own dist.integrity check");
+    assertTarballIntegrity(tgz, dist);
     const inTar = tarPathOf(name, pin);
     const entry = readTarEntry(gunzipSync(tgz), inTar);
     if (!entry) throw new Error(`'${inTar}' not found in ${spec} tarball`);
@@ -103,5 +113,5 @@ async function main() {
 
 // Export the pure helpers so an OFFLINE test can exercise the hand-rolled ustar reader / integrity check
 // without the live-network CI job; run the CLI only when invoked directly (not on import).
-export { readTarEntry, integrityOk, tarPathOf, sha256Lf };
+export { readTarEntry, integrityOk, assertTarballIntegrity, tarPathOf, sha256Lf };
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) process.exit(await main());

@@ -509,7 +509,7 @@ function bindDeclaration(d, scope) {
   else if (d.init.type === "MemberExpression") scope.set(d.id.name, { kind: "memberAlias", node: d.init });
 }
 
-function buildAstScope(factory, amdDeps, src) {
+function buildAstScope(factory, amdDeps) {
   const scope = new Map();
   (factory.params || []).forEach((p, i) => {
     // Bind the AMD dependency to a resolver STATE, not just a proxy: the `terrasoft` dep (param usually named
@@ -574,7 +574,7 @@ export function parseSchema(src, pkg) {
   // The static eval is depth-capped (MAX_AST_DEPTH), but keep a belt: any residual stack blow-up on a
   // hostile body degrades to a clean parseError (→ gate blocks), never an uncaught RangeError crash.
   try {
-    const scope = buildAstScope(factory, amdDeps, src);
+    const scope = buildAstScope(factory, amdDeps);
     const captured = makeAstEvaluator(scope, astDiagnostics, src)(retArg, []);
     // The return resolved to something that is NOT a plain object (an alias to a dynamic value, a ternary the
     // evaluator could not decide, a call) → the effective page is empty. Flag it at the ROOT (path "") so the

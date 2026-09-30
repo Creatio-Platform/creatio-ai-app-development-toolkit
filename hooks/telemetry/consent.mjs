@@ -51,7 +51,7 @@ function noteConsentReadFailure(error) {
 export function consentGranted() {
 	let raw;
 	try {
-		raw = fs.readFileSync(path.join(telemetryHome(), 'consent.json'), 'utf8').replace(/^﻿/, '');
+		raw = fs.readFileSync(path.join(telemetryHome(), 'consent.json'), 'utf8').replace(/^\uFEFF/, '');
 	} catch (error) {
 		if (error?.code !== 'ENOENT') {
 			noteConsentReadFailure(error);

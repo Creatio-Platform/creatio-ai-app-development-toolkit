@@ -2139,7 +2139,7 @@ function mapOneImage(i, ctx, F, soleImageCol, soleUsed) {
   const image = { classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !bound };
   if (soleCollision) decisions.push({ kind: "image-column", item: i.name,
     reason: `image '${i.name}' has no own column and the entity's sole IMAGELOOKUP column '${soleImageCol}' is already bound to another image — two crt.ImageInput widgets must not share one column. Pick or create a DISTINCT ImageLookup column for it (left as a FILL until then).` });
-  let attrEntry = null, pdsEntry = null;
+  let attrEntry, pdsEntry = null;
   if (boundCol && onEntity) {
     attrEntry = { key: attr, value: { modelConfig: { path: "PDS." + boundCol } } };
     pdsEntry = { key: boundCol, value: { path: boundCol } };
