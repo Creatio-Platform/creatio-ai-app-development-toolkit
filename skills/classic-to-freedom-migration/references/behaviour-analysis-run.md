@@ -38,9 +38,10 @@ and say in `worklog.md` which route ran.
    launching a sub-agent unless the user asked for one in that turn. That rule is why a previous run
    stopped mid-step to ask instead of just running: do not repeat it, and do not treat the ask as
    the only lawful option. Call it **by script path** —
-   `Workflow({ scriptPath: "./classic-behaviour-analysis.workflow.js", args: { manifest, digest, environment, outDir, sectionSchema, totals } })`,
-   resolved to its absolute path in the plugin dir. That script ships beside this file, so it is
-   always present and always version-matched; `name: "creatio-classic-behaviour-analysis"` resolves
+   `Workflow({ scriptPath: "../classic-behaviour-analysis.workflow.js", args: { manifest, digest, environment, outDir, sectionSchema, totals } })`,
+   resolved to its absolute path in the plugin dir. That script ships beside `SKILL.md` — the
+   skill folder, one level above this `references/` file — so it is always present and always
+   version-matched; `name: "creatio-classic-behaviour-analysis"` resolves
    only where the installer has mirrored it, which on Claude Code is usually nowhere (see
    "Named-workflow availability" below — do not spend a call probing the name first). Pass the
    digest's `totals` so a surface with no imperative rows exits before spending a single agent, and

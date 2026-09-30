@@ -175,6 +175,28 @@ class BriefRoutingTableTests(unittest.TestCase):
             self.assertIn("build-task-execution.md", paths)
 
 
+class ReferencePathTests(unittest.TestCase):
+    """A path written in a reference resolves from where a reader takes it."""
+
+    def test_every_relative_path_in_a_reference_resolves(self):
+        # `./references/<file>` is the skill's convention for another reference and is read
+        # from the skill folder; nothing else can be meant by it. Every other relative path is
+        # read literally, from the reference's own folder — a `./x.js` moved out of SKILL.md
+        # into `references/` points at `references/x.js`, and a host handed it as a
+        # `scriptPath` fails to find the script.
+        pattern = re.compile(r"[\"`(](\.{1,2}/[A-Za-z0-9_./-]+\.(?:md|js|mjs|json))")
+        checked, broken = 0, []
+        for doc in sorted(REFERENCES.glob("*.md")):
+            for number, line in enumerate(read(doc).splitlines(), 1):
+                for rel in pattern.findall(line):
+                    base = SKILL_DIR if rel.startswith("./references/") else doc.parent
+                    checked += 1
+                    if not (base / rel).resolve().is_file():
+                        broken.append(f"{doc.name}:{number} {rel} -> {(base / rel).resolve()}")
+        self.assertGreater(checked, 5, "found almost no relative paths; the pattern has stopped matching")
+        self.assertFalse(broken, f"relative paths that do not resolve: {broken}")
+
+
 class ReferencePlacementTests(unittest.TestCase):
     """Each moved block is cited from the step that needs it, not only listed."""
 
