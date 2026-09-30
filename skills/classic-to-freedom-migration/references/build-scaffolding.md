@@ -1,11 +1,11 @@
 # Scaffolding — the app, the section and the page shells
 
 Handed, with `./references/build-task-execution.md`, to the run's `Scaffolding` task. The placement
-facts and the `sectionHost.mode` the user chose are in the approved plan (SKILL.md step 3.1); this
-file is how the build carries that choice out, and how a form page moves to the template the plan
-names (SKILL.md step 5). The state, scope and existence-check rules in `build-task-execution.md`
-bind every call below: `find-app` / `list-app-sections` / `list-pages` before any `create-app`,
-`create-app-section` or `create-page`, so a second run over the same folder duplicates nothing.
+facts and the `sectionHost.mode` the user chose are in the approved plan; this file is how the build
+carries that choice out, and how a form page moves to the template the plan names for it. The state,
+scope and existence-check rules in `build-task-execution.md` bind every call below: `find-app` /
+`list-app-sections` / `list-pages` before any `create-app`, `create-app-section` or `create-page`,
+so a second run over the same folder duplicates nothing.
 
 ## `new-app` is one call
 
@@ -34,15 +34,17 @@ named identically in the app's page list, and paid an extra ~90-second call for 
 
 **Never repair an app's package composition on your own.** Linking a package to an app or flipping
 its primary flag changes which package owns the app's identity and where the Section Wizard writes
-every future schema. Surface it as a decision with the three `sectionHost.mode` values (SKILL.md
-step 3.1); the user picks.
+every future schema. Surface it as a decision with the three `sectionHost.mode` values —
+`existing-app` (`create-app-section` into the app, which needs the app's primary package to be the
+target package and editable), `new-app` (the one `create-app` call above) and `pages-only-no-menu`
+(no menu registration; the pages are reached by URL and page bindings) — and the user picks.
 
 ## Re-templating the scaffolded form page
 
 **Re-templating the scaffolded form page: the sequence, so nobody improvises it.** Neither
 `create-app` nor `create-app-section` accepts a template argument — the form page always arrives on
-`PageWithTabsFreedomTemplate`. When the plan names a different one (SKILL.md step 5's template
-table), the build does this, in this order, inside the ONE task that owns the page:
+`PageWithTabsFreedomTemplate`. When the plan names a different form template for the page, the
+build does this, in this order, inside the ONE task that owns the page:
 
 1. `get-page` the scaffolded form page and keep its body somewhere outside the repo — everything
    after this is destructive.

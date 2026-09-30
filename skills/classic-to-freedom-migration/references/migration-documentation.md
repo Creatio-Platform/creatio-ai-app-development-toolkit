@@ -99,7 +99,7 @@ Read-only findings from runtime discovery.
 Separate confirmed facts from inferences.
 
 ### plan.md — the approval-gated plan
-Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) — **written directly by `--out`**, its Overview/Main-scope values supplied via `manifest.planMeta`, plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
+Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) — **written directly by `--out`**, its Overview/Main-scope values supplied via `manifest.planMeta`, its `### Run diagnostics` block (skill build, clio, stand) via `manifest.runDiagnostics` (left out of the plan version), plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
 - This is the contract the user approves.
 - **Frozen after approval.** Do not edit it to reflect progress.
 - Any scope or strategy change requires a new entry in `decisions.md` and explicit re-approval. The version bump is AUTOMATIC and is not something to type: the change goes into the manifest, `--plan --out` is re-run, and the engine's `**Plan version:**` string moves with it. Record what changed, why, and the new version. That entry is not the approval: only an entry holding both `Approved by:` and `Plan version:` with that exact version counts as one (`--handoff` refuses without it).
@@ -124,7 +124,7 @@ Append-only. Every entry has a date.
 - plan approval, switch-over approval, package-placement decision, template choices that were not obvious, dropped artifacts with reason, and any re-approval after a scope change
 - one row/section per decision: date, decision, rationale, who approved, affected tasks
 - **the plan-approval entry names the plan VERSION** alongside the date and who approved. The build reads that entry as a precondition and refuses to run without a matching version — approving one plan does not authorise building another. At single-section scope this entry may be the file's only content.
-- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over three manifest inputs — `entity`, the `schemas` bodies and `planMeta` — so re-running the planner is not a new version to re-approve, while a changed `planMeta` or main-page schema is. It does not cover the child/detail/seed/section sections, so it confirms the approved and built plans share their main-page inputs rather than checksumming the whole artifact; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
+- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over every manifest key except `runDiagnostics` (the machine the plan was made on) — see "The plan version" in `engine/README.md` — so re-running the planner is not a new version to re-approve, while a changed manifest input is; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
 
   ```
   **Plan version:** `plan-4f9c2ab17e03` — record THIS string in the `decisions.md` approval entry; …

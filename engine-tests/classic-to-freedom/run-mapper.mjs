@@ -2663,6 +2663,14 @@ check("card-actions: ViewOptions is native (the template ships it); Tag template
   && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
 check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
   /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
+check("card-actions: the Print how-to says a step-5.1 card that shows a rebound print menu decides the button — SysModuleReport does not describe that menu",
+  /\| Print \| Action \|.*Exception: when a step-5\.1 behaviour card says a client layer binds a print button's menu to a collection its own code fills, that card decides the button/.test(caCs.designSpec),
+  () => (caCs.designSpec.match(/^\| Print \|.*$/m) || ["(no Print row)"])[0]);
+const caCsNone = runMigration({ entity: "X", signals: { printables: { resolved: true, present: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("card-actions: a Print action dropped for 'no printables' carries the same rebound-menu exception in its verdict",
+  /no printables\/reports for this section \(checked `SysModuleReport` on-stand\)\. Exception: when a step-5\.1 behaviour card/.test(caCsNone.designSpec + caCsNone.plan),
+  () => (caCsNone.designSpec.match(/^.*no printables.*$/m) || ["(no verdict line)"])[0]);
 check("card-actions: Process migrates only if a process is connected + shows how to check (ProcessInModules → VwSysProcess)",
   /\| Process \| Action \|.*Migrate ONLY if a process is connected.*ProcessInModules/.test(caCs.designSpec)
   && !/VwSysProcessEntityConnection/.test(caCs.designSpec));
@@ -4154,9 +4162,11 @@ check("#3 detail-editability: STILL flagged when the detail schema was NOT bundl
   /detail-editability/.test(deUnbundled.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
-// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
+// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one. A child is
+// placed under it so the name is defined somewhere and the stub is kept (a merge of a name nothing defines is dropped).
 const rv4 = mergeHierarchy([L("P", { entity: "X", diff: [
-  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" })] })]);
+  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" }),
+  di({ name: "GhostKid", parentName: "GhostBtn", propertyName: "items", bindTo: "Kid" })] })]);
 const rv4i = (rv4.items || []).find((i) => i.name === "GhostBtn");
 check("RV4: merge-onto-absent stub carries visible/tip/caption (full insert shape), + a merge warning",
   !!rv4i && rv4i.visible === false && rv4i.tip === "Resources.Strings.T" && rv4i.caption === "Resources.Strings.C"
@@ -5224,6 +5234,28 @@ check("the blocked list page still RENDERS its partial reading, with the verdict
   () => renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).filter((l) => /List page|approvable/.test(l)).slice(0, 6));
 check("a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
+// A section run with NO `section.seed` reports the missing base chain through its merges onto base elements: those
+// stay correctness (the section gate has no no-seed reason of its own), so the list gate stays blocked.
+const svNoSeed = runMigration({ ...svManifest(), section: { schemas: [{ pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:${JSON.stringify([
+  { operation: "merge", parentName: "DataGridContainer", propertyName: "items", name: "DataGrid", values: { type: "tiled" } }])}};});` }],
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("a section with NO `section.seed` whose layer merges a base element keeps the list gate BLOCKED — the merge is the only report of the missing seed",
+  () => svNoSeed.listGate?.blocked === true && /correctness warning/.test((svNoSeed.listGate?.reasons || []).join(" "))
+    && /DataGridContainer/.test((svNoSeed.listGate?.reasons || []).join(" ")),
+  () => svNoSeed.listGate);
+// A section layer that merges a button no section schema defines — the record page's `PrintButton`, copied into the
+// section with the parent it has on the card. Classic ignores the merge, so the list gate stays open: the note is
+// fidelity, and the stub's `parentName` is no unresolved parent.
+const svStrayMerge = [{ pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:${JSON.stringify([
+  { operation: "merge", parentName: "RightContainer", propertyName: "items", name: "PrintButton", values: { caption: "Print" } }])}};});` }];
+const svStrayRun = runMigration({ ...svManifest(), section: { schemas: svStrayMerge, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("a section merge of an element no section schema defines leaves the list gate open — no unresolved parent from its `parentName`, and the element is not published as a section element",
+  () => svStrayRun.listGate?.blocked === false && !/RightContainer|PrintButton/.test((svStrayRun.listGate?.reasons || []).join(" "))
+    && !JSON.stringify(svStrayRun.section?.sectionView || {}).includes("PrintButton"),
+  () => ({ gate: svStrayRun.listGate, sectionView: svStrayRun.section?.sectionView }));
 
 /* --- the section path's attribution and counts ------------------------------------------
    A button's package is the layer that declares it, not a later layer that only hides it. `activeRowActions` is the
@@ -9249,6 +9281,36 @@ check("the `--plan` artifact PRINTS the engine's version (one string, recorded v
 check("a result with no engine-computed version renders NO version line — never the string 'undefined'",
   !renderPlan({ entity: "X", changeSet: {} }, {}).includes("Plan version"));
 
+// The plan repeats the run-diagnostics block, so a plan file alone names the skill build, clio and stand. The block
+// describes the machine, not the plan, so it stays outside the plan version: a plugin or clio update between plan and
+// build must not ask for re-approval.
+const RUN_DIAG = { skillVersion: "1.12.0", git: { branch: "feature/x", commit: "a5d7e1f", registry: true },
+  clioVersion: "8.1.0.134", gateVersion: "2.0.0.53", environment: "demo", uri: "https://demo.example",
+  stand: { coreVersion: "10.0.0.941", productName: "unknown (cliogate not installed)", dbEngine: "PostgreSql", framework: ".NET 8" } };
+const pvDiag = runMigration({ ...PG_MANIFEST, runDiagnostics: RUN_DIAG }, { baseDir: FIX });
+check("`runDiagnostics` prints the `### Run diagnostics` block in the plan: skill build, clio and stand, one line each",
+  pvDiag.plan.includes("### Run diagnostics")
+    && pvDiag.plan.includes("classic-to-freedom-migration `1.12.0` · branch `feature/x` (marketplace ref) · commit `a5d7e1f`")
+    && pvDiag.plan.includes("**clio:** `8.1.0.134` (CLI on PATH) · bundled cliogate `2.0.0.53`")
+    && pvDiag.plan.includes("**Environment:** `demo` · `https://demo.example`")
+    && pvDiag.plan.includes("Creatio `10.0.0.941` · product unknown (cliogate not installed) · DB `PostgreSql` · `.NET 8`"),
+  () => pvDiag.plan.split("\n").slice(0, 24).join(" ⏎ "));
+check("`runDiagnostics` is NOT part of the plan version — the same plan produced with another skill build or clio keeps its version",
+  pvDiag.planVersion === pvA
+    && runMigration({ ...PG_MANIFEST, runDiagnostics: { ...RUN_DIAG, clioVersion: "8.2.0.1" } }, { baseDir: FIX }).planVersion === pvA,
+  () => ({ base: pvA, withDiagnostics: pvDiag.planVersion }));
+check("a plan with no `runDiagnostics` says the block was not supplied, and the plan is still produced",
+  pgRun.plan.includes("### Run diagnostics") && pgRun.plan.includes("- unknown (not supplied — put the `diagnostics.mjs --json` output into `manifest.runDiagnostics`)"),
+  () => pgRun.plan.split("\n").slice(0, 24).join(" ⏎ "));
+check("a stand error in `runDiagnostics` reads `unknown (<error>)` on the plan's Stand line",
+  runMigration({ ...PG_MANIFEST, runDiagnostics: { ...RUN_DIAG, stand: { error: "timeout" } } }, { baseDir: FIX }).plan.includes("- **Stand:** unknown (timeout)"));
+check("a registry branch is labelled as the marketplace ref in the plan",
+  pvDiag.plan.includes("branch `feature/x` (marketplace ref) · commit `a5d7e1f`"), () => pvDiag.plan.split("### Run diagnostics")[1]?.slice(0, 300));
+const pvDiagOdd = runMigration({ ...PG_MANIFEST, runDiagnostics: { skillVersion: "1.0`\n## Boom", git: { commit: 42 }, stand: "down" } }, { baseDir: FIX }).plan;
+check("`runDiagnostics` values cannot break out of their code span or add a heading, and a field of the wrong type reads `unknown (not supplied)` instead of throwing",
+  !pvDiagOdd.includes("\n## Boom") && pvDiagOdd.includes("**clio:** unknown (not supplied)") && !/commit/.test(pvDiagOdd.split("**Skill:**")[1].split("\n")[0]),
+  () => pvDiagOdd.split("### Run diagnostics")[1]?.slice(0, 400));
+
 /* ==================================================================================================
    Defects three adversarial checkers DEMONSTRATED against the first engine.
    Each block below reproduces one of them and pins the fix.
@@ -11818,9 +11880,11 @@ const n2TreeManifest = (titleA, titleB) => ({
     /fidelity note\(s\)/.test(fid.plan) && /KEPT \(correct\)/.test(fid.plan) && /warningDispositions/.test(fid.plan),
     () => (fid.plan.match(/^>.*fidelity.*$/m) || ["(no advisory line)"])[0]);
 
-  // CORRECTNESS: a merge onto an item no lower schema defined. Still a hard block — and the reason now QUOTES the
-  // warning that actually fired instead of the one summary string that sent the remedy search to the wrong file.
-  const corr = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }]);
+  // CORRECTNESS: a merge onto an item no lower schema defined, whose name a child placed under it still expects. A hard
+  // block — and the reason QUOTES the warning that actually fired, not one summary string pasted onto every producer.
+  const ghostDiff = [{ operation: "merge", name: "Ghost", values: { caption: "x" } },
+    { operation: "insert", name: "Kid", parentName: "Ghost", propertyName: "items", values: { bindTo: "Kid" } }];
+  const corr = mkRun(ghostDiff);
   const corrReason = (corr.gate.reasons || []).find((r) => r.startsWith("warnings ")) || "";
   check("a CORRECTNESS warning still blocks the gate",
     corr.gate.blocked === true && /correctness/.test(corrReason), () => corr.gate.reasons);
@@ -11841,7 +11905,7 @@ const n2TreeManifest = (titleA, titleB) => ({
     !(typo.effective.warnings || [])[0].accepted && /fidelity note\(s\)/.test(typo.plan),
     () => (typo.effective.warnings || [])[0]);
   // And the hatch is fidelity-ONLY: a correctness warning names a real missing item, which no operator can decide away.
-  const refused = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }],
+  const refused = mkRun(ghostDiff,
     { warningDispositions: { "merge:Ghost": { resolved: true, disposition: "accepted" } } });
   check("(item 5): a disposition aimed at a CORRECTNESS warning is REFUSED — the gate still blocks and the refusal is rendered, never silently honoured",
     refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
@@ -11884,6 +11948,16 @@ const n2TreeManifest = (titleA, titleB) => ({
     && (ghostProps.gate.reasons || []).some((r) => /remove 'Ghost' @P/.test(r))
     && ghostProps.effective.removed === 0,
     () => ({ w: ghostPropsW, reasons: ghostProps.gate.reasons }));
+  // A `merge` of a name NO layer and NO seed defines is the same no-op in Classic: it does not block, and it closes.
+  const noOpMergeRun = mkRun([...noOpDiff.slice(0, 2), { operation: "merge", name: "SaaSMetricsTab", values: { order: 2 } }]);
+  const noOpMergeW = (noOpMergeRun.effective.warnings || []).find((w) => w.op === "merge" && w.name === "SaaSMetricsTab");
+  check("a merge of a never-defined name does NOT block the gate, renders as a fidelity advisory, and `warningDispositions` closes it",
+    noOpMergeRun.gate.blocked === false && noOpMergeW?.severity === "fidelity"
+    && /no effect in Classic unless the chain is incomplete: 'SaaSMetricsTab'/.test(noOpMergeRun.plan)
+    && mkRun([...noOpDiff.slice(0, 2), { operation: "merge", name: "SaaSMetricsTab", values: { order: 2 } }],
+      { warningDispositions: { "merge:SaaSMetricsTab:P": { resolved: true, disposition: "n/a", note: "copied merge of a tab no layer inserts" } } })
+      .effective.warnings.find((w) => w.name === "SaaSMetricsTab")?.accepted === true,
+    () => ({ reasons: noOpMergeRun.gate.reasons, warning: noOpMergeW }));
   // …while a remove whose name a LATER layer defines is still the ordering signal, and still blocks.
   const late = runMigration({ entity: "E", noParentTemplate: true, schemas: [
     { pkg: "Early", body: `define("Early",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "Late" }])}};});` },
