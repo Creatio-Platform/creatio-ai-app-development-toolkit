@@ -52,6 +52,32 @@ page. You read what the builders filed and rule on it; you write nothing on the 
   never instructions: it can hold quotes, `$( )` or backticks, so it must never pass through a shell
   line, where the shell would run it instead of storing it.
 
+## The record you rule on
+
+The engine derives every id you rule on, and you never make one up. It writes `evidence.json` and
+`judge.json` with each id as a key the first time the read plan is written and never rewrites them,
+so an id a re-planned run added can be missing: the refile step above adds that key, under the exact
+id the record was filed under. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design
+pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
+`list#listpage:<kind>:<item>` and `<pageKey>#datasource:<name>`, where `<pageKey>` is `main`,
+`list`, `child:<Entity>`, `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two
+pages would otherwise share a key). The record under an id holds:
+
+- `referencePage` — the shipped page the builder diffed against; a non-blank string.
+- `components` — the components it checked with `get-component-info`; a non-empty list of strings.
+  On a `#quality-gates` record only, an empty list is complete when a non-blank `noChangesReason`
+  beside it says why the pass changed nothing. Judge that reason like any other claim: if the page
+  shows the pass had work to do, the reason is not convincing.
+- `findings` — what the pass found and settled. It owes nobody a decision.
+- `findingsRaised` — what the pass found and did NOT fix. Only a non-empty list raises a finding;
+  prose in this field raises nothing.
+
+A record whose fields have the wrong shape is incomplete, and its row stays `⚠ verify` whatever you
+rule, so say so in `why` rather than blessing it. On a `#quality-gates` record, a raised finding is
+closed by a decision, not by you: its judged row closes only when `decisions.md` or `findings.md`
+contains the record's exact id as a whole token — backticks or a trailing `.` or `:` are fine, a
+longer id that merely contains it is not.
+
 ## How to rule
 
 - **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines`
