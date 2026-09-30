@@ -12144,6 +12144,21 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => !/ConnCase/.test(nLine), () => nLine);
 }
 
+/* KNOWN LIMITATION (pinned): a FLAT leaf container that names the connection group exempts every field it holds —
+   a field control there is not distinguished from a real connection lookup. The leaf/ancestor guard only stops an
+   ancestor tab from exempting its own direct fields; a base field placed directly in a connections-named leaf is
+   still exempt. Pinned so a future tightening (e.g. exempting only lookups) breaks this test on purpose. */
+{
+  const rnFlat = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
+  const builtFlat = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" },
+    { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "Owner", type: "crt.ComboBox" }] }] } } } };
+  check("verify: a base field in a FLAT connections-named leaf is exempt (known limitation, pinned)",
+    () => !/❌ EXTRA/.test(renderVerify(rnFlat, { reconcileMode: "classic-layout" }, builtFlat).markdown),
+    () => (renderVerify(rnFlat, { reconcileMode: "classic-layout" }, builtFlat).markdown.split("\n").find((l) => /Fields —/.test(l)) || ""));
+}
+
 /* a connection lookup identified ONLY by its bound column (no element name) is exempt too. */
 {
   const rnB = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },

@@ -4975,6 +4975,33 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const vOff = cliTasks(["--verify", "--built", bf], RECON); // no --tasks → gate not applied
     check("verify WITHOUT --tasks on a reconcile plan announces the EXTRA gate is NOT applied",
       () => /EXTRA-field gate NOT applied/.test(vOff.stderr || ""), () => vOff.stderr);
+    // A corrupted .reconcile-mode on --verify must NOT silently verify a classic-layout folder as overlay.
+    fs.writeFileSync(path.join(dV, ".reconcile-mode"), "sideways\n");
+    const vCorrupt = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
+    check("verify REFUSES a corrupted .reconcile-mode rather than silently skipping the classic-layout gate",
+      () => vCorrupt.status === 1 && /unrecognised value/.test(vCorrupt.stderr || vCorrupt.stdout || ""), () => vCorrupt.stderr);
+  }
+  // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
+  {
+    const dAdd = path.join(tmp("mode_addtasks_stamp"), "bt");
+    syncTaskDir(dAdd, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    addTasks(dAdd, RUN, { ...DECL }, OPTS);
+    const minted = readTaskDir(dAdd).find((t) => t.id === DECL.id);
+    check("addTasks stamps `reconcileMode: classic-layout` on the task it mints on a frozen folder",
+      () => { if (!minted) return false; const txt = fs.readFileSync(path.join(dAdd, minted.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC; },
+      () => ({ minted: minted?.file }));
+  }
+  // ---- --revoke keeps the stamp on the rewritten TASK FRONT MATTER, not only the index headline ----
+  {
+    const dRv = path.join(tmp("mode_revoke_frontmatter"), "bt");
+    syncTaskDir(dRv, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const dm = new Map([["D13", "descope — test"]]);
+    applyDecision(dRv, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    revokeDecision(dRv, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    const engRv = readTaskDir(dRv).find((t) => t.origin === "engine");
+    check("--revoke keeps `reconcileMode: classic-layout` in the rewritten engine task front matter",
+      () => !!engRv && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dRv, engRv.file), "utf8")));
   }
 }
 /* ================================================================================================

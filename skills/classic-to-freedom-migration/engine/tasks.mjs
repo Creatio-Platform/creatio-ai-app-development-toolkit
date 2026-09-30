@@ -3644,6 +3644,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   }
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
+  const reconcileMode = readFrozenMode(dir); // invariant for the whole loop — read the frozen dotfile once
   for (const d of decls) {
     const n = Number(d.order);
     const rows = d.deliverables.map((label) => ({ label: String(label).trim(), group: d.group, vk: null, na: null }));
@@ -3656,7 +3657,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode: readFrozenMode(dir) }));
+    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
     written.push(task);
   }
   // Back through the ordinary pass, so minted files are merged, ordered and indexed like any other.

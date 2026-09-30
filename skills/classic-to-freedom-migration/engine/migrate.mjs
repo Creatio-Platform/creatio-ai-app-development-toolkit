@@ -62,7 +62,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED,
-  RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenMode, readFrozenModeState } from "./tasks.mjs";
+  RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3916,16 +3916,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
     // On `--verify --tasks <dir>` carry the folder's frozen reconcile mode into verify, so the classic-layout
-    // EXTRA-field gate (a base field still on the page but not in the plan) actually fires. Without `--tasks` there
-    // is no folder to read it from, so the gate stays off (overlay-equivalent).
-    const verifyMode2 = tasksMode ? readFrozenMode(tasksDir) : null;
-    // The classic-layout EXTRA-field gate is ON only when a frozen `classic-layout` mode was read from `--tasks`.
-    // On a reconcile plan, say which mode applied so a run that verifies as overlay because it was given no
-    // `--tasks` folder (or an unreadable one) is visible, not silently un-gated.
+    // EXTRA-field gate (a base field still on the page but not in the plan) actually fires. Read it the SAME strict
+    // way the `--tasks` cut does: a corrupted `.reconcile-mode` must NOT collapse to null and silently verify a
+    // classic-layout folder as overlay (which would turn the gate off and pass a page that still carries base
+    // controls). Without `--tasks` there is no folder to read it from, so the gate is legitimately off.
+    let verifyMode2 = null;
+    if (tasksMode) {
+      const st = readFrozenModeState(tasksDir);
+      if (st.present && !st.valid) fail(`--verify: this folder's \`.reconcile-mode\` holds an unrecognised value ${JSON.stringify(st.raw)}. Refusing to verify it as overlay and silently skip the classic-layout EXTRA-field gate — fix or delete the file, then re-verify.`);
+      verifyMode2 = st.valid ? st.mode : null;
+    }
+    // On a reconcile plan, name which mode applied so a run that verifies without the classic-layout gate is visible,
+    // never silently un-gated — and the reason distinguishes "no --tasks folder" from "the folder is on overlay".
     if (manifest.planMeta?.freedomExists) {
-      process.stderr.write(verifyMode2 === RECONCILE_MODE_CLASSIC
-        ? "migrate.mjs: reconcile verify mode = classic-layout — EXTRA-field gate ON.\n"
-        : `migrate.mjs: reconcile verify mode = ${verifyMode2 || "overlay (no --tasks folder)"} — classic-layout EXTRA-field gate NOT applied.\n`);
+      const why = verifyMode2 === RECONCILE_MODE_CLASSIC ? "classic-layout — EXTRA-field gate ON"
+        : tasksMode ? "overlay — classic-layout EXTRA-field gate NOT applied"
+          : "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
+      process.stderr.write(`migrate.mjs: reconcile verify mode = ${why}.\n`);
     }
     verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2 }, built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so

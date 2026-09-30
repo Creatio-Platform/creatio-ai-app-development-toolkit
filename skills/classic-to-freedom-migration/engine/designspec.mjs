@@ -3128,20 +3128,11 @@ function maxFieldMatch(names, ops) {
 // fields is skipped (it is not a leaf), while the group's own container (which holds only its lookups) is used. Both
 // the element name and the bound column of each lookup are recorded, so a lookup identified only by `bound` is exempt.
 const CONNECTED_TO_RE = /connected[\s_-]*to|entityconnection|connections?\b|связ|подключ/i;
-// True when another container is nested inside `c` — its field set is a strict, non-empty subset of `c`'s. That
-// makes `c` an ANCESTOR of a group, not the group's own leaf container.
-function wrapsAnotherContainer(c, containers) {
-  const fields = new Set(c.fields || []);
-  if (!fields.size) return false;
-  return containers.some((d) => d !== c && (d.fields || []).length > 0 && (d.fields || []).length < fields.size
-    && (d.fields || []).every((f) => fields.has(f)));
-}
 function keptConnectionFieldNames(ctx) {
-  const containers = ctx.containers || [];
   const names = new Set();
-  for (const c of containers) {
+  for (const c of ctx.containers || []) {
     if (!CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) continue;
-    if (wrapsAnotherContainer(c, containers)) continue; // an ancestor tab, not the group's own leaf container
+    if (c.hasNestedContainer) continue; // an ancestor tab (holds another container), not the group's own leaf
     for (const n of c.fields || []) if (n) names.add(n);
     for (const o of c.fieldOps || []) if (o?.bound) names.add(o.bound);
   }
@@ -4164,6 +4155,17 @@ function builtCaption(raw, resources) {
   const hit = resourceText(resources, captionKeyOf(text));
   return hit?.trim() ? hit : text;
 }
+// True when a node's subtree holds ANOTHER named container — read off the real tree, so an ancestor tab can be told
+// from the group's own leaf container without inferring nesting from field-set overlap.
+function isContainerNode(node) {
+  return !!(node && typeof node === "object" && node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || "")));
+}
+function subtreeHasContainer(node) {
+  if (Array.isArray(node)) return node.some(subtreeHasContainer);
+  if (!node || typeof node !== "object") return false;
+  if (isContainerNode(node)) return true;
+  return subtreeHasContainer(node.items);
+}
 function pageContainersOf(entry) {
   const e = entryObject(entry);
   const out = [];
@@ -4171,10 +4173,11 @@ function pageContainersOf(entry) {
   const walk = (node, parentType) => {
     if (Array.isArray(node)) { for (const n of node) { walk(n, parentType); } return; }
     if (!node || typeof node !== "object") return;
-    if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
+    if (isContainerNode(node)) {
       // `caption` is the resolved text; `rawCaption` keeps the binding, whose key words still identify the tab.
+      // `hasNestedContainer` is the real-tree nesting flag — an ancestor tab has one, the group's own leaf does not.
       out.push({ name: String(node.name), type: String(node.type || ""), parentType, caption: builtCaption(node.caption, e.resources),
-        rawCaption: String(node.caption ?? ""),
+        rawCaption: String(node.caption ?? ""), hasNestedContainer: (node.items || []).some(subtreeHasContainer),
         ...collectLayout(node.items, { fields: [], fieldOps: [], lists: [], widgets: [] }) });
     }
     walk(node.items, String(node.type || ""));
