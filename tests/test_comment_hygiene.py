@@ -208,9 +208,6 @@ EXEMPT_PATHS = (
     # A dated gap analysis whose subject IS the before-state it measured; its
     # `file:line` references deliberately point at the code as it was.
     "skills/classic-to-freedom-migration/docs/imperative-logic-gap.md",
-    # The design record for the two reconcile modes: its subject is the decision
-    # and its traceability (the ticket and branch it was taken on).
-    "skills/classic-to-freedom-migration/docs/reconcile-modes-decision.md",
     "engine-tests/classic-to-freedom/baseline",
 )
 

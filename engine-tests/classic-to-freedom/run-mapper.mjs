@@ -12,7 +12,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, posCell } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -12126,24 +12126,72 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => /Owner/.test(extraLine(vC.markdown)), () => extraLine(vC.markdown));
 }
 
+/* NEGATIVE: a broad tab that NAMES connections but also holds an unrelated base field must NOT exempt that field —
+   only the group's own LEAF container is used, never the ancestor tab that wraps it. */
+{
+  const rnN = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
+  const builtNested = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" },
+    { name: "ConnectionsTab", type: "crt.TabContainer", items: [
+      { name: "Owner", type: "crt.ComboBox" },
+      { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "ComboBox_ConnCase", type: "crt.ComboBox" }] }] }] } } } };
+  const vN = renderVerify(rnN, { reconcileMode: "classic-layout" }, builtNested);
+  const nLine = (vN.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
+  check("verify: an unrelated base field in an ancestor tab that NAMES connections is STILL flagged EXTRA (leaf-only exemption)",
+    () => /Owner/.test(nLine), () => nLine);
+  check("verify: the lookup in the nested leaf Connected-to group is NOT flagged EXTRA",
+    () => !/ConnCase/.test(nLine), () => nLine);
+}
+
+/* a connection lookup identified ONLY by its bound column (no element name) is exempt too. */
+{
+  const rnB = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
+  const builtBound = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" },
+    { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ type: "crt.ComboBox", control: "$ConnCaseCol" }] }] } } } };
+  check("verify: a Connected-to lookup identified only by `bound` (no name) is exempt from EXTRA",
+    () => !/❌ EXTRA/.test(renderVerify(rnB, { reconcileMode: "classic-layout" }, builtBound).markdown),
+    () => (renderVerify(rnB, { reconcileMode: "classic-layout" }, builtBound).markdown.split("\n").find((l) => /Fields —/.test(l)) || ""));
+}
+
+/* posCell renders the converted grid coordinate: r · c, a `· w{colSpan}` suffix only for a wide field, DASH when
+   there is no layoutConfig, and r0 · c0 at the origin (0 is a real coordinate, not "missing"). */
+{
+  check("posCell: `· w{colSpan}` suffix for a wide field (colSpan > 1)",
+    () => posCell({ layoutConfig: { row: 2, column: 1, colSpan: 3 } }) === "r2 · c1 · w3");
+  check("posCell: no width suffix when colSpan is 1",
+    () => posCell({ layoutConfig: { row: 2, column: 1, colSpan: 1 } }) === "r2 · c1");
+  check("posCell: r0 · c0 at the origin (0 is a real coordinate, not missing)",
+    () => posCell({ layoutConfig: { row: 0, column: 0 } }) === "r0 · c0");
+  check("posCell: DASH when there is no layoutConfig or the coordinate is absent",
+    () => posCell({}) === "—" && posCell({ layoutConfig: { row: 1 } }) === "—");
+}
+
 /* G3 — the Form-template row can close on a RECONCILE. A reconcile saves a replacing schema whose parent is the
    page's own chain, not the base template, so a built parent that is not the expected template is expected here. */
 {
   const tSchema = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});`;
-  const builtRecon = { pages: { main: { parentSchemaName: "X_FormPage", viewConfig: { items: [{ name: "A", type: "crt.Input" }] } } } };
+  const builtRecon = { pages: { main: { schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [{ name: "A", type: "crt.Input" }] } } } };
   const tLine = (md) => md.split("\n").find((l) => /Form template →/.test(l)) || "";
   const pmRecon = { ...FULL_PLANMETA, freedomExists: true, formTemplate: "PageWithTabsFreedomTemplate" };
   const pmNoRecon = { ...FULL_PLANMETA, freedomExists: false, formTemplate: "PageWithTabsFreedomTemplate" };
   const rnT = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } }, planMeta: pmRecon,
     schemas: [{ pkg: "P", body: tSchema }] }, { baseDir: FIX });
-  check("verify G3: on a reconcile the Form-template row reads ✅ when the built parent is the replacing schema, not the base template",
+  check("verify: on a reconcile the Form-template row reads ✅ only when the built parent is the page's own replacing schema",
     () => { const l = tLine(renderVerify(rnT, { planMeta: pmRecon, reconcileMode: "classic-layout" }, builtRecon).markdown); return /✅/.test(l) && /reconcile onto the existing page/.test(l); },
     () => tLine(renderVerify(rnT, { planMeta: pmRecon, reconcileMode: "classic-layout" }, builtRecon).markdown));
   const rnNoRecon = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } }, planMeta: pmNoRecon,
     schemas: [{ pkg: "P", body: tSchema }] }, { baseDir: FIX });
-  check("verify G3: a NON-reconcile with a non-template parent stays ⚠ (a real mismatch, not auto-passed)",
+  check("verify: a NON-reconcile with a non-template parent stays ⚠ (a real mismatch, not auto-passed)",
     () => /⚠/.test(tLine(renderVerify(rnNoRecon, { planMeta: pmNoRecon }, builtRecon).markdown)),
     () => tLine(renderVerify(rnNoRecon, { planMeta: pmNoRecon }, builtRecon).markdown));
+  // A reconcile whose built parent is neither the expected template NOR the page's own schema is NOT auto-passed.
+  const builtUnrelated = { pages: { main: { schemaName: "X_FormPage", parentSchemaName: "SomethingElse", viewConfig: { items: [{ name: "A", type: "crt.Input" }] } } } };
+  check("verify: a reconcile whose built parent is unrelated (not the page's own schema) stays ⚠, not a blanket ✅",
+    () => { const l = tLine(renderVerify(rnT, { planMeta: pmRecon, reconcileMode: "classic-layout" }, builtUnrelated).markdown); return /⚠/.test(l) && /nor the page's own schema/.test(l); },
+    () => tLine(renderVerify(rnT, { planMeta: pmRecon, reconcileMode: "classic-layout" }, builtUnrelated).markdown));
 }
 
 /* a field bound to `$PDS_<Column>` WITHOUT the Interface Designer's hash still matches the plan column — the

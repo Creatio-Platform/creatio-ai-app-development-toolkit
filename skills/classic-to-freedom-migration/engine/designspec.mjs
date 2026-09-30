@@ -16,6 +16,7 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
+import { RECONCILE_MODE_CLASSIC } from "./reconcile-modes.mjs";
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
@@ -177,7 +178,7 @@ function rowsForFields(fields, regionOf) {
 // Classic coordinates: left island = 1 col, tab/group = 2 cols, wide header = 24). The `classic-layout` reconcile
 // mode places each field at exactly this cell, so the spec must SHOW it; `overlay` ignores it. Read-only cell, so
 // it is inert data in the plan the user presents. `r`ow · `c`olumn · `w`idth(colSpan, only when it spans >1).
-function posCell(v) {
+export function posCell(v) {
   const lc = v && v.layoutConfig;
   if (!lc || lc.row == null || lc.column == null) return DASH;
   return `r${lc.row} · c${lc.column}${lc.colSpan > 1 ? ` · w${lc.colSpan}` : ""}`;
@@ -3030,11 +3031,13 @@ function resolveTemplateVk(vk, ctx) {
   const gap = primaryDataSourceGap(ctx);
   if (gap) return ["❌ MISSING", gap, "missing"];
   if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
-  // A reconcile saves a REPLACING schema whose parent is the page's own chain (its parent is the page itself, not
-  // the base template); the real template sits at the chain root and a reconcile never swaps it. So a parent that
-  // is not the expected template is the expected shape here, not a mismatch — the existing page already carries
-  // the template the plan derived `exp` from.
-  if (vk.reconcile) return ["✅ Done", `reconcile onto the existing page — its template \`${esc(vk.exp)}\` is unchanged (a replacing schema's parent is \`${esc(tpl)}\`, not the base template)`, "ok"];
+  // A reconcile saves a REPLACING schema whose parent is the page ITSELF; the real template sits at the chain root
+  // and a reconcile never swaps it. So the one parent that confirms the template is unchanged is the page's own
+  // schema name — closed ✅. Any other parent is NOT evidence the template held (it could be a different chain),
+  // so it stays ⚠ rather than a blanket pass.
+  const own = entryObject(ctx.page)?.schemaName;
+  if (vk.reconcile && own && tpl === own) return ["✅ Done", `reconcile onto the existing page — its template \`${esc(vk.exp)}\` is unchanged (the replacing schema's parent is the page itself, \`${esc(tpl)}\`)`, "ok"];
+  if (vk.reconcile) return ["⚠ verify", `reconcile: the built parent is \`${esc(tpl)}\`, not the expected template \`${esc(vk.exp)}\` nor the page's own schema — confirm the page kept its template`, "unverified"];
   return ["⚠ verify", `built on \`${esc(tpl)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
 }
 // THE MINI PAGE, resolved like every other page: from `--built.pages["mini:<Schema>"]`, the key the engine itself
@@ -3118,16 +3121,28 @@ function maxFieldMatch(names, ops) {
 // The field controls that belong to a KEPT "Connected to" connection group — the only standard Freedom component
 // that holds field-typed controls (its connection lookups); Feed / Attachments / Timeline hold none, so no other
 // kept component contributes here. classic-layout keeps the group, so its lookups are not EXTRA controls to remove.
-// The group is identified by its OWN container name/caption (`ConnectedToExpansionPanel`, `ConnectionsTabContainer`,
-// a "Connected to" caption) — never by an ancestor that merely CONTAINS it, because the built container tree
-// aggregates every descendant field into each ancestor, and matching an ancestor would exempt the whole page.
-const CONNECTED_TO_RE = /connected\s*to|connection|связ|подключен/i;
+// Two guards keep this from disabling the EXTRA gate for a whole tab: the container must NAME the connection group,
+// and it must be a LEAF — it may not contain another named container. The built container tree aggregates every
+// descendant field into each ancestor, so a broad tab ("Connections") that wraps the real group PLUS unrelated base
+// fields is skipped (it is not a leaf), while the group's own container (which holds only its lookups) is used. Both
+// the element name and the bound column of each lookup are recorded, so a lookup identified only by `bound` is exempt.
+const CONNECTED_TO_RE = /connected[\s_-]*to|entityconnection|connections?\b|связ|подключ/i;
+// True when another container is nested inside `c` — its field set is a strict, non-empty subset of `c`'s. That
+// makes `c` an ANCESTOR of a group, not the group's own leaf container.
+function wrapsAnotherContainer(c, containers) {
+  const fields = new Set(c.fields || []);
+  if (!fields.size) return false;
+  return containers.some((d) => d !== c && (d.fields || []).length > 0 && (d.fields || []).length < fields.size
+    && (d.fields || []).every((f) => fields.has(f)));
+}
 function keptConnectionFieldNames(ctx) {
+  const containers = ctx.containers || [];
   const names = new Set();
-  for (const c of ctx.containers || []) {
-    if (CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) {
-      for (const n of c.fields || []) if (n) names.add(n);
-    }
+  for (const c of containers) {
+    if (!CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) continue;
+    if (wrapsAnotherContainer(c, containers)) continue; // an ancestor tab, not the group's own leaf container
+    for (const n of c.fields || []) if (n) names.add(n);
+    for (const o of c.fieldOps || []) if (o && o.bound) names.add(o.bound);
   }
   return names;
 }
@@ -3144,11 +3159,12 @@ function resolveFieldsByIdentity(vk, names, ctx) {
   // mode was supposed to REMOVE. Matching on the bound column is what keeps a renamed-but-bound base field
   // (`Input_CallFrom` bound to a planned `CallerId`) from being flagged as extra; a value-add widget is not a
   // field type, so FIELD_RE excludes it and it is never in this set.
-  if (ctx.reconcileMode === "classic-layout") {
+  if (ctx.reconcileMode === RECONCILE_MODE_CLASSIC) {
     // A lookup that lives inside a KEPT "Connected to" connection group is part of that component, not a stray base
     // field, so it is never an EXTRA to remove.
     const kept = keptConnectionFieldNames(ctx);
-    const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "") && !kept.has(o.name)).map((o) => o.name || o.bound);
+    const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "")
+      && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
     if (extras.length) {
       const ov = extras.length > 8 ? "…" : "";
       const alsoMissing = missing.length ? ` · also missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}` : "";

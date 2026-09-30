@@ -41,6 +41,8 @@ import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem } from "./split.mjs";
+import { RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_LIST, RECONCILE_MODES, RECONCILE_MODE_DEFAULT }
+  from "./reconcile-modes.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -2704,6 +2706,7 @@ export function readMergedTaskDir(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts);
   if (fresh.refused) return { ...fresh, tasks: [] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = readFrozenMode(dir); // the index refresh reads `merged`; keep the frozen stamp on it
   attachDispatch(merged, dir);
   resolvePartials(merged);
   return merged;
@@ -2724,17 +2727,12 @@ export function freezeSplit(dir, text) {
   fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
 }
 
-// The RECONCILE MODE is a build-time choice for an existing-Freedom reconcile, frozen in the folder
-// exactly like the split: chosen once with `--reconcile-mode` at the first `--tasks` run, then read back on every
-// re-slice so the orchestrator does not have to re-pass it. It changes HOW build sub-agents place elements, not the
-// plan — so it never touches `--plan`/`--spec`, only the task files (front matter) and the index header.
-//   overlay        — add the client delta onto the existing Freedom layout; keep base positions/extras (default).
-//   classic-layout — place fields/details at their Classic positions (move base, remove base layout elements not in
-//                    the plan, keep Freedom-only value-add); see references/existing-freedom-reconcile.md.
-export const RECONCILE_MODE_OVERLAY = "overlay";
-export const RECONCILE_MODE_CLASSIC = "classic-layout";
-export const RECONCILE_MODES = new Set([RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC]);
-export const RECONCILE_MODE_DEFAULT = RECONCILE_MODE_OVERLAY;
+// The RECONCILE MODE is a build-time choice for an existing-Freedom reconcile, frozen in the folder exactly like the
+// split: chosen once with `--reconcile-mode` at the first `--tasks` run, then read back on every re-slice so the
+// orchestrator does not have to re-pass it. It changes HOW build sub-agents place elements, not the plan — so it
+// never touches `--plan`/`--spec`, only the task files (front matter) and the index header. The mode values live in
+// `reconcile-modes.mjs` (dependency-free, shared with designspec.mjs) and are re-exported here for existing callers.
+export { RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_LIST, RECONCILE_MODES, RECONCILE_MODE_DEFAULT };
 const RECONCILE_MODE_FILE = ".reconcile-mode";
 
 // The mode frozen in the folder, or null when none was ever set (a legacy folder, or a non-reconcile build). A value
@@ -2745,6 +2743,16 @@ export function readFrozenMode(dir) {
   if (!fs.existsSync(p)) return null;
   const m = fs.readFileSync(p, "utf8").trim();
   return RECONCILE_MODES.has(m) ? m : null;
+}
+
+// The `.reconcile-mode` state, so the CLI can tell three cases apart that `readFrozenMode` collapses to null:
+// `{ present:false }` (no mode was ever frozen), `{ present:true, valid:true, mode }`, and `{ present:true,
+// valid:false, raw }` (a corrupted dotfile — refused rather than silently overwritten).
+export function readFrozenModeState(dir) {
+  const p = path.join(dir, RECONCILE_MODE_FILE);
+  if (!fs.existsSync(p)) return { present: false };
+  const raw = fs.readFileSync(p, "utf8").trim();
+  return RECONCILE_MODES.has(raw) ? { present: true, valid: true, mode: raw } : { present: true, valid: false, raw };
 }
 
 export function freezeMode(dir, mode) {
@@ -3648,7 +3656,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null }));
+    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode: readFrozenMode(dir) }));
     written.push(task);
   }
   // Back through the ordinary pass, so minted files are merged, ordered and indexed like any other.
@@ -3954,6 +3962,7 @@ export function applyDecision(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = readFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
 
@@ -4077,6 +4086,7 @@ export function revokeDecision(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = readFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
 
   const cleared = [];
   const skipped = [];

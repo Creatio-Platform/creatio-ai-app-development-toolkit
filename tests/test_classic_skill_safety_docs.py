@@ -462,7 +462,7 @@ class ReconcileModeDocTests(unittest.TestCase):
     plan. Each phrase below is load-bearing: drop the "on-page control only" qualifier and a
     build reads it as licence to delete a column; drop "recommend overlay" and the gate stops
     protecting the safe default; drop the region-parity clause and classic-layout loses the
-    check that catches the exact silent defect the ticket was filed for.
+    check that a field sits in its planned region.
     """
 
     def test_skill_gate_names_both_modes_the_default_and_the_flag(self):
@@ -511,9 +511,9 @@ class ReconcileModeDocTests(unittest.TestCase):
         self.assertIn("In `overlay` mode this parity check does not apply", content)
 
     def test_mode2_removal_is_machine_enforced_not_asserted(self):
-        # The measured failure was sub-agents ASSERTING "base non-plan elements
-        # removed" while emitting no removes. Both docs must say removal is gated by --verify (❌ EXTRA),
-        # not a documentation-only claim, so the enforcement can't quietly regress to prose.
+        # A sub-agent can ASSERT "base non-plan elements removed" without emitting any remove op. Both docs must
+        # say removal is gated by --verify (❌ EXTRA), not a documentation-only claim, so the enforcement stays
+        # machine-checked rather than prose.
         reconcile = flat(read_text(RECONCILE_DOC))
         self.assertIn("machine-enforced", reconcile)
         self.assertIn("EXTRA", reconcile)
