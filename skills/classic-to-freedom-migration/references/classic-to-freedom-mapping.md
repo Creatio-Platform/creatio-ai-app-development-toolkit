@@ -49,8 +49,9 @@ package. Everything below follows from that one fact.
 | No app owns the entity's package | `new-app` | `create-app` gives the new app its own editable primary package. |
 | User accepts URL/page-binding reachability only | `pages-only-no-menu` | Legitimate, but it must be an approved decision recorded in `decisions.md` — never a silent fallback after a failed registration. |
 
-Record the answers in `manifest.placement` (see SKILL.md step 3.1); `migrate.mjs --plan` refuses to
-present a plan until they are resolved.
+Record the answers in `manifest.placement` — `targetPackageEditable`, `application`,
+`primaryPackage`, `targetPackageInApplication` and `sectionHost.mode`, each as
+`{ "resolved": true, … }`; `migrate.mjs --plan` refuses to present a plan until they are resolved.
 
 **`new-app` is ONE `create-app` call, never `create-app` followed by `create-app-section`.** Pass
 `optional-template-data-json` with BOTH `useExistingEntitySchema: true` and `entitySchemaName: "<Entity>"`
@@ -607,7 +608,7 @@ page's own layer declares becomes a decision.
 
 ## Classic layout & business rules: read ALL package schemas, not just the top one
 
-> **Preferred: run the bundled deterministic engine (`engine/migrate.mjs`, see SKILL.md step 4) instead of merging schemas by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across schemas with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
+> **Preferred: run the bundled deterministic engine (`node engine/migrate.mjs <manifest>`) instead of merging schemas by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across schemas with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
 
 `get-client-unit-schema` (and any single-schema read) returns only the OWN body of the
 top-most replacing schema for that name. For a base-product Classic page that top schema is
