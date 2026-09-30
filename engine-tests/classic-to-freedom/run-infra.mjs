@@ -1017,8 +1017,9 @@ console.log("\n===== run diagnostics (offline, injected runner) =====");
   check("diagnostics: a plugin cache without `.git` reads the installed commit from `installed_plugins.json` (the record whose installPath is this dir) and the branch from the marketplace ref",
     () => fromRegistry.includes("`1.12.0` · branch `feature/ENG-1-x` (marketplace ref) · commit `a5d7e1f`"), () => fromRegistry);
   const registryD = diag.collect({ environment: "demo", root: cached, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - timeout" } }) });
+  const registryJson = JSON.stringify(registryD);
   check("diagnostics: the `--json` object renders through `normalize` exactly as the CLI block — registry branch, commit and a stand error survive the round trip into the plan",
-    () => diag.render(diag.normalize(JSON.parse(JSON.stringify(registryD)), (s) => s)) === diag.render(registryD), () => diag.render(registryD));
+    () => diag.render(diag.normalize(JSON.parse(registryJson), (s) => s)) === diag.render(registryD), () => diag.render(registryD));
   listPlugins({ source: "github", repo: "o/toolkit" });
   writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing, source: { source: "github", repo: "o/m", ref: "release" } } }));
   const marketRef = diag.render(diag.collect({ root: cached, run: runner() }));
