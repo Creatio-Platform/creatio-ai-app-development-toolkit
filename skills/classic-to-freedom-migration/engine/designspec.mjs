@@ -179,9 +179,10 @@ function rowsForFields(fields, regionOf) {
 // mode places each field at exactly this cell, so the spec must SHOW it; `overlay` ignores it. Read-only cell, so
 // it is inert data in the plan the user presents. `r`ow · `c`olumn · `w`idth(colSpan, only when it spans >1).
 export function posCell(v) {
-  const lc = v && v.layoutConfig;
-  if (!lc || lc.row == null || lc.column == null) return DASH;
-  return `r${lc.row} · c${lc.column}${lc.colSpan > 1 ? ` · w${lc.colSpan}` : ""}`;
+  const lc = v?.layoutConfig;
+  if (lc?.row == null || lc?.column == null) return DASH;
+  const width = lc.colSpan > 1 ? ` · w${lc.colSpan}` : "";
+  return `r${lc.row} · c${lc.column}${width}`;
 }
 function rowsForDetails(details, tabRegion) {
   return (details || []).map((d) => {

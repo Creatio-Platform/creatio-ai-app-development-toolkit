@@ -4858,7 +4858,7 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     () => !/reconcileMode:/.test(fs.readFileSync(path.join(dN, setN.tasks.find((t) => t.origin === "engine").file), "utf8")));
 
   // ---- CLI: the flag on a reconcile plan writes the folder, freezes, exits 0; guards on misuse ----
-  const RECON = { ...MANIFEST, planMeta: { ...(MANIFEST.planMeta || {}), freedomExists: true } };
+  const RECON = { ...MANIFEST, planMeta: { ...(MANIFEST.planMeta ?? {}), freedomExists: true } };
   const bR = tmp("cli_recon"); const dR = path.join(bR, "bt");
   const okRun = cliTasks(["--tasks", dR, "--reconcile-mode", "classic-layout"], RECON);
   check("CLI: `--tasks --reconcile-mode classic-layout` on a reconcile plan exits 0 and writes the folder",
