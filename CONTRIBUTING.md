@@ -30,6 +30,16 @@ Pull requests are welcome. Before opening one:
 
 By submitting a pull request you agree that your contribution is licensed under the same MIT License as the rest of the repository (see [LICENSE](LICENSE)).
 
+## Dependencies
+
+Code the release ships (`skills/`, `hooks/` and `runtime/` from `plugin_runtime`, plus `installer/` from
+`release_extras` in `.release-manifest.json`) imports only the standard library and files shipped next to
+it: it runs on the developer's machine with no install step. The other shipped entries, `.github/plugin`
+included, carry data only. CI, test and maintenance code (`.github/workflows/`, `scripts/`,
+`engine-tests/`, `tests/`) may take npm dev dependencies.
+The reasoning, the vendored-parser exception and the exact boundary are in
+[`docs/engine-zero-dependency-decision.md`](docs/engine-zero-dependency-decision.md).
+
 ## Comments Describe the Code, Not Its Review History
 
 A comment, a test's check title and a shipped reference doc state the rule or invariant that holds
@@ -50,6 +60,14 @@ Rewrite, do not strip: a block that carries both a rule and its history keeps th
 subject *is* the history — `RELEASE-NOTES.md`, the decision records under `docs/` and `.ai/specs/`.
 If you add such a record, add its path to that test's `EXEMPT_PATHS`.
 
+
+## Cutting a Release
+
+Maintainers cut a release with one release preparation PR: the `RELEASE-NOTES.md` section, a banner under
+`docs/assets/` and the manifest bump from `node scripts/bump-version.js X.Y.Z`. Merging it runs the `Release`
+workflow. The step-by-step procedure is the repository skill
+[`.claude/skills/toolkit-release/SKILL.md`](.claude/skills/toolkit-release/SKILL.md): Claude Code loads it in
+this repository on "cut a release", and any other agent or person can follow the same file.
 
 ## Code of Conduct
 

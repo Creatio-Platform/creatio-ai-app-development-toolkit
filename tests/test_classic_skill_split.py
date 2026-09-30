@@ -214,6 +214,62 @@ class BriefSelfSufficiencyTests(unittest.TestCase):
             self.assertIn(phrase, engine, f"judge-brief quotes {phrase!r} but the engine does not print it")
 
 
+class EvidenceRecordContractTests(unittest.TestCase):
+    """The briefs of the agents that file and judge evidence records state the record contract."""
+
+    def test_record_briefs_name_every_field_and_id_shape_the_engine_checks(self):
+        # The builder files evidence records and the judge rules on them. When either brief
+        # leaves out a field or an id shape, the sub-agent goes into the engine source to find
+        # it. Both lists are read from the engine, so a field or shape added there fails here
+        # until the briefs name it too.
+        designspec = read(SKILL_DIR / "engine/designspec.mjs")
+        reads = read(SKILL_DIR / "engine/reads.mjs")
+        skeleton = re.search(r"\[EVIDENCE_SKELETON_FILE, \{([^}]*)\}\]", reads)
+        self.assertIsNotNone(skeleton, "the evidence skeleton in reads.mjs no longer has the shape this test reads")
+        required = re.search(r"export const EVIDENCE_REQUIRES = \[([^\]]*)\]", designspec)
+        self.assertIsNotNone(required, "EVIDENCE_REQUIRES is no longer where this test reads it")
+        fields = set(re.findall(r"(\w+):", skeleton.group(1))) | set(re.findall(r'"(\w+)"', required.group(1)))
+        self.assertIn("noChangesReason", designspec)
+        fields.add("noChangesReason")
+        shapes_block = section(designspec, "FIVE shapes:", "// Built from")
+        # One shape per line, indented a few spaces; the deeper-indented lines continue a shape's note.
+        shapes = re.findall(r"^// {1,4}`([^`]+)`", shapes_block, re.M)
+        self.assertEqual(len(shapes), 5, f"read {shapes} as the evidence-id shapes")
+        # The files a decision that closes a raised finding is read from.
+        decision_files = re.search(r"export const DECISION_FILES = \[([^\]]*)\]", read(SKILL_DIR / "engine/assemble.mjs"))
+        self.assertIsNotNone(decision_files, "DECISION_FILES is no longer where this test reads it")
+        decision_files = re.findall(r'"([^"]+)"', decision_files.group(1))
+        self.assertTrue(decision_files, "read no decision files from assemble.mjs")
+        for name in ("judge-brief.md", "build-page.md"):
+            text = read(REFERENCES / name)
+            missing = [f for f in sorted(fields) if f"`{f}`" not in text]
+            missing += [s for s in shapes if f"`{s}`" not in text]
+            missing += [f for f in decision_files if f"`{f}`" not in text]
+            self.assertFalse(missing, f"{name} does not name {missing}")
+
+
+class ReferencePathTests(unittest.TestCase):
+    """A path written in a reference resolves from where a reader takes it."""
+
+    def test_every_relative_path_in_a_reference_resolves(self):
+        # `./references/<file>` is the skill's convention for another reference and is read
+        # from the skill folder; nothing else can be meant by it. Every other relative path is
+        # read literally, from the reference's own folder — a `./x.js` moved out of SKILL.md
+        # into `references/` points at `references/x.js`, and a host handed it as a
+        # `scriptPath` fails to find the script.
+        pattern = re.compile(r"[\"`(](\.{1,2}/[A-Za-z0-9_./-]+\.(?:md|js|mjs|json))")
+        checked, broken = 0, []
+        for doc in sorted(REFERENCES.glob("*.md")):
+            for number, line in enumerate(read(doc).splitlines(), 1):
+                for rel in pattern.findall(line):
+                    base = SKILL_DIR if rel.startswith("./references/") else doc.parent
+                    checked += 1
+                    if not (base / rel).resolve().is_file():
+                        broken.append(f"{doc.name}:{number} {rel} -> {(base / rel).resolve()}")
+        self.assertGreater(checked, 5, "found almost no relative paths; the pattern has stopped matching")
+        self.assertFalse(broken, f"relative paths that do not resolve: {broken}")
+
+
 class ReferencePlacementTests(unittest.TestCase):
     """Each moved block is cited from the step that needs it, not only listed."""
 

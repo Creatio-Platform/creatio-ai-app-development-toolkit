@@ -34,7 +34,8 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    it" / "not this phase" are ANSWERS to a question the plan raised, and every one of them needs the person's
    authorisation (`D<N>`) recorded before it stands. Raise the question in your `## Notes` (`Decision needed
    (row N): …` — see below) and leave the row `not-built — needs-decision`. The developer then runs
-   `--decide D<N> --wont-do` / `--postponed --to <destination>`, which fills the row's Outcome cell for you.
+   `--decide D<N> --wont-do` / `--postponed --to <destination>`, which fills the row's Outcome cell for you, or
+   `--decide D<N> --build`, which re-opens the row for a builder.
    Put the detail under `## Notes` against the row number: what you saved, the evidence you filed (spelled out —
    a SEPARATE context judges it and cannot ask you: the shipped reference page you diffed against and each
    component you checked with `get-component-info`), the on-stand reads you ran, and for every `not-built` row what

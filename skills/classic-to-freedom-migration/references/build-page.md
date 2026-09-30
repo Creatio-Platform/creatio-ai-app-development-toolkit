@@ -177,6 +177,35 @@ leaves the second row open even if the first reads ✅. Either row left `☐`/no
 marked `Done` with no reference-page + component evidence (a surface review), means **that page is
 NOT done** — mark the page's own row `⚠ Partial` and do not report the task complete.
 
+**The evidence record, field by field.** Records live in `evidence.json` in the migration folder,
+one per evidence id. The engine derives every id and writes the file, with each id as a key, the
+first time the read plan is written — and never rewrites a file that exists, so an id a re-sliced or
+re-planned run added can be missing from it. Fill the value under the key your row names. When that
+key is absent, add it by copying the id character for character from `evidenceIds` in
+`reads/index.json`, which every `--reads` rewrites for the current plan — never type one from a row's
+label, which is escaped for display, and never shorten or rename a key.
+
+The ids come in five shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
+page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
+`list#listpage:<kind>:<item>` and
+`<pageKey>#datasource:<name>`, where `<pageKey>` is `main`, `list`, `child:<Entity>`,
+`typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two pages would otherwise
+share a key). A record is complete only when its fields have the right shape:
+
+- `referencePage` — a non-blank string: the shipped page you diffed against.
+- `components` — a non-empty list of non-blank strings: the components you checked with
+  `get-component-info`. On a `#quality-gates` record only, `components: []` is complete when it sits
+  beside a non-blank `noChangesReason` saying why the pass needed no change; the empty list alone
+  proves nothing and leaves the row unverified.
+- `findings` — what the pass found and settled. It owes nobody a decision.
+- `findingsRaised` — what the pass found and did NOT fix. Only a non-empty list raises a finding
+  (prose here raises nothing). On a `#quality-gates` record, a raised finding keeps the judged row
+  open until `decisions.md` or `findings.md` names the record's exact id as a whole token — a
+  verdict alone does not close it.
+
+A wrong shape — a blank page, a list that is empty or holds a non-string — is an incomplete record,
+and the row reads unverified whatever the judge rules.
+
 **Two platform residues a run can leave on the stand, and neither is yours to remove silently (C1,
 C2).** Both are defects on the platform side: REPORT them and stop there — deleting records on a
 customer's stand is the operator's decision. Know they exist, because the Applicant run had to clear
