@@ -19,7 +19,8 @@ node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) a
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves in decisions.md (a `## D13 — …` heading, a `| D13 | … |` table row, or a plain `D13 — …` line in a file with neither) — it never creates a decision, and that refusal IS the safeguard. It writes only the addressed rows
-node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else (a cell whose `manifest.deliverableStatus` entry still cites D13 is skipped: remove the entry or set it to `build`, then re-run `--tasks`)
+node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --build --row <id>:<n>  # …or answer a `not-built — needs-decision` row "build it": clears its Outcome, records D13 in the task's `decisions:` (`<n>:D13!`), and puts the task back to `todo` so `--next` offers it. Same D<N> guard; built, plan-boundary, already-decided and non-needs-decision rows, and rows of a task still `todo` or `in-progress`, are skipped with a reason. No task file is edited
+node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else (a build-it entry is withdrawn: a still-blank row is `needs-decision` again, a row a builder recorded keeps its record; a row of an `in-progress` task stays blank for its builder; a cell whose `manifest.deliverableStatus` entry still cites D13 is skipped: remove the entry or set it to `build`, then re-run `--tasks`)
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
@@ -173,8 +174,8 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   row with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject that
   another task also cites is withheld by `--next` and refused by `--start`, naming the source task and row. The
   task's own undecided rows count as sources, so deciding one task's row on a shared subject does not release
-  another task whose row on it is still undecided. `--decide` on the source row releases it, and so does re-opening
-  that row (its `Outcome` cell cleared, its task back to `todo`) or a repair round that builds it. A row with no
+  another task whose row on it is still undecided. `--decide` on the source row releases it — `--decide D<N> --build`
+  re-opens the row for a builder — and so does a repair round that builds it. A row with no
   subject never waits, a plan-boundary row is never open, and a subject no other task cites holds nothing.
 - **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
   exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
