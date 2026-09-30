@@ -8594,12 +8594,21 @@ const locateRow = (dir, label) => {
       const bare = tmp("decisions-first-dispatch");
       const pendingBare = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "", rows: [] }]);
       const nonce = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "abc", rows: [] }]);
-      const built = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "", rows: [{ outcomeKind: "built" }] }]);
+      const withRow = (row) => TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "", rows: [row] }]);
+      const built = withRow({ outcomeKind: "built" });
+      const notBuilt = withRow({ outcomeKind: "not-built" });
+      const asserted = withRow({ outcomeKind: "not-applicable" });
+      const boundary = withRow({ outcomeKind: "not-applicable", na: "other section" });
+      const decided = withRow({ outcomeKind: "wont-do" });
+      const handTyped = withRow({ outcomeKind: "not-built", naNoReason: true });
       fs.writeFileSync(path.join(bare, TASKS_MODULE.TIMINGS_FILE), "{ not json");
       const malformed = TASKS_MODULE.firstDispatchPending(bare, []);
-      check("T4 (unit): the folder is pre-dispatch only with no nonce, no `built` row and no timings record; an unparseable timings file counts as a dispatch",
-        () => pendingBare === true && nonce === false && built === false && malformed === false,
-        () => ({ pendingBare, nonce, built, malformed }));
+      check("T4 (unit): the folder is pre-dispatch only with no nonce, no sub-agent outcome and no timings record; an unparseable timings file counts as a dispatch",
+        () => pendingBare === true && nonce === false && malformed === false,
+        () => ({ pendingBare, nonce, malformed }));
+      check("T4 (unit): `built`, `not-built` and a `not-applicable` on a row the plan did not mark are sub-agent outcomes; the plan's boundary `not-applicable`, a `--decide` cell and a hand-typed word are not",
+        () => built === false && notBuilt === false && asserted === false && boundary === true && decided === true && handTyped === true,
+        () => ({ built, notBuilt, asserted, boundary, decided, handTyped }));
       fs.rmSync(bare, { recursive: true, force: true });
     }
     {
@@ -8668,7 +8677,16 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
   {
     const { base, dir } = copy("aggregate-remedy");
     edit(dir, blankAggregates);
-    // With the recorded cells emptied nothing in the folder shows a dispatch, so D3 is recorded after the sync.
+    // With the recorded cells emptied nothing in the folder shows a dispatch, so D3, cited by no row any more,
+    // refuses the sync before the first dispatch. The per-item rows below are reached without decisions.md and
+    // D3 is recorded after the sync.
+    const blanked = snapOf(dir);
+    const chained = cliIn(base);
+    const chainedSet = syncTaskDir(dir, runMigration(m), { ...checklistOpts(m), decisions: new Map([["D3", "not carried over"]]), refuseUnaccounted: true });
+    check("aggregate rows: with the aggregate cells and their `decisions:` entry emptied on a folder with no dispatch, the next sync refuses on the decision no row cites — exit 2, NOTHING WRITTEN, D3 named, the folder byte-identical",
+      () => chained.status === 2 && /NOTHING WRITTEN/.test(chained.stdout) && /D3 — not carried over/.test(chained.stdout)
+        && chainedSet.refused && chainedSet.refusal === TASKS_MODULE.REFUSED_DECISIONS && JSON.stringify(snapOf(dir)) === JSON.stringify(blanked),
+      () => ({ status: chained.status, out: chained.stdout.slice(0, 700), refusal: chainedSet.refusal }));
     const decisionsMd = path.join(base, "decisions.md");
     const decisionsText = fs.readFileSync(decisionsMd, "utf8");
     fs.rmSync(decisionsMd);

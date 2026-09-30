@@ -4102,11 +4102,6 @@ function clearStaleStatusCells(tasks) {
   }
   return cleared;
 }
-// The cut copies each planning status into its row through the `--decide` row writer: `wont-do — <title> (D<N>)`
-// with a `D<N>=` entry, after clearing the cells whose status is gone. Every status must resolve against
-// decisions.md before any is written. A closed task a cell was cleared in reopens as `todo`; every engine task
-// with no open row then derives its status on this pass, so a task closed entirely by the plan (`na`) or by
-// statuses is never offered as `todo`.
 // The `D<N>` entries of `decisions` (the Map from readDecisions) that nothing cites: no task `decisions:` entry,
 // no `deliverableStatus` entry and no `withoutDeliverable` item. `{ id, title }` in file order; `Adjustment N`
 // keys are never returned.
@@ -4122,9 +4117,14 @@ export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus 
     .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
     .map(([id, title]) => ({ id, title }));
 }
-// Whether the folder has had no dispatch yet: no task with an `agentNonce` or a `built` row, and no timings
-// record. A timings file that does not parse counts as a dispatch.
-const showsDispatch = (t) => !!String(t.agentNonce || "").trim() || (t.rows || []).some((r) => r.outcomeKind === O_BUILT);
+// Whether the folder has had no dispatch yet: no task with an `agentNonce` or a sub-agent outcome, and no
+// timings record. A sub-agent outcome is `built`, `not-built`, or `not-applicable` on a row the plan did not mark
+// `na`; the plan's own `not-applicable`, the `wont-do` / `postponed` cells `--decide` writes and a hand-typed
+// word read as `not-built` are not. A timings file that does not parse counts as a dispatch.
+const SUB_AGENT_OUTCOMES = new Set([O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE]);
+const showsSubAgentOutcome = (r) => SUB_AGENT_OUTCOMES.has(r.outcomeKind) && !r.naNoReason
+  && !(r.outcomeKind === O_NOT_APPLICABLE && r.na);
+const showsDispatch = (t) => !!String(t.agentNonce || "").trim() || (t.rows || []).some(showsSubAgentOutcome);
 export function firstDispatchPending(dir, tasks = []) {
   if (tasks.some(showsDispatch)) return false;
   const { running, samples, malformed } = readTimingsFile(dir);
@@ -4151,6 +4151,11 @@ function decisionRefusal(merged, dir, opts) {
   if (!open.length) return null;
   return { problems: open.map((d) => `${d.id} — ${d.title}`), openDeliverables: openDeliverableKeys(merged.tasks) };
 }
+// The cut copies each planning status into its row through the `--decide` row writer: `wont-do — <title> (D<N>)`
+// with a `D<N>=` entry, after clearing the cells whose status is gone. Every status must resolve against
+// decisions.md before any is written. A closed task a cell was cleared in reopens as `todo`; every engine task
+// with no open row then derives its status on this pass, so a task closed entirely by the plan (`na`) or by
+// statuses is never offered as `todo`.
 function applyPlanStatuses(merged, decisions) {
   const reopened = clearStaleStatusCells(merged.tasks);
   const pending = pendingStatuses(merged.tasks);
