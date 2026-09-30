@@ -21,15 +21,14 @@ accordingly.
 If you cannot read `./references/page-to-mobile-conversion.md`, **STOP**: tell the user the CAADT
 toolkit files are not accessible from this session, and do not run the conversion from memory.
 
-## Preflight: the converter is a GATED clio feature (check first)
+## Preflight: confirm the converter surface is available (check first)
 
-The Web→Mobile converter is an **experimental clio feature, off by default**. The converter-specific
-surface — the `get-mobile-page-conversion-guide` tool and the `get-guidance` article
-`freedom-page-web-to-mobile-conversion` — is gated behind the feature flag **`mobile-page-converter`**
-and is **not registered** until that flag is enabled. (The general page tools `create-page` /
+The Web→Mobile converter needs two clio-side pieces: the `get-mobile-page-conversion-guide` tool and
+the `get-guidance` article `freedom-page-web-to-mobile-conversion`. Both ship enabled — there is no
+feature flag to turn on — but an older clio may predate them. (The general page tools `create-page` /
 `update-page` / `validate-page` and `create-related-page-addon` (web `RelatedPage` + mobile
-`MobileRelatedPage` via `schema-type=mobile`) are always available and are NOT gated — but on their own
-they are not enough to run this flow correctly.)
+`MobileRelatedPage` via `schema-type=mobile`) are always available too, but on their own they are not
+enough to run this flow correctly.)
 
 Before the Load order below, verify the converter is available: list the server tools (or call
 `get-tool-contract`) and check for `get-mobile-page-conversion-guide`.
@@ -37,28 +36,26 @@ Before the Load order below, verify the converter is available: list the server 
 - **If present** → also confirm the paired guidance article loads before proceeding: Load order step 2
   calls `get-guidance` with name `freedom-page-web-to-mobile-conversion`. If that call falls back to
   `availableGuides` (the article is absent or was renamed) instead of returning the real conversion
-  guidance, **STOP** — but this is a DIFFERENT failure than the flag being off, so do NOT reuse the
-  `--enable` message below (the flag is already enabled; re-running it cannot restore a missing article).
+  guidance, **STOP** — this is a DIFFERENT failure than the tool being missing, and updating clio may
+  not fix it on its own, because the guidance library is fetched and cached separately from the tool.
   Tell the user verbatim:
 
-  > The `mobile-page-converter` feature is enabled, but its `freedom-page-web-to-mobile-conversion`
-  > guidance article could not be loaded (missing or renamed in this clio version). Update or reinstall
-  > clio to a version that ships this article, or check whether it was renamed (`get-guidance` with no
-  > name lists `availableGuides`). Do NOT re-run `clio experimental --name mobile-page-converter --enable`
-  > — the flag is already on and that will not restore the article.
+  > The `get-mobile-page-conversion-guide` tool is available, but its
+  > `freedom-page-web-to-mobile-conversion` guidance article could not be loaded (missing, renamed, or a
+  > stale cached guidance library). Update clio (`dotnet tool update clio -g`) and re-run; if it still
+  > does not load, check whether it was renamed (`get-guidance` with no name lists `availableGuides`).
 
   Do NOT proceed with the tool but no guidance, or you will build the body missing the paste-verbatim
   data-section and hard mobile rules with no warning. Otherwise proceed with the Load order and the flow.
-- **If absent** → the feature is turned off. **STOP** and tell the user verbatim:
+- **If absent** → this clio is too old to ship the converter. **STOP** and tell the user verbatim:
 
-  > The Web→Mobile converter is not enabled in your clio. Enable it once with:
-  > `clio experimental --name mobile-page-converter --enable`
-  > then re-run this request. (Disable later with `--disable`; list all flags with `clio experimental`.)
+  > The Web→Mobile converter is not available in your clio. Update it with:
+  > `dotnet tool update clio -g`
+  > then re-run this request.
 
-  Do **not** run the conversion from memory or hand-roll the mobile body with the general page tools
-  while the flag is off — without `get-mobile-page-conversion-guide` and the
-  `freedom-page-web-to-mobile-conversion` guidance you lack the authoritative component mapping and
-  paste-verbatim data sections. Do not try to work around the gate.
+  Do **not** run the conversion from memory or hand-roll the mobile body with the general page tools —
+  without `get-mobile-page-conversion-guide` and the `freedom-page-web-to-mobile-conversion` guidance you
+  lack the authoritative component mapping and paste-verbatim data sections.
 
 ## Load order
 
@@ -96,7 +93,7 @@ identified by the `workflow` field, so do not invent `mobile_*` event names — 
 | --- | --- | --- |
 | `workflow_started` | — | take the first conversion request |
 | `clarification_requested` / `user_input_received` | — | ask the developer something the flow waits on / receive their answer |
-| `plan_blocked` | `variant=feature-disabled` | find the `mobile-page-converter` flag off in the preflight above — emit before telling the user how to enable it, then STOP as that section requires |
+| `plan_blocked` | `variant=converter-unavailable` | find `get-mobile-page-conversion-guide` missing in the preflight above — emit before telling the user to update clio, then STOP as that section requires |
 | `plan_presented` | — | present the plain-language plan |
 | `plan_approved` | — | get approval at **Gate M** — before the first write |
 | `build_started` | — | begin writing the mobile page |
