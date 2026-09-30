@@ -30,8 +30,14 @@ feature flag to turn on — but an older clio may predate them. (The general pag
 `MobileRelatedPage` via `schema-type=mobile`) are always available too, but on their own they are not
 enough to run this flow correctly.)
 
-Before the Load order below, verify the converter is available: list the server tools (or call
-`get-tool-contract`) and check for `get-mobile-page-conversion-guide`.
+Before the Load order below, verify the converter is available by calling **`get-tool-contract`** and
+checking for `get-mobile-page-conversion-guide` in the index it returns.
+
+Use `get-tool-contract`, NOT the server's `tools/list`. The converter is a long-tail tool: it is
+reachable through `clio-run` and discovered through the tool-contract index, and it is deliberately
+absent from `tools/list` even when it is present and working. Judging it by `tools/list` reports every
+clio as missing the tool, including the newest one — and the message below would then tell a fully
+up-to-date user to update clio, every time they retry.
 
 - **If present** → also confirm the paired guidance article loads before proceeding: Load order step 2
   calls `get-guidance` with name `freedom-page-web-to-mobile-conversion`. If that call falls back to
@@ -42,12 +48,15 @@ Before the Load order below, verify the converter is available: list the server 
 
   > The `get-mobile-page-conversion-guide` tool is available, but its
   > `freedom-page-web-to-mobile-conversion` guidance article could not be loaded (missing, renamed, or a
-  > stale cached guidance library). Update clio (`dotnet tool update clio -g`) and re-run; if it still
-  > does not load, check whether it was renamed (`get-guidance` with no name lists `availableGuides`).
+  > stale cached guidance library). Refresh the guidance library with `clio update-knowledge`, then
+  > re-run. If it still does not load, update clio itself (`dotnet tool update clio -g`) and re-run; and
+  > if it still does not load after that, check whether the article was renamed (`get-guidance` with no
+  > name lists `availableGuides`).
 
   Do NOT proceed with the tool but no guidance, or you will build the body missing the paste-verbatim
   data-section and hard mobile rules with no warning. Otherwise proceed with the Load order and the flow.
-- **If absent** → this clio is too old to ship the converter. **STOP** and tell the user verbatim:
+- **If absent from the tool-contract index** → this clio does not ship the converter. **STOP** and tell
+  the user verbatim:
 
   > The Web→Mobile converter is not available in your clio. Update it with:
   > `dotnet tool update clio -g`

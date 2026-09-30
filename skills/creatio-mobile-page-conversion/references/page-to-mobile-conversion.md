@@ -360,9 +360,8 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   anything else, exactly as written (do not paraphrase or drop it). Print it as a PLAIN paragraph: no
   blockquote, no leading `>` — terminals whose font lacks the quote bar draw it as a missing-glyph box
   on every wrapped line of the notice. It names the one limit a developer cannot discover from the plan
-  itself, and it survived the feature going GA. Note what it does NOT say: tablet output is not missing,
-  it is produced and unverified, so "coming later" would be the wrong warning — the user would not think
-  to check a rendering they were told does not exist yet:
+  itself. Tablet output is generated, not absent, so the notice asks the user to CHECK it rather than to
+  wait for it:
 
   ⚠️ The **web-Freedom-page → mobile-Freedom-page conversion** is supported for the **Mobile canvas** only. Tablet layout IS generated, but it remains **experimental** and is outside the supported scope — check the page on a tablet before relying on it.
 - **Target** — the registered environment, the target page name (**with the environment
