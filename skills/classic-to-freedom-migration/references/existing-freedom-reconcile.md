@@ -159,17 +159,19 @@ Never drop the field/detail, and never remove the value-add element to make room
 
 Handlers, business rules, and auto-fills are ported **exactly as in a normal migration** — mode-independent.
 
-## Step 5 — Verify the reconciliation
+## Step 6 — Verify the reconciliation (BOTH modes)
 
 - Re-read the Freedom page and confirm, per mode:
   - **Mode 1:** every client-added element is present and configured as the client had it; every
     client-removed element is gone (or hidden); no base/standard element was removed without a matching
     Classic removal.
   - **Mode 2:** every plan field/detail is present at its `Position` with its status; every base layout
-    element NOT in the plan is gone; every kept Freedom-only value-add component is still present. This is
-    **machine-enforced**: `migrate.mjs --verify --built <file> --tasks <dir>` (the folder carries the frozen
-    `classic-layout` mode) flags any field control on the built page that is not in the plan as **❌ EXTRA** and
-    blocks completion — so removal has to actually happen, it cannot be merely asserted.
+    element NOT in the plan is gone; every kept Freedom-only value-add component is still present. The FIELD
+    part of this is machine-checked: `migrate.mjs --verify --built <file> --tasks <dir>` (the folder carries
+    the frozen `classic-layout` mode) flags any FIELD control on the built page that is not in the plan as
+    **❌ EXTRA** and blocks completion — so a field removal has to actually happen, it cannot be merely
+    asserted. Detail/related-list and value-add placement are NOT covered by that gate — the UI-guidelines
+    region-parity review confirms them.
 - Record each removal with its evidence in `worklog.md`. List any ambiguous removal as a manual
   decision in `decisions.md` rather than acting on it silently.
 

@@ -4972,6 +4972,13 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const vOn = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
     check("verify on a classic-layout folder announces the applied mode (EXTRA gate ON), not a silent overlay",
       () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vOn.stderr || ""), () => vOn.stderr);
+    // end-to-end: a built page carrying a base field NOT in the plan makes --verify flag ❌ EXTRA and exit non-zero.
+    const bfExtra = path.join(tmp("mode_verify_extra_built"), "built.json");
+    fs.writeFileSync(bfExtra, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [{ name: "StrayBase", type: "crt.Input" }] } } } }));
+    const vExtra = cliTasks(["--tasks", dV, "--verify", "--built", bfExtra], RECON);
+    check("verify on a classic-layout folder flags a base field NOT in the plan as ❌ EXTRA and does not pass (exit != 0)",
+      () => vExtra.status !== 0 && /❌ EXTRA/.test(vExtra.stdout || "") && /StrayBase/.test(vExtra.stdout || ""),
+      () => ({ status: vExtra.status, extra: (vExtra.stdout || "").split("\n").filter((l) => /EXTRA/.test(l)) }));
     const vOff = cliTasks(["--verify", "--built", bf], RECON); // no --tasks → gate not applied
     check("verify WITHOUT --tasks on a reconcile plan announces the EXTRA gate is NOT applied",
       () => /EXTRA-field gate NOT applied/.test(vOff.stderr || ""), () => vOff.stderr);
@@ -4980,6 +4987,48 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const vCorrupt = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
     check("verify REFUSES a corrupted .reconcile-mode rather than silently skipping the classic-layout gate",
       () => vCorrupt.status === 1 && /unrecognised value/.test(vCorrupt.stderr || vCorrupt.stdout || ""), () => vCorrupt.stderr);
+  }
+  // ---- a DROPPED `.reconcile-mode` (dotfile gone, task files still stamped) is a lost dotfile, not a mode reset ----
+  // A mutation op (--decide/--revoke) or a repair round must NOT strip the stamp off every rewritten task file and
+  // silently revert the folder to overlay; and --verify must restore the mode from the stamp, keeping the gate ON.
+  {
+    const engStamped = (dir) => { const eng = readTaskDir(dir).find((t) => t.origin === "engine");
+      return !!eng && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dir, eng.file), "utf8")); };
+    const dropDotfile = (dir) => fs.rmSync(path.join(dir, ".reconcile-mode"), { force: true });
+    const dm = new Map([["D13", "descope — test"]]);
+    // --decide with the dotfile gone keeps the stamp on the rewritten task files (restored from the stamp).
+    const dDec = path.join(tmp("mode_lost_decide"), "bt");
+    syncTaskDir(dDec, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dDec);
+    applyDecision(dDec, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    check("--decide with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files (restored from the stamp, not reset to overlay)",
+      () => engStamped(dDec), () => ({ eng: (readTaskDir(dDec).find((t) => t.origin === "engine") || {}).file }));
+    // --revoke with the dotfile gone likewise keeps the stamp.
+    const dRevL = path.join(tmp("mode_lost_revoke"), "bt");
+    syncTaskDir(dRevL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    applyDecision(dRevL, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    dropDotfile(dRevL);
+    revokeDecision(dRevL, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    check("--revoke with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files",
+      () => engStamped(dRevL));
+    // a repair round with the dotfile gone stamps the repair file from the task-file stamp, not overlay.
+    const dRepL = path.join(tmp("mode_lost_repair"), "bt");
+    syncTaskDir(dRepL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dRepL);
+    const repL = syncRepairDir(dRepL, RUN, VERIFY_PAGES, OPTS);
+    const repLFile = (repL.written || [])[0];
+    check("a repair round with a DROPPED .reconcile-mode still stamps `reconcileMode: classic-layout` on the repair task",
+      () => !!repLFile && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dRepL, repLFile.file), "utf8")),
+      () => ({ repFile: repLFile?.file }));
+    // --verify --tasks with the dotfile gone restores the mode from the stamp and keeps the EXTRA gate ON.
+    const dVerL = path.join(tmp("mode_lost_verify"), "bt");
+    cliTasks(["--tasks", dVerL, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dVerL);
+    const bfL = path.join(tmp("mode_lost_verify_built"), "built.json");
+    fs.writeFileSync(bfL, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vLost = cliTasks(["--tasks", dVerL, "--verify", "--built", bfL], RECON);
+    check("verify with a DROPPED .reconcile-mode restores classic-layout from the stamp — EXTRA gate stays ON, not silently overlay",
+      () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vLost.stderr || ""), () => vLost.stderr);
   }
   // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
   {

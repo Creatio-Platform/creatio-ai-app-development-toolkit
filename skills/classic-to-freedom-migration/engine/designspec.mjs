@@ -2258,6 +2258,9 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   // Set below and the gate could never reach ✅ for such a page. `o.name` is `col` / `col_2` — distinct and
   // identical to the built element names.
   if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
+  // classic-layout removal check as its OWN row (reconcile plans only), so a base extra can be decided independently
+  // without the Fields presence row hiding real MISSING fields. It no-ops (✅) unless the folder is frozen classic-layout.
+  if (expFields && pm.freedomExists) cover.push({ label: "No base field controls outside the plan (classic-layout removal)", vk: { type: "classic-extras", names: fieldOps.map((o) => o.name) } });
   // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
   // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
@@ -3120,54 +3123,59 @@ function maxFieldMatch(names, ops) {
   return { matched, opToName };
 }
 // The field controls that belong to a KEPT "Connected to" connection group — the only standard Freedom component
-// that holds field-typed controls (its connection lookups); Feed / Attachments / Timeline hold none, so no other
-// kept component contributes here. classic-layout keeps the group, so its lookups are not EXTRA controls to remove.
-// Two guards keep this from disabling the EXTRA gate for a whole tab: the container must NAME the connection group,
-// and it must be a LEAF — it may not contain another named container. The built container tree aggregates every
-// descendant field into each ancestor, so a broad tab ("Connections") that wraps the real group PLUS unrelated base
-// fields is skipped (it is not a leaf), while the group's own container (which holds only its lookups) is used. Both
-// the element name and the bound column of each lookup are recorded, so a lookup identified only by `bound` is exempt.
+// that holds field-typed controls (its connection lookups); Feed / Attachments / Timeline hold none. classic-layout
+// keeps the group, so its lookups are not EXTRA controls to remove. THREE guards keep this from disabling the gate
+// for unrelated fields: (1) the container must NAME the connection group; (2) it must be a LEAF — a container that
+// wraps another named container is an ancestor tab, not the group (`hasNestedContainer`); (3) only LOOKUPS
+// (`crt.ComboBox`) inside it are exempt — a base Input / date / checkbox / rich-text placed in a connections-named
+// group is still flagged EXTRA. A base lookup dropped directly into the group is the one irreducible case (its
+// column identity is not in the plan and cannot be told from a real connection lookup without semantic data).
 const CONNECTED_TO_RE = /connected[\s_-]*to|entityconnection|connections?\b|связ|подключ/i;
+const CONNECTION_LOOKUP_TYPE = "crt.ComboBox";
 function keptConnectionFieldNames(ctx) {
   const names = new Set();
   for (const c of ctx.containers || []) {
     if (!CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) continue;
     if (c.hasNestedContainer) continue; // an ancestor tab (holds another container), not the group's own leaf
-    for (const n of c.fields || []) if (n) names.add(n);
-    for (const o of c.fieldOps || []) if (o?.bound) names.add(o.bound);
+    for (const o of c.fieldOps || []) {
+      if (o?.type !== CONNECTION_LOOKUP_TYPE) continue; // only the group's lookups are kept; base non-lookups are not
+      if (o.name) names.add(o.name);
+      if (o.bound) names.add(o.bound);
+    }
   }
   return names;
 }
-// The classic-layout EXTRA row, or null when nothing is extra. A field CONTROL the maximum matching could not assign
-// to any expected name (`opToName[oi] < 0`) is a base field the mode was supposed to REMOVE — unless it is a lookup
-// inside a KEPT "Connected to" group (exempt by element name OR bound column). Own function so resolveFieldsByIdentity
-// stays under Sonar's cognitive-complexity ceiling.
-function classicLayoutExtraRow(identified, opToName, ctx, missing) {
+// The `classic-extras` row — ❌ EXTRA listing base field controls to remove, or ✅ when there are none. A field CONTROL
+// the maximum matching could not assign to any expected name (`opToName[oi] < 0`) is a base field the mode was supposed
+// to REMOVE — unless it is a lookup inside a KEPT "Connected to" group (exempt by element name OR bound column).
+function classicLayoutExtraRow(identified, opToName, ctx) {
   const kept = keptConnectionFieldNames(ctx);
-  const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "")
+  const extras = identified.filter((o, oi) => opToName[oi] < 0 && LAYOUT_FIELD_RE.test(o.type || "")
     && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
-  if (!extras.length) return null;
+  if (!extras.length) return ["✅ Done", "no base field control outside the plan", "ok"];
   const ov = extras.length > 8 ? "…" : "";
-  const alsoMissing = missing.length ? ` · also missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}` : "";
-  return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}${alsoMissing}`, "missing"];
+  return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}`, "missing"];
+}
+// The `classic-extras` deliverable: only a frozen `classic-layout` reconcile enforces it; every other mode no-ops.
+// Its OWN row (not folded into Fields) so a base extra can be decided independently without hiding real MISSING.
+function resolveClassicExtrasVk(vk, ctx) {
+  if (ctx.reconcileMode !== RECONCILE_MODE_CLASSIC) return ["✅ Done", "not applicable — base extras are kept outside classic-layout", "ok"];
+  if (ctx.entryAbsent) return ["⚠ verify", "the page was not read — cannot check for base field controls outside the plan", "unverified"];
+  const names = [...new Set(vk.names || [])];
+  const identified = ctx.ops.filter((o) => o.name || o.bound);
+  const { opToName } = maxFieldMatch(names, identified);
+  return classicLayoutExtraRow(identified, opToName, ctx);
 }
 function resolveFieldsByIdentity(vk, names, ctx) {
   const ops = ctx.ops;
   const identified = ops.filter((o) => o.name || o.bound);
   if (ops.length && !identified.length) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
-  const { matched, opToName } = maxFieldMatch(names, identified);
+  const { matched } = maxFieldMatch(names, identified);
   const missing = names.filter((_, ni) => !matched.has(ni));
   const b = names.length - missing.length;
-  // In `classic-layout` the page's fields must be EXACTLY the plan's set: a field CONTROL the maximum matching
-  // could not assign to any expected name (by element name, `<Name>Field`, or bound column) is a base field the
-  // mode was supposed to REMOVE. Matching on the bound column is what keeps a renamed-but-bound base field
-  // (`Input_CallFrom` bound to a planned `CallerId`) from being flagged as extra; a value-add widget is not a
-  // field type, so FIELD_RE excludes it and it is never in this set.
-  if (ctx.reconcileMode === RECONCILE_MODE_CLASSIC) {
-    const extraRow = classicLayoutExtraRow(identified, opToName, ctx, missing);
-    if (extraRow) return extraRow;
-  }
+  // The classic-layout removal check is its OWN row (`classic-extras`), not folded here — this row is presence only,
+  // so a base extra never hides a real MISSING field and each can be decided independently.
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page (element name, \`<Name>Field\`, or the bound column)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
@@ -3223,6 +3231,7 @@ function resolveElementVk(vk, ctx) {
 }
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") return resolveFieldsVk(vk, ctx);
+  if (vk.type === "classic-extras") return resolveClassicExtrasVk(vk, ctx);
   if (vk.type === "image") return resolveImageVk(vk, ctx);
   if (vk.type === "element") return resolveElementVk(vk, ctx);
   const accepted = BUILT_TYPES[vk.type === "tabs" ? "tabs" : "details"];
@@ -3398,7 +3407,7 @@ export function resolveRuleVk(vk, ctx) {
   return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) on the built page)${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
-const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element"]);
+const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element", "classic-extras"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
 const VK_RULE = new Set(["rule"]);
 // A REACHABILITY / wiring deliverable (per-type routing, mini-page "+ New" binding, section registration, typed-form
@@ -4131,7 +4140,7 @@ function collectLayout(node, acc) {
   const t = String(node.type || "");
   if (LAYOUT_FIELD_RE.test(t)) {
     acc.fields.push(node.name);
-    if (acc.fieldOps) { const attr = boundAttributeOf(node); acc.fieldOps.push({ name: node.name, ...(attr ? { bound: attr } : {}) }); }
+    if (acc.fieldOps) { const attr = boundAttributeOf(node); acc.fieldOps.push({ name: node.name, type: t, ...(attr ? { bound: attr } : {}) }); }
   }
   else if (t === "crt.DataGrid") acc.lists.push(node.name);
   else if (LAYOUT_WIDGETS.has(t)) acc.widgets.push(t);

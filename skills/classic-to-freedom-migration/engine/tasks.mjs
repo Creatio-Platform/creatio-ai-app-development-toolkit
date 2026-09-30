@@ -2658,7 +2658,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   fs.mkdirSync(dir, { recursive: true });
   // A repair round is over an already-cut folder, so its reconcile mode is the one frozen there; carry
   // it into the repair task files and the index the same way syncTaskDir does for the plan tasks.
-  const reconcileMode = readFrozenMode(dir);
+  const reconcileMode = effectiveFrozenMode(dir);
   const written = [];
   for (const t of tasks) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
@@ -2705,7 +2705,7 @@ export function readMergedTaskDir(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts);
   if (fresh.refused) return { ...fresh, tasks: [] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
-  merged.reconcileMode = readFrozenMode(dir); // the index refresh reads `merged`; keep the frozen stamp on it
+  merged.reconcileMode = effectiveFrozenMode(dir); // the index refresh reads `merged`; keep the frozen stamp on it
   attachDispatch(merged, dir);
   resolvePartials(merged);
   return merged;
@@ -2739,10 +2739,8 @@ const RECONCILE_MODE_FILE = ".reconcile-mode";
 // the current engine does not recognise is treated as absent rather than trusted — the same "strict about values"
 // rule parseTaskFile follows for a status it cannot read.
 export function readFrozenMode(dir) {
-  const p = path.join(dir, RECONCILE_MODE_FILE);
-  if (!fs.existsSync(p)) return null;
-  const m = fs.readFileSync(p, "utf8").trim();
-  return RECONCILE_MODES.has(m) ? m : null;
+  const st = readFrozenModeState(dir);
+  return st.valid ? st.mode : null;
 }
 
 // The `.reconcile-mode` state, so the CLI can tell three cases apart that `readFrozenMode` collapses to null:
@@ -2766,9 +2764,32 @@ export function freezeMode(dir, mode) {
 // frozen, so a later re-slice without the flag reads it back. `--reconcile-mode` is validated + scope-gated by the
 // CLI before it ever reaches here, so any value present is already one of RECONCILE_MODES on a reconcile plan.
 export function resolveFrozenMode(dir, opts = {}) {
-  const mode = opts.reconcileMode || readFrozenMode(dir);
-  if (mode) freezeMode(dir, mode);
-  return mode || null;
+  if (opts.reconcileMode) { freezeMode(dir, opts.reconcileMode); return opts.reconcileMode; }
+  const st = readFrozenModeState(dir);
+  if (st.valid) { freezeMode(dir, st.mode); return st.mode; }
+  // A corrupted dotfile is refused by the CLI before we get here; still, never trust an unrecognised value.
+  if (st.present) return null;
+  // The dotfile is ABSENT. If existing task files still carry a `reconcileMode:` stamp, the dotfile was lost (e.g. a
+  // copy dropped it) — restore it from the stamp rather than silently re-slicing every task back to overlay.
+  const stamped = frozenModeFromTasks(dir);
+  if (stamped) { freezeMode(dir, stamped); return stamped; }
+  return null;
+}
+// The reconcile mode stamped on the folder's existing task files, or null — the source for restoring a lost `.reconcile-mode`.
+function frozenModeFromTasks(dir) {
+  return readExisting(dir).map((e) => e.meta?.reconcileMode).find((m) => RECONCILE_MODES.has(m)) || null;
+}
+// The effective frozen mode of a folder, read-only: the dotfile when valid, else the mode the existing task files
+// still carry when the dotfile was dropped, else null. Unlike `resolveFrozenMode` it never re-freezes. Used wherever
+// the folder's mode must be honoured without a cut — stamping a rewrite (the index refresh, a `--decide`/`--revoke`,
+// a repair round) and carrying the mode into `--verify`. Reading the dotfile alone (`readFrozenMode`) would map a
+// lost-but-stamped mode to null and silently reset the folder to overlay, turning the classic-layout removal gate
+// off for good. A corrupted dotfile returns null here; the CLI refuses it before either use reaches this point.
+export function effectiveFrozenMode(dir) {
+  const st = readFrozenModeState(dir);
+  if (st.valid) return st.mode;
+  if (st.present) return null;
+  return frozenModeFromTasks(dir);
 }
 
 // EVERY PLAN ROW IS CLAIMED BY EXACTLY ONE TASK ROW. Matching is scoped PER PAGE, the way `planIndex` scopes the
@@ -3644,7 +3665,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   }
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
-  const reconcileMode = readFrozenMode(dir); // invariant for the whole loop — read the frozen dotfile once
+  const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
     const rows = d.deliverables.map((label) => ({ label: String(label).trim(), group: d.group, vk: null, na: null }));
@@ -3963,7 +3984,7 @@ export function applyDecision(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
-  merged.reconcileMode = readFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
+  merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
 
@@ -4087,7 +4108,7 @@ export function revokeDecision(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
-  merged.reconcileMode = readFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
+  merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
 
   const cleared = [];
   const skipped = [];

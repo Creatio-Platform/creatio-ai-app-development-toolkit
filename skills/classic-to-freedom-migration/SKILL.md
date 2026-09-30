@@ -190,6 +190,7 @@ Then decide `sectionHost.mode` — and put the decision to the user whenever it 
 | `existing-app` | the app's primary package IS the target package and is editable | `create-app-section` into that app |
 | `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | ONE `create-app` call that carries the entity — see below. It returns the app, its own editable primary package, AND the section over the existing object. Do NOT follow it with `create-app-section` |
 | `pages-only-no-menu` | the user accepts pages reachable by URL / page bindings only | no registration; the checklist row is rendered as a deliberate drop, not a gated deliverable |
+| `existing-section` | a RECONCILE (`planMeta.freedomExists`) onto a Freedom section that is ALREADY registered | register nothing — reconcile the existing pages and keep the live section/list page. Offered ONLY on a reconcile; on a rebuild the placement gate refuses it |
 
 **`new-app` is ONE call, and `create-app-section` is not part of it.** `create-app` takes
 `optional-template-data-json`, and that is what binds the app's own section to an object that already

@@ -2638,12 +2638,19 @@ check("placement gate: mode 'new-app' clears the gate (the build creates its own
   planWithPlacement(newAppPlacement).status === 0);
 check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
   /Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
-// (g) 'existing-section' — a reconcile onto an ALREADY-registered section: clears the gate with NO owning app,
-// registers nothing, and KEEPS the list page live (unlike pages-only-no-menu, which drops it).
+// (g) 'existing-section' — a RECONCILE onto an ALREADY-registered section: on a reconcile (planMeta.freedomExists) it
+// clears the gate with NO owning app, registers nothing, and KEEPS the list page live (unlike pages-only-no-menu). On
+// a rebuild (no existing Freedom page) there is no already-registered section to reconcile onto, so the gate REFUSES it.
 const existingSectionPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "existing-section" } };
-check("placement gate: mode 'existing-section' clears the gate with NO owning app (a reconcile registers nothing)",
-  planWithPlacement(existingSectionPlacement).status === 0, () => planWithPlacement(existingSectionPlacement).stderr);
-const clExistingSection = checklistWithPlacement(existingSectionPlacement);
+const runExistingSection = (mode, extraMeta) => runMigrate(["-", mode], { input: JSON.stringify({ ...placementBase, planMeta: { ...FULL_PLANMETA, ...extraMeta }, placement: existingSectionPlacement }), encoding: "utf8" });
+const planExistingRecon = runExistingSection("--plan", { freedomExists: true });
+check("placement gate: mode 'existing-section' on a RECONCILE (freedomExists) clears the gate with NO owning app (a reconcile registers nothing)",
+  planExistingRecon.status === 0, () => planExistingRecon.stderr);
+const planExistingRebuild = runExistingSection("--plan", {});
+check("placement gate: mode 'existing-section' on a REBUILD (no freedomExists) is REFUSED — no already-registered section to reconcile onto",
+  planExistingRebuild.status !== 0 && /existing-section/.test(planExistingRebuild.stderr || "") && /not a reconcile/.test(planExistingRebuild.stderr || ""),
+  () => planExistingRebuild.stderr);
+const clExistingSection = runExistingSection("--checklist", { freedomExists: true });
 check("placement: 'existing-section' renders the section row as already-registered / registers-nothing (no gated exactly-ONE row)",
   /Navigable section already registered — \*\*reconcile registers nothing\*\*/.test(clExistingSection.stdout || "")
   && !/Navigable section registered in exactly ONE workplace/.test(clExistingSection.stdout || ""),
@@ -12084,29 +12091,30 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => !/\| required \|/.test(s));
 }
 
-/* the classic-layout EXTRA-field verify gate. A base field CONTROL on the built page that is not
-   in the plan is a base field the mode was meant to REMOVE; a documentation-only QA note did not make it happen
-   (measured), so `--verify` (with the folder's frozen mode) now flags it ❌ EXTRA and blocks. Value-add widgets are
-   not field-typed, so they are never flagged. Overlay / no-mode never flag. */
+/* the classic-layout EXTRA-field verify gate. A base field CONTROL on the built page that is not in the plan is a
+   base field the mode must REMOVE, so `--verify` (with the folder's frozen mode) flags it ❌ EXTRA and blocks
+   completion. Value-add widgets are not field-typed, so they are never flagged. Overlay / no-mode never flag. */
 {
   const rn = runMigration({ entity: "X", entityColumns: { A: { type: "Text" }, B: { type: "Text" } },
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}},{operation:"insert",name:"B",parentName:"Header",propertyName:"items",values:{bindTo:"B"}}]};});` }] }, { baseDir: FIX });
+  const reconPm = { freedomExists: true }; // a classic-layout reconcile is always onto an existing Freedom page
   const builtWithExtra = { pages: { main: { viewConfig: { items: [
     { name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" },
     { name: "Owner", type: "crt.ComboBox" }, { name: "ESNFeed", type: "crt.Feed" }] } } } };
-  const vClassic = renderVerify(rn, { reconcileMode: "classic-layout" }, builtWithExtra);
+  const vClassic = renderVerify(rn, { planMeta: reconPm, reconcileMode: "classic-layout" }, builtWithExtra);
+  const extraLine1 = vClassic.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "";
   check("verify: classic-layout flags a base field NOT in the plan as ❌ EXTRA and blocks (complete=false)",
-    () => /❌ EXTRA/.test(vClassic.markdown) && /Owner/.test(vClassic.markdown) && vClassic.complete === false,
+    () => /❌ EXTRA/.test(vClassic.markdown) && /Owner/.test(extraLine1) && vClassic.complete === false,
     () => vClassic.markdown.split("\n").filter((l) => /Fields|EXTRA/.test(l)));
-  check("verify: a value-add widget (crt.Feed) is NOT counted as an extra field",
-    () => !/ESNFeed/.test((vClassic.markdown.match(/❌ EXTRA[^|]*/) || [""])[0]));
+  check("verify: a value-add widget (crt.Feed) is NOT counted as an extra field — the EXTRA row names Owner but never the Feed",
+    () => /Owner/.test(extraLine1) && !/ESNFeed/.test(extraLine1), () => extraLine1);
   check("verify: overlay does NOT flag the base field (base positions/extras kept by design)",
-    () => !/❌ EXTRA/.test(renderVerify(rn, { reconcileMode: "overlay" }, builtWithExtra).markdown));
+    () => !/❌ EXTRA/.test(renderVerify(rn, { planMeta: reconPm, reconcileMode: "overlay" }, builtWithExtra).markdown));
   check("verify: no mode (verify without --tasks) does NOT flag extras",
-    () => !/❌ EXTRA/.test(renderVerify(rn, {}, builtWithExtra).markdown));
+    () => !/❌ EXTRA/.test(renderVerify(rn, { planMeta: reconPm }, builtWithExtra).markdown));
   const builtClean = { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" }] } } } };
   check("verify: classic-layout with EXACTLY the plan's fields raises no EXTRA",
-    () => !/❌ EXTRA/.test(renderVerify(rn, { reconcileMode: "classic-layout" }, builtClean).markdown));
+    () => !/❌ EXTRA/.test(renderVerify(rn, { planMeta: reconPm, reconcileMode: "classic-layout" }, builtClean).markdown));
 }
 
 /* the classic-layout EXTRA gate does NOT flag a lookup that lives inside a KEPT "Connected to" connection group
@@ -12118,7 +12126,7 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     { name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" },
     { name: "Owner", type: "crt.ComboBox" },
     { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "ComboBox_ConnCase", type: "crt.ComboBox" }] }] } } } };
-  const vC = renderVerify(rnC, { reconcileMode: "classic-layout" }, builtConn);
+  const vC = renderVerify(rnC, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtConn);
   const extraLine = (md) => md.split("\n").find((l) => /❌ EXTRA/.test(l)) || "";
   check("verify: a lookup inside a kept Connected-to group is NOT flagged EXTRA (its container name matches)",
     () => /❌ EXTRA/.test(vC.markdown) && !/ConnCase/.test(extraLine(vC.markdown)), () => extraLine(vC.markdown));
@@ -12136,7 +12144,7 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     { name: "ConnectionsTab", type: "crt.TabContainer", items: [
       { name: "Owner", type: "crt.ComboBox" },
       { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "ComboBox_ConnCase", type: "crt.ComboBox" }] }] }] } } } };
-  const vN = renderVerify(rnN, { reconcileMode: "classic-layout" }, builtNested);
+  const vN = renderVerify(rnN, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtNested);
   const nLine = (vN.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
   check("verify: an unrelated base field in an ancestor tab that NAMES connections is STILL flagged EXTRA (leaf-only exemption)",
     () => /Owner/.test(nLine), () => nLine);
@@ -12144,19 +12152,21 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => !/ConnCase/.test(nLine), () => nLine);
 }
 
-/* KNOWN LIMITATION (pinned): a FLAT leaf container that names the connection group exempts every field it holds —
-   a field control there is not distinguished from a real connection lookup. The leaf/ancestor guard only stops an
-   ancestor tab from exempting its own direct fields; a base field placed directly in a connections-named leaf is
-   still exempt. Pinned so a future tightening (e.g. exempting only lookups) breaks this test on purpose. */
+/* The exemption is LOOKUPS-ONLY: inside a connections-named leaf, a crt.ComboBox is kept (a real connection lookup),
+   but a base non-lookup control placed in the same group is NOT — it is still flagged EXTRA. */
 {
   const rnFlat = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
   const builtFlat = { pages: { main: { viewConfig: { items: [
     { name: "A", type: "crt.Input" },
-    { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "Owner", type: "crt.ComboBox" }] }] } } } };
-  check("verify: a base field in a FLAT connections-named leaf is exempt (known limitation, pinned)",
-    () => !/❌ EXTRA/.test(renderVerify(rnFlat, { reconcileMode: "classic-layout" }, builtFlat).markdown),
-    () => (renderVerify(rnFlat, { reconcileMode: "classic-layout" }, builtFlat).markdown.split("\n").find((l) => /Fields —/.test(l)) || ""));
+    { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [
+      { name: "ConnLookup", type: "crt.ComboBox" }, { name: "StrayNote", type: "crt.Input" }] }] } } } };
+  const vFlat = renderVerify(rnFlat, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtFlat);
+  const flatLine = vFlat.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "";
+  check("verify: a non-lookup base control in a connections-named leaf is STILL flagged EXTRA (lookups-only exemption)",
+    () => /StrayNote/.test(flatLine), () => flatLine);
+  check("verify: the ComboBox lookup in that same leaf is NOT flagged EXTRA",
+    () => !/ConnLookup/.test(flatLine), () => flatLine);
 }
 
 /* a connection lookup identified ONLY by its bound column (no element name) is exempt too. */
@@ -12167,8 +12177,23 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     { name: "A", type: "crt.Input" },
     { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ type: "crt.ComboBox", control: "$ConnCaseCol" }] }] } } } };
   check("verify: a Connected-to lookup identified only by `bound` (no name) is exempt from EXTRA",
-    () => !/❌ EXTRA/.test(renderVerify(rnB, { reconcileMode: "classic-layout" }, builtBound).markdown),
-    () => (renderVerify(rnB, { reconcileMode: "classic-layout" }, builtBound).markdown.split("\n").find((l) => /Fields —/.test(l)) || ""));
+    () => !/❌ EXTRA/.test(renderVerify(rnB, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtBound).markdown),
+    () => (renderVerify(rnB, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtBound).markdown.split("\n").find((l) => /Fields —/.test(l)) || ""));
+}
+
+/* KNOWN LIMITATION (pinned): recognition of a kept connection lookup requires the connections-named GROUP CONTAINER.
+   A connection lookup flattened onto the page with no container around it is not recognized, so classic-layout flags
+   it EXTRA. classic-layout always builds the connection group as a container, so this is an edge; the escape when it
+   does occur is `--decide`. Pinned so a future change that recognizes container-less lookups breaks this on purpose. */
+{
+  const rnNoCont = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
+  const builtNoCont = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" }, { name: "ConnCaseLookup", type: "crt.ComboBox" }] } } } };
+  const vNoCont = renderVerify(rnNoCont, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtNoCont);
+  check("verify: a connection lookup with NO group container is flagged EXTRA (recognition needs the named container; known limitation, pinned)",
+    () => /❌ EXTRA/.test(vNoCont.markdown) && /ConnCaseLookup/.test(vNoCont.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || ""),
+    () => vNoCont.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
 }
 
 /* posCell renders the converted grid coordinate: r · c, a `· w{colSpan}` suffix only for a wide field, DASH when
@@ -12184,7 +12209,7 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => posCell({}) === "—" && posCell({ layoutConfig: { row: 1 } }) === "—");
 }
 
-/* G3 — the Form-template row can close on a RECONCILE. A reconcile saves a replacing schema whose parent is the
+/* The Form-template row can close on a RECONCILE. A reconcile saves a replacing schema whose parent is the
    page's own chain, not the base template, so a built parent that is not the expected template is expected here. */
 {
   const tSchema = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});`;

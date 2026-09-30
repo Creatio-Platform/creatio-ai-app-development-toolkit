@@ -512,10 +512,10 @@ class ReconcileModeDocTests(unittest.TestCase):
 
     def test_mode2_removal_is_machine_enforced_not_asserted(self):
         # A sub-agent can ASSERT "base non-plan elements removed" without emitting any remove op. Both docs must
-        # say removal is gated by --verify (❌ EXTRA), not a documentation-only claim, so the enforcement stays
-        # machine-checked rather than prose.
+        # say FIELD removal is gated by --verify (❌ EXTRA), not a documentation-only claim, so the enforcement stays
+        # machine-checked rather than prose. The gate covers FIELD controls only, so the doc says "machine-checked".
         reconcile = flat(read_text(RECONCILE_DOC))
-        self.assertIn("machine-enforced", reconcile)
+        self.assertIn("machine-checked", reconcile)
         self.assertIn("EXTRA", reconcile)
         build = flat(read_text(BUILD_EXEC_DOC))
         self.assertIn("asserting it is not doing it", build)
