@@ -217,7 +217,7 @@ sub-agents before this, one of them caching material nobody else read.
    `decisions.md` is cited by no `deliverableStatus` entry, no task `decisions:` line and not that
    list; the refusal names each `D<N>`, its title and the open deliverable ids. Add the status or the
    list item, re-run `--plan`, and have the plan approved again. `--decide` and `--revoke` are never
-   refused by this check, and it no longer applies once a task has been dispatched. A list item that
+   refused by this check, and it does not apply once a task has been dispatched. A list item that
    decisions.md does not hold, or that a `wont-do` status also cites, is a plan gap.
 
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses

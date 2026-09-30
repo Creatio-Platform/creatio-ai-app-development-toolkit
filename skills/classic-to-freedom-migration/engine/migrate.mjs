@@ -3376,7 +3376,8 @@ function refusalCause(set, dir) {
 const FIXED_REMEDIES = {
   [REFUSED_STATUS]: " Add the decision to decisions.md, or correct the entry, then re-run.",
   [REFUSED_RETIRED]: " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
-    + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row.",
+    + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row."
+    + " Before the first dispatch, record the decision as a `manifest.deliverableStatus` entry for each related list instead.",
   [REFUSED_CUT]: " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
     + " produced it.",
 };

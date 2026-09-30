@@ -434,8 +434,8 @@ which clears the cell.
 or absent. A plan gap (`decisionsWithoutDeliverable INVALID`, exit 2, `--tasks` writes nothing) is raised for a
 value that is not a list, an item not shaped `D<N>`, an item decisions.md does not hold (when no decisions.md is read,
 under the same rule as `deliverableStatus`), and an item a `wont-do` status also cites. Before the first dispatch —
-no task with an `agentNonce` or a `built` row, and no `timings.json` record (one that does not parse counts as a
-dispatch) — `--tasks` (the cut, a re-sync, `--start`, `--next`) refuses (`unaccounted-decisions`, exit 2, nothing
+no task with an `agentNonce` or a sub-agent outcome (`built`, `not-built`, or `not-applicable` on a row the plan did
+not mark `na`), and no `timings.json` record (one that does not parse counts as a dispatch) — `--tasks` (the cut, a re-sync, `--start`, `--next`) refuses (`unaccounted-decisions`, exit 2, nothing
 written) while a `D<N>` in decisions.md is cited by no `deliverableStatus` entry, no task `decisions:` entry and no
 item of this list. The refusal names each `D<N>` with its title, the entry shape for each remedy and the open
 deliverable ids per page. `Adjustment N` keys are not checked. `--decide` and `--revoke` never run the check.
