@@ -21,7 +21,8 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
-  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
+  RESUME_FILE, planApprovalLine, worklogRoute } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
@@ -5749,6 +5750,153 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   check("--next without --tasks: exit 1 — it answers a question about a task FOLDER, and without one there is nothing to answer about",
     () => alone.status === 1 && /--tasks/.test(alone.stderr || ""),
     () => ({ status: alone.status, stderr: alone.stderr }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====");
+{
+  // The two facts a hand-off refuses on are read from files a PERSON writes, so the readers are pinned on the
+  // shapes those files take and on the near-misses that must not pass.
+  const V = "plan-4f9c2ab17e03";
+  check("planApprovalLine: a `Plan version:` line naming the version is the approval, returned without its list marker",
+    () => planApprovalLine(`# Decisions\n- Approved by: user\n- Plan version: \`${V}\`\n`, V) === `Plan version: \`${V}\``);
+  check("planApprovalLine: the version must be a WHOLE token — a prefix or an extension of it is a different plan",
+    () => planApprovalLine("- Plan version: `plan-4f9c`", V) === null && planApprovalLine(`- Plan version: \`${V}0\``, V) === null
+      && planApprovalLine("- Plan version: `plan-4f9c2ab17e03-b`", V) === null);
+  check("planApprovalLine: the version on a line that is not a `Plan version` line is not an approval",
+    () => planApprovalLine(`- Rationale: supersedes ${V}`, V) === null && planApprovalLine("", V) === null
+      && planApprovalLine(`- Plan version: ${V}`, null) === null);
+  check("worklogRoute: a plain, bold or listed `Route:` line is read, and the LAST one wins",
+    () => worklogRoute("Route: agent") === "Route: agent" && worklogRoute("- **Route:** `inline`") === "Route: inline"
+      && worklogRoute("Route: agent\n## later\nRoute: codex\n") === "Route: codex",
+    () => [worklogRoute("Route: agent"), worklogRoute("- **Route:** `inline`"), worklogRoute("Route: agent\nRoute: codex")]);
+  check("worklogRoute: a line that only mentions a route, or an empty `Route:`, is not the route",
+    () => worklogRoute("- the Route: line is written in 7.0") === null && worklogRoute("Route:") === null
+      && worklogRoute("") === null && RESUME_FILE === "resume.md");
+}
+
+console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
+{
+  // THE HAND-OFF TO A FRESH SESSION. The build loop's driver context grew past 450k on a measured run because
+  // every build turn carried the discovery and planning it had done before approval. `--handoff` writes the one
+  // file a fresh session resumes from, and every value in it is computed here — none is typed by the driver,
+  // because a hand-written note is exactly the prose-only rule the measured runs skipped.
+  //
+  // The layout is the real one on purpose: the manifest sits OUTSIDE the migration folder (a session scratchpad),
+  // and both paths carry a space, since the resume prompt must name them verbatim.
+  const base = tmp("cli-handoff");
+  const folder = path.join(base, "mig folder");
+  const dir = path.join(folder, "build-tasks");
+  const manifestPath = path.join(base, "scratch pad", "manifest.json");
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
+  const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
+  cliFile(manifestPath, "--tasks", dir);
+  const APPROVAL = `- Plan version: \`${RUN.planVersion}\``;
+  const decisionsOk = `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Decision: build the plan\n- Approved by: user\n${APPROVAL}\n`;
+  const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n";
+  fs.writeFileSync(path.join(folder, "decisions.md"), decisionsOk);
+  fs.writeFileSync(path.join(folder, "worklog.md"), worklogOk);
+  const RESUME = path.join(folder, "resume.md");
+  const snapOf = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { recursive: true }).sort()
+    .filter((f) => fs.statSync(path.join(d, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(d, f), "utf8")]) : null);
+
+  const next = cliFile(manifestPath, "--tasks", dir, "--next");
+  const nextId = ((next.stdout || "").split("\n").find((l) => l.includes("--start ")) || "")
+    .split("--start ")[1]?.trim().replace(/^["']|["']$/g, "");
+  check("--handoff (anti-vacuity): the sliced fixture has a startable task for the resume to name — else 'names the next task' would be a claim about an empty answer",
+    () => next.status === 0 && !!nextId, () => ({ status: next.status, stdout: next.stdout }));
+
+  const ok = cliFile(manifestPath, "--tasks", dir, "--handoff");
+  const resume = fs.existsSync(RESUME) ? fs.readFileSync(RESUME, "utf8") : "";
+  check("--handoff (R1): on an approved, sliced folder it exits 0 and WRITES <migration-folder>/resume.md",
+    () => ok.status === 0 && resume.length > 0, () => ({ status: ok.status, stdout: ok.stdout, stderr: ok.stderr }));
+  check("--handoff (R1): resume.md records the ABSOLUTE manifest path, the migration folder and the environment the plan names",
+    () => resume.includes(path.resolve(manifestPath)) && resume.includes(path.resolve(folder))
+      && /\*\*Environment:\*\* `test`/.test(resume),
+    () => resume);
+  check("--handoff (R1): resume.md records the APPROVED plan version and the approval line it was read from in decisions.md",
+    () => resume.includes(`**Approved plan version:** \`${RUN.planVersion}\``) && resume.includes(APPROVAL.replace(/^- /, "")),
+    () => resume);
+  check("--handoff (R1): resume.md records the `Route:` line from worklog.md verbatim",
+    () => /\*\*Route:\*\* `Route: agent`/.test(resume), () => resume);
+  check("--handoff (R1): resume.md carries the engine's `--- progress ---` block, as `--tasks` prints it",
+    () => resume.includes("--- progress ---") && /done \d+ · running \d+ · todo \d+/.test(resume) && /dispatched \d+ of \d+/.test(resume),
+    () => resume);
+  check("--handoff (R1): resume.md names the next startable task — the same one `--next` names first",
+    () => resume.includes(`**Next startable task:** \`${nextId}\``), () => ({ nextId, resume }));
+  const promptBlock = (resume.split("## Resume prompt")[1] || "");
+  check("--handoff (R1): the ONE copyable resume prompt names the migration folder and the manifest path verbatim, and the `--next` it continues with",
+    () => promptBlock.includes(path.resolve(folder)) && promptBlock.includes(path.resolve(manifestPath))
+      && promptBlock.includes("--next") && (promptBlock.match(/```/g) || []).length === 2,
+    () => promptBlock);
+  check("--handoff (R4): the stdout note names resume.md, gives the prompt to paste into a FRESH session, and says to STOP",
+    () => (ok.stdout || "").includes(RESUME) && /fresh session/i.test(ok.stdout || "") && /STOP/.test(ok.stdout || "")
+      && (ok.stdout || "").includes(path.resolve(manifestPath)),
+    () => ok.stdout);
+  check("--handoff: it reads the task folder, it does not move it — no task started, no token issued",
+    () => readTaskDir(dir).every((t) => t.status === "todo") && !/DISPATCH TOKEN/.test(ok.stdout || ""),
+    () => readTaskDir(dir).map((t) => t.status));
+
+  // R2 — the four refusals. Each exits 2, names the cause AND the fix, and writes nothing: no resume.md where
+  // there was none, the previous one byte-identical where there was, and the task folder untouched.
+  const refusalCase = (label, arrange, args, cause, fix) => {
+    const copy = path.join(tmp(`cli-handoff-${label}`), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    const hadResume = label === "no-route";   // one case keeps the earlier resume.md, to pin "unchanged"
+    if (!hadResume) fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    arrange(copy);
+    const before = snapOf(copy);
+    const res = cliFile(args.manifest || manifestPath, "--tasks", path.join(copy, "build-tasks"), "--handoff");
+    const after = snapOf(copy);
+    check(`--handoff (R2) ${label}: exit 2, NOTHING WRITTEN, the cause and the fix named, ${hadResume ? "the earlier resume.md unchanged" : "no resume.md"} and the folder byte-identical`,
+      () => res.status === 2 && /NOTHING WRITTEN/.test(res.stdout || "") && cause.test(res.stdout || "") && fix.test(res.stdout || "")
+        && (hadResume ? fs.readFileSync(path.join(copy, "resume.md"), "utf8") === resume : !fs.existsSync(path.join(copy, "resume.md")))
+        && JSON.stringify(before) === JSON.stringify(after),
+      () => ({ status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+  };
+  refusalCase("no-approval", (c) => fs.writeFileSync(path.join(c, "decisions.md"),
+    decisionsOk.replace(RUN.planVersion, "plan-000000000000")), {},
+  /no approval of plan version/, /Record the approval/);
+  refusalCase("unsliced", (c) => fs.rmSync(path.join(c, "build-tasks"), { recursive: true, force: true }), {},
+    /not sliced/, /--tasks .*build-tasks/);
+  refusalCase("no-manifest", () => {}, { manifest: path.join(base, "scratch pad", "gone.json") },
+    /manifest .*does not exist/, /rerun step 4/);
+  refusalCase("no-route", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent\n", "")), {},
+    /no `Route:` line/, /7\.0/);
+  {
+    // An unsliced folder is refused WITHOUT being created: the refresh `--tasks` modes run creates the folder.
+    const copy = path.join(tmp("cli-handoff-uncut"), "mig folder");
+    fs.mkdirSync(copy, { recursive: true });
+    fs.writeFileSync(path.join(copy, "decisions.md"), decisionsOk);
+    fs.writeFileSync(path.join(copy, "worklog.md"), worklogOk);
+    const res = cliFile(manifestPath, "--tasks", path.join(copy, "build-tasks"), "--handoff");
+    check("--handoff (R2): a folder never sliced is refused and NOT created — a hand-off must not cut the folder it reports on",
+      () => res.status === 2 && !fs.existsSync(path.join(copy, "build-tasks")) && !fs.existsSync(path.join(copy, "resume.md")),
+      () => ({ status: res.status, stdout: res.stdout }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+  }
+  {
+    // A manifest on stdin has no path, so the fresh session would have nothing to re-open.
+    fs.rmSync(RESUME, { force: true });
+    const res = cliTasks(["--tasks", dir, "--handoff"], MANIFEST);
+    check("--handoff (R2): a manifest piped on stdin is refused — exit 2, nothing written — because the resume must name a path",
+      () => res.status === 2 && /NOTHING WRITTEN/.test(res.stdout || "") && /stdin/.test(res.stdout || "") && !fs.existsSync(RESUME),
+      () => ({ status: res.status, stdout: res.stdout }));
+  }
+  {
+    const alone = cliFile(manifestPath, "--handoff");
+    check("--handoff without --tasks: exit 1 — it hands off a task FOLDER, and without one there is nothing to hand off",
+      () => alone.status === 1 && /--tasks/.test(alone.stderr || ""), () => ({ status: alone.status, stderr: alone.stderr }));
+    for (const [label, args] of [["--next", ["--next"]], ["--start", ["--start", nextId]], ["--route", ["--route"]],
+      ["--verify", ["--verify", "--built", "nope.json"]]]) {
+      const res = cliFile(manifestPath, "--tasks", dir, "--handoff", ...args);
+      check(`--handoff + ${label}: exit 1 and nothing printed on stdout — the resume must describe ONE folder state`,
+        () => res.status === 1 && /--handoff/.test(res.stderr || "") && (res.stdout || "").trim() === "" && !fs.existsSync(RESUME),
+        () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    }
+  }
   fs.rmSync(base, { recursive: true, force: true });
 }
 {

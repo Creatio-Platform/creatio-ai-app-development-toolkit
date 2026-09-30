@@ -16,6 +16,7 @@ node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis hand
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
 node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) are startable right now, each with the exact --start command — ask this instead of picking off index.md
+node migrate.mjs <manifest.json> --tasks <dir> --handoff  # WRITE <dir>/../resume.md so the build loop continues in a FRESH session (orchestrate-build.md 7.1b)
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves in decisions.md (a `## D13 — …` heading, a `| D13 | … |` table row, or a plain `D13 — …` line in a file with neither) — it never creates a decision, and that refusal IS the safeguard. It writes only the addressed rows
@@ -231,6 +232,20 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   whose clock the refresh is what closes, so the un-refreshed folder reads as a dispatch-ledger failure. For the
   same reason it refuses to combine with `--start`, `--route`, `--verify` or `--split`: each writes the folder
   before the answer would print, so one call could only describe a state the reader cannot place.
+- **`--handoff` moves the build loop to a FRESH SESSION.** Every build turn pays for the whole conversation before
+  it, and a driver that planned and built in one session carried discovery and planning into each build turn (a
+  measured run: 451k tokens at the first `--start`). The mode writes `resume.md` into the migration folder (the
+  parent of `<dir>`): the absolute manifest path, the migration folder, the environment (`planMeta.environment`),
+  the approved plan version with the `decisions.md` line that approves it, the `Route:` line from `worklog.md`, the
+  `--- progress ---` block, the next task `--next` would name, and ONE copyable resume prompt ending in that
+  `--next` command. Every value is computed from the folder — none is typed by the driver, because a hand-written
+  hand-off note is a prose-only rule, and those were measured being skipped. It refreshes the folder as `--next`
+  does, starts nothing and issues no token. It REFUSES — exit **2**, `NOTHING WRITTEN`, every cause and its fix
+  stated at once, no `resume.md` written or changed — when no `Plan version:` line in `decisions.md` names the
+  current plan version, when the folder was never sliced (no `index.md`; the folder is not created), when
+  `worklog.md` has no `Route:` line, or when the manifest path does not exist or the manifest came in on stdin (the
+  fresh session must re-open it by path; it stays in the scratchpad and is never copied into the folder). Like
+  `--next` it refuses to combine with any flag that moves the folder.
 - **`--start` enforces the queue, not just the ledger.** It refuses a task whose `dependsOn` has not closed, and
   refuses a second token for an artifact a dispatched task is still writing. Both are field comparisons the engine
   makes rather than rules the caller is asked to honour. The second one matters most: with

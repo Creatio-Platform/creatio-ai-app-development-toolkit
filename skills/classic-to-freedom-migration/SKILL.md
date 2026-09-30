@@ -80,6 +80,7 @@ name (older clio), stop emitting for the rest of the run and carry on.
 - A Creatio section/page URL, or a section/page/entity name.
 - A Creatio package or application name, when the whole package/app must be migrated.
 - Optional Creatio environment name.
+- A migration folder holding `resume.md`: resume its build — skip steps 0-6, read `./references/orchestrate-build.md` → *Resuming*.
 
 ## Migration Scope
 
@@ -462,18 +463,18 @@ Never batch decisions into one prose message ("confirm A2 and A8"). Record every
 
 ### 7. Implement The Approved Plan — Slice It, Then Orchestrate One Task At A Time
 
-Step 6 ends with an approved plan. This step does **not** build it here. It cuts the plan into a folder of
-one-task files and then walks that folder, handing **one task at a time** to its own sub-agent.
+Step 6 ends with an approved plan. This step does **not** build it here: it cuts the plan into one-task files and
+hands **one task at a time** to its own sub-agent.
 
 **When the plan is approved, read `./references/orchestrate-build.md` ONCE, before you slice.** It holds this step
-in full — 7.0 the dispatch route, 7.1 recording the approval and slicing the plan, 7.2 the orchestrator contract,
-7.3 what each sub-agent is handed (the task-kind → brief table), 7.4 the read-back and the judge, 7.5 repair, 7.6
-whole-package scope — and step 8's driver side. What follows is the part you keep in view while the build runs; it
-does not replace it.
+in full (7.0-7.7) and step 8's driver side; below is what stays in view during the build.
 
 **7.0 Resolve the dispatch route before the first `--start`** and write it into `worklog.md` as a `Route:` line
 (`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
 `AskUserQuestion`, then stop until it is answered.
+
+**7.1b More than one task? Run `--tasks <migration-folder>/build-tasks --handoff`**, relay its prompt for a fresh
+session and STOP (again when a `--verify` opens repairs).
 
 **7.2 The orchestrator contract** — six rules, each stated in full in the reference:
 
