@@ -41,8 +41,7 @@ import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem } from "./split.mjs";
-import { RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_LIST, RECONCILE_MODES, RECONCILE_MODE_DEFAULT }
-  from "./reconcile-modes.mjs";
+import { RECONCILE_MODES } from "./reconcile-modes.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -2732,7 +2731,8 @@ export function freezeSplit(dir, text) {
 // orchestrator does not have to re-pass it. It changes HOW build sub-agents place elements, not the plan — so it
 // never touches `--plan`/`--spec`, only the task files (front matter) and the index header. The mode values live in
 // `reconcile-modes.mjs` (dependency-free, shared with designspec.mjs) and are re-exported here for existing callers.
-export { RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_LIST, RECONCILE_MODES, RECONCILE_MODE_DEFAULT };
+export { RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_LIST, RECONCILE_MODE_DEFAULT } from "./reconcile-modes.mjs";
+export { RECONCILE_MODES };
 const RECONCILE_MODE_FILE = ".reconcile-mode";
 
 // The mode frozen in the folder, or null when none was ever set (a legacy folder, or a non-reconcile build). A value

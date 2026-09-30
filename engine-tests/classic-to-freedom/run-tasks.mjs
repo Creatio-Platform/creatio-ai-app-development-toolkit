@@ -4858,7 +4858,7 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     () => !/reconcileMode:/.test(fs.readFileSync(path.join(dN, setN.tasks.find((t) => t.origin === "engine").file), "utf8")));
 
   // ---- CLI: the flag on a reconcile plan writes the folder, freezes, exits 0; guards on misuse ----
-  const RECON = { ...MANIFEST, planMeta: { ...(MANIFEST.planMeta ?? {}), freedomExists: true } };
+  const RECON = { ...MANIFEST, planMeta: { ...MANIFEST.planMeta, freedomExists: true } };
   const bR = tmp("cli_recon"); const dR = path.join(bR, "bt");
   const okRun = cliTasks(["--tasks", dR, "--reconcile-mode", "classic-layout"], RECON);
   check("CLI: `--tasks --reconcile-mode classic-layout` on a reconcile plan exits 0 and writes the folder",
@@ -4956,8 +4956,11 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const rep = syncRepairDir(dRep, RUN, VERIFY_PAGES, OPTS);
     const repFile = (rep.written || [])[0];
     check("syncRepairDir stamps `reconcileMode: classic-layout` on a repair task file and it round-trips",
-      () => { if (!repFile) return false; const txt = fs.readFileSync(path.join(dRep, repFile.file), "utf8");
-        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC; },
+      () => {
+        if (!repFile) return false;
+        const txt = fs.readFileSync(path.join(dRep, repFile.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC;
+      },
       () => ({ repFile: repFile?.file }));
   }
   // ---- --verify --built --tasks reads the frozen mode; the applied mode is printed, never silently off ----

@@ -3143,9 +3143,22 @@ function keptConnectionFieldNames(ctx) {
     if (!CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) continue;
     if (wrapsAnotherContainer(c, containers)) continue; // an ancestor tab, not the group's own leaf container
     for (const n of c.fields || []) if (n) names.add(n);
-    for (const o of c.fieldOps || []) if (o && o.bound) names.add(o.bound);
+    for (const o of c.fieldOps || []) if (o?.bound) names.add(o.bound);
   }
   return names;
+}
+// The classic-layout EXTRA row, or null when nothing is extra. A field CONTROL the maximum matching could not assign
+// to any expected name (`opToName[oi] < 0`) is a base field the mode was supposed to REMOVE — unless it is a lookup
+// inside a KEPT "Connected to" group (exempt by element name OR bound column). Own function so resolveFieldsByIdentity
+// stays under Sonar's cognitive-complexity ceiling.
+function classicLayoutExtraRow(identified, opToName, ctx, missing) {
+  const kept = keptConnectionFieldNames(ctx);
+  const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "")
+    && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
+  if (!extras.length) return null;
+  const ov = extras.length > 8 ? "…" : "";
+  const alsoMissing = missing.length ? ` · also missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}` : "";
+  return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}${alsoMissing}`, "missing"];
 }
 function resolveFieldsByIdentity(vk, names, ctx) {
   const ops = ctx.ops;
@@ -3161,16 +3174,8 @@ function resolveFieldsByIdentity(vk, names, ctx) {
   // (`Input_CallFrom` bound to a planned `CallerId`) from being flagged as extra; a value-add widget is not a
   // field type, so FIELD_RE excludes it and it is never in this set.
   if (ctx.reconcileMode === RECONCILE_MODE_CLASSIC) {
-    // A lookup that lives inside a KEPT "Connected to" connection group is part of that component, not a stray base
-    // field, so it is never an EXTRA to remove.
-    const kept = keptConnectionFieldNames(ctx);
-    const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "")
-      && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
-    if (extras.length) {
-      const ov = extras.length > 8 ? "…" : "";
-      const alsoMissing = missing.length ? ` · also missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}` : "";
-      return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}${alsoMissing}`, "missing"];
-    }
+    const extraRow = classicLayoutExtraRow(identified, opToName, ctx, missing);
+    if (extraRow) return extraRow;
   }
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page (element name, \`<Name>Field\`, or the bound column)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
