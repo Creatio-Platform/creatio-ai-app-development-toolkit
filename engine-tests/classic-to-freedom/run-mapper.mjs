@@ -11830,6 +11830,23 @@ const n2TreeManifest = (titleA, titleB) => ({
       return cs.resources.Document_AddButtonCaption === "Add" && cs.resourceCultures.Document_AddButtonCaption?.["fr-FR"] === "Ajouter"
         && !cs.needsDecision.some((n) => n.kind === "detail-text");
     });
+  // A readable detail that lacks one referenced string: only that text is a Confirm item; its other texts and title resolve.
+  check("texts T4: a detail whose strings lack one referenced key raises one `detail-text` item and keeps its other texts and title",
+    () => {
+      const m = coTextsManifest();
+      const partial = Object.fromEntries(Object.entries(DOC_STRINGS).filter(([k]) => k !== "SelectDocumentMessage"));
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, resourceStrings: partial };
+      const run = runMigration(m, { baseDir: FIX });
+      const cs = run.changeSet;
+      const texts = cs.needsDecision.filter((n) => n.kind === "detail-text").map((n) => n.item);
+      const v = renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      const line = v.markdown.split("\n").find((l) => l.includes("[detail-text] DocumentDetailV2 · SelectDocumentMessage")) || "";
+      return texts.length === 1 && texts[0] === "DocumentDetailV2 · SelectDocumentMessage"
+        && cs.resources.Document_LinkDocumentCaption === "Link document" && cs.resources.Document_Caption === "Documents"
+        && layoutRow(run.plan, "Documents").includes('`Document_LinkDocumentCaption` "Link document"')
+        && !cs.needsDecision.some((n) => n.kind === "detail-caption" && n.item === "DocumentDetailV2")
+        && line !== "" && !line.includes("✅");
+    });
   // One source per key: a key `resourceStrings` carries takes its en-US text from them, not from the flat `resources`.
   check("texts: a key whose flat en-US text differs from its `resourceStrings` en-US takes both from `resourceStrings`, and a built page with those texts closes the row",
     () => {
