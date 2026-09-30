@@ -80,7 +80,7 @@ name (older clio), stop emitting for the rest of the run and carry on.
 - A Creatio section/page URL, or a section/page/entity name.
 - A Creatio package or application name, when the whole package/app must be migrated.
 - Optional Creatio environment name.
-- A migration folder holding `resume.md`: resume its build — skip steps 0-6, read `./references/orchestrate-build.md` → *Resuming*.
+- A migration folder with `resume.md`: skip steps 0-6, read `./references/orchestrate-build.md` → *Resuming*.
 
 ## Migration Scope
 
@@ -463,8 +463,8 @@ Never batch decisions into one prose message ("confirm A2 and A8"). Record every
 
 ### 7. Implement The Approved Plan — Slice It, Then Orchestrate One Task At A Time
 
-Step 6 ends with an approved plan. This step does **not** build it here: it cuts the plan into one-task files and
-hands **one task at a time** to its own sub-agent.
+This step does **not** build the approved plan here: it cuts it into one-task files and hands
+**one task at a time** to its own sub-agent.
 
 **When the plan is approved, read `./references/orchestrate-build.md` ONCE, before you slice.** It holds this step
 in full (7.0-7.7) and step 8's driver side; below is what stays in view during the build.
