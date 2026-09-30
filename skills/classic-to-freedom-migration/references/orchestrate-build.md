@@ -158,12 +158,14 @@ sub-agents before this, one of them caching material nobody else read.
    every task has settled; go to step 8. *Run halted* (exit **2**) → nothing is startable AND
    nothing is running: a task is `blocked` or carries a status nobody recognises, or waits on an
    open decision, and no re-run changes that — read its `## Notes` and decide, or `--decide` the
-   source row it names, or re-open that row if the answer is to build it. *Dispatch ledger broken*
+   source row it names (`--decide D<N> --build` if the answer is to build it). *Dispatch ledger broken*
    (exit **2**) → repair the ledger first; `--start` refuses every id until you do. A task withheld
    with **every open row waiting on a decision** names the source task and row that raised it:
-   answer that decision with `--decide D<N> --row <task>:<n>` and the task is released. When the
-   answer is to build the row, re-open it instead: clear its `Outcome` cell and set its task back to
-   `status: todo`. Do not dispatch the held task first.
+   answer that decision with `--decide D<N> --wont-do|--postponed --row <task>:<n>` and the task is
+   released. When the answer is to build the row, run `--decide D<N> --build --row <task>:<n>`: the
+   engine clears the row, records the decision and puts its task back to `todo`; never edit the task
+   file. `--decide D<N> --build` re-opens only a `not-built — needs-decision` row and names every
+   other row it skipped. Do not dispatch the held task first.
 
    **The queue order it answers in is leaf-first, and that is a build requirement, not a
    preference:** a related list's Add/Edit opens the child's own form, so the child page exists
@@ -209,6 +211,16 @@ sub-agents before this, one of them caching material nobody else read.
    item or fold chain other deliverables share without a status of their own: give each its own
    (`wont-do`, or `"status": "build"`); nothing is closed on their behalf. A decision taken DURING
    the build still goes through `--decide`.
+
+   **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
+   deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints
+   the list under `### Won't do` so the approver sees it. Until a task is dispatched, `--tasks` (the
+   cut, a re-sync, `--start`, `--next`) refuses with NOTHING WRITTEN and exit 2 while a `D<N>` in
+   `decisions.md` is cited by no `deliverableStatus` entry, no task `decisions:` line and not that
+   list; the refusal names each `D<N>`, its title and the open deliverable ids. Add the status or the
+   list item, re-run `--plan`, and have the plan approved again. `--decide` and `--revoke` are never
+   refused by this check, and it does not apply once a task has been dispatched. A list item that
+   decisions.md does not hold, or that a `wont-do` status also cites, is a plan gap.
 
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses
    a task whose `dependsOn` has not closed, naming each one and its status. And it refuses to issue
@@ -578,7 +590,7 @@ names what holds each task. Open each blocked task in the folder it names, read 
 the hold, resolve that hold (a decision, a dependency, an artifact somebody else owns), set the file
 back to `status: todo`, and only then `--start` it. A task held on an open decision is already
 `todo`: record that decision with `--decide` on the source row the block names, or, if the answer is
-to build that row, clear its `Outcome` cell and set its task back to `status: todo`.
+to build that row, `--decide D<N> --build --row <task>:<n>`.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The engine's close artifact is the ONLY sanctioned completion/status report — the migration
