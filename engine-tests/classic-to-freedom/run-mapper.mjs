@@ -12146,6 +12146,19 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => tLine(renderVerify(rnNoRecon, { planMeta: pmNoRecon }, builtRecon).markdown));
 }
 
+/* a field bound to `$PDS_<Column>` WITHOUT the Interface Designer's hash still matches the plan column — the
+   `PDS_` prefix is unwrapped the same as the hashed `PDS_<Column>_<hash>` form. Otherwise a freshly inserted plan
+   field reads as both missing AND EXTRA on a classic-layout reconcile. */
+{
+  const rnP = runMigration({ entity: "X", entityColumns: { Foo: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Foo",parentName:"Header",propertyName:"items",values:{bindTo:"Foo"}}]};});` }] }, { baseDir: FIX });
+  const builtPds = { pages: { main: { viewConfig: { items: [{ name: "NumberInput_XFoo", type: "crt.NumberInput", control: "$PDS_Foo" }] } } } };
+  const vP = renderVerify(rnP, { reconcileMode: "classic-layout" }, builtPds);
+  const fLine = vP.markdown.split("\n").find((l) => /Fields —/.test(l)) || "";
+  check("verify: a field bound to `$PDS_<Column>` (no Designer hash) matches by column — not missing, not EXTRA",
+    () => /✅/.test(fLine) && !/❌ EXTRA/.test(vP.markdown) && !/missing:/.test(fLine), () => fLine);
+}
+
 // ================================================================================================
 // THE READ PLAN. The `--verify` payload was composed by hand, and every failure it paid
 // for was a key that did not get copied: no `modelConfig` (the primary-data-source check never ran),

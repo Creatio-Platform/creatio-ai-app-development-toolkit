@@ -3990,7 +3990,12 @@ export function boundAttributeOf(node) {
   if (!b) return null;
   const attr = b.slice(1);
   const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
-  return m ? m[1] : attr;
+  if (m) return m[1];
+  // A build that binds to a plainly-named primary-data-source attribute (`$PDS_<Column>`, no Designer hash) means
+  // the same column — unwrap the `PDS_` prefix so it matches the plan's bare column name, exactly as the hashed
+  // Designer form does.
+  if (/^PDS_./i.test(attr)) return attr.slice(4);
+  return attr;
 }
 // One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
 // component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
