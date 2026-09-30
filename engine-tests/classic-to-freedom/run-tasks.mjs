@@ -5919,6 +5919,14 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
         () => res.status === 1 && /--handoff/.test(res.stderr || "") && (res.stdout || "").trim() === "" && !fs.existsSync(RESUME),
         () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
     }
+    // `--build` is an answer to `--decide`, so it reaches `--handoff` only through `--decide` — both shapes refuse.
+    for (const [label, args, names] of [["--build", ["--build"], /--build/],
+      ["--decide D1 --build", ["--decide", "D1", "--build", "--task", nextId], /--handoff/]]) {
+      const res = cliFile(manifestPath, "--tasks", dir, "--handoff", ...args);
+      check(`--handoff + ${label}: exit 1, nothing printed on stdout and no resume.md — a build answer and a hand-off are separate calls`,
+        () => res.status === 1 && names.test(res.stderr || "") && (res.stdout || "").trim() === "" && !fs.existsSync(RESUME),
+        () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    }
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
