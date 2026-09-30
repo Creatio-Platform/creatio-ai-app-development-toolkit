@@ -3948,9 +3948,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // On a reconcile plan, name which mode applied so a run that verifies without the classic-layout gate is visible,
     // never silently un-gated — and the reason distinguishes "no --tasks folder" from "the folder is on overlay".
     if (manifest.planMeta?.freedomExists) {
-      const why = verifyMode2 === RECONCILE_MODE_CLASSIC ? "classic-layout — EXTRA-field gate ON"
-        : tasksMode ? "overlay — classic-layout EXTRA-field gate NOT applied"
-          : "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
+      let why;
+      if (verifyMode2 === RECONCILE_MODE_CLASSIC) why = "classic-layout — EXTRA-field gate ON";
+      else if (tasksMode) why = "overlay — classic-layout EXTRA-field gate NOT applied";
+      else why = "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
       process.stderr.write(`migrate.mjs: reconcile verify mode = ${why}.\n`);
     }
     verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2 }, built, decidedKeys);

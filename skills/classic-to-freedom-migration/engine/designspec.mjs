@@ -3136,17 +3136,21 @@ function maxFieldMatch(names, ops) {
 // one — the escape stays `--decide` on the row. Narrowing the tokens would instead MISS real localized groups.
 const CONNECTED_TO_RE = /connected[\s_-]*to|entityconnection|connections?\b|связ|подключ/i;
 const CONNECTION_LOOKUP_TYPE = "crt.ComboBox";
+// A container is the connection group's own LEAF when it NAMES the group and wraps no other container (an ancestor
+// tab that holds another named container is not the group itself — `hasNestedContainer`).
+const isConnectionGroupLeaf = (c) =>
+  CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`) && !c.hasNestedContainer;
+// Add the element name + bound column of every connection LOOKUP directly in a kept leaf; base non-lookups are not kept.
+function addConnectionLookupIds(container, names) {
+  for (const o of container.fieldOps || []) {
+    if (o?.type !== CONNECTION_LOOKUP_TYPE) continue;
+    if (o.name) names.add(o.name);
+    if (o.bound) names.add(o.bound);
+  }
+}
 function keptConnectionFieldNames(ctx) {
   const names = new Set();
-  for (const c of ctx.containers || []) {
-    if (!CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) continue;
-    if (c.hasNestedContainer) continue; // an ancestor tab (holds another container), not the group's own leaf
-    for (const o of c.fieldOps || []) {
-      if (o?.type !== CONNECTION_LOOKUP_TYPE) continue; // only the group's lookups are kept; base non-lookups are not
-      if (o.name) names.add(o.name);
-      if (o.bound) names.add(o.bound);
-    }
-  }
+  for (const c of (ctx.containers || []).filter(isConnectionGroupLeaf)) addConnectionLookupIds(c, names);
   return names;
 }
 // The `classic-extras` row — ❌ EXTRA listing base field controls to remove, or ✅ when there are none. A field CONTROL

@@ -5002,7 +5002,7 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     dropDotfile(dDec);
     applyDecision(dDec, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
     check("--decide with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files (restored from the stamp, not reset to overlay)",
-      () => engStamped(dDec), () => ({ eng: (readTaskDir(dDec).find((t) => t.origin === "engine") || {}).file }));
+      () => engStamped(dDec), () => ({ eng: readTaskDir(dDec).find((t) => t.origin === "engine")?.file }));
     // --revoke with the dotfile gone likewise keeps the stamp.
     const dRevL = path.join(tmp("mode_lost_revoke"), "bt");
     syncTaskDir(dRevL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
@@ -5082,8 +5082,11 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     addTasks(dAdd, RUN, { ...DECL }, OPTS);
     const minted = readTaskDir(dAdd).find((t) => t.id === DECL.id);
     check("addTasks stamps `reconcileMode: classic-layout` on the task it mints on a frozen folder",
-      () => { if (!minted) return false; const txt = fs.readFileSync(path.join(dAdd, minted.file), "utf8");
-        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC; },
+      () => {
+        if (!minted) return false;
+        const txt = fs.readFileSync(path.join(dAdd, minted.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC;
+      },
       () => ({ minted: minted?.file }));
   }
   // ---- --revoke keeps the stamp on the rewritten TASK FRONT MATTER, not only the index headline ----
