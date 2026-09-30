@@ -2063,9 +2063,7 @@ export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, i
 export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
-  // OOTB selection-window entry points, including the wrappers a + calls directly (PICUtilities,
-  // LookupMultiAddMixin).
-  const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b|\bopenLookupWithMultiSelect\b|\bopenProductLookupToLink\b/.test(body);
+  const lookup =/\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b|\bopenLookupWithMultiSelect\b|\bopenProductLookupToLink\b/.test(body);
   const editableGrid = /\bConfigurationGrid\b|ConfigurationGridUtilities|getEditableGridRowViewModelClassName|getCellControlsConfig/.test(body);
   const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
   const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
