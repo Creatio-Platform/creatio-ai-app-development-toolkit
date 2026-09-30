@@ -175,6 +175,34 @@ class BriefRoutingTableTests(unittest.TestCase):
             self.assertIn("build-task-execution.md", paths)
 
 
+class EvidenceRecordContractTests(unittest.TestCase):
+    """The briefs of the agents that file and judge evidence records state the record contract."""
+
+    def test_record_briefs_name_every_field_and_id_shape_the_engine_checks(self):
+        # The builder files evidence records and the judge rules on them. When either brief
+        # leaves out a field or an id shape, the sub-agent goes into the engine source to find
+        # it. Both lists are read from the engine, so a field or shape added there fails here
+        # until the briefs name it too.
+        designspec = read(SKILL_DIR / "engine/designspec.mjs")
+        reads = read(SKILL_DIR / "engine/reads.mjs")
+        skeleton = re.search(r"\[EVIDENCE_SKELETON_FILE, \{([^}]*)\}\]", reads)
+        self.assertIsNotNone(skeleton, "the evidence skeleton in reads.mjs no longer has the shape this test reads")
+        required = re.search(r"export const EVIDENCE_REQUIRES = \[([^\]]*)\]", designspec)
+        self.assertIsNotNone(required, "EVIDENCE_REQUIRES is no longer where this test reads it")
+        fields = set(re.findall(r"(\w+):", skeleton.group(1))) | set(re.findall(r'"(\w+)"', required.group(1)))
+        self.assertIn("noChangesReason", designspec)
+        fields.add("noChangesReason")
+        shapes_block = section(designspec, "FIVE shapes:", "// Built from")
+        # One shape per line, indented a few spaces; the deeper-indented lines continue a shape's note.
+        shapes = re.findall(r"^// {1,4}`([^`]+)`", shapes_block, re.M)
+        self.assertEqual(len(shapes), 5, f"read {shapes} as the evidence-id shapes")
+        for name in ("judge-brief.md", "build-page.md"):
+            text = read(REFERENCES / name)
+            missing = [f for f in sorted(fields) if f"`{f}`" not in text]
+            missing += [s for s in shapes if f"`{s}`" not in text]
+            self.assertFalse(missing, f"{name} does not name {missing}")
+
+
 class ReferencePathTests(unittest.TestCase):
     """A path written in a reference resolves from where a reader takes it."""
 
