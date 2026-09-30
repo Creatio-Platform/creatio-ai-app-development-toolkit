@@ -3,7 +3,7 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1221,6 +1221,59 @@ console.log("\n===== run diagnostics (offline, injected runner) =====");
   const bare = diag.render(diag.collect({ root: tmp, run: runner() }));
   check("diagnostics: no plugin.json and no --environment still render a block, each gap with its reason",
     () => bare.includes("unknown (no plugin.json beside the skill)") && bare.includes("unknown (no --environment given)") && !bare.includes("**Stand:**"), () => bare);
+  // The Claude Code plugin cache is not a git checkout; its build comes from the registry beside the cache.
+  const plugins = path.join(tmp, "plugins");
+  const cached = path.join(plugins, "cache", "creatio", "toolkit", "1.12.0");
+  mkdirSync(path.join(cached, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(cached, ".claude-plugin", "plugin.json"), JSON.stringify({ version: "1.12.0" }));
+  const listing = path.join(tmp, "listing");
+  mkdirSync(path.join(listing, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+    "toolkit@other": [{ installPath: path.join(plugins, "cache", "other", "toolkit", "1.12.0"), gitCommitSha: "ffffffffffffffffffffffffffffffffffffffff" }],
+    "toolkit@creatio": [{ installPath: cached, gitCommitSha: "a5d7e1fd9c62aaaabbbbccccddddeeeeffff0000" }] } }));
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing } }));
+  const listPlugins = (source) => writeFileSync(path.join(listing, ".claude-plugin", "marketplace.json"), JSON.stringify({ plugins: [{ name: "toolkit", source }] }));
+  listPlugins({ source: "url", url: "https://example/toolkit.git", ref: "feature/ENG-1-x" });
+  const fromRegistry = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a plugin cache without `.git` reads the installed commit from `installed_plugins.json` (the record whose installPath is this dir) and the branch from the marketplace ref",
+    () => fromRegistry.includes("`1.12.0` · branch `feature/ENG-1-x` (marketplace ref) · commit `a5d7e1f`"), () => fromRegistry);
+  const registryD = diag.collect({ environment: "demo", root: cached, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - timeout" } }) });
+  const registryJson = JSON.stringify(registryD);
+  check("diagnostics: the `--json` object renders through `normalize` exactly as the CLI block — registry branch, commit and a stand error survive the round trip into the plan",
+    () => diag.render(diag.normalize(JSON.parse(registryJson), (s) => s)) === diag.render(registryD), () => diag.render(registryD));
+  listPlugins({ source: "github", repo: "o/toolkit" });
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing, source: { source: "github", repo: "o/m", ref: "release" } } }));
+  const marketRef = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a plugin entry with no ref takes the branch from the marketplace source ref",
+    () => marketRef.includes("branch `release` (marketplace ref) · commit `a5d7e1f`"), () => marketRef);
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing } }));
+  const commitOnly = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a registry record whose marketplace names no branch prints the commit alone, never `detached`",
+    () => commitOnly.includes("`1.12.0` · commit `a5d7e1f`\n") && !commitOnly.includes("detached"), () => commitOnly);
+  // The registry names the cache by the path Claude Code wrote; a symlinked config dir reaches the same directory.
+  const linked = path.join(tmp, "linked-plugins");
+  let symlinked = true;
+  try { symlinkSync(plugins, linked, "dir"); } catch { symlinked = false; }
+  if (symlinked) {
+    writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+      "toolkit@creatio": [{ installPath: path.join(linked, "cache", "creatio", "toolkit", "1.12.0"), gitCommitSha: "a5d7e1fd9c62aaaabbbbccccddddeeeeffff0000" }] } }));
+    const viaLink = diag.render(diag.collect({ root: cached, run: runner() }));
+    check("diagnostics: a registry installPath that reaches the cache through a symlink still matches it",
+      () => viaLink.includes("commit `a5d7e1f`"), () => viaLink);
+  }
+  writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "toolkit@creatio": [{ installPath: cached, gitCommitSha: "" }] } }));
+  const noSha = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a registry record with an empty commit prints the version alone and does not throw",
+    () => noSha.includes("classic-to-freedom-migration `1.12.0`\n"), () => noSha);
+  mkdirSync(path.join(cached, ".git"));
+  const checkoutWins = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a git checkout is read from git even when a registry record exists — git names the commit that is on disk",
+    () => checkoutWins.includes("branch `feature/x` · commit `abc1234`"), () => checkoutWins);
+  const json = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs"), "--json"],
+    { encoding: "utf8", env: { PATH: "" } });
+  check("diagnostics: `--json` prints the same values as one object, the shape `manifest.runDiagnostics` takes",
+    () => { const d = JSON.parse(json.stdout); return json.status === 0 && typeof d.skillVersion === "string" && d.clioVersion === "unknown (clio not found on PATH)"; },
+    () => json.stdout);
   check("diagnostics: the CLI entry point exits 0 and prints the block even when nothing can be read",
     () => {
       const r = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs")],

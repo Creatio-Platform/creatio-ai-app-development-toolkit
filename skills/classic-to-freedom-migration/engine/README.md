@@ -96,7 +96,8 @@ writes a folder rather than printing, so silent precedence would report a plan w
 **The plan version.** `--plan` prints `**Plan version:** \`plan-<hash>\`` as the first line of the Overview. It is a
 deterministic short hash over EVERY key the manifest carries — `entity`, `schemas` (package + body CONTENT, in
 order), `planMeta`, and equally `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`,
-`signals` and `behaviourIndex`. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
+`signals` and `behaviourIndex` — except `runDiagnostics`, which describes the machine the plan was made on, so a
+plugin or clio update does not force re-approval. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
 contributes its CONTENT wherever it sits), so the same manifest always yields the same version and re-planning is
 not a new version to approve. An earlier version hashed an ALLOWLIST of three keys, and that is what this replaced:
 the unit set could change materially (a detail marked `editPage:false` drops a whole child page) while the version
@@ -536,7 +537,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
 - `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
-- `diagnostics.mjs` — `node diagnostics.mjs --environment <name>`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus git branch/commit when the install is a checkout), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account.
+- `diagnostics.mjs` — `node diagnostics.mjs --environment <name> [--json]`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus branch/commit: from git when the install is a checkout, else from the Claude Code registry — `installed_plugins.json` for the commit, the marketplace's `source.ref` for the branch), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account. `--json` prints the same values as one object — `manifest.runDiagnostics`, which `--plan` renders as the plan's own `### Run diagnostics` block and leaves out of the plan version.
 
 ## Tests & internals
 

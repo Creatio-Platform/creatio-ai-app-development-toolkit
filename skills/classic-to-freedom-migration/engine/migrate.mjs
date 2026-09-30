@@ -23,6 +23,7 @@
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
+//     "runDiagnostics": { skillVersion, git, clioVersion, gateVersion, environment, uri, stand }, // optional; the `diagnostics.mjs --json` object — `--plan` prints it as the plan's `### Run diagnostics` block (`unknown (not supplied)` when absent). Not part of the plan version.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
@@ -2496,9 +2497,13 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // signals OUTSIDE it: the unit set could change materially (a detail marked `editPage:false` drops a whole child
 // page) while the approved version stayed identical, so the approval gate authorised a plan nobody approved.
 // Everything the manifest carries is covered here rather than an allowlist — the allowlist is what went stale.
+// The one key left out is `runDiagnostics`: it records the machine the plan was produced on (skill build, clio,
+// stand), not what the plan says, so a plugin or clio update between plan and build does not ask for re-approval.
+const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics"]);
 function computePlanVersion(manifest, readBody) {
   const h = createHash("sha256");
-  feedPlanVersion(h, manifest, null, readBody, { nodes: 0 }, 0);
+  const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
+  feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
@@ -2994,7 +2999,7 @@ export function runMigration(manifest, opts = {}) {
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, { ...specOpts, planGroups });
+  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }

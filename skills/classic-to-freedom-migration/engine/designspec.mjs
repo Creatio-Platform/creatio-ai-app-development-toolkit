@@ -23,6 +23,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
+import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -2042,6 +2043,16 @@ function dashboardsSigLines(s, targetPackage = "") {
   bucket(d.unrecorded, "\u26a0 written as a bare string \u2014 rewrite as `{ id, caption, sourcePackage? }`");
   return L;
 }
+// The `### Run diagnostics` block in the plan, from `manifest.runDiagnostics` (the `diagnostics.mjs --json` object),
+// so the plan file alone names the skill build, the clio and the stand it was produced with. Every value is text an
+// agent copied, so `normalize` passes each one through `esc`; the block never throws and never stops the plan.
+function renderRunDiagnostics(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return ["### Run diagnostics", "", "- unknown (not supplied — put the `diagnostics.mjs --json` output into `manifest.runDiagnostics`)", ""];
+  }
+  return [renderDiagnosticsBlock(normalizeDiagnostics(raw, esc)).trimEnd(), ""];
+}
+
 export function renderPlan(result, opts = {}) {
   return renderPlanWith(result, { ...opts, printedStatus: new Set() });
 }
@@ -2089,6 +2100,7 @@ function renderPlanWith(result, opts) {
     sizeLine,
     `- **Approach:** ${fill(pm.approach, "<FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>")}`,
     "",
+    ...renderRunDiagnostics(opts.runDiagnostics),
     "### What it does",
     escBareLine(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>")), // bare line → also escape a leading block marker (finding 5)
     "",
