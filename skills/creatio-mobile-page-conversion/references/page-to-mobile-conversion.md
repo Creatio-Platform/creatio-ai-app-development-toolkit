@@ -138,7 +138,7 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    - **Freedom UI (`freedom-web`):** continue — the guide already analyzed components, layout,
      fields, actions, and (detected) business rules.
 4. **Generate the conversion plan.** From the guide, produce a SHORT, plain-language plan — NOT
-   technical detail. Lead with the Beta-release notice (see "Conversion plan" below) — verbatim at the
+   technical detail. Lead with the scope notice (see "Conversion plan" below) — verbatim at the
    very top. Then state: what will be transferred, what will be adapted (e.g. *"grid → mobile
    list"*, *"checkbox → toggle"*), what is unsupported / will be dropped, what needs a decision, the
    recommended mobile template, and the section/workplace registration intent. For each unsupported /
@@ -356,16 +356,14 @@ make. Section/workplace writes (`odata-update` on `SysModule`, `odata-create` on
 
 Show a SHORT, plain-language plan — no JSON, no page body, no per-property detail. Cover:
 
-- **Beta-release notice (show FIRST, verbatim)** — print this notice at the very top of the plan,
-  before anything else, exactly as written (do not paraphrase or drop it). Print it as a PLAIN
-  paragraph: no blockquote, no leading `>` — terminals whose font lacks the quote bar draw it as a
-  missing-glyph box on every wrapped line of the notice. It is temporary and names the feature it
-  applies to — converting a **web Freedom UI page** into a **mobile Freedom UI page**:
+- **Scope notice (show FIRST, verbatim)** — print this notice at the very top of the plan, before
+  anything else, exactly as written (do not paraphrase or drop it). Print it as a PLAIN paragraph: no
+  blockquote, no leading `>` — terminals whose font lacks the quote bar draw it as a missing-glyph box
+  on every wrapped line of the notice. It names the one limit a developer cannot discover from the plan
+  itself. Tablet output is generated, not absent, so the notice asks the user to CHECK it rather than to
+  wait for it:
 
-  ⚠️ You are using the **web-Freedom-page → mobile-Freedom-page conversion** in **Beta mode**: some functionality may be limited or subject to change, and the Converter currently supports the **Mobile canvas** only — Tablet support is on the roadmap and will be available in a future release.
-
-  (The separate "enabling this feature activates Beta mode" heads-up is shown by clio at the moment the
-  `mobile-page-converter` feature is enabled, not here.)
+  ⚠️ The **web-Freedom-page → mobile-Freedom-page conversion** is supported for the **Mobile canvas** only. Tablet layout IS generated, but it remains **experimental** and is outside the supported scope — check the page on a tablet before relying on it.
 - **Target** — the registered environment, the target page name (**with the environment
   `SchemaNamePrefix`**), the recommended mobile template, and the target package (propose one; the
   developer makes the final choice).
@@ -398,7 +396,8 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   `sectionRegistration.probeOk` is false, say the environment could not be queried and registration
   must be verified manually.
 - **Adaptive layout (per-screen)** — when `guide.adaptiveLayout` is present, state it in plain words:
-  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* State it
+  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet — the
+  tablet layout is experimental, check it on a device."* State it
   as what the conversion DID, not as something to accept or decline: both the container columns and each
   child's placement are already in the pasted `values`, there is nothing separate to apply, and there is no
   mechanism to honour a refusal. A different layout is an edit to those `values` before pasting.
