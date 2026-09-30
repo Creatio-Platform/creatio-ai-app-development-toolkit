@@ -146,3 +146,19 @@ without re-inserting it, or later — the hint says which), it stays `correctnes
 schema order (F1), a lower or same-layer one means the base element is missing from the seed (F2).
 A `remove` that carries `properties` is not this case: it patches an element, like a `merge`, so on
 a name nothing in the supplied chain defines it stays `correctness` and blocks.
+
+## Texts — the page and its details carry localizable strings
+
+- **`resourceStrings` (page) and `detailSchemas.<Detail>.resourceStrings`** — the same strings as
+  `resources`, in every Classic culture (`{ "Key": { "en-US": "…", "fr-FR": "…" } }`), as
+  `get-classic-page-sources` writes them. The engine echoes the en-US text of each string the page
+  uses on `changeSet.resources` and its values in the other cultures on `changeSet.resourceCultures`
+  (key → { culture → text }), with the Classic string each came from on `changeSet.resourceSources`.
+  Authoring those values is part of the build. A folded child, typed or mini page carries the same
+  three fields on its own `changeSet` in the result.
+- **A detail's `title` is the detail schema's internal caption**, never the title the page shows. The
+  related list's title is, in Classic's order: the page string named by the page's
+  `details.<X>.captionName`, then the page string `<X>DetailCaptionOnPage`, then the detail's own
+  `Caption` in its `resourceStrings` (e.g. `{ "DocumentDetailV2": { "body": "<define(...)>",
+  "resourceStrings": { "Caption": { "en-US": "Documents" } } } }`). When none of them is readable, the
+  plan asks for the title in ⚠ Confirm.

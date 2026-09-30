@@ -442,13 +442,31 @@ export function mapToFreedom(eff, opts = {}) {
   // knows what to author. `key` = the ORIGINAL classic resource key when the schema had one, else a
   // synthesized `<name>Caption`. `resolved` = the text is known (no manual decision needed).
   const resourceStrings = {}; // resource key -> default-language text: the map the agent registers at build
+  // The same keys -> { culture: text } in every culture Classic holds (only when the manifest carries
+  // `resourceStrings`), and -> the Classic string each text was read from ("page · Key" / "<DetailSchema> · Key").
+  const pageCultures = opts.resourceStrings || null;
+  const resourceCultures = {};
+  const resourceSources = {};
+  const registerText = (key, t) => {
+    resourceStrings[key] = t.text;
+    if (t.cultures) resourceCultures[key] = t.cultures;
+    resourceSources[key] = t.source;
+  };
+  // A page string by its Classic key or `Resources.Strings.` reference: its text, cultures and source, or null.
+  const pageText = (raw) => {
+    if (!raw) return null;
+    const key = resources[resourceKey(raw)] == null ? raw : resourceKey(raw);
+    if (resources[key] == null) return null;
+    return { text: resources[key], cultures: pageCultures?.[key] ?? null, source: `page · ${key}` };
+  };
   const captionKey = (raw, fallbackName) => raw
     ? resourceKey(raw)
     : (fallbackName || "") + "Caption";
   const caption = (raw, fallbackName) => {
     const key = captionKey(raw, fallbackName);
-    const text = resolveText(raw) ?? resolveText((fallbackName || "") + "Caption");
-    if (text != null) resourceStrings[key] = text;
+    const hit = pageText(raw) ?? pageText((fallbackName || "") + "Caption");
+    const text = hit?.text ?? null;
+    if (hit) registerText(key, hit);
     return { binding: "$Resources.Strings." + key, text, key, resolved: text != null, synthesized: !raw };
   };
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
@@ -514,7 +532,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
-  const ctx = { eff, cols, resources, resolveText, caption, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor,
+  const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor,
     index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
@@ -592,6 +610,10 @@ export function mapToFreedom(eff, opts = {}) {
     // resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
     resources: resourceStrings,
+    // per-culture Classic values of those keys (present only for keys the manifest carried in every culture)
+    resourceCultures,
+    // the Classic string behind each key: "page · <Key>" or "<DetailSchema> · <Key>"
+    resourceSources,
     // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
     standardFeatures: D.standardFeatures,
     // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
@@ -1285,7 +1307,7 @@ function detectDetailAddMechanism(dinfo) {
 }
 
 function mapDetails(ctx, containers, profileRegion) {
-  const { index, profileAnchors, detailSchemas, resolveText, payloadDetails } = ctx;
+  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails } = ctx;
   const { ensureTab } = containers;
   const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set();
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
@@ -1332,7 +1354,7 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   // The decisions a genuine (non-feature) related list raises: unresolved name, unplaced tab, undeterminable
   // editability, its SEPARATE child edit-page migration, and an unresolved caption. Own fn for Sonar CC 15.
-  const flagDetailIssues = (d, dinfo, dentity, tab, detailTitle) => {
+  const flagDetailIssues = (d, dinfo, dentity, tab, detailTitle, detailTexts) => {
     if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
       const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
@@ -1348,15 +1370,20 @@ function mapDetails(ctx, containers, profileRegion) {
       reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-page-sources gathers these); an inline-editable grid then resolves from its grid config, otherwise it defaults to standard add/edit/delete via the child edit page. Or confirm view-only.` });
     needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
       reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
-    if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
-      reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
+    if (!detailTitle) needsDecision.push(detailCaptionDecision(d));
+    for (const t of detailTexts) if (t.text == null) needsDecision.push(detailTextDecision(d, t));
   };
   // Build the emitted detail record (Expanded / inline-Editable list) — editable-grid intent + columns.
-  const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle) => {
+  const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle, detailTexts) => {
     const editable = detectDetailAddMechanism(dinfo);
+    if (detailTitle) registerText(detailTitle.key, detailTitle);
+    for (const t of detailTexts) if (t.text != null) registerText(t.key, t);
     details.push({
       composite: editable ? "Editable list" : "Expanded list", entity: dentity, detailSchema: d.schemaName,
-      caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      caption: detailTitle?.text ?? null, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      // the title's page key and Classic source, and the texts the detail body shows (its `Resources.Strings.*`)
+      captionKey: detailTitle?.key ?? null, captionSource: detailTitle?.source ?? null,
+      texts: detailTexts,
       columns: dinfo?.columns?.length ? dinfo.columns : null,
       editable,
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
@@ -1372,15 +1399,50 @@ function mapDetails(ctx, containers, profileRegion) {
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); return; }
-    // detail TITLE: resolved page-caption resource → the detail's own title → a plain caption → null.
-    const resolvedDcap = d.caption ? resolveText(d.caption) : null;
-    const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
-    const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
-    flagDetailIssues(d, dinfo, dentity, tab, detailTitle);
-    buildCustomDetail(d, dinfo, dentity, tab, detailTitle);
+    const detailTitle = classicDetailTitle(d, dinfo, pageText);
+    const detailTexts = classicDetailTexts(d, dinfo);
+    flagDetailIssues(d, dinfo, dentity, tab, detailTitle, detailTexts);
+    buildCustomDetail(d, dinfo, dentity, tab, detailTitle, detailTexts);
   };
   for (const entry of bySig.values()) emitDetail(entry);
   return { details, standardFeatures, needsDecision, accountedFor };
+}
+
+// A related list's title in Classic's order (`BaseEntityPage.getDetailInfo`, then `BaseDetailV2.initDefaultCaption`):
+// the page string named by `details.<X>.captionName`, the page string `<X>DetailCaptionOnPage`, the detail's own
+// `Caption` string. The detail schema's caption (`title`) is never a title. Null when none of the three is readable.
+function classicDetailTitle(d, dinfo, pageText) {
+  const onPage = pageText(d.captionName) ?? pageText(d.key ? d.key + "DetailCaptionOnPage" : null);
+  if (onPage) return { ...onPage, key: onPage.source.slice("page · ".length) };
+  const own = dinfo?.strings?.Caption;
+  if (!own) return null;
+  return { text: defaultCultureText(own), cultures: own, source: `${d.schemaName} · Caption`, key: detailTextKey(d, "Caption") };
+}
+// The texts a detail's body shows (`Resources.Strings.<Key>`), each read from the detail's own strings: text and
+// cultures, or `text: null` when the manifest does not carry that string.
+function classicDetailTexts(d, dinfo) {
+  return (dinfo?.textKeys || []).map((k) => {
+    const cultures = dinfo.strings?.[k] ?? null;
+    return { key: detailTextKey(d, k), classicKey: k, text: cultures ? defaultCultureText(cultures) : null, cultures,
+      source: `${d.schemaName} · ${k}` };
+  });
+}
+// A detail string's page key, namespaced by the detail's placement so two details' `Caption` never share a key.
+const detailTextKey = (d, k) => `${d.key || d.schemaName}_${k}`;
+function detailCaptionDecision(d) {
+  const named = d.captionName ? `the page string '${d.captionName}' (captionName), ` : "";
+  return { kind: "detail-caption", item: d.schemaName || d.key,
+    reason: `related list '${d.key}' has no Classic title — none of ${named}the page string '${d.key}DetailCaptionOnPage' or the '${d.schemaName}' detail's own Caption string could be read. Confirm the title in every culture; do NOT invent one, and do NOT use the detail schema's caption` };
+}
+function detailTextDecision(d, t) {
+  return { kind: "detail-text", item: t.source,
+    reason: `the '${d.schemaName}' detail shows the string '${t.classicKey}', and its Classic text could not be read — confirm the text in every culture; do NOT invent one or reuse a nearby caption` };
+}
+
+// The en-US text of a `{ culture: text }` map, else its first culture's.
+export function defaultCultureText(cultures) {
+  if (!cultures || typeof cultures !== "object") return null;
+  return typeof cultures["en-US"] === "string" ? cultures["en-US"] : (Object.values(cultures).find((v) => typeof v === "string") ?? null);
 }
 
 // Moment 5: card actions / ACTIONS menu → Freedom card actions (B7). Returns needsDecision[] / accountedFor[].

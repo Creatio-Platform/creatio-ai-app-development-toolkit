@@ -1400,7 +1400,9 @@ function normalizeDetails(d) {
     out[k] = { schemaName: strOrNull(e.schemaName),
                entitySchemaName: strOrNull(e.entitySchemaName),
                detailColumn: strOrNull(f.detailColumn),
-               masterColumn: strOrNull(f.masterColumn) };
+               masterColumn: strOrNull(f.masterColumn),
+               // the page resource that titles this detail (`details.<X>.captionName`), first in Classic's title order
+               captionName: strOrNull(e.captionName) };
   }
   return out;
 }
@@ -2049,7 +2051,11 @@ function mergeDetails(L, seed, details) {
   for (const k of Object.keys(L.details)) {
     const prev = details.get(k);
     const rec = { key: k, ...L.details[k], provenance: [L.pkg], schemaTouched: !seed };
-    if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
+    if (prev) {
+      rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed;
+      // Classic merges `details` across layers: a layer that restates a detail without `captionName` keeps the lower one.
+      rec.captionName = rec.captionName ?? prev.captionName ?? null;
+    }
     details.set(k, rec);
   }
 }

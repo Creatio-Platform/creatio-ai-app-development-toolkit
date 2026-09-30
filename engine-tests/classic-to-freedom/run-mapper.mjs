@@ -2606,14 +2606,16 @@ check("invariant: NO field carries an inline `label` (fields auto-label from the
 check("invariant: the ChangeSet exposes a resources map (page string keys → default text)",
   co.resources && typeof co.resources === "object");
 
-/* ---- #13 (detail title): detailSchemas[...].title becomes the detail's display caption ---- */
+/* ---- #13 (detail title): the detail schema's caption (`title`) is never the related list's title ---- */
 const dtCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
-    Stages: { schemaName: "StageInRecruitmentDetailV2", entitySchemaName: "RecruitmentInStage", detailColumn: "Root", masterColumn: "Id" } },
+    Orders: { schemaName: "OrderDetailV2", entitySchemaName: "Order", detailColumn: "Root", masterColumn: "Id" } },
   diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
-         di({ name: "Stages", parentName: "T", propertyName: "items", itemType: 2 })] })]),
-  { detailSchemas: { StageInRecruitmentDetailV2: { entity: "RecruitmentInStage", columns: ["Stage", "Date"], title: "Stage history" } } });
-check("#13 detail title: detailSchemas.title → the detail's caption is the human title",
-  dtCs.details.find(d => d.detailSchema === "StageInRecruitmentDetailV2")?.caption === "Stage history");
+         di({ name: "Orders", parentName: "T", propertyName: "items", itemType: 2 })] })]),
+  { detailSchemas: { OrderDetailV2: { entity: "Order", columns: ["Number", "Date"], title: "Order detail schema" } } });
+check("#13 detail title: detailSchemas.title is not a title — the list has no caption and a detail-caption Confirm is raised",
+  () => dtCs.details.find(d => d.detailSchema === "OrderDetailV2")?.caption === null
+    && dtCs.needsDecision.some(n => n.kind === "detail-caption" && n.item === "OrderDetailV2"),
+  () => ({ details: dtCs.details.map(d => d.caption), nd: dtCs.needsDecision.map(n => n.kind) }));
 
 /* ---- a tab that holds ONLY a detail (no field) must still be emitted so the related list has a home ---- */
 const dtabCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
@@ -4090,8 +4092,8 @@ check("parseDetailSchemas: manifest `entity` wins over the body's entitySchemaNa
   chRun.childPages.some((c) => c.entity === "ManifestEntity")
   && !chRun.childPages.some((c) => c.entity === "BodyEntity"),
   () => chRun.childPages.map((c) => c.entity));
-check("parseDetailSchemas: manifest `title` reaches the Layout table as the related list's caption",
-  /\| Manifest Title \|/.test(chRun.plan), () => (chRun.plan.match(/^\|.*Related list.*$/m) || [])[0]);
+check("parseDetailSchemas: manifest `title` never reaches the Layout table as the related list's caption",
+  !/\| Manifest Title \|/.test(chRun.plan), () => (chRun.plan.match(/^\|.*Related list.*$/m) || [])[0]);
 check("parseDetailSchemas: manifest `editable:false` wins over a body that shows add-record VISIBLE",
   chRun.childPages.some((c) => c.entity === "ManifestEntity" && c.editable === false)
   && /· view\/attach-only/.test(chRun.plan),
@@ -11555,7 +11557,7 @@ try {
 
 // --- THE NAMING. Two children of one entity are disambiguated by their detail CAPTION — customer-authored,
 // localizable — so the page KEY has to carry the caption verbatim: two captions that differ only outside
-// `[A-Za-z0-9_.-]` are two pages and must publish two distinct keys. `title` is what makes the caption resolve, and an
+// `[A-Za-z0-9_.-]` are two pages and must publish two distinct keys. The detail's own `Caption` string is what makes the caption resolve, and an
 // unanswered `editPage` is what keeps each child published as its own key.
 const n2TreeManifest = (titleA, titleB) => ({
   entity: "Applicant",
@@ -11570,8 +11572,8 @@ const n2TreeManifest = (titleA, titleB) => ({
   };
 });` }],
   detailSchemas: {
-    EduADetail: { title: titleA, entity: "Education" },
-    EduBDetail: { title: titleB, entity: "Education" },
+    EduADetail: { resourceStrings: { Caption: { "en-US": titleA } }, entity: "Education" },
+    EduBDetail: { resourceStrings: { Caption: { "en-US": titleB } }, entity: "Education" },
   },
 });
 {
@@ -11582,6 +11584,246 @@ const n2TreeManifest = (titleA, titleB) => ({
       () => k.length === 3 && k.includes("main") && pair.every((t) => k.includes(`child:Education@${t}`)),
       () => k);
   }
+}
+
+// ===== Classic texts in every culture: related-list titles, detail texts, per-culture design and verification =====
+// The Contract layers (fixtures/contract) with the strings `get-classic-page-sources` returns: page `resourceStrings`,
+// and per detail its body plus `resourceStrings`. `withCultures: false` is the manifest a clio without
+// `resourceStrings` writes: flat en-US page `resources` and no detail strings.
+{
+  const CO_TEXT_FILES = ["CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
+    "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js"];
+  const DOC_DETAIL_BODY = `define("DocumentDetailV2", [], function() {
+  return {
+    entitySchemaName: "Document",
+    methods: {
+      addGridOperationsMenuItems: function(toolsButtonMenu) {
+        toolsButtonMenu.addItem(this.getButtonMenuItem({
+          Caption: {"bindTo": "Resources.Strings.LinkDocumentCaption"},
+          Click: {"bindTo": "linkDocument"}
+        }));
+        this.callParent(arguments);
+      },
+      linkDocument: function() {
+        if (!this.getActiveRow()) {
+          this.showInformationDialog(this.get("Resources.Strings.SelectDocumentMessage"));
+        }
+      }
+    }
+  };
+});`;
+  const PAGE_STRINGS = {
+    GeneralInfoTabCaption: { "en-US": "General information", "fr-FR": "Informations générales" },
+    ContractVisaTabCaption: { "en-US": "Approvals", "fr-FR": "Validations" },
+    InvoiceDetailCaptionOnPage: { "en-US": "Contract invoices", "fr-FR": "Factures du contrat" },
+  };
+  const DOC_STRINGS = {
+    Caption: { "en-US": "Documents", "fr-FR": "Documents contractuels" },
+    LinkDocumentCaption: { "en-US": "Link document", "fr-FR": "Lier le document" },
+    SelectDocumentMessage: { "en-US": "Select a document first", "fr-FR": "Sélectionnez d'abord un document" },
+    AddButtonCaption: { "en-US": "Add", "fr-FR": "Ajouter" },
+  };
+  const enUS = (map) => Object.fromEntries(Object.entries(map).map(([k, c]) => [k, c["en-US"]]));
+  const withStrings = (entry, strings, withCultures) => (withCultures ? { ...entry, resourceStrings: strings } : entry);
+  const coTextsManifest = ({ withCultures = true, planMeta } = {}) => ({
+    entity: "Contract",
+    seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: CO_TEXT_FILES.map((f) => ({ pkg: f.replace(/\.js$/, ""), file: "contract/" + f })),
+    resources: enUS(PAGE_STRINGS),
+    ...(withCultures ? { resourceStrings: PAGE_STRINGS } : {}),
+    detailSchemas: {
+      DocumentDetailV2: withStrings({ body: DOC_DETAIL_BODY, entity: "Document", editPage: false, title: "Document detail schema" }, DOC_STRINGS, withCultures),
+      InvoiceDetailV2: withStrings({ entity: "Invoice", editPage: false, title: "Invoice detail schema" },
+        { Caption: { "en-US": "Invoices", "fr-FR": "Factures" } }, withCultures),
+      ContractProductDetailV2: withStrings({ entity: "OrderProduct", editPage: false, title: "Product detail schema" },
+        { Caption: { "en-US": "Products", "fr-FR": "Produits" } }, withCultures),
+      ContractDetailV2: { entity: "Contract", editPage: false, title: "Subordinate contracts detail schema" },
+    },
+    ...(planMeta ? { planMeta } : {}),
+  });
+  const coTexts = runMigration(coTextsManifest(), { baseDir: FIX });
+  const coTextsOld = runMigration(coTextsManifest({ withCultures: false }), { baseDir: FIX });
+  const tcs = coTexts.changeSet;
+  const detailOf = (cs, schema) => (cs.details || []).find((d) => d.detailSchema === schema);
+  const layoutRow = (plan, title) => plan.split("\n").find((l) => l.startsWith("| ") && l.includes(`| ${title} | Related list |`)) || "";
+
+  // T3 / R5 — the related-list title follows Classic's order; the schema caption (`title`) is never used.
+  check("texts T3: a related list is titled with its detail's own Caption string, never the detail schema's caption",
+    () => detailOf(tcs, "DocumentDetailV2")?.caption === "Documents" && detailOf(tcs, "ContractProductDetailV2")?.caption === "Products"
+      && !/(Document|Invoice|Product|Subordinate contracts) detail schema/.test(coTexts.plan),
+    () => ({ details: tcs.details.map((d) => [d.detailSchema, d.caption]), hit: coTexts.plan.split("\n").filter((l) => /(Document|Invoice|Product|Subordinate contracts) detail schema/.test(l)) }));
+  check("texts T3: the page string `<Key>DetailCaptionOnPage` titles the list ahead of the detail's own Caption",
+    () => detailOf(tcs, "InvoiceDetailV2")?.caption === "Contract invoices" && detailOf(tcs, "InvoiceDetailV2")?.captionSource === "page · InvoiceDetailCaptionOnPage",
+    () => detailOf(tcs, "InvoiceDetailV2"));
+  // T4 / R6 — a detail whose strings cannot be read is a Confirm item, never a title of the engine's making.
+  check("texts T4: a detail with no readable title has no caption and is listed in ⚠ Confirm as `detail-caption`",
+    () => detailOf(tcs, "ContractDetailV2")?.caption === null
+      && tcs.needsDecision.some((n) => n.kind === "detail-caption" && n.item === "ContractDetailV2")
+      && /\*\*\[detail-caption\]\*\* ContractDetailV2/.test(coTexts.plan),
+    () => coTexts.plan.split("\n").filter((l) => /detail-caption/.test(l)));
+  check("texts T4: the migration result does not report a `detail-caption` Confirm row as done",
+    () => {
+      const v = renderVerify(coTexts, checklistOpts(coTextsManifest()), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      const line = v.markdown.split("\n").find((l) => l.includes("[detail-caption] ContractDetailV2")) || "";
+      return line !== "" && !line.includes("✅");
+    });
+  // T3 / R7 — the texts a detail body shows are quoted word for word, each under a key that keeps its Classic source.
+  check("texts R7: the Layout row quotes the detail's action caption and message word for word, each with its Classic source",
+    () => {
+      const row = layoutRow(coTexts.plan, "Documents");
+      return row.includes('`Document_LinkDocumentCaption` "Link document" ← DocumentDetailV2 · LinkDocumentCaption')
+        && row.includes('`Document_SelectDocumentMessage` "Select a document first" ← DocumentDetailV2 · SelectDocumentMessage')
+        && row.includes("title `Document_Caption` ← DocumentDetailV2 · Caption");
+    },
+    () => layoutRow(coTexts.plan, "Documents"));
+  check("texts R7: a detail string the body never shows is not registered (base-template `AddButtonCaption`)",
+    () => !Object.keys(tcs.resources).some((k) => k.endsWith("_AddButtonCaption")), () => Object.keys(tcs.resources));
+  // T6 / R8 — every culture's value travels as the form-page row's data; localization is never a plan item of its own.
+  const formRowData = (run, m) => checklistGroups(run, checklistOpts(m)).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:form");
+  check("texts T6: the form-page row carries each text's key, Classic source and value in every culture as row data",
+    () => {
+      const row = formRowData(coTexts, coTextsManifest());
+      const doc = row?.vk.texts.find((t) => t.key === "Document_Caption");
+      return !!doc && doc.cultures["fr-FR"] === "Documents contractuels" && doc.source === "DocumentDetailV2 · Caption"
+        && row.vk.texts.some((t) => t.key === "InvoiceDetailCaptionOnPage" && t.cultures["fr-FR"] === "Factures du contrat");
+    });
+  check("texts T6: neither the plan nor the form-page row label lists the other cultures",
+    () => !coTexts.plan.includes("fr-FR") && formRowData(coTexts, coTextsManifest()).label === formRowData(coTextsOld, coTextsManifest({ withCultures: false })).label,
+    () => ({ label: formRowData(coTexts, coTextsManifest()).label, fr: coTexts.plan.split("\n").filter((l) => l.includes("fr-FR")).slice(0, 3) }));
+  check("texts T6: the reconcile save instruction names no localization tool",
+    () => {
+      const run = runMigration(coTextsManifest({ planMeta: { ...FULL_PLANMETA, freedomExists: true } }), { baseDir: FIX });
+      const line = run.plan.split("\n").find((l) => l.startsWith("> **Reconcile:**")) || "";
+      return line.includes("and save with `update-page`. Procedure:") && !/localize/.test(run.plan);
+    });
+  check("texts T6: the ChangeSet echoes the other-culture values on `changeSet.resourceCultures` with their sources",
+    () => tcs.resourceCultures.GeneralInfoTabCaption["fr-FR"] === "Informations générales"
+      && tcs.resourceSources.GeneralInfoTabCaption === "page · GeneralInfoTabCaption");
+  check("texts T6: a folded child page's texts reach the root result as `changeSet.resourceCultures`",
+    () => {
+      const m = coTextsManifest();
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, editPage: "DocumentPageV2" };
+      m.childPageSchemas = { DocumentPageV2: { entity: "Document", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: `define("DocumentPageV2",[],function(){return{entitySchemaName:"Document",diff:[{operation:"insert",name:"DocTab",parentName:"Tabs",propertyName:"tabs",values:{caption:{bindTo:"Resources.Strings.DocTabCaption"},items:[]}},{operation:"insert",name:"Number",parentName:"DocTab",propertyName:"items",values:{bindTo:"Number"}}]};});` }],
+        resources: { DocTabCaption: "Document" }, resourceStrings: { DocTabCaption: { "en-US": "Document", "fr-FR": "Pièce" } } } };
+      const run = runMigration(m, { baseDir: FIX });
+      const child = run.childPages.find((c) => c.resolvedFrom === "DocumentPageV2");
+      return child?.changeSet?.resourceCultures?.DocTabCaption?.["fr-FR"] === "Pièce"
+        && child.changeSet.resourceSources.DocTabCaption === "page · DocTabCaption";
+    });
+  // T5 / R4 / R11 — a manifest without `resourceStrings` still plans, in en-US, and says translations need a newer clio.
+  check("texts T5: without `resourceStrings` the plan is still produced from the flat en-US `resources`",
+    () => typeof coTextsOld.plan === "string" && coTextsOld.changeSet.resources.GeneralInfoTabCaption === "General information"
+      && Object.keys(coTextsOld.changeSet.resourceCultures).length === 0);
+  check("texts T5: without `resourceStrings` the plan states that translations need a newer clio; with them it does not",
+    () => coTextsOld.plan.includes("- Translations not migrated: requires a newer clio version\n")
+      && !coTexts.plan.includes("Translations not migrated"));
+  check("texts T5: without detail strings every related-list title and detail text becomes a Confirm item",
+    () => ["DocumentDetailV2", "InvoiceDetailV2", "ContractProductDetailV2", "ContractDetailV2"]
+      .filter((s) => s !== "InvoiceDetailV2").every((s) => coTextsOld.changeSet.needsDecision.some((n) => n.kind === "detail-caption" && n.item === s))
+      && coTextsOld.changeSet.needsDecision.some((n) => n.kind === "detail-text" && n.item === "DocumentDetailV2 · SelectDocumentMessage")
+      && detailOf(coTextsOld.changeSet, "InvoiceDetailV2")?.caption === "Contract invoices",
+    () => coTextsOld.changeSet.needsDecision.filter((n) => /detail-(caption|text)/.test(n.kind)).map((n) => n.item));
+  // R9 — list columns bound to an entity column carry no page caption key; the platform titles them.
+  check("texts R9: every registered key comes from a page string or a detail string — no key for an entity-bound list column",
+    () => Object.entries(tcs.resourceSources).every(([k, src]) => /^page · /.test(src) || new RegExp("^\\w+ · \\w+$").test(src))
+      && !Object.keys(tcs.resources).some((k) => (tcs.details || []).some((d) => (d.columns || []).some((c) => k === c || k === c + "Caption"))),
+    () => tcs.resourceSources);
+  // T7 / R10 — verification compares the built text with the Classic value in every culture.
+  const builtWith = (mutate) => {
+    const strings = JSON.parse(JSON.stringify(tcs.resourceCultures));
+    mutate(strings);
+    return { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } };
+  };
+  const formRowOf = (built) => renderVerify(coTexts, checklistOpts(coTextsManifest()), built).markdown.split("\n")
+    .find((l) => l.includes("Form page")) || "";
+  check("texts T7: a form page whose texts match Classic in every culture closes its row",
+    () => formRowOf(builtWith(() => {})).includes("✅"), () => formRowOf(builtWith(() => {})));
+  check("texts T7: a fr-FR text that differs from Classic fails the form-page row and names the key, culture and both values",
+    () => {
+      const row = formRowOf(builtWith((s) => { s.GeneralInfoTabCaption["fr-FR"] = "Infos"; }));
+      return row.includes("❌") && row.includes("GeneralInfoTabCaption") && row.includes("fr-FR") && row.includes("Informations générales");
+    },
+    () => formRowOf(builtWith((s) => { s.GeneralInfoTabCaption["fr-FR"] = "Infos"; })));
+  check("texts T7: a Classic culture the built page does not carry leaves the row unverified, not done",
+    () => {
+      const row = formRowOf(builtWith((s) => { delete s.Document_Caption["fr-FR"]; }));
+      return row.includes("⚠") && !row.includes("✅") && row.includes("Document_Caption");
+    },
+    () => formRowOf(builtWith((s) => { delete s.Document_Caption["fr-FR"]; })));
+  check("texts T7: without `resourceStrings` only en-US is compared, so an en-US-only built page closes the row",
+    () => {
+      const strings = Object.fromEntries(Object.entries(coTextsOld.changeSet.resources).map(([k, t]) => [k, { "en-US": t }]));
+      const v = renderVerify(coTextsOld, checklistOpts(coTextsManifest({ withCultures: false })),
+        { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } });
+      return (v.markdown.split("\n").find((l) => l.includes("Form page")) || "").includes("✅");
+    });
+}
+
+// A typed page is a page like the form page: its `page:typed:<schema>` row carries that page's own texts and is
+// checked against that page's built strings in every culture.
+{
+  const TYPED_BODY = `define("ContractTermsPage", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    diff: [{ "operation": "insert", "name": "TermsTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.TermsTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Number", "parentName": "TermsTab", "propertyName": "items", "values": { "bindTo": "Number" } }]
+  };
+});`;
+  const typedStrings = { TermsTabCaption: { "en-US": "Terms", "fr-FR": "Conditions" } };
+  const typedManifest = {
+    entity: "Contract",
+    seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", file: "contract/CoreContracts.js" }],
+    typedPages: [{ schema: "ContractTermsPage", type: "Terms" }],
+    typedPageSchemas: { ContractTermsPage: { entity: "Contract", seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+      schemas: [{ pkg: "CoreContracts", body: TYPED_BODY }], resources: { TermsTabCaption: "Terms" }, resourceStrings: typedStrings } },
+  };
+  const typedRun = runMigration(typedManifest, { baseDir: FIX });
+  const typedRow = checklistGroups(typedRun, checklistOpts(typedManifest)).flatMap((g) => g.rows)
+    .find((r) => r.deliverableId === "page:typed:ContractTermsPage");
+  check("texts typed: the `page:typed:<schema>` row carries the typed page's own texts, checked against that page",
+    () => typedRow?.vk.textsPage === "typed:ContractTermsPage"
+      && typedRow.vk.texts.some((t) => t.key === "TermsTabCaption" && t.cultures["fr-FR"] === "Conditions" && t.source === "page · TermsTabCaption"),
+    () => typedRow?.vk);
+  const typedLine = (frText) => renderVerify(typedRun, checklistOpts(typedManifest), {
+    typedFormsBuilt: true,
+    pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] },
+      "typed:ContractTermsPage": { viewConfig: [{ name: "X", type: "crt.Input" }],
+        resources: { strings: { TermsTabCaption: { "en-US": "Terms", "fr-FR": frText } } } } },
+  }).markdown.split("\n").find((l) => l.includes("Typed form `ContractTermsPage`")) || "";
+  check("texts typed: the typed page's texts reach the root result as `changeSet.resourceCultures`",
+    () => typedRun.typedPages[0]?.changeSet?.resourceCultures?.TermsTabCaption?.["fr-FR"] === "Conditions");
+  check("texts typed: a typed page whose fr-FR text differs from Classic fails its row; a matching one closes it",
+    () => typedLine("Termes").includes("❌") && typedLine("Termes").includes("TermsTabCaption") && typedLine("Conditions").includes("✅"),
+    () => ({ wrong: typedLine("Termes"), right: typedLine("Conditions") }));
+}
+
+// The related-list title order, one step at a time, including a `captionName` a higher layer does not restate.
+{
+  const titleOf = (details, resources, strings) => mapToFreedom(mergeHierarchy([L("Base", { entity: "X", details: {
+      Orders: { schemaName: "OrderDetailV2", entitySchemaName: "Order", detailColumn: "X", masterColumn: "Id", ...details } },
+    diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+           di({ name: "Orders", parentName: "T", propertyName: "items", itemType: 2 })] })]),
+    { resources, detailSchemas: { OrderDetailV2: { entity: "Order", columns: [], strings } } }).details[0]?.caption;
+  const page = { OrdersListCaption: "Open orders", OrdersDetailCaptionOnPage: "Orders on this page" };
+  const own = { Caption: { "en-US": "Orders", "fr-FR": "Commandes" } };
+  check("title order: `captionName` names the page string that titles the list, ahead of the other two",
+    () => titleOf({ captionName: "OrdersListCaption" }, page, own) === "Open orders");
+  check("title order: without `captionName`, the page string `<Key>DetailCaptionOnPage` titles the list",
+    () => titleOf({}, page, own) === "Orders on this page");
+  check("title order: without either page string, the detail's own Caption titles the list",
+    () => titleOf({}, {}, own) === "Orders");
+  check("title order: a `captionName` naming a string the page does not have falls through to the next step",
+    () => titleOf({ captionName: "Missing" }, { OrdersDetailCaptionOnPage: "Orders on this page" }, own) === "Orders on this page");
+  const layered = mergeHierarchy([
+    L("Base", { entity: "X", details: { Orders: { schemaName: "OrderDetailV2", captionName: "OrdersListCaption" } } }),
+    L("Top", { entity: "X", details: { Orders: { schemaName: "OrderDetailV2", entitySchemaName: "Order" } } }),
+  ]);
+  check("title order: a layer that restates a detail without `captionName` keeps the lower layer's",
+    () => layered.details.find((d) => d.key === "Orders")?.captionName === "OrdersListCaption",
+    () => layered.details);
 }
 
 // ===== N1: make --verify trustworthy (business rules gated, component role/analog) ================
