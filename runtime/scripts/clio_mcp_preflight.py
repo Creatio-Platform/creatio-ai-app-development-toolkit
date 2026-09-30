@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-clio MCP availability preflight (ENG-92985).
+clio MCP availability preflight.
 
 A deterministic, read-only gate the orchestrator runs *once, before the first clio
 operation* when the host does NOT expose native clio MCP tools. It answers one
 question with a machine-readable verdict and an exit code so the agent stops on a
-structured signal instead of free-form reasoning (the failure mode in ENG-92985,
+structured signal instead of free-form reasoning (the failure mode being an agent
 where the agent reasoned "this is a missing prerequisite" and then self-bootstrapped
 .NET and drove everything through the stdio wrapper for ~2h anyway).
 
@@ -61,7 +61,7 @@ SENTINEL_USABLE = "PREFLIGHT: clio-mcp-usable"
 SENTINEL_BLOCKED = "BLOCKER: clio-mcp-unavailable"
 
 # Short by design: a healthy clio answers get-tool-contract in ~1-2s, so a dead or
-# missing server is diagnosed in seconds — never the 664s/964s hangs of ENG-92985.
+# missing server is diagnosed in seconds — never a 664s/964s hang.
 DEFAULT_PROBE_TIMEOUT = 20
 
 # Upper bound on --timeout so an extreme explicit value can't defeat the "bounded,
@@ -71,7 +71,7 @@ MAX_PROBE_TIMEOUT = 120
 # Hard wall-clock ceiling the watchdog adds on top of the probe timeout. The probe
 # runs on a worker thread; if it overruns (a clio child that is alive but silent, or
 # a blocking stdout read that never sees the deadline), the watchdog force-kills the
-# child so a hung server can NEVER reproduce the ENG-92985 hang inside the gate.
+# child so a hung server can NEVER reproduce that hang inside the gate.
 PROBE_WATCHDOG_GRACE = 5
 
 # mcp_client's cold-start `initialize` handshake runs BEFORE the get-tool-contract call
@@ -181,7 +181,7 @@ def _verify_clio_cmd_exists(parts):
     `mcp_client._resolve_clio_cmd` trusts CLIO_CMD verbatim without checking the target
     exists, so a typo'd CLIO_CMD would otherwise surface later as a subprocess spawn
     failure classified as `mcp-server-unresponsive` (wrong remedy). Verifying here keeps
-    the accurate `clio-not-resolvable` remedy — the real ENG-92985 root cause.
+    the accurate `clio-not-resolvable` remedy, which names the real root cause.
     """
     executable = parts[0]
     if shutil.which(executable) is None and not Path(executable).exists():
@@ -238,7 +238,7 @@ def _default_prober(timeout):
     The probe therefore runs on a worker thread; if it overruns the watchdog window
     (see ``_probe_watchdog_window`` — it covers the cold-start initialize cap so a slow
     healthy start is not force-killed) the watchdog kills the child so the gate itself
-    can never reproduce the ENG-92985 hang.
+    can never reproduce that hang.
     """
     box = {}
 
@@ -246,7 +246,7 @@ def _default_prober(timeout):
         try:
             # Single-shot, NON-retrying: call_mcp_tool's get-tool-contract branch retries on
             # exception (close() + re-call), which would RE-SPAWN a clio child after the
-            # watchdog kill and leave it unsupervised past the gate (PR #55 review). call_tool
+            # watchdog kill and leave it unsupervised past the gate. call_tool
             # does not retry, so after a force-kill the worker raises once and stops.
             box["result"] = mcp_client._get_shared_client().call_tool(
                 "get-tool-contract", {}, timeout=timeout)

@@ -1,6 +1,6 @@
 ---
 name: creatio-app-orchestrator
-description: Use when creating Creatio app Business Plans, technical implementation handoffs, or applying the approved plan through clio MCP.
+description: Use when the user asks to create, generate, scaffold, build, add, or plan a Creatio app or a new section — for example "create a Todo app" or "add an Orders section". Apply proactively for any new-app or new-section request, even when not explicitly selected: this skill is the entrypoint that produces the Creatio app Business Plan and technical implementation handoff and then applies the approved plan through clio MCP.
 ---
 
 # Creatio App Orchestrator
@@ -34,11 +34,55 @@ Use these values for CAADT product telemetry when calling clio telemetry tools:
 - `coding_agent`: your host coding agent (for example `Claude Code`, `Codex`, `GitHub Copilot CLI`, or `Cursor`).
 - `plugin_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
 
+## Product telemetry — the stage vocabulary plus your `workflow` value
+
+Read `../../context/product-telemetry.md` for which gate emits which stage. Event names are **flow-agnostic stages**; which flow it
+was travels in the `workflow` field. Read `get-guidance name=product-telemetry` for the vocabulary and
+the consent flow — clio owns both, along with the allow-list that validates them — and never spell a
+stage from memory. Send the Analytics Context values above on every event.
+
+- **Full app generation or business-shaped feature work** → `workflow: "app-creation"`. Map the stages onto
+  this flow's gates: `plan_presented` when the BA-style Business Plan is shown in full, `plan_approved` at
+  Gate R, `build_started` once runtime context is available, `work_item_completed` per created
+  section/page. Do NOT send the legacy `session_started` / `business_plan_*` / `implementation_*` names:
+  clio still accepts them so an older installed toolkit keeps reporting, but a run that sends them is
+  invisible to every funnel built on the stages — it has no `workflow_started` to be counted from.
+- **A targeted, implementation-ready change** to an existing app → `workflow: "app-maintenance"`, with
+  `plan_skipped` at the start to make the skipped planning explicit. These runs skip Gate P/R, so they have
+  no approval stage — but they are not exempt from telemetry, which is exactly the gap this closes.
+- **A run you delegate to another skill** (Classic→Freedom migration, web→mobile conversion, branding) →
+  that skill owns its own emission points and its own `workflow` value; do not emit on its behalf.
+
+Both flows this skill owns emit the same stages; only the points differ:
+
+| Send | `app-creation` — at the point where you | `app-maintenance` — at the point where you |
+| --- | --- | --- |
+| `workflow_started` | take the first request | take the first request |
+| `clarification_requested` / `user_input_received` | ask a discovery question / receive the answer | ask anything the change waits on / receive the answer |
+| `plan_presented` | show the full BA-style Business Plan | — |
+| `plan_skipped` | — | start the run (makes the skipped planning explicit) |
+| `plan_changes_requested` | receive a change request before Gate R | — |
+| `plan_approved` | get Gate R confirmation | — |
+| `build_started` | begin implementing, once runtime context is available | begin the first write |
+| `work_item_completed` | finish each section/page (`variant` = `section` / `page`) | finish each applied change |
+| `workflow_completed` / `workflow_failed` | reach the end of the run | reach the end of the run |
+| `changes_requested` | the developer asks for more changes after completion | same |
+| `changes_applied` | those follow-up changes are applied and verified | same |
+
+`build_started` is emitted in **both** flows, even though a targeted edit has no approval boundary before
+it — that keeps "how many runs actually reached the writing phase" a single query across every workflow
+instead of a per-flow special case.
+
+Telemetry is non-blocking: never let it gate or delay the user's task, and if clio rejects an event name
+(older clio), stop emitting for the rest of the run and carry on.
+
 ## Core Rules
 
 - Pages are separate for web and mobile: before any page edit, read `../../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
 - **Lookup/enum values are package data, never a runtime write.** Seed them inline via `sync-schemas`'s row-seeding parameter (name resolved via `get-tool-contract`) when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside that batch — both are DB-first and install immediately, no compile step involved. Never seed lookup values through runtime OData/DataService calls or raw SQL: those bypass the platform, so the row lands in the table but the value doesn't surface as real package data. Details: `../../context/essentials.md`, "Data Binding And Schema Inspection".
-- **UI/UX is mandatory, not optional.** Whenever the workflow creates or edits Freedom UI pages (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring page bodies and apply its rules (layout/containers, component choice, lookups, fields, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components).
+- **UI/UX is mandatory, not optional.** Whenever the workflow creates or edits Freedom UI pages (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before creating pages (to pick the page template)** and **before authoring page bodies**, and apply its rules (page-template choice, layout/containers, component choice, lookups, fields, accessibility), then run its review checklist **before** treating page work as done. The template choice matters at `create-page` time specifically: it is fixed on creation and cannot be swapped afterwards, so a page whose composition needs a stage progress bar (DCM) must be created from the progress-bar template — resolved via `list-page-templates` on the target environment — not created on the default form page and patched later. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (wrong page template, selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components).
+- **Navigation placement and audience are mandatory, not optional.** A section that exists is not a section a user can reach: `create-app` places it in the `My applications` workplace, which is granted to `System administrators` only, and a home page is reachable only through a workplace whose `HomePageUId` points at it. So (a) in the FIRST discovery batch — not a later round, and never as a defaulted assumption — you MUST secure the developer's decision on WHERE the app belongs in the left navigation and WHO should see it — a new workplace named for the app (recommend this when scaffolding), `My applications`, or a named existing one — per `../../context/business-checklist.md`, "Users, access and ownership", and carry it in `## 2. Roles and Permissions`; and (b) before any navigation write you MUST call `get-guidance name=workplaces` (plus `name=home-page` when the plan has a home page) and follow it, then verify the placement by reading the rows back and confirm the change shipped as a package data binding — see `../../runbooks/03-app-implementation.md`, "Place the app in the navigation". Do not improvise these writes from tool contracts alone and do not silently choose the placement yourself: a workplace bound with the wrong column set installs on the next environment as an empty unreachable entry, one of the binding tools deletes live records, and navigation is cached so the developer must be told to log out and back in.
+- **Analytics is mandatory, not optional.** Every app-creation Business Plan MUST include a populated `## 7. Analytics` section, and the agent MUST propose it proactively **as an expert in the app's business domain** — the dashboards, KPIs, and widgets an experienced practitioner would expect for each role and section, never generic filler (never wait for the developer to ask). Plan `### 7.1 Section analytics` (per-section **dashboards**, ~2-3 per section unless the developer asks for more; each dashboard carries **at least 5 widgets** — a metric band plus charts/lists) and `### 7.2 Workplace analytics` (the app's **single home page**, with **at least 10 widgets** since it aggregates the whole app). At implementation time build them per `../../runbooks/03-app-implementation.md` step 5, following `get-guidance name=dashboards` (routes to `dashboard-creation`, `dashboard-and-home-page-layout`, `dashboard-design`, `indicator-widget`, `chart-widget`, `dashboard-rights`, `home-page`); §7.1 dashboards are hosted on the section list page's `crt.Dashboards` element (grouped by section in the plan); §7.2 is **one** `BaseHomePage` (charts/metrics on a single page, NOT multiple dashboards) bound to the app's workplace — normally the already-existing **"My applications"** (found via `SysModuleInWorkplace`) — through `SysWorkplace.HomePageUId`, never on the shared core `FreedomDashboards` page. Only in the rare case where no workplace hosts the app's sections must one be created (clio cannot create a workplace today; resolved via `get-tool-contract`); before binding a shared workplace's `SysWorkplace.HomePageUId`, run the pre-write clobber check (surface, don't silently overwrite an existing home page). Each §7.1 dashboard states `access rights: All Employees` — a **static default**: dashboards are created visible to everyone (the role a dashboard is for drives its **content**, not its access); the implementation applies that static grant via `dashboard-rights`. The §7.2 **home page has no per-page access rights** (its audience is the workplace). Role-scoped least-privilege is out of scope here (future roles work). The workflow validator fails a plan whose `## 7. Analytics` is missing or empty.
 - **Schema naming is mandatory, not optional.** Whenever the workflow creates or names data-model elements (`create-entity-schema`, `update-entity-schema`, `create-lookup`, and the objects/columns implied by `create-app`/`create-app-section`), you MUST invoke the **`creatio-schema-naming`** skill **before** choosing object, title, column, field, lookup, Guid/UId, or relation-object names, and apply its rules together with `../../context/naming-conventions.md`. Do not invent names from memory — inconsistent or non-conventional names are hard to correct after the schema is published.
 - **Web→mobile page conversion is a dedicated skill.** Whenever the task is to make an existing Freedom UI web page available in the Creatio Mobile app (convert/port a page to mobile, build a mobile list/form page, or register a converted page as a mobile section/workplace), invoke the **`creatio-mobile-page-conversion`** skill — it loads the conversion playbook, invokes `creatio-ui-guidelines` before authoring the mobile body (satisfying the UI/UX rule above for its `create-page`/`update-page` calls), and enforces the conversion gates (Gate M before any write, Gate S before any section registration). Do not convert from memory or skip the gates. Note the delegate's **preflight**: the converter is an experimental clio feature off by default (`mobile-page-converter`), so on an environment where the flag is not enabled the skill STOPS and asks the operator to run `clio experimental --name mobile-page-converter --enable` first — a Business Plan that references only Gate M/Gate S will hit this precondition before either gate.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../../AGENTS.md`.

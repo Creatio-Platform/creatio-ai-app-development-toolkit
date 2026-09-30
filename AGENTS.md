@@ -10,7 +10,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
 - **The plan output MUST be a BA-style Business Plan.** The BA-style Business Plan (Agent 2 output) must be shown inline in the visible conversation body. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
-- **Exception — Classic→Freedom UI migration.** Everything above governs **business-requirements planning** — app creation and any other business task that needs requirements working-through. A Classic→Freedom UI migration is **not** such a task: it is a deterministic technical UI-transformation. The `classic-to-freedom-migration` skill therefore does **not** use the BA-style Business Plan or Gate P/R — it presents its OWN engine-written migration plan (`node engine/migrate.mjs <manifest> --plan`: Overview / Main scope / Layout / Logic / ⚠ Confirm), and for it the written `plan.md` **is** the deliverable, presented verbatim. That skill's Contract governs its plan format and approval; do not force it into the 7-section structure.
+- **Exception — Classic→Freedom UI migration.** Everything above governs **business-requirements planning** — app creation and any other business task that needs requirements working-through. A Classic→Freedom UI migration is **not** such a task: it is a deterministic technical UI-transformation. The `classic-to-freedom-migration` skill therefore does **not** use the BA-style Business Plan or Gate P/R — it presents its OWN engine-written migration plan (`node engine/migrate.mjs <manifest> --plan`: Overview / Main scope / Layout / Business rules / ⚠ Custom methods / ⚠ Other declared logic / ⚠ Confirm), and for it the written `plan.md` **is** the deliverable, presented verbatim. That skill's Contract governs its plan format and approval; do not force it into the BA-style Business Plan structure.
 
 
 The required top-level sections of every BA-style Business Plan are, in order:
@@ -21,12 +21,14 @@ The required top-level sections of every BA-style Business Plan are, in order:
 4. Lifecycle and Statuses
 5. Business Logic
 6. UX Expectations
-7. Edge Cases and Exceptions
+7. Analytics
+8. Edge Cases and Exceptions
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
+`Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
 
 Required BA-style Business Plan template:
 
@@ -37,7 +39,8 @@ Required BA-style Business Plan template:
 ## 4. Lifecycle and Statuses
 ## 5. Business Logic
 ## 6. UX Expectations
-## 7. Edge Cases and Exceptions
+## 7. Analytics
+## 8. Edge Cases and Exceptions
 ```
 
 ## Format Compliance Rule
@@ -84,6 +87,14 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 
 For CAADT product telemetry, read and follow `context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-telemetry` payload shape.
 
+**One stage vocabulary, plus a `workflow` field — and no skill is exempt.** Telemetry applies to every workflow, not only app creation. Event names are flow-agnostic stages and **which** flow it was travels in the `workflow` field: `app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or `app-maintenance`. Do not invent per-flow event names — clio rejects them, and they would encode the flow dimension into the enum instead of the field, multiplying names by flows.
+
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow; it is owned by clio, which also owns the allow-list that validates it. `context/product-telemetry.md` owns only the other half: which gate of which CAADT flow emits which stage. Do not spell a stage from memory — a near-miss is rejected at runtime.
+
+This rule is stated here, outside the gate flow below, because that is exactly where it used to fail: the app-creation event checkpoints in the UX Contract hang off Gate P and Gate R, and this document exempts the `classic-to-freedom-migration` skill, the `creatio-mobile-page-conversion` skill, and branding runs from those gates — so those flows reported nothing at all, no matter how the instructions were worded. Being exempt from Gate P/R does **not** mean being exempt from telemetry; it means the same stages land on that flow's own gates instead (the engine gates and the verbatim migration plan, Gate M / Gate S, the single branding confirmation). The rule applies to targeted changes, autonomous runs, and pre-approved runs exactly as it applies to full app generation.
+
+Telemetry stays non-blocking everywhere: it must never gate or delay the developer's task, and a clio too old to accept the stage names is a stop-emitting-and-continue, never a blocker.
+
 ## Task Classification
 
 Classify each request before choosing the workflow.
@@ -99,11 +110,11 @@ Use the branding flow when the request is about visual branding rather than busi
 
 - creating or restyling a theme, or matching a brandbook or company site
 - changing the app's brand colors or fonts
-- adding or changing the app's logos, or generating a palette-matched app background
+- adding or changing the app's logos and browser-tab favicon, or generating a palette-matched app background
 
 Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
 
-Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, background) with no business-logic component; when in doubt, treat it as app work, not branding.
+Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, favicon, background) with no business-logic component; when in doubt, treat it as app work, not branding.
 
 ## Support Mode (Troubleshooting)
 
@@ -143,9 +154,11 @@ The default user-facing flow is:
 
 Product telemetry is woven through this flow as a non-blocking, cross-cutting concern. `context/product-telemetry.md` is the source of truth for consent handling and the exact per-event emission points; the touchpoints below are the minimum the agent must not skip, and they never gate the flow (if consent is denied or telemetry is unavailable, continue normally):
 
-- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and emit `session_started` per the consent table in `context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
-- **During discovery (steps 2-4):** emit `pre_plan_clarification_requested`, `pre_plan_user_input_received`, `business_plan_generated` / `business_plan_regenerated` (or `business_plan_generation_skipped` when Business Plan generation is intentionally skipped), and `business_plan_feedback_received` at the points the contract lists.
-- **At Gate R and implementation (steps 6-7):** emit `business_plan_approved`, then `implementation_started` before the first implementation action, and the terminal `implementation_completed` or `implementation_failed` when the run ends.
+- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and open the run per the consent table in `context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
+- **During discovery (steps 2-4):** report the clarification and input stages, and the plan stage once the Business Plan is presented, at the points the contract lists.
+- **At Gate R and implementation (steps 6-7):** report the approval stage at Gate R, the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends.
+
+Stage NAMES are deliberately not written here. They live in `get-guidance name=product-telemetry`, and `context/product-telemetry.md` maps them to these gates — a list copied into this file would outlive the release that changed it, which is exactly how a measured run came to report an entire funnel under names the current vocabulary no longer counts.
 
 First-turn latency rule:
 
@@ -157,18 +170,20 @@ First-turn latency rule:
 - The first turn should include:
   - a short "What I understood"
   - the main highest-priority business discovery questions, up to the 10-question ceiling — cover the full critical set in this one batch, since a follow-up batch often does not happen
+  - for a NEW app or a new section, navigation placement and its audience among those questions (see the business-discovery priorities below) — it is a plan-level decision, and the file that documents it is not readable this turn
 - The first discovery questions should appear in that same first user-facing interaction, whether via compact text or structured input.
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
 - Prefer to cover the full critical set in the first batch (up to the 10-question ceiling); ask a follow-up batch only if something critical genuinely remains, since a second round often does not happen.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
 - Do not read large repository files before the first clarification turn (routing + initial discovery batch) is completed for the current request.
-- First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and `session_started` is emitted silently at workflow start.
+- First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and the run's opening stage is emitted silently at workflow start.
 
 Business discovery must follow a Business Analyst style:
 
 - ask only the minimum critical questions
 - keep the business discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest; technical questions stay limited to execution blockers)
-- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria
+- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria, and — for a NEW app or a new section — navigation placement and its audience
+- navigation placement is always critical for a NEW app or a new section, never a "minor implementation question": ask which workplace the section (and its home page, if requested) belongs to and which roles should see it. Ask it from the PROMPT ALONE — resolving where an existing app's sections already live needs a live `SysModuleInWorkplace` read, and the first-turn latency rule above forbids blocking this turn on environment inspection. So offer the generic set here — a new workplace named for the app, `My applications`, or an existing one the developer names — recommending the new named workplace when the request is to scaffold a NEW app, and say the current placement will be read back and confirmed before anything is applied. The read-then-order refinement, including the `My applications` carve-out and what to do when the sections span several workplaces, belongs to requirements gathering (`runbooks/02-requirements-gathering.md`), where environment reads are allowed. It cannot be safely assumed: `create-app` and `create-app-section` both place the section in `My applications`, which is granted to `System administrators` only, so a defaulted answer ships a section ordinary users cannot open. This applies to an added section as much as to a whole new app — the entrypoint trigger covers both, so the first batch must too. Keep it in the FIRST batch; the reference material that explains it (`context/business-checklist.md`) is deliberately not read until after that batch, so this line is the only thing carrying it there.
 - avoid minor implementation questions during approval of the business plan
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
@@ -250,12 +265,12 @@ Gate R:
 - **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
 - Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
+- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`).
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
-- The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
+- The visible draft must use the 8-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
-- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 7-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
+- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 8-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
 - A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
 Gate bypass rule:
@@ -292,10 +307,10 @@ Approval-ready vs delivery-ready rule:
 
 ## Orchestration Checklist
 
-0. At workflow start, establish telemetry consent and emit `session_started` per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
-1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Emit the `pre_plan_*` events as you ask for and receive pre-plan input.
-2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan emit `business_plan_generated` (and `business_plan_regenerated` on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; emit `business_plan_approved` then.
-3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
+0. At workflow start, establish telemetry consent and open the run per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
+1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Report the clarification and input stages as you ask for and receive pre-plan input.
+2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan report the plan stage (and again on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; report the approval stage then — and only for an approval the developer actually gave.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Report the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
@@ -395,19 +410,15 @@ Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_d
 
 Notes for each release live in `RELEASE-NOTES.md` (canonical file at the repo root). Add a `## X.Y.Z (YYYY-MM-DD)` section at the top of the file in a separate PR before triggering the release workflow. Subsections (`###`) are free-form per release (Features, Bug Fixes, Migration Notes, etc.).
 
-<!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
+<!-- BEGIN MANAGED SECTION: company-agent-policy v1.1.0 -->
 <!-- DO NOT EDIT THIS SECTION MANUALLY. -->
 
 ## Required Workflow
-Before any substantial repository analysis, planning, implementation, refactoring, bug fixing, or file edits, use the `$ensure-ai-commit-attribution` skill.
-
-This is a mandatory attribution rule for all coding sessions in this repository.
+Attribution of AI-authored changes is handled automatically by the installed Claude Code tooling hooks (Pre/PostToolUse events) — no manual skill or marker command is required for normal work.
 
 The agent must:
-1. Mark every file the agent creates or modifies with the skill marker helper.
-2. Allow the repository hooks to manage the `AI agents: ...` trailer automatically.
-3. Avoid all other attribution commands during normal work.
-
-For normal work, the only allowed attribution command is the file-marking command after a real file write. That single command must also handle any needed hook installation quietly.
+1. Let the installed hooks record every file the agent creates or modifies.
+2. Allow the hooks to manage the `AI agents: ...` commit trailer automatically.
+3. Avoid running manual attribution commands during normal work.
 
 <!-- END MANAGED SECTION -->

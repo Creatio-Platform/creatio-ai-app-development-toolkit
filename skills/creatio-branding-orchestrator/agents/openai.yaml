@@ -1,5 +1,5 @@
 ---
 display_name: "Creatio Branding Orchestrator"
-short_description: "Brand a Creatio app: theme colors and fonts, logos, and a palette-matched background."
-default_prompt: "Use $creatio-branding-orchestrator to brand or theme a Creatio app — match a brandbook or company site, or apply chosen brand colors and fonts, add the company logos, and generate a palette-matched background — then build and apply everything through clio MCP."
+short_description: "Brand a Creatio app: theme colors and fonts, logos and favicon, and a palette-matched background."
+default_prompt: "Use $creatio-branding-orchestrator to brand or theme a Creatio app — match a brandbook or company site, or apply chosen brand colors and fonts, add the company logos and browser-tab favicon, and generate a palette-matched background — then build and apply everything through clio MCP."
 ---

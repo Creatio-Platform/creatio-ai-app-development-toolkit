@@ -13,8 +13,9 @@ name: Sonar gate
 # anonymously, so this also works on pull requests from forks.
 
 on:
+  # No `branches:` filter on purpose: with `[main]` a PR stacked on a feature base got no
+  # new-issues gate at all. The PR is looked up by number and head SHA, so any base works.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -28,7 +29,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - name: Check for new Sonar issues

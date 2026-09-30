@@ -34,3 +34,7 @@ scratch_*
 # architecture deck produced while building the skill. Kept on disk for reference but NOT shipped with the
 # plugin: it would bloat the client bundle and leak internal notes. Untracked via `git rm -r --cached .migration`.
 .migration/
+
+# Local machine paths for build-dev-toolchain.bat (copied from build-dev-toolchain.config.example).
+# Machine-specific; never tracked so real local paths do not show up as repo diffs.
+scripts/build-dev-toolchain.config

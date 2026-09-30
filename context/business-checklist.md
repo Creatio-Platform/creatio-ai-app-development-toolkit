@@ -14,10 +14,11 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | 4 | Lifecycle and Statuses | yes |
 | 5 | Business Logic | yes |
 | 6 | UX Expectations | yes |
-| 7 | Edge Cases and Exceptions | yes |
+| 7 | Analytics | yes |
+| 8 | Edge Cases and Exceptions | yes |
 
 The checklist groups below are discovery buckets, not an alternate final document structure.
-The plan body shown for Gate R approval must map the checklist outcome into the canonical 7-section Business Plan above.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 8-section Business Plan above.
 A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
 Section mapping rules:
@@ -25,6 +26,7 @@ Section mapping rules:
 - `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
 - `Roles and Permissions` must include actors, responsibilities, personas, and access posture.
 - `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
+- `Analytics` is mandatory and always proposed by the agent as a domain expert (never generic filler). It contains `### 7.1 Section analytics` — per-section **dashboards** (~2-3 per section unless the developer asks for more), each naming its `dashboard:` title, its `access rights: All Employees` (a static default — dashboards are created visible to everyone; the role a dashboard is for drives its content, not its access), its `scope:`, and its `widgets:` (**at least 5** widgets — a metric band plus charts/lists); and `### 7.2 Workplace analytics` — the app's **single home page** (one `home page:` block with its `scope:` and **at least 10** `widgets:`), which has **no** `access rights:` line (its audience is the workplace it is bound to) and is **not** a set of dashboards. Widgets may draw on any site object (the app's own objects and standard platform objects). The section must be populated, never left empty or `TBD`.
 
 ---
 
@@ -83,6 +85,28 @@ If restrictions are not essential, explicitly state:
 - `No specific access restrictions are required by default.`
 
 Do not suggest optional restrictions without a business reason.
+
+Also required, and NOT covered by the sentence above — navigation placement and audience:
+- where the app belongs in the left navigation: a NEW workplace named for the app (recommend this when
+  scaffolding a new app), the default `My applications`, or an existing workplace the developer names
+- when the section is being added to an app that ALREADY exists, read where that app's sections live
+  and recommend that workplace instead — except when it is `My applications`, which
+  must not be recommended: an app sitting there is the very defect this question exists to catch, so
+  recommend a new workplace named for the app and say the current placement is administrators-only. A section can
+  legitimately sit in more than one workplace (`SysModuleInWorkplace` is one row per placement); when
+  the app's sections span several, recommend the one holding most of them and list the others, and
+  ask rather than choose when it is a tie
+- who should see that workplace (which roles)
+
+These are separate questions from record-level access, and the "no specific access restrictions"
+default does NOT answer them. Every app gets a navigation placement whether or not anyone chose one:
+`create-app` puts the section in `My applications`, which is granted to `System administrators` only,
+so silence here ships an app that ordinary users cannot reach. If the developer also asked for a home
+page, ask which workplace it should land on — a home page is only reachable through a workplace.
+
+Ask this in the discovery batch, not at implementation time: it changes the plan, not just the build.
+The mechanics (three tables, data bindings, transfer between environments) belong to clio — see
+`get-guidance name=workplaces`; the checklist only has to secure the developer's decision.
 
 ### Core process and business logic
 
@@ -192,6 +216,13 @@ Before presenting the BA draft to the developer, run a pre-analysis pass across 
 
 The pre-analysis must check for:
 - contradictions between business context, process, data model, UX assumptions, and assumptions
+- the SAME concept specified twice in the request in incompatible ways — most often a state modelled
+  both as a boolean and as a multi-value status (e.g. a `Completed` checkbox alongside a
+  `New / In progress / Completed` status). Pick ONE carrier and say which, or ask; never satisfy both
+  by creating both fields, because nothing then keeps them in agreement and every metric, filter, and
+  business rule silently picks a different source of truth
+- a workplace placement or workplace audience that no answer or assumption covers (see
+  "Users, access and ownership")
 - business logic that is not reflected in the data model or cannot be supported by the described UX
 - required fields in business logic that are not marked as required in the data model
 - defaults that do not identify an explicit business default or explicit absence of default

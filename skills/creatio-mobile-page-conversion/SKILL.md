@@ -65,14 +65,16 @@ Before the Load order below, verify the converter is available: list the server 
 1. Read `./references/page-to-mobile-conversion.md` — the **AUTHORITATIVE playbook**. It defines the
    full flow, the approval gates (Gate M, Gate S), the exact tool sequence, and the conversion report.
    Follow it exactly.
-2. Read clio `get-guidance` with name `freedom-page-web-to-mobile-conversion` — the advisory engine
-   guidance (component classification, the paste-verbatim data-section rules, the hard mobile rules).
+2. Read clio `get-guidance` with name `freedom-page-web-to-mobile-conversion` — the advisory ENGINE-layer
+   guidance and the single source of truth for the body-building mechanics (component classification,
+   per-operation `viewConfigDiff` rules, `values` paste, the paste-verbatim data-section rules, adaptive /
+   tab-body / normalization behavior, the hard mobile rules). The playbook defers to it for all mechanics.
 3. Read `../../context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics
    (separate web/mobile pages, body format, component-registry differences).
 4. **Before authoring the mobile page body (Flow step 7):** (a) call clio `get-guidance` with name
    `mobile-page-modification` — the platform-mandated mobile page-authoring guidance (mobile component
    registry, body constraints, Scaffold inheritance rules). `../../context/essentials.md` requires this
-   call before editing ANY mobile page body, and the mechanical `mobileValues` paste does not exempt it.
+   call before editing ANY mobile page body, and the mechanical `values` paste does not exempt it.
    Then (b) **invoke the `creatio-ui-guidelines` skill** and apply its mobile-relevant rules (component
    choice, lookups, fields, captions, tooltips, accessibility), and run its review checklist before
    treating the page as done. `create-page` / `update-page` on a mobile page are the same page-authoring
@@ -83,6 +85,29 @@ Before the Load order below, verify the converter is available: list the server 
    app's design package, `update-page` writes a replacing schema in the design package and leaves the
    created mobile schema empty — the Mobile app then loads the empty schema and crashes. Details in the
    playbook's Flow step 7.
+
+## Product telemetry — emit the shared stages with `workflow: "mobile-page-conversion"`
+
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow, and
+`../../context/product-telemetry.md` for this flow's emission points. Emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+identified by the `workflow` field, so do not invent `mobile_*` event names — clio rejects them.
+
+| Send | With | At the point where you |
+| --- | --- | --- |
+| `workflow_started` | — | take the first conversion request |
+| `clarification_requested` / `user_input_received` | — | ask the developer something the flow waits on / receive their answer |
+| `plan_blocked` | `variant=feature-disabled` | find the `mobile-page-converter` flag off in the preflight above — emit before telling the user how to enable it, then STOP as that section requires |
+| `plan_presented` | — | present the plain-language plan |
+| `plan_approved` | — | get approval at **Gate M** — before the first write |
+| `build_started` | — | begin writing the mobile page |
+| `work_item_completed` | `variant=page` | finish and validate a mobile page body, once per page — including each missing-target-page follow-up converted via the playbook's step 8a |
+| `work_item_completed` | `variant=section` | complete section/workplace registration after **Gate S** |
+| `workflow_completed` / `workflow_failed` | — | reach the end of the run |
+| `changes_requested` | — | the developer asks for further changes AFTER the conversion completed. Emit before starting that follow-up work |
+| `changes_applied` | — | the follow-up changes are applied and verified |
+
+Telemetry is non-blocking and must never interfere with Gate M or Gate S. If clio rejects an event name
+(older clio), stop emitting for the rest of the run and carry on.
 
 ## Gates are MANDATORY — this is the point of this skill
 
@@ -96,8 +121,18 @@ request collapse this into a single unattended pass. The invariants:
   `create-related-page-addon` with `schema-type=mobile`).
 - **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
   and END THE TURN without writing — never self-approve.
+- **Missing target pages are converted one at a time, never as a batch — and the offer is one level
+  deep.** The playbook's step 8a proposes converting the pages listed in the conversion report's "Missing
+  pages" block, but each accepted page is a full separate run of this flow with its own Gate M (and Gate S
+  if applicable). The developer accepting the sequential-conversion offer is not blanket approval for
+  every page in the list. A follow-up page's OWN missing targets are reported in its own step 8 report but
+  are never offered for further sequential conversion — converting those is a new, separate request.
 
 The AUTHORITATIVE, detailed gate rules — the two-choice (View details / Adjust vs Approve) flow, what the
 plan must contain, and the exact FORBIDDEN-until-approved tool lists — live in the "Gate M" / "Gate S"
-sections of `./references/page-to-mobile-conversion.md`. That file is the single source of truth: follow
-it, and make gate-rule changes there rather than duplicating them here.
+sections of `./references/page-to-mobile-conversion.md`. That file is the single source of truth for the
+**PROCESS** layer (the flow, the gates, the plan/report format, environment resolution, section
+registration): follow it, and make gate/process changes there. The body-building **MECHANICS** are a
+separate layer whose single source of truth is the clio `freedom-page-web-to-mobile-conversion` guidance
+article (Load order step 2) — make mechanic changes there, not in the playbook, and if the two ever
+disagree the guidance article wins on mechanics.

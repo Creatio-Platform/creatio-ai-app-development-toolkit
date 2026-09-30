@@ -1,8 +1,9 @@
 name: PR checks
 
 on:
+  # No `branches:` filter on purpose: with `[main]` these checks never ran on a PR that targets a feature base,
+  # and a stacked PR is exactly where drift between `_workflow-core/` and a generated `.workflow.js` is most likely.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -17,7 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - name: Install dependencies
@@ -32,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
       - name: Check manifest sync
@@ -43,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
       # supply-chain AUTHENTICITY anchor (the other half of verify-vendor.mjs): independently fetch the pinned
@@ -62,7 +63,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
       # supply-chain gate: the vendored acorn parser (the one executable processing untrusted schema-body)
@@ -85,3 +86,34 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-infra.mjs
+      # The shipped Claude `.workflow.js` files are GENERATED from skills/_workflow-core/ (a workflow script cannot
+      # `import`, so the host-neutral core is inlined into them). This is the drift gate: an edit to the generated
+      # file alone, or a core edit that was never re-generated, fails here instead of shipping two divergent
+      # orchestrations — the Claude one and the one Codex runs through the CLI.
+      - name: Workflow core ↔ generated workflow in sync
+        if: always()
+        run: node scripts/build-workflows.mjs --check
+      # The host-neutral core itself: the work-item protocol's three outcomes, capability negotiation (an explicit
+      # stop, never a silent degradation), journal replay/resume, CROSS-HOST PARITY (the Claude adapter and the CLI
+      # must return the identical result), and an evaluation of the generated file the way the host evaluates it.
+      - name: Run workflow-core goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-workflow-core.mjs
+      # DIFFERENTIAL: the generated workflow scripts against the hand-written baselines they replaced, driven the
+      # way the Claude host drives them. Identical phase sequence, identical agent dispatch order, identical
+      # PROMPTS byte for byte, identical return value — the acceptance criterion "existing Claude Code behavior
+      # remains unchanged", asserted rather than asserted-about. The baselines under `baseline/` are frozen; a
+      # deliberate behaviour change replaces them in its own reviewed commit.
+      - name: Run workflow parity goldens (shipped vs baseline)
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-workflow-parity.mjs
+      # The approved plan sliced into a FOLDER of one-task files (`--tasks <dir>`), which an orchestrator walks one
+      # task at a time instead of holding every deliverable in one context: content-derived ids (an inserted page
+      # must not renumber a recorded status onto another task), the leaf-first build order, the caller's status and
+      # notes surviving a re-run, nothing ever deleted, and a plan-level gap writing no folder at all.
+      - name: Run task-slicing goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-tasks.mjs

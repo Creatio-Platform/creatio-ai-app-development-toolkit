@@ -76,6 +76,7 @@ Beyond the principles above, verify these page-design criteria. Each maps to a W
 - Widget Color parameter in Freedom UI Designer and Dashboard Designer shows WCAG-compliant colors; choosing from it is usually safe.
 - Pipeline, Sales pipeline, Full pipeline, Doughnut, and Progress bar widgets use preset accessible color sequences and are not user-configurable.
 - Tabs and Area backgrounds require manual validation because text/background combinations can fail contrast.
+- **Assign status colors from a consistent semantic scale, and always pair the color with text.** When you color a status, use one meaning-to-color scale across the app: green = on-track / ready / positive / done; amber = draft / paused / needs attention; red = stopped / overdue / at-risk / lost; neutral gray = inactive / not started. The same state uses the same color everywhere, the label states the status in words (color is never the only signal), and every pair meets the contrast minimums above.
 
 ## Recommended multi-series chart order
 

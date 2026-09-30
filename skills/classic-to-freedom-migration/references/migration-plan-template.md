@@ -8,7 +8,7 @@
 >
 > 1. **Reference** — so you (and the reader) know *what a complete plan covers*. Every section below is
 >    already produced, in a page-centric shape, by `--plan` (Overview + Main scope + per-page
->    `Layout`/`Logic`/`⚠ Confirm` + `Child page mappings`). Do not build a second, template-shaped plan
+>    `Layout`/`Business rules`/`⚠ Custom methods`/`⚠ Other declared logic`/`⚠ Confirm` + `Child page mappings`). Do not build a second, template-shaped plan
 >    alongside it.
 > 2. **Hand-authoring fallback** — when Node is genuinely unavailable and the engine cannot run, author
 >    the plan by hand using the structure below, filling each section from the merged schema chain.
@@ -35,7 +35,6 @@ Record the evidence used and any gaps.
 | Source | Status | Evidence | Risk |
 | --- | --- | --- | --- |
 | Creatio runtime metadata | Available / Missing / Partial |  |  |
-| Local repository | Available / Missing / Partial |  |  |
 | Existing Freedom UI artifacts | Found / Not found / Partial |  |  |
 | Package ownership/editability | Editable / Locked / Unknown / Partial |  |  |
 | Classic schema coverage | All schemas read / Partial / Top-only | list schemas read (base→top) | items from unread schemas are INFERRED |
