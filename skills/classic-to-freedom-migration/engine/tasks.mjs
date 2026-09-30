@@ -85,6 +85,9 @@ export const REFUSED_STATUS = "deliverable-status";
 // plan carries one row per field and per related list instead, so the cell has no row to land on and a sync would
 // drop it.
 export const REFUSED_RETIRED = "retired-aggregate";
+// Before the first dispatch, a `D<N>` in decisions.md that no deliverable status, task `decisions:` entry or
+// `manifest.decisionsWithoutDeliverable` item cites: a deliverable it drops would reach a sub-agent.
+export const REFUSED_DECISIONS = "unaccounted-decisions";
 
 // WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
 // frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
@@ -4258,6 +4261,55 @@ function clearStaleStatusCells(tasks) {
   }
   return cleared;
 }
+// The `D<N>` entries of `decisions` (the Map from readDecisions) that nothing cites: no task `decisions:` entry,
+// no `deliverableStatus` entry and no `withoutDeliverable` item. `{ id, title }` in file order; `Adjustment N`
+// keys are never returned.
+export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
+  const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
+  for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
+  for (const t of tasks) {
+    if (t.unread) continue;
+    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+    for (const d of map.values()) cited.add(decisionOf(d));
+  }
+  return [...(decisions || new Map()).entries()]
+    .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
+    .map(([id, title]) => ({ id, title }));
+}
+// Whether the folder has had no dispatch yet: no task with an `agentNonce` or a sub-agent outcome, and no
+// timings record. A sub-agent outcome is `built`, `not-built`, or `not-applicable` on a row the plan did not mark
+// `na`; the plan's own `not-applicable`, the `wont-do` / `postponed` cells `--decide` writes and a hand-typed
+// word read as `not-built` are not. A timings file that does not parse counts as a dispatch.
+const SUB_AGENT_OUTCOMES = new Set([O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE]);
+const showsSubAgentOutcome = (r) => SUB_AGENT_OUTCOMES.has(r.outcomeKind) && !r.naNoReason
+  && !(r.outcomeKind === O_NOT_APPLICABLE && r.na);
+const showsDispatch = (t) => !!String(t.agentNonce || "").trim() || (t.rows || []).some(showsSubAgentOutcome);
+export function firstDispatchPending(dir, tasks = []) {
+  if (tasks.some(showsDispatch)) return false;
+  const { running, samples, malformed } = readTimingsFile(dir);
+  return !malformed && !samples.length && !Object.keys(running).length;
+}
+// The open deliverables of the merged set as `<pageKey>#<deliverableId>`, grouped by page in cut order.
+function openDeliverableKeys(tasks) {
+  const byPage = new Map();
+  for (const t of tasks) {
+    for (const r of t.rows || []) {
+      if (!r.deliverableId || r.na || r.outcomeKind || r.status) continue;
+      const page = r.pageKey || t.pageKey;
+      if (!byPage.has(page)) byPage.set(page, new Set());
+      byPage.get(page).add(`${page}#${r.deliverableId}`);
+    }
+  }
+  return [...byPage.entries()].map(([page, keys]) => ({ page, keys: [...keys] }));
+}
+// Applies only when `opts.refuseUnaccounted` is set and nothing has been dispatched from the folder.
+function decisionRefusal(merged, dir, opts) {
+  if (!opts.refuseUnaccounted || !firstDispatchPending(dir, merged.tasks)) return null;
+  const open = unaccountedDecisions(opts.decisions, { tasks: merged.tasks, deliverableStatus: opts.deliverableStatus,
+    withoutDeliverable: opts.decisionsWithoutDeliverable });
+  if (!open.length) return null;
+  return { problems: open.map((d) => `${d.id} — ${d.title}`), openDeliverables: openDeliverableKeys(merged.tasks) };
+}
 // The cut copies each planning status into its row through the `--decide` row writer: `wont-do — <title> (D<N>)`
 // with a `D<N>=` entry, after clearing the cells whose status is gone. Every status must resolve against
 // decisions.md before any is written. A closed task a cell was cleared in reopens as `todo`; every engine task
@@ -4288,6 +4340,8 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const merged = mergeTaskSet(fresh, readExisting(dir));
   const problems = applyPlanStatuses(merged, opts.decisions);
   if (problems.length) return { ...fresh, refused: true, refusal: REFUSED_STATUS, problems, tasks: [], stale: [], blocked: [] };
+  const unaccounted = decisionRefusal(merged, dir, opts);
+  if (unaccounted) return { ...fresh, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
   // Close the clocks of everything that finished since the last pass, before the files are written.
   closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());

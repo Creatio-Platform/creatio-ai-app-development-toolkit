@@ -28,6 +28,7 @@
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 //     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
+//     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry or this list
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
 // THE PLAN VERSION: `--plan` prints `**Plan version:** \`plan-<hash>\`` in its Overview — a deterministic hash over
@@ -62,7 +63,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
+  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -813,6 +814,22 @@ function deliverableStatusIssues(groups, opts) {
   const own = entries.flatMap(([key, entry]) => entryProblems(key, entry, byKey, rows, opts));
   return own.length ? own : relatedStatusIssues(rows, opts.deliverableStatus);
 }
+// Every `manifest.decisionsWithoutDeliverable` item that cannot stand, as `{ key, problem }`: a value that is not
+// a list, an item not shaped D<N>, one decisions.md does not hold, and one a `wont-do` status also cites.
+function noDeliverableIssues(list, opts) {
+  if (list === undefined) return [];
+  if (!Array.isArray(list)) return [{ key: "decisionsWithoutDeliverable", problem: "must be a list of D<N>" }];
+  const wontDo = new Set(Object.values(plainObject(opts.deliverableStatus)).filter((e) => e?.status === STATUS_WONT_DO).map((e) => e.decision));
+  return list.flatMap((d) => noDeliverableProblems(d, wontDo, opts));
+}
+function noDeliverableProblems(d, wontDo, { decisions, decisionsOptional }) {
+  if (typeof d !== "string" || !/^D\d+$/.test(d)) return [{ key: String(d), problem: "is not a D<N>" }];
+  if (wontDo.has(d)) return [{ key: d, problem: `is also cited by a \`${STATUS_WONT_DO}\` status in \`manifest.deliverableStatus\` — a decision that drops a deliverable is not listed here` }];
+  if (!decisions && decisionsOptional) return [];
+  if (!decisions) return [{ key: d, problem: "cannot be resolved: no decisions.md was read — plan with `--out` into the migration folder that holds decisions.md" }];
+  if (!decisions.has(d)) return [{ key: d, problem: "does not resolve to an entry in decisions.md" }];
+  return [];
+}
 function validIdsOf(page, rows) {
   const ids = rows.filter((r) => r.pageKey === page && r.deliverableId).map((r) => statusKey(page, r.deliverableId));
   return ids.length ? ids : [...new Set(rows.map((r) => r.pageKey))].map((k) => `${k}#…`);
@@ -1001,6 +1018,8 @@ export function checklistOpts(manifest, opts = {}) {
     deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
     decisions: opts.decisions instanceof Map ? opts.decisions : null,
     decisionsOptional: opts.decisionsOptional === true,
+    // Root-only, like the plan's `### Won't do` list it is printed in.
+    decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
@@ -2965,7 +2984,10 @@ export function runMigration(manifest, opts = {}) {
   // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
   const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
-  if (!opts.scopeSchema) out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
+  if (!opts.scopeSchema) {
+    out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
+    out.noDeliverableIssues = noDeliverableIssues(manifest.decisionsWithoutDeliverable, specOpts);
+  }
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
@@ -3341,6 +3363,7 @@ function refusalCause(set, dir) {
   if (set.refusal === REFUSED_RETIRED) return `recorded cells in ${dir} sit on an aggregate coverage row, and this plan has one row per item`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_STATUS) return "a deliverable status in `manifest.deliverableStatus` does not resolve against decisions.md";
+  if (set.refusal === REFUSED_DECISIONS) return `nothing has been dispatched from ${dir} yet, and decisions.md holds decision(s) no deliverable accounts for`;
   if (set.refusal === REFUSED_COVERAGE) {
     return handedIn(set)
       ? `the split passed with ${SPLIT_FLAG} does not cover this plan`
@@ -3349,16 +3372,19 @@ function refusalCause(set, dir) {
   return "the cut does not resolve against this plan";
 }
 
+// Remedies that do not depend on the refused set.
+const FIXED_REMEDIES = {
+  [REFUSED_STATUS]: " Add the decision to decisions.md, or correct the entry, then re-run.",
+  [REFUSED_RETIRED]: " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
+    + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row."
+    + " Before the first dispatch, record the decision as a `manifest.deliverableStatus` entry for each related list instead.",
+  [REFUSED_CUT]: " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
+    + " produced it.",
+};
+
 function refusalRemedy(set) {
-  if (set.refusal === REFUSED_STATUS) return " Add the decision to decisions.md, or correct the entry, then re-run.";
-  if (set.refusal === REFUSED_RETIRED) {
-    return " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
-      + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row.";
-  }
-  if (set.refusal === REFUSED_CUT) {
-    return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
-      + " produced it.";
-  }
+  if (Object.hasOwn(FIXED_REMEDIES, set.refusal)) return FIXED_REMEDIES[set.refusal];
+  if (set.refusal === REFUSED_DECISIONS) return decisionsRemedy(set);
   if (set.refusal === REFUSED_COVERAGE) {
     // The engine picks no owner: which item a row belongs to is the judgement the split records. What FALLING
     // BACK reaches depends on what is still in play — dropping a handed-in flag reads the folder's own frozen
@@ -3383,6 +3409,15 @@ function refusalRemedy(set) {
   return ` Fix or remove ${SPLIT_FILE}.`;
 }
 
+// Each decision either drops deliverables, recorded one status per deliverable, or drops none, recorded in the
+// marker list. The open deliverable ids are listed per page.
+function decisionsRemedy(set) {
+  return " For each decision: if it drops a deliverable, add `\"<page>#<id>\": { \"status\": \"wont-do\", \"decision\": \"D<N>\" }`"
+    + " to `manifest.deliverableStatus` for each deliverable it drops; if it drops none, add it to"
+    + " `manifest.decisionsWithoutDeliverable`: `[\"D<N>\"]`. Re-run `--plan`, present the plan for approval, then re-run this command."
+    + " Open deliverable ids:\n" + (set.openDeliverables || []).map((p) => `  · ${p.page}: ${p.keys.join(", ")}`).join("\n");
+}
+
 // A cut that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
 // half-applied cut can never schedule part of a plan and drop the rest.
 function splitRefusalText(set, dir) {
@@ -3403,7 +3438,8 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
-  const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
+  const checked = { ...opts, refuseUnaccounted: true };
+  const set = startId ? startTask(dir, startId, result, checked, split) : syncTaskDir(dir, result, checked, split);
   if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
@@ -3560,7 +3596,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   if (gapRefusal) { nextRefusalFailure = true; return gapRefusal; }
   const noFolder = nextFolderRefusal(dir);
   if (noFolder) { nextRefusalFailure = true; return noFolder; }
-  const set = syncTaskDir(dir, result, opts);
+  const set = syncTaskDir(dir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
@@ -4319,8 +4355,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // banner, so an operator (and the build executor, which reads the exit code / `planGaps`, not the Markdown)
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
-  // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply.
-  const statusBad = (result.statusIssues || []).length > 0;
+  // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply, or a marker item that does not stand.
+  const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || statusBad || verifyIncomplete
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete

@@ -1749,6 +1749,8 @@ function renderPlanBanners(result, opts) {
   P.push(...renderBehaviourIndexBanners(result));
   if ((result.statusIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.statusIssues.length} \`manifest.deliverableStatus\` entr(y/ies) cannot be applied:**`,
     ...result.statusIssues.map((x) => `> - ${esc(statusIssueText(x))}`), "");
+  if ((result.noDeliverableIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.noDeliverableIssues.length} \`manifest.decisionsWithoutDeliverable\` item(s) cannot be applied:**`,
+    ...result.noDeliverableIssues.map((x) => `> - ${esc(noDeliverableIssueText(x))}`), "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];
@@ -2811,7 +2813,16 @@ function renderWontDoList(opts) {
   const rows = opts.planGroups.flatMap((g) => g.rows
     .filter((r) => (r.na || r.status?.kind === STATUS_WONT_DO) && !printed.has(statusKey(g.pageKey, r.deliverableId)))
     .map((r) => `- \`${esc(statusKey(g.pageKey, r.deliverableId))}\` ${r.label.split(" — ")[0]} — ${statusText(r.na ? { kind: "not-applicable", reason: r.na } : r.status, opts)}`));
-  return rows.length ? ["", "### Won't do", "", ...rows, ""] : [];
+  const none = noDeliverableLines(opts);
+  if (!rows.length && !none.length) return [];
+  return ["", "### Won't do", "", ...rows, ...(rows.length && none.length ? [""] : []), ...none, ""];
+}
+// The decisions that close no deliverable, listed for the approver; nothing when the list is empty.
+function noDeliverableLines(opts) {
+  const list = opts.decisionsWithoutDeliverable || [];
+  if (!list.length) return [];
+  return ["Decisions that close no deliverable (`manifest.decisionsWithoutDeliverable`):", "",
+    ...list.map((d) => `- ${esc(String(d))} — ${esc(opts.decisions?.get?.(d) || "?")}`)];
 }
 function pageGroup(pageKey, title, rows, ctx = {}) {
   return {
@@ -4690,6 +4701,7 @@ export function planGaps(result) {
   // page built from an unreadable section `diff` as buildable. Same shape as the legs above so no caller changes.
   if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   if ((result?.statusIssues || []).length) g.push(`deliverableStatus INVALID (${result.statusIssues.map(statusIssueText).join("; ")})`);
+  if ((result?.noDeliverableIssues || []).length) g.push(`decisionsWithoutDeliverable INVALID (${result.noDeliverableIssues.map(noDeliverableIssueText).join("; ")})`);
   return g;
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.
@@ -4698,6 +4710,7 @@ function statusIssueText(x) {
   const ids = (x.valid || []).length ? ` — ${idsLabel}: ${x.valid.join(", ")}` : "";
   return `\`${x.key}\` ${x.problem}${ids}`;
 }
+const noDeliverableIssueText = (x) => `\`${x.key}\` ${x.problem}`;
 // THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.
 // A mis-filed record blocks the run without touching a row, so a verdict computed from rows alone would read
 // positive beside the banner that blocks it.

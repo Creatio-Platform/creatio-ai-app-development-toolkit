@@ -212,6 +212,16 @@ sub-agents before this, one of them caching material nobody else read.
    (`wont-do`, or `"status": "build"`); nothing is closed on their behalf. A decision taken DURING
    the build still goes through `--decide`.
 
+   **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
+   deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints
+   the list under `### Won't do` so the approver sees it. Until a task is dispatched, `--tasks` (the
+   cut, a re-sync, `--start`, `--next`) refuses with NOTHING WRITTEN and exit 2 while a `D<N>` in
+   `decisions.md` is cited by no `deliverableStatus` entry, no task `decisions:` line and not that
+   list; the refusal names each `D<N>`, its title and the open deliverable ids. Add the status or the
+   list item, re-run `--plan`, and have the plan approved again. `--decide` and `--revoke` are never
+   refused by this check, and it does not apply once a task has been dispatched. A list item that
+   decisions.md does not hold, or that a `wont-do` status also cites, is a plan gap.
+
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses
    a task whose `dependsOn` has not closed, naming each one and its status. And it refuses to issue
    a second token for an artifact a dispatched task is still writing, because two open tokens on one
