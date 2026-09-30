@@ -5045,6 +5045,35 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     fs.writeFileSync(path.join(dMixed, engMix), fs.readFileSync(path.join(dMixed, engMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
     check("a folder with DISAGREEING task-file stamps resolves to null (ambiguous, not first-wins) so the mode is not silently trusted",
       () => effectiveFrozenMode(dMixed) === null, () => ({ resolved: effectiveFrozenMode(dMixed) }));
+    // CLI: re-passing the SAME mode on a dropped-dotfile folder is accepted (not a false "cut WITHOUT a mode" refusal).
+    const dCliSame = path.join(tmp("mode_lost_cli_same"), "bt");
+    cliTasks(["--tasks", dCliSame, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliSame);
+    const rSame = cliTasks(["--tasks", dCliSame, "--reconcile-mode", "classic-layout"], RECON);
+    check("CLI: re-passing the SAME mode on a dropped-dotfile folder is accepted and re-freezes it (no false 'cut WITHOUT a mode')",
+      () => rSame.status === 0 && readFrozenMode(dCliSame) === RECONCILE_MODE_CLASSIC, () => ({ status: rSame.status, err: rSame.stderr }));
+    // CLI: re-passing a DIFFERENT mode on a dropped-dotfile folder is refused and names the mode restored from the stamps.
+    const dCliDiff = path.join(tmp("mode_lost_cli_diff"), "bt");
+    cliTasks(["--tasks", dCliDiff, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliDiff);
+    const rDiff = cliTasks(["--tasks", dCliDiff, "--reconcile-mode", "overlay"], RECON);
+    check("CLI: re-passing a DIFFERENT mode on a dropped-dotfile folder is refused, naming the mode restored from the stamps",
+      () => rDiff.status === 1 && /cut in `classic-layout`/.test(rDiff.stderr || rDiff.stdout || ""), () => rDiff.stderr);
+    // CLI: a dropped-dotfile folder with DISAGREEING task stamps is refused on a no-flag re-slice (not silently overlaid).
+    const dCliMix = path.join(tmp("mode_lost_cli_mixed"), "bt");
+    cliTasks(["--tasks", dCliMix, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliMix);
+    const engCliMix = readTaskDir(dCliMix).find((t) => t.origin === "engine");
+    fs.writeFileSync(path.join(dCliMix, engCliMix.file), fs.readFileSync(path.join(dCliMix, engCliMix.file), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    const rMix = cliTasks(["--tasks", dCliMix], RECON);
+    check("CLI: a dropped-dotfile folder with DISAGREEING task stamps is refused on re-slice (not silently overlaid)",
+      () => rMix.status === 1 && /DISAGREEING/.test(rMix.stderr || rMix.stdout || ""), () => rMix.stderr);
+    // verify on that mixed folder is refused too — the EXTRA gate is never silently turned off by an ambiguous folder.
+    const bfMix = path.join(tmp("mode_lost_cli_mixed_built"), "built.json");
+    fs.writeFileSync(bfMix, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vMix = cliTasks(["--tasks", dCliMix, "--verify", "--built", bfMix], RECON);
+    check("verify on a dropped-dotfile folder with DISAGREEING stamps is refused (EXTRA gate not silently overlaid)",
+      () => vMix.status === 1 && /DISAGREEING/.test(vMix.stderr || vMix.stdout || ""), () => vMix.stderr);
   }
   // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
   {

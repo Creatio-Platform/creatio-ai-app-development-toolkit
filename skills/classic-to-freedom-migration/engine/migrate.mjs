@@ -62,7 +62,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED,
-  RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode } from "./tasks.mjs";
+  RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3694,14 +3694,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (reconcileModeArg && (verifyMode || routeMode || nextMode || decideMode || revokeMode)) fail(`\`${RECONCILE_MODE_FLAG}\` is set once at the \`${TASKS_FLAG}\` cut and frozen in the folder; \`--verify\` / \`${ROUTE_FLAG}\` read it back from there. Drop it from this call.`);
   if (reconcileModeArg && !RECONCILE_MODES.has(reconcileModeArg)) fail(`\`${RECONCILE_MODE_FLAG}\` must be one of ${RECONCILE_MODE_LIST.join(" | ")} — got \`${reconcileModeArg}\`.`);
   // The mode is FROZEN at the FIRST cut. A corrupted `.reconcile-mode` is refused on ANY `--tasks` run (cut, re-slice,
-  // route, decide) rather than collapsed to null and silently rewritten as overlay — the read is the same one
-  // `resolveFrozenMode` does deeper in. Re-passing the flag is refused when it would change what a built folder means:
-  // a different frozen mode, or a folder already cut WITHOUT a mode. A fresh mode needs a fresh folder.
+  // route, decide, verify) rather than collapsed to null and silently rewritten/verified as overlay — the read is the
+  // same one `resolveFrozenMode` does deeper in. When the dotfile is ABSENT but the task files carry a stamp, the dotfile
+  // was dropped: a single stamp is the folder's true mode (restored below), DISAGREEING stamps are ambiguous and refused
+  // the same way a corrupted dotfile is (never silently picked). Re-passing the flag is refused when it would change what
+  // a built folder means: a different frozen mode (dotfile or stamp), or a folder truly cut WITHOUT a mode.
   if (tasksMode) {
     const st = readFrozenModeState(tasksDir);
     if (st.present && !st.valid) fail(`this folder's \`.reconcile-mode\` holds an unrecognised value ${JSON.stringify(st.raw)} — refusing rather than overwriting it or verifying as overlay. Fix or delete it, then re-run.`);
     if (reconcileModeArg && st.valid && st.mode !== reconcileModeArg) fail(`this folder was cut in \`${st.mode}\` mode; re-passing \`${RECONCILE_MODE_FLAG} ${reconcileModeArg}\` would change how every task is built. Keep \`${st.mode}\` (drop the flag — a re-slice reads it back), or start a fresh folder for the other mode.`);
-    if (reconcileModeArg && !st.present && fs.existsSync(path.join(tasksDir, TASK_INDEX_FILE))) fail(`this folder was already cut WITHOUT a reconcile mode; the mode is chosen on the FIRST \`${TASKS_FLAG}\` cut and frozen. Start a fresh folder for \`${reconcileModeArg}\`, or re-slice without the flag to keep the implicit overlay.`);
+    if (!st.present && fs.existsSync(path.join(tasksDir, TASK_INDEX_FILE))) {
+      const stamps = stampedModes(tasksDir);
+      if (stamps.length > 1) fail(`this folder's \`.reconcile-mode\` is absent and its task files carry DISAGREEING modes (${stamps.join(", ")}) — refusing to pick one silently or verify as overlay. Fix the stamps or start a fresh folder.`);
+      if (reconcileModeArg && stamps.length === 1 && stamps[0] !== reconcileModeArg) fail(`this folder was cut in \`${stamps[0]}\` mode (its \`.reconcile-mode\` was lost but the task files still carry it); re-passing \`${RECONCILE_MODE_FLAG} ${reconcileModeArg}\` would change how every task is built. Keep \`${stamps[0]}\` (drop the flag — a re-slice restores it from the stamps), or start a fresh folder for the other mode.`);
+      if (reconcileModeArg && stamps.length === 0) fail(`this folder was already cut WITHOUT a reconcile mode; the mode is chosen on the FIRST \`${TASKS_FLAG}\` cut and frozen. Start a fresh folder for \`${reconcileModeArg}\`, or re-slice without the flag to keep the implicit overlay.`);
+      // a single stamp equal to the arg (or no arg) is a dropped dotfile — resolveFrozenMode restores + re-freezes it.
+    }
   }
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
