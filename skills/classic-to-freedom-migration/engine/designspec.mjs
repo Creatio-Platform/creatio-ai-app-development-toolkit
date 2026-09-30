@@ -3130,6 +3130,10 @@ function maxFieldMatch(names, ops) {
 // (`crt.ComboBox`) inside it are exempt — a base Input / date / checkbox / rich-text placed in a connections-named
 // group is still flagged EXTRA. A base lookup dropped directly into the group is the one irreducible case (its
 // column identity is not in the plan and cannot be told from a real connection lookup without semantic data).
+// The name test is deliberately broad (English + the ru stems `связ`/`подключ`) so it recognises a localized
+// connection group; the tradeoff is that a base `crt.ComboBox` inside a CUSTOM leaf merely named like one (e.g.
+// «Связанные документы» / "Connections") is exempted too. That widens the same irreducible case above, not a new
+// one — the escape stays `--decide` on the row. Narrowing the tokens would instead MISS real localized groups.
 const CONNECTED_TO_RE = /connected[\s_-]*to|entityconnection|connections?\b|связ|подключ/i;
 const CONNECTION_LOOKUP_TYPE = "crt.ComboBox";
 function keptConnectionFieldNames(ctx) {

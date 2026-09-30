@@ -22,7 +22,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
-  readFrozenMode, freezeMode, resolveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
+  readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
@@ -5029,6 +5029,22 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const vLost = cliTasks(["--tasks", dVerL, "--verify", "--built", bfL], RECON);
     check("verify with a DROPPED .reconcile-mode restores classic-layout from the stamp — EXTRA gate stays ON, not silently overlay",
       () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vLost.stderr || ""), () => vLost.stderr);
+    // the CUT path (syncTaskDir/resolveFrozenMode) restores AND re-freezes the dotfile from the stamp on a no-flag re-slice.
+    const dReslice = path.join(tmp("mode_lost_reslice"), "bt");
+    syncTaskDir(dReslice, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dReslice);
+    const reSet = syncTaskDir(dReslice, RUN, checklistOpts(MANIFEST)); // NO flag
+    check("a no-flag re-slice with a DROPPED .reconcile-mode restores classic-layout from the stamp (set + front matter) AND re-freezes the dotfile",
+      () => reSet.reconcileMode === RECONCILE_MODE_CLASSIC && engStamped(dReslice) && readFrozenMode(dReslice) === RECONCILE_MODE_CLASSIC,
+      () => ({ set: reSet.reconcileMode, dotfile: readFrozenMode(dReslice) }));
+    // MIXED stamps (task files disagree) are ambiguous — treated like a corrupted dotfile, not first-wins.
+    const dMixed = path.join(tmp("mode_lost_mixed"), "bt");
+    const mixedSet = syncTaskDir(dMixed, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dMixed);
+    const engMix = mixedSet.tasks.find((t) => t.origin === "engine").file; // flip ONE task file's stamp to overlay
+    fs.writeFileSync(path.join(dMixed, engMix), fs.readFileSync(path.join(dMixed, engMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    check("a folder with DISAGREEING task-file stamps resolves to null (ambiguous, not first-wins) so the mode is not silently trusted",
+      () => effectiveFrozenMode(dMixed) === null, () => ({ resolved: effectiveFrozenMode(dMixed) }));
   }
   // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
   {

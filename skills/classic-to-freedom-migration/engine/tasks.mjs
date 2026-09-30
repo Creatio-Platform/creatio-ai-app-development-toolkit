@@ -2776,8 +2776,12 @@ export function resolveFrozenMode(dir, opts = {}) {
   return null;
 }
 // The reconcile mode stamped on the folder's existing task files, or null — the source for restoring a lost `.reconcile-mode`.
+// The cut stamps EVERY task file with the one frozen mode, so a valid folder carries a single distinct stamp. If the stamps
+// DISAGREE (a task file adopted from another folder, a hand edit), the folder's mode is ambiguous — return null so the caller
+// treats it like a corrupted dotfile (refused / unstamped) rather than trusting whichever file happens to scan first.
 function frozenModeFromTasks(dir) {
-  return readExisting(dir).map((e) => e.meta?.reconcileMode).find((m) => RECONCILE_MODES.has(m)) || null;
+  const stamped = new Set(readExisting(dir).map((e) => e.meta?.reconcileMode).filter((m) => RECONCILE_MODES.has(m)));
+  return stamped.size === 1 ? [...stamped][0] : null;
 }
 // The effective frozen mode of a folder, read-only: the dotfile when valid, else the mode the existing task files
 // still carry when the dotfile was dropped, else null. Unlike `resolveFrozenMode` it never re-freezes. Used wherever

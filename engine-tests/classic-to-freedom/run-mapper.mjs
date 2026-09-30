@@ -12196,6 +12196,22 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => vNoCont.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
 }
 
+/* KNOWN LIMITATION (pinned): the connection-group name test is broad enough to recognise a localized group, so a base
+   lookup in a CUSTOM leaf merely named like one (here a Russian «Связи…» caption) is exempted too — the same irreducible
+   case as a base lookup dropped into the real group, widened by the name heuristic. Escape is `--decide`. Pinned so a
+   future narrowing of the name test turns this into a visible, reviewed test delta. */
+{
+  const rnLoc = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
+  const builtLoc = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" },
+    { name: "CustomGroup", type: "crt.GridContainer", caption: "Связи с документами", items: [{ name: "StrayLookup", type: "crt.ComboBox" }] }] } } } };
+  const vLoc = renderVerify(rnLoc, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtLoc);
+  check("verify: a base lookup in a CUSTOM leaf with a connection-like localized caption is NOT flagged EXTRA (broad name heuristic; known limitation, pinned)",
+    () => !/StrayLookup/.test(vLoc.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || ""),
+    () => vLoc.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
+}
+
 /* posCell renders the converted grid coordinate: r · c, a `· w{colSpan}` suffix only for a wide field, DASH when
    there is no layoutConfig, and r0 · c0 at the origin (0 is a real coordinate, not "missing"). */
 {
