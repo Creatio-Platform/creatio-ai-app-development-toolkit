@@ -129,23 +129,31 @@ stands — "big / shared / view-only / follow-on" are still not skip reasons), a
 already ships a Freedom form, `reuseFreedomPage` is the better answer and wins. Widening the scope
 later is just dropping the key and supplying the schema — a re-plan, not a defect.
 
-## warningDispositions — a remove of a name nothing in the supplied chain defines
+## warningDispositions — a remove or merge of a name nothing in the supplied chain defines
 
-A `remove` of a name nothing in the supplied chain defines (no layer and no seed inserts, patches,
-moves, sets, parents under or aliases it; typically a stray or mistyped name) is `fidelity`, not
-`correctness`: the Classic runtime ignores a remove of a name it does not have, so schema order (F1)
-cannot clear it and it does not block. Its hint says "no effect in Classic **unless the chain is
-incomplete**": absence from the SUPPLIED chain proves absence in Classic only if the seed is the
+A `remove` or a `merge` of a name nothing in the supplied chain defines (no layer and no seed
+inserts, moves, sets, parents under or aliases it; typically a stray, mistyped or copied name — a
+block copied from a record page into a section whose chain never had that element is the common
+merge case) is `fidelity`, not `correctness`: the Classic runtime ignores a remove of a name it does
+not have, and a merge onto one returns `false` without an error, so schema order (F1) cannot clear it
+and it does not block. A merge of the name is not a definition, so a name only merges mention counts
+as undefined, and a remove of it is a no-op too. The engine drops a no-op merge's stub, so the
+element is not on the folded page and the `parentName` the merge carried is no unresolved parent. A
+merge is settled only over a supplied, non-skeletal seed: with no seed (a section run without
+`section.seed` included) or a skeletal one it stays `correctness` — it is most likely the missing base
+element — and the remedy is to supply the seed.
+Its hint says "no effect in Classic **unless the chain is incomplete**": absence from the SUPPLIED chain proves absence in Classic only if the seed is the
 full parent-template chain, so confirm the base seed when it is partial (F2) — the hint says so
 outright when the seed is absent or `possiblyPartial` — then close it with `n/a`. The same applies
-to a layer that removes and re-inserts the same name (its hint says "re-inserted by the same
-layer"), even when a later layer customises the re-inserted element. A seed layer's own no-op remove
-arrives already CLOSED by the engine when the seed looks complete (the plan lists it as "CLOSED by
-the engine" — nothing to record). Otherwise, if ANY layer references that name (lower, the same
-without re-inserting it, or later — the hint says which), it stays `correctness`: a later one means
+to a layer that removes or merges a name and inserts it in the same layer (its hint says
+"re-inserted" or "defined by the same layer": the layer's merges and removes run before its inserts), even when a
+later layer customises the inserted element. A seed layer's own no-op remove or merge arrives already
+CLOSED by the engine when the seed looks complete (the plan lists it as "CLOSED by
+the engine" — nothing to record). Otherwise, if ANY layer defines that name (lower, the same
+without inserting it, or later — the hint says which), it stays `correctness`: a later one means
 schema order (F1), a lower or same-layer one means the base element is missing from the seed (F2).
-A `remove` that carries `properties` is not this case: it patches an element, like a `merge`, so on
-a name nothing in the supplied chain defines it stays `correctness` and blocks.
+A `remove` that carries `properties` is not this case: it patches an element, so on a name nothing in
+the supplied chain defines it stays `correctness` and blocks.
 
 ## Texts — the page and its details carry localizable strings
 

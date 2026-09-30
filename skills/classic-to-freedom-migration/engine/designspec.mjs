@@ -23,6 +23,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
+import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -342,13 +343,17 @@ const WORKPLACE_HOWTO = "Resolve the section's `SysModule.Id` FIRST (nothing els
   + " `{ \"workplaces\": <row count>, \"names\": [...] }` — the COUNT of the rows that came back, not a flag."
   + " NOT `find-app`: it reports the app's own schemas and is blind to a section registered over a BORROWED"
   + " entity, which it then reports as absent.";
-const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
+// `SysModuleReport` describes the STANDARD print menu only. A client layer can bind a print button's menu to a
+// collection its own code fills (`controlConfig.menu.items`); that menu is then not read from `SysModuleReport` at all,
+// and the step-5.1 behaviour card of the method filling the collection is what describes it.
+const PRINT_MENU_REBOUND = "Exception: when a step-5.1 behaviour card says a client layer binds a print button's menu to a collection its own code fills, that card decides the button — `SysModuleReport` does not describe that menu, and finding no rows there does not drop it.";
+const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action. " + PRINT_MENU_REBOUND;
 // The standard card actions an on-stand signal decides, from the mapping table. Matched by exact name: a custom
 // action whose name merely contains "print" or "process" (`printContract`) is its own deliverable, and `RunProcess`
 // (a process launched from a page method) is settled by its `process-launch` item, never by the section's menu.
 const CARD_ACTION_SIGNALS = cardActionSignals();
 const NOTHING_BEHIND = {
-  printables: "no printables/reports for this section (checked `SysModuleReport` on-stand)",
+  printables: "no printables/reports for this section (checked `SysModuleReport` on-stand). " + PRINT_MENU_REBOUND,
   processes: "no process connected to this section (checked `ProcessInModules` on-stand)",
 };
 // The one verdict a signal-decided card action gets, read by its Layout cell and by its deliverable status:
@@ -2047,6 +2052,16 @@ function dashboardsSigLines(s, targetPackage = "") {
   return L;
 }
 const TRANSLATIONS_MISSING_LINE = "- Translations not migrated: requires a newer clio version";
+// The `### Run diagnostics` block in the plan, from `manifest.runDiagnostics` (the `diagnostics.mjs --json` object),
+// so the plan file alone names the skill build, the clio and the stand it was produced with. Every value is text an
+// agent copied, so `normalize` passes each one through `esc`; the block never throws and never stops the plan.
+function renderRunDiagnostics(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return ["### Run diagnostics", "", "- unknown (not supplied — put the `diagnostics.mjs --json` output into `manifest.runDiagnostics`)", ""];
+  }
+  return [renderDiagnosticsBlock(normalizeDiagnostics(raw, esc)).trimEnd(), ""];
+}
+
 export function renderPlan(result, opts = {}) {
   return renderPlanWith(result, { ...opts, printedStatus: new Set() });
 }
@@ -2095,6 +2110,7 @@ function renderPlanWith(result, opts) {
     ...(result.translationsMissing ? [TRANSLATIONS_MISSING_LINE] : []),
     `- **Approach:** ${fill(pm.approach, "<FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>")}`,
     "",
+    ...renderRunDiagnostics(opts.runDiagnostics),
     "### What it does",
     escBareLine(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>")), // bare line → also escape a leading block marker (finding 5)
     "",

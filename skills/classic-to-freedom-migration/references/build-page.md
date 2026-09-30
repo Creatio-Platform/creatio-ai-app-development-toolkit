@@ -8,10 +8,10 @@ rules in `build-task-execution.md` override every convenience in this file.
 
 ## Everything else about building a page
 
-This file is the per-page build procedure, unchanged from when it was one monolithic step of
-`SKILL.md`. Read the parts that apply to your task's rows — the state, scope and preflight rules in
-`build-task-execution.md` apply to every task, the `creatio-ui-guidelines` done-gate applies to
-every task that touches a page's layout, and the clio-safety rules apply to every write.
+This file is the per-page build procedure. Read the parts that apply to your task's rows — the
+state, scope and preflight rules in `build-task-execution.md` apply to every task, the
+`creatio-ui-guidelines` done-gate applies to every task that touches a page's layout, and the
+clio-safety rules apply to every write.
 
 1. **The page TREE is sliced across tasks, not walked by you.** Each page — the record page, each
    typed page, the mini page, each `Rebuild (child)` — is its own artifact with its own task (or its
@@ -158,10 +158,11 @@ before that comparison is made, the shared stand may be left altered for every o
 surface that as a blocking risk in your report rather than moving on silently.
 
 **Where the evidence goes.** You do not assemble the AC list by hand: with `manifest.behaviourIndex`
-supplied (step 5.1), the plan's own **Described in** cell already names the card + AC list to walk
-for each row — walk that list, and treat a row still reading `⚠ not described` as one step 5.1 has
-not covered yet. The Evidence column carries your per-AC result lines, never the **Described in**
-citation copied across; a hand-authored summary table in its place is the rule-1 violation.
+supplied by the behaviour analysis, the plan's own **Described in** cell already names the card + AC
+list to walk for each row — walk that list, and treat a row still reading `⚠ not described` as one
+the behaviour analysis has not covered yet. The Evidence column carries your per-AC result lines,
+never the **Described in** citation copied across; a hand-authored summary table in its place is the
+rule-1 violation.
 
 **What the generated `Quality gates` rows must contain (the `creatio-ui-guidelines` done-gate —
 `./references/build-task-execution.md`, run inside the build task that touches the page).** They are
@@ -213,7 +214,7 @@ both by hand on top of a green build:
 ## Known Traps — the build-time half
 
 Real failures from prior builds, each enforced by a gate or a reference — a memory aid, not new
-rules. The plan-phase half stays in `SKILL.md`.
+rules.
 
 - **Feature downgraded to a list.** Rebuilding a Visa (Approvals) as a plain `ApplicantVisa`
   DataGrid, or Activities/Emails as a `crt.Timeline`. → the mapping reference → *Standard features, widgets & actions*.
@@ -250,7 +251,7 @@ rules. The plan-phase half stays in `SKILL.md`.
   island card settings get caught only after the user asks about styles on other pages. The gate
   runs when the page is saved, its core is the tool-based style diff (reference page +
   `get-component-info` per added component), and its evidence is a mandatory row in the step-8
-  Plan-vs-Done table. → step 7 / step 8 / the guidelines skill's "Style parity" checklist item.
+  Plan-vs-Done table. → the guidelines skill's "Style parity" checklist item.
 - **Means-of-communication downgraded to a grid.** A `ContactCommunication` detail is the native
   **Communication-options** component (`crt.CommunicationOptions`, the compositeOnly component the
   "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY
@@ -263,28 +264,28 @@ rules. The plan-phase half stays in `SKILL.md`.
   attribute** + the on-change handler — not dropped because it has no real column. Dropping them is
   what leaves a one-field island. → the mapping reference → *Embedded profile cards*.
 - **`success` mistaken for "works".** clio returns `success` for bodies that fail at runtime —
-  render in the browser. → step 7 / step 8.
+  render in the browser.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
   bypass-permissions session. Establish the surface BEFORE the first stand write and say so when
   there is none. A stored preference that later proves unachievable is RE-ASKED, never silently
-  downgraded while still reporting itself as automatic. → step 7 / step 8.
+  downgraded while still reporting itself as automatic.
 - **Registry filter bar / section actions dropped.** The Classic section body carries **quick
   filters** (`initFixedFiltersConfig`) and **custom section actions** (`getSectionActions`) — the
   engine now surfaces both in the plan's `### List page` block. They are page-CENTRIC blind spots
   (the folded form page has neither), so build them on the Freedom LIST page: the quick filters as
   the list's filter controls, the section actions as list-page actions. A list page that migrated
-  columns but dropped the filter bar / its `createRegistry`-style actions is NOT done. → step 4.2
-  (`section`) / the mapping reference → *Standard features, widgets & actions*.
+  columns but dropped the filter bar / its `createRegistry`-style actions is NOT done. →
+  the mapping reference → *Standard features, widgets & actions*.
 - **A card's condition replaced by a "stronger equivalent", and the row still marked ported.** One
   of three conjunctive gates (the new-record check) was swapped for a guard the agent judged
   strictly stronger. It inverted the card's negative AC — editing any pre-existing record now
   created a record Classic never created — and the row passed as *ported* because its Evidence cited
   the card without walking its criteria. Closed by two rules: a condition substitution is a
-  deviation to propose, equivalent only if it holds for every AC (step 5.1); and Evidence carries
-  one entry per AC with negative ACs exercised on-stand, else `⚠ Partial` (Plan-vs-Done). → step 5.1
-  / Plan-vs-Done evidence / Contract rule 7.
+  deviation to propose, equivalent only if it holds for every AC; and Evidence carries
+  one entry per AC with negative ACs exercised on-stand, else `⚠ Partial` (Plan-vs-Done). →
+  Plan-vs-Done evidence / Contract rule 7.
 - **Imperative lookup filter read as "no filter".** A lookup filtered in
   `attributes.<Col>.lookupListConfig.filters` is the SAME user-visible behaviour as a declarative
   `businessRules` FILTRATION, but it is not a business rule and does not come across as one — it
@@ -292,7 +293,7 @@ rules. The plan-phase half stays in `SKILL.md`.
   when these columns change" wiring → an on-change handler) and for a **virtual** attribute with no
   entity column behind it (page UI state — an editability/mode flag, a collection backing a menu —
   which no field insert carries). All three are now members with their own decisions; none of them
-  may be reported as absent. → step 4.2 /
+  may be reported as absent. →
   the mapping reference → *Distinguish declarative business rules from imperative logic*.
 - **Detail add flow ≠ plain related list.** Many details are NOT a default add-new list: they ADD
   via a **lookup** (pick existing), call a backend **service** to link/insert, and/or are an
@@ -305,8 +306,7 @@ rules. The plan-phase half stays in `SKILL.md`.
   `get-component-info` on the target version. For the lookup/service add flow, reproduce with a
   **custom add request-handler** (open the lookup → create the link records / call the service), NOT
   a naive add-new — and if a service is named, **verify it is deployed on-stand** (else port its
-  logic). Do not ship a plain read-only related list for such a detail. → step 4.2
-  (`detailSchemas`).
+  logic). Do not ship a plain read-only related list for such a detail.
 - **Removed row actions are their own line.** A Classic detail that overrides
   `addRecordOperationsMenuItems` without `callParent` (e.g. `Terrasoft.emptyFn`), or overrides
   `getCopyRecordMenuItem` / `getEditRecordMenuItem` / `getDeleteRecordMenuItem` to return nothing,
