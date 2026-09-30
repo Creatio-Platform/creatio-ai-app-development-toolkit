@@ -512,7 +512,7 @@ payload shape are in `./references/orchestrate-build.md` → *Step 8 — the dri
 close report (the Plan-vs-Done rows, per-AC evidence, gate-toggle safety, the `Quality gates` rows) is in
 `./references/build-page.md`.
 
-**Clean up (step 4.2 inputs).** Once a page/section is `VALIDATED`, delete its temporary input directory (the manifest + fetched Classic bodies) — it is stand-sourced customer data with no further use. The versioned outputs (`plan.md`, `worklog.md`, the built Freedom artifacts) stay.
+**Clean up (step 4.2 inputs).** Once a page/section is `VALIDATED`, delete its temporary input directory (manifest, Classic bodies) and `resume-manifest.json` — stand-sourced customer data with no further use. The versioned outputs (`plan.md`, `worklog.md`, the built Freedom artifacts) stay.
 
 ## References
 

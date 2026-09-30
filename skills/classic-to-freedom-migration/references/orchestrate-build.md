@@ -31,21 +31,23 @@ mean. No sub-agent is handed this file — each gets the briefs its task kind na
 
 **Your own whole reads, each once:** `plan.md` at approval (7.1 records its version), `decisions.md`,
 and the `--- progress ---` block the engine prints — you paste that block, you do not re-read it.
-Everything else you open during the build is a targeted read. A resumed session reads `resume.md`
-instead of `plan.md` — see *Resuming* below.
+Everything else you open during the build is a targeted read. A resumed session's whole reads are
+`resume.md` and this file instead, and nothing else — see *Resuming* below.
 
 ## Resuming — a fresh session continues the build from `resume.md`
 
 The build loop runs in a fresh session once the plan is sliced (7.1b), because every build turn pays
-for the whole conversation before it — a driver that also carried discovery and planning reached
-451k tokens at its first `--start`. When the user hands you a migration folder that holds
+for the whole conversation before it, and a driver that also carried discovery and planning pays for
+them on every build turn. When the user hands you a migration folder that holds
 `resume.md` (the prompt 7.1b printed names it), you are that fresh session:
 
 1. **Skip steps 0-6.** Do not re-read `discovery.md`, `plan.md`, the manifest or the stand material
    behind them, and do not re-run `--plan`: the plan is approved and sliced, and the approval entry
    in `decisions.md` names the plan version `resume.md` records.
-2. **Read `resume.md` whole, once, then this file** — the two are your whole start-up reading. Take
-   the manifest path, the task folder, the environment and the `Route:` from `resume.md`; the route
+2. **Read `resume.md` whole, once, then this file** — the two are your only whole reads; `decisions.md`
+   and `worklog.md` are targeted reads from here on, by heading, when a task needs an entry. Take
+   the manifest path (the copy `resume-manifest.json` beside it), the task folder, the environment
+   and the `Route:` from `resume.md`; the route
    stands for the rest of the run (7.0 — never switch mid-run; if this session's host withholds
    what the route needs, the 7.0 ROUTE GATE question is how you ask).
 3. **Continue the 7.2 loop with the `--next` command `resume.md` ends on** —
@@ -167,10 +169,15 @@ line written (7.0), run
 `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --handoff`
 It writes `<migration-folder>/resume.md` — manifest path, folder, environment, the approved plan
 version, the route, the progress block, the next task and one resume prompt — every value computed
-from the folder, so **never write `resume.md` yourself**. It refuses (exit **2**, nothing written)
-while the current plan version has no approval entry in `decisions.md`, the folder is not sliced,
-`worklog.md` has no `Route:` line, or the manifest path does not exist — fix what it names and run
-it again. Then give the user the resume prompt it printed, to paste into a fresh session, and
+from the folder, so **never write `resume.md` yourself** — and it copies the manifest beside it as
+`resume-manifest.json`, which `resume.md` names, so the fresh session never needs your temporary
+input folder. It refuses (exit **2**, nothing written), in stages, naming every cause of a stage at
+once: a plan with gaps; a manifest path that does not exist, or a manifest on stdin; then together a
+folder not sliced, no `## ` entry in `decisions.md` holding both `Plan version:` with exactly the
+current version and a non-empty `Approved by:`, and no `worklog.md` `Route:` naming one of the 7.0
+routes; then a `D<N>` in `decisions.md` nothing cites; then a `--next` answer of `ledger` or
+`stuck`. Fix what it names and run it again. Then give the user the resume prompt it printed, to
+paste into a fresh session, and
 **STOP**: no `--start` and no dispatch in this session. The same hand-off happens again when a
 step-8 `--verify --tasks` opens repair tasks. A run below `TASK_BUDGET.run` (the `Whole migration`
 task and its review) stays in this session.

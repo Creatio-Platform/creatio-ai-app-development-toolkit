@@ -64,7 +64,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, planApprovalLine, worklogRoute, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -3261,8 +3261,9 @@ let routeRefusalFailure = false;
 // for the WHOLE refusal set rather than per reason — some of the reasons (an unreadable file, an id the folder
 // does not hold) carry no dispatch verdict of their own, so only a set-wide flag makes every one of them non-zero.
 let startRefusalFailure = false;
-// ⛔ `--handoff` WROTE NO RESUME — the plan is not approved at this version, not sliced, or the run has no route.
-// A hand-off the fresh session cannot resume from is a refusal, and it exits like one.
+// ⛔ `--handoff` WROTE NO RESUME — the plan is not approved at this version, not sliced, the run has no route, or
+// `--next` would refuse the folder. A hand-off the fresh session cannot resume from is a refusal, and it exits like
+// one.
 let handoffRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
@@ -3612,60 +3613,80 @@ function runNextMode(result, dir, opts, cmdFor) {
 
 // `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
 //
-// It writes `<migration-folder>/resume.md` and nothing else of its own; the folder refresh is the one `--next`
-// runs, so the next task it names is the one `--next` would name. A fresh session can only resume what the folder
-// records, so every precondition that session would otherwise discover mid-build is refused HERE, all at once,
-// before anything is written: the approval of THIS plan version, a cut folder, and the dispatch route. (A manifest
-// that does not exist is refused before it is parsed — see the CLI.)
+// It writes `<migration-folder>/resume.md` and the manifest copy it names (`resume-manifest.json`), and nothing
+// else of its own; the folder refresh is the one `--next` runs, so the next task it names is the one `--next` would
+// name. A fresh session can only resume what the folder records, so every precondition that session would otherwise
+// discover mid-build is refused HERE, before anything of the hand-off is written. The causes are checked in
+// stages, and each stage reports every cause it finds before the next one runs: the plan's own gaps; the manifest
+// path (the CLI, before parsing); the cut folder, the approval of THIS plan version and the dispatch route, together;
+// the folder refresh `--next` would refuse (an uncited decision); and a `--next` answer that exits 2 (a broken
+// dispatch ledger, or a run that cannot move).
 const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
+// The folder-level preconditions, with the values they read — the renderer reuses them rather than reading again.
 function handoffCauses(result, dir, folder) {
   const causes = [];
   if (!fs.existsSync(path.join(dir, TASK_INDEX_FILE))) {
     causes.push(`the plan is not sliced — there is no task folder at ${dir} (no ${TASK_INDEX_FILE}). Slice it first`
       + ` (orchestrate-build.md 7.1): \`${TASKS_FLAG} ${shellArg(dir)} ${SPLIT_FLAG} split.json\`, then hand off.`);
   }
-  if (!planApprovalLine(readTextOr(path.join(folder, "decisions.md")), result.planVersion)) {
-    causes.push(`decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\` (no entry`
-      + ` holds both a \`Plan version: ${result.planVersion}\` field and a non-empty \`Approved by:\` field). Record the`
-      + " approval naming that version and who approved it (orchestrate-build.md 7.1 step 1), then hand off — a fresh"
-      + " session builds only the plan an approval names.");
+  const approvalLine = planApprovalLine(readTextOr(path.join(folder, "decisions.md")), result.planVersion);
+  if (!approvalLine) {
+    causes.push(`decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\` (no \`## \``
+      + ` entry holds both a \`Plan version: ${result.planVersion}\` field and a non-empty \`Approved by:\` field). Record`
+      + " the approval naming that version and who approved it (orchestrate-build.md 7.1 step 1), then hand off — a"
+      + " fresh session builds only the plan an approval names.");
   }
-  if (!worklogRoute(readTextOr(path.join(folder, "worklog.md")))) {
-    causes.push(`worklog.md in ${folder} has no \`Route:\` line. Resolve the dispatch route first (orchestrate-build.md`
-      + " 7.0) and write it there, so the fresh session dispatches every task the same way.");
+  const route = worklogRoute(readTextOr(path.join(folder, "worklog.md")));
+  if (!route) {
+    causes.push(`worklog.md in ${folder} has no \`Route:\` line naming one of ${DISPATCH_ROUTES.join(" · ")} (the last`
+      + " `Route:` line is the one read). Resolve the dispatch route first (orchestrate-build.md 7.0) and write it"
+      + " there, so the fresh session dispatches every task the same way.");
   }
-  return causes;
+  return { causes, approvalLine, route };
 }
+const handoffRefusalHeader = (tasksDir) =>
+  `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:`;
 function runHandoffMode(result, dir, opts, ctx) {
   const gapRefusal = planGapRefusal(result);
   if (gapRefusal) { handoffRefusalFailure = true; return gapRefusal; }
   const tasksDir = path.resolve(dir);
   const folder = path.dirname(tasksDir);
-  const causes = handoffCauses(result, tasksDir, folder);
+  const { causes, approvalLine, route } = handoffCauses(result, tasksDir, folder);
   if (causes.length) {
     handoffRefusalFailure = true;
-    return `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:\n`
-      + causes.map((c) => `  — ${c}`).join("\n") + "\n";
+    return handoffRefusalHeader(tasksDir) + "\n" + causes.map((c) => `  — ${c}`).join("\n") + "\n";
   }
   const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
   const answer = startableTasks(set, tasksDir);
+  // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
+  // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
+  // `--next` names.
+  if (answer.verdict === NEXT_LEDGER || answer.verdict === NEXT_STUCK) {
+    handoffRefusalFailure = true;
+    if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir: tasksDir, started: true };
+    else startableGateFailure = { dir: tasksDir, answer };
+    return [`${handoffRefusalHeader(tasksDir)} \`--next\` answers \`${answer.verdict}\` and exits 2, so a fresh`
+      + " session would open on a refusal. Fix what it names below, then hand off:",
+    ...nextAnswerLines(answer, tasksDir, ctx.startCommand(tasksDir))].join("\n") + "\n";
+  }
+  // THE MANIFEST TRAVELS WITH THE FOLDER. The fresh session re-opens it on every command, so it must not depend on
+  // the planning session's temporary input folder. A hand-off re-run from the copy itself leaves it as it is.
+  const manifestCopy = path.join(folder, RESUME_MANIFEST_FILE);
+  if (path.resolve(ctx.manifestPath) !== manifestCopy) fs.copyFileSync(ctx.manifestPath, manifestCopy);
   const resumeFile = path.join(folder, RESUME_FILE);
-  const text = renderResume({
-    migrationDir: folder, tasksDir, manifestPath: ctx.manifestPath, environment: ctx.environment,
-    planVersion: result.planVersion,
-    approvalLine: planApprovalLine(readTextOr(path.join(folder, "decisions.md")), result.planVersion),
-    route: worklogRoute(readTextOr(path.join(folder, "worklog.md"))),
+  const { text, prompt } = renderResume({
+    migrationDir: folder, tasksDir, manifestPath: manifestCopy, environment: ctx.environment,
+    planVersion: result.planVersion, approvalLine, route,
     progress: renderProgress(set, tasksDir), next: answer.startable[0] || null, verdict: answer.verdict,
-    nextCommand: ctx.nextCommand(tasksDir), now: new Date().toISOString(),
+    nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
   });
   fs.writeFileSync(resumeFile, text);
-  // The prompt is printed from the text just written, so stdout and the file cannot disagree.
-  const prompt = (text.split("## Resume prompt")[1] || "").replace(/^[^\n]*\n/, "").trim();
-  return [`migrate.mjs: wrote ${resumeFile} — the build loop moves to a FRESH SESSION now.`,
-    "Give the user the prompt below to paste into a fresh session, then STOP: do not `--start` or dispatch",
-    "anything more in this session. The fresh session reads resume.md and orchestrate-build.md → Resuming.",
-    "", prompt, ""].join("\n");
+  return [`migrate.mjs: wrote ${resumeFile} and the manifest copy ${manifestCopy} — the build loop moves to a FRESH`
+    + " SESSION now.",
+  "Give the user the prompt below to paste into a fresh session, then STOP: do not `--start` or dispatch",
+  "anything more in this session. The fresh session reads resume.md and orchestrate-build.md → Resuming.",
+  "", prompt, ""].join("\n");
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -4152,11 +4173,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (tasksMode && !verifyMode && !decideMode && !revokeMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
-  // A HAND-OFF NEEDS A MANIFEST PATH THE FRESH SESSION CAN RE-OPEN, so a missing file (a cleaned scratchpad) or a
+  // A HAND-OFF COPIES THE MANIFEST FOR THE FRESH SESSION, so a missing file (a cleaned temporary input folder) or a
   // piped one is refused before it is parsed — exit 2 with nothing written, like the other hand-off refusals.
   if (handoffMode && (!fromFile || !fs.existsSync(arg))) {
     const cause = fromFile
-      ? `the manifest '${arg}' does not exist — the fresh session rebuilds every answer from it. It lives in the session's temporary input folder, which may have been cleaned: rerun step 4 to write it again, then hand off.`
+      ? `the manifest '${arg}' does not exist — the hand-off copies it beside ${RESUME_FILE} as ${RESUME_MANIFEST_FILE}, and the fresh session rebuilds every answer from that copy. A resumed session passes the copy ${RESUME_FILE} names; if that copy is gone, stop and ask the user — do not re-run the planning steps. The planning session, whose temporary input folder may have been cleaned, reruns step 4 to write the manifest again, then hands off.`
       : "the manifest came in on stdin — the fresh session needs a PATH to re-open it. Pass the manifest as a file path.";
     process.stdout.write(`migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off, and no ${RESUME_FILE}:\n  — ${cause}\n`);
     process.exit(2);
@@ -4284,11 +4305,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // BEFORE the slicing branch, for the reason `--next` is: it reports on the folder, it does not re-cut it.
   else if (tasksMode && handoffMode) {
-    const nextCommand = (dir) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
-      shellArg(path.resolve(arg)), TASKS_FLAG, shellArg(dir), NEXT_FLAG].join(" ");
+    const nextCommand = (manifestFile, dir) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
+      shellArg(manifestFile), TASKS_FLAG, shellArg(dir), NEXT_FLAG].join(" ");
+    const startCommand = (dir) => (id) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
+      shellArg(path.resolve(arg)), TASKS_FLAG, shellArg(dir), START_FLAG, shellArg(id)].join(" ");
     try {
       output = runHandoffMode(result, tasksDir, taskOpts(),
-        { manifestPath: path.resolve(arg), environment: manifest.planMeta?.environment || null, nextCommand });
+        { manifestPath: path.resolve(arg), environment: manifest.planMeta?.environment || null, nextCommand, startCommand });
     } catch (e) { fail(`cannot write the hand-off for '${tasksDir}': ${e.message}`); }
   }
   // `--decide` / `--revoke` — writes into the frozen folder. Placed BEFORE the slicing branch

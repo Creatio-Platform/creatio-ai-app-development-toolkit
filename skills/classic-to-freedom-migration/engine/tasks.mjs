@@ -4357,17 +4357,28 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
 // ---8<--- THE HAND-OFF: the build loop resumed in a fresh session ---8<---
 
 // WHY A FILE, AND WHY THE ENGINE WRITES IT. Every build turn pays for the whole conversation before it, so a
-// driver that planned and then built in one session carried discovery and planning into every build turn — a
-// measured run reached 451k tokens at its first `--start`. `--tasks <dir> --handoff` writes `resume.md` beside the
-// task folder and the build continues in a fresh session that reads it. Every value in it is computed from the
-// folder, never typed by the driver: a hand-written hand-off note is a prose-only rule, and those were skipped.
+// driver that planned and then built in one session carries discovery and planning into every build turn.
+// `--tasks <dir> --handoff` writes `resume.md` beside the task folder and the build continues in a fresh session
+// that reads it. Every value in it is computed from the folder, never typed by the driver: a hand-written hand-off
+// note is a prose-only rule, and a prose-only rule is the one that gets skipped.
 export const RESUME_FILE = "resume.md";
+// The manifest COPY the hand-off writes beside `resume.md`. The original lives in the planning session's temporary
+// input folder, which a fresh session cannot count on; the copy is what `resume.md` and its commands name, and it
+// is deleted with the other stand-sourced inputs at the step-4.2 clean-up.
+export const RESUME_MANIFEST_FILE = "resume-manifest.json";
+// The dispatch routes step 7.0 may record. A `Route:` line naming anything else (`TBD`, a typo) is no route: the
+// fresh session would have to decide how to dispatch, which is exactly what the line exists to settle.
+export const DISPATCH_ROUTES = Object.freeze(["agent", "codex", "copilot", "inline"]);
 
-// A `Field: value` line with its list marker, bold and backticks dropped, as `[field, value]`, or null.
+// A line with its list marker, bold and backticks dropped.
+const plainLine = (line) => line.replace(/^\s*[-*]\s*/, "").replaceAll("**", "").replaceAll("`", "").trim();
+// A `Field: value` line as `[field, value]`, or null. Split on the first colon rather than matched by one regex:
+// the field name holds no colon, and a pattern with a lazy name group before `\s*(.*)` backtracks on long lines.
 function entryField(line) {
-  const plain = line.replace(/^\s*[-*]\s*/, "").replaceAll("**", "").replaceAll("`", "").trim();
-  const m = /^([A-Za-z][A-Za-z ]*?):\s*(.*)$/.exec(plain);
-  return m ? [m[1].toLowerCase(), m[2].trim()] : null;
+  const plain = plainLine(line);
+  const colon = plain.indexOf(":");
+  const name = colon > 0 ? plain.slice(0, colon) : "";
+  return /^[A-Za-z][A-Za-z ]*$/.test(name) ? [name.toLowerCase(), plain.slice(colon + 1).trim()] : null;
 }
 // The `decisions.md` line that approves THIS plan version, read per `## ` entry: the entry must hold a
 // `Plan version:` field whose value IS the version (so `plan-4f9c` does not pass for `plan-4f9c2ab17e03`) AND a
@@ -4379,7 +4390,7 @@ export function planApprovalLine(decisionsText, planVersion) {
   const entries = [[]];
   for (const line of String(decisionsText || "").split(/\r?\n/)) {
     if (/^##\s/.test(line)) entries.push([]);
-    entries[entries.length - 1].push(line);
+    entries.at(-1).push(line);
   }
   for (const lines of entries) {
     const fields = lines.map((line) => [line, entryField(line)]).filter(([, f]) => f);
@@ -4390,30 +4401,40 @@ export function planApprovalLine(decisionsText, planVersion) {
   return null;
 }
 
-// The `Route:` line step 7.0 writes into `worklog.md`, bold and list marker dropped. The LAST one wins: the route
-// covers the whole run, so a later line can only be a correction of an earlier one.
+// The `Route:` line step 7.0 writes into `worklog.md`, bold and list marker dropped, or null. The LAST one wins:
+// the route covers the whole run, so a later line can only be a correction of an earlier one — and a correction
+// to a value that is not one of DISPATCH_ROUTES leaves the run with no route, not with the earlier one.
 export function worklogRoute(worklogText) {
   let route = null;
   for (const line of String(worklogText || "").split(/\r?\n/)) {
-    const plain = line.replace(/^\s*[-*]\s*/, "").replaceAll("**", "").replaceAll("`", "").trim();
-    if (/^Route:\s*\S/.test(plain)) route = plain;
+    const plain = plainLine(line);
+    if (plain.startsWith("Route:") && plain.slice("Route:".length).trim() !== "") route = plain;
   }
-  return route;
+  if (!route) return null;
+  const value = route.slice("Route:".length).trim().split(/\s/)[0];
+  return DISPATCH_ROUTES.includes(value) ? route : null;
 }
 
 // THE RESUME FILE, rendered from values the caller computed. Pure: no file is read here, so the goldens can hold
 // it to its fields. `next` is the first task `--next` would name, or null with the verdict that answered instead.
+// Returns the file text and the prompt it carries, so the caller prints that prompt without re-parsing the text.
 export function renderResume(f) {
   const nextLine = f.next
     ? `\`${f.next.id}\` (step ${Number(f.next.order)} · ${f.next.pageKey} · ${f.next.group})`
     : `none right now — \`--next\` answers \`${f.verdict}\`; ask it and act on that answer`;
-  return [
+  const prompt = [
+    `Resume the Classic to Freedom UI migration build in ${f.migrationDir} with the classic-to-freedom-migration skill.`,
+    `Read ${path.join(f.migrationDir, RESUME_FILE)}, then the skill's references/orchestrate-build.md (Resuming), and`,
+    `continue step 7 with: ${f.nextCommand}`,
+    `The manifest is ${f.manifestPath}.`,
+  ].join("\n");
+  const text = [
     `# Build resume — ${path.basename(f.migrationDir)}`,
     "",
     `Written by \`migrate.mjs --tasks <dir> --handoff\` at ${f.now}. Every value below is the engine's, read from the`,
     "folder — do not edit this file; run `--handoff` again to refresh it.",
     "",
-    `- **Manifest:** \`${f.manifestPath}\``,
+    `- **Manifest:** \`${f.manifestPath}\` (the hand-off's copy; the step-4.2 clean-up deletes it)`,
     `- **Migration folder:** \`${f.migrationDir}\``,
     `- **Task folder:** \`${f.tasksDir}\``,
     `- **Environment:** \`${f.environment || "not recorded in manifest.planMeta.environment"}\``,
@@ -4431,11 +4452,9 @@ export function renderResume(f) {
     "## Resume prompt — paste this into a fresh session",
     "",
     "```text",
-    `Resume the Classic to Freedom UI migration build in ${f.migrationDir} with the classic-to-freedom-migration skill.`,
-    `Read ${path.join(f.migrationDir, RESUME_FILE)}, then the skill's references/orchestrate-build.md (Resuming), and`,
-    `continue step 7 with: ${f.nextCommand}`,
-    `The manifest is ${f.manifestPath}.`,
+    prompt,
     "```",
     "",
   ].join("\n");
+  return { text, prompt };
 }

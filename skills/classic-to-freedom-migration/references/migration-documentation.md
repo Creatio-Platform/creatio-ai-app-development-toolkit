@@ -258,9 +258,13 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 - Decision: <what was decided>
 - Rationale: <why>
 - Approved by: <user>
-- Plan version: <v1 | v2 | …>   # required on the plan-approval entry, beside a non-empty Approved by — the build compares it to plan.md
+- Plan version: plan-<hash>
 - Affects: <task IDs>
 ```
+
+On the plan-approval entry `Plan version:` is required, beside a non-empty `Approved by:` in the same `## `
+entry, and its value is the `plan-<hash>` string `plan.md` prints, alone on the line — the build and `--handoff`
+compare it to `plan.md` exactly, so nothing may follow it there.
 
 ### worklog.md
 ```markdown

@@ -94,6 +94,43 @@ class ResumeSectionTests(unittest.TestCase):
         self.assertIn("`Route:`", self.resuming)
         self.assertIn("plan version", self.resuming)
 
+    def test_it_forbids_re_reading_the_planning_material(self):
+        # The names alone would pass a section that told the fresh driver to read them.
+        self.assertIn("Do not re-read `discovery.md`, `plan.md`, the manifest", self.resuming)
+        self.assertIn("Do not widen what you read", self.resuming)
+
+    def test_it_takes_the_manifest_copy_from_the_resume(self):
+        self.assertIn("`resume-manifest.json`", self.resuming)
+
+
+class WholeReadsAgreeTests(unittest.TestCase):
+    """The build's whole-read list and the Resuming section name the same reads for a resumed session."""
+
+    def test_both_passages_name_resume_md_and_this_file_only(self):
+        text = read(ORCHESTRATE)
+        reads = section(text, "**Your own whole reads, each once:**", "## Resuming")
+        self.assertIn("`resume.md` and this file instead, and nothing else", reads)
+        resuming = section(text, "## Resuming", "## Step 7")
+        self.assertIn("the two are your only whole reads", resuming)
+        self.assertIn("`decisions.md`\n   and `worklog.md` are targeted reads", resuming)
+
+
+class ManifestCopyTests(unittest.TestCase):
+    """--handoff copies the manifest into the folder; the clean-up deletes that copy too."""
+
+    def test_7_1b_names_the_copy(self):
+        handoff = section(read(ORCHESTRATE), "**7.1b Hand off to a fresh session", "**7.2 ")
+        self.assertIn("`resume-manifest.json`", handoff)
+
+    def test_the_step_4_2_clean_up_names_the_copy(self):
+        clean_up = section(read(SKILL), "**Clean up (step 4.2 inputs).**", "\n")
+        self.assertIn("`resume-manifest.json`", clean_up)
+
+    def test_the_template_value_line_holds_only_the_version(self):
+        doc = read(SKILL_DIR / "references/migration-documentation.md")
+        template = section(doc, "### decisions.md\n```markdown", "### worklog.md")
+        self.assertIn("- Plan version: plan-<hash>\n", template)
+
 
 class SkillRouteTests(unittest.TestCase):
     """SKILL.md routes a folder with resume.md to the resume path, within budget."""
@@ -118,6 +155,14 @@ class EngineReadmeTests(unittest.TestCase):
         readme = read(ENGINE_README)
         self.assertIn("--handoff", readme)
         self.assertIn("resume.md", readme)
+
+    def test_readme_states_the_refusals_the_code_makes(self):
+        entry = section(read(ENGINE_README), "- **`--handoff` moves the build loop", "- **`--start` enforces")
+        self.assertIn("in stages", entry)
+        self.assertNotIn("at once, no", entry)
+        for fragment in ("plan-level gaps", "stdin", "`Approved by:`", "`## ` entry",
+                         "`Route: TBD` is no route", "cites", "`ledger` or `stuck`", "`resume-manifest.json`"):
+            self.assertIn(fragment, entry)
 
 
 if __name__ == "__main__":

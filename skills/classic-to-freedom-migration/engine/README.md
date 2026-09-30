@@ -234,19 +234,31 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   same reason it refuses to combine with `--start`, `--route`, `--verify` or `--split`: each writes the folder
   before the answer would print, so one call could only describe a state the reader cannot place.
 - **`--handoff` moves the build loop to a FRESH SESSION.** Every build turn pays for the whole conversation before
-  it, and a driver that planned and built in one session carried discovery and planning into each build turn (a
-  measured run: 451k tokens at the first `--start`). The mode writes `resume.md` into the migration folder (the
-  parent of `<dir>`): the absolute manifest path, the migration folder, the environment (`planMeta.environment`),
-  the approved plan version with the `decisions.md` line that approves it, the `Route:` line from `worklog.md`, the
-  `--- progress ---` block, the next task `--next` would name, and ONE copyable resume prompt ending in that
-  `--next` command. Every value is computed from the folder — none is typed by the driver, because a hand-written
-  hand-off note is a prose-only rule, and those were measured being skipped. It refreshes the folder as `--next`
-  does, starts nothing and issues no token. It REFUSES — exit **2**, `NOTHING WRITTEN`, every cause and its fix
-  stated at once, no `resume.md` written or changed — when no `Plan version:` line in `decisions.md` names the
-  current plan version, when the folder was never sliced (no `index.md`; the folder is not created), when
-  `worklog.md` has no `Route:` line, or when the manifest path does not exist or the manifest came in on stdin (the
-  fresh session must re-open it by path; it stays in the scratchpad and is never copied into the folder). Like
-  `--next` it refuses to combine with any flag that moves the folder.
+  it, so a driver that planned and built in one session carries discovery and planning into each build turn. The
+  mode writes `resume.md` into the migration folder (the parent of `<dir>`) and copies the manifest beside it as
+  `resume-manifest.json` — the fresh session re-opens the copy, never the planning session's temporary original,
+  and the step-4.2 clean-up deletes it with the other stand-sourced inputs. `resume.md` holds the absolute path of
+  that copy, the migration folder, the environment (`planMeta.environment`), the approved plan version with the
+  `decisions.md` line that approves it, the `Route:` line from `worklog.md`, the `--- progress ---` block, the next
+  task `--next` would name, and ONE copyable resume prompt ending in that `--next` command. Every value is computed
+  from the folder — none is typed by the driver, because a hand-written hand-off note is a prose-only rule. It
+  refreshes the folder as `--next` does, starts nothing and issues no token. Run again from the copy (a resumed
+  session handing off after a repair round) it leaves the copy as it is.
+  It REFUSES — exit **2**, `NOTHING WRITTEN`, no `resume.md` or manifest copy written or changed — in stages, each
+  stage naming every cause it finds, with its fix, before the next one runs:
+  1. the plan has plan-level gaps (the refusal every task-folder mode gives);
+  2. the manifest path does not exist, or the manifest came in on stdin (the copy needs a path to copy from);
+  3. together: the folder was never sliced (no `index.md`; the folder is not created), no `## ` entry of
+     `decisions.md` holds both a `Plan version:` field whose value is exactly the current plan version and a
+     non-empty `Approved by:` field, or the last `Route:` line of `worklog.md` names none of `agent` · `codex` ·
+     `copilot` · `inline` (`Route: TBD` is no route);
+  4. the folder refresh `--next` would refuse — before the first dispatch, a `D<N>` in `decisions.md` that no
+     deliverable status, task `decisions:` entry or `decisionsWithoutDeliverable` cites;
+  5. `--next` would answer `ledger` or `stuck` (it exits 2 on both): the same answer follows the header, and the
+     same stderr gate is raised.
+
+  Like `--next` it refuses to combine with any flag that moves the folder or answers about it (`--next`, `--start`,
+  `--route`, `--verify`, `--split`, `--add`, `--decide`, `--revoke`).
 - **`--start` enforces the queue, not just the ledger.** It refuses a task whose `dependsOn` has not closed, and
   refuses a second token for an artifact a dispatched task is still writing. Both are field comparisons the engine
   makes rather than rules the caller is asked to honour. The second one matters most: with
