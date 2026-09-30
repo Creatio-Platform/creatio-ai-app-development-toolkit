@@ -54,8 +54,10 @@ page. You read what the builders filed and rule on it; you write nothing on the 
 
 ## The record you rule on
 
-Every id you rule on is already a key in `evidence.json` and `judge.json` — the engine derived it,
-and you never make one up. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design
+The engine derives every id you rule on, and you never make one up. It writes `evidence.json` and
+`judge.json` with each id as a key the first time the read plan is written and never rewrites them,
+so an id a re-planned run added can be missing: the refile step above adds that key, under the exact
+id the record was filed under. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design
 pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
 `list#listpage:<kind>:<item>` and `<pageKey>#datasource:<name>`, where `<pageKey>` is `main`,
 `list`, `child:<Entity>`, `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two
@@ -71,9 +73,10 @@ pages would otherwise share a key). The record under an id holds:
   prose in this field raises nothing.
 
 A record whose fields have the wrong shape is incomplete, and its row stays `⚠ verify` whatever you
-rule, so say so in `why` rather than blessing it. A raised finding is closed by a decision, not by
-you: its row closes only when `decisions.md` or `findings.md` contains the record's exact id as a
-whole token — backticks or a trailing `.` or `:` are fine, a longer id that merely contains it is not.
+rule, so say so in `why` rather than blessing it. On a `#quality-gates` record, a raised finding is
+closed by a decision, not by you: its judged row closes only when `decisions.md` or `findings.md`
+contains the record's exact id as a whole token — backticks or a trailing `.` or `:` are fine, a
+longer id that merely contains it is not.
 
 ## How to rule
 

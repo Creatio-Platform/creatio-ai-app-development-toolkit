@@ -196,10 +196,16 @@ class EvidenceRecordContractTests(unittest.TestCase):
         # One shape per line, indented a few spaces; the deeper-indented lines continue a shape's note.
         shapes = re.findall(r"^// {1,4}`([^`]+)`", shapes_block, re.M)
         self.assertEqual(len(shapes), 5, f"read {shapes} as the evidence-id shapes")
+        # The files a decision that closes a raised finding is read from.
+        decision_files = re.search(r"export const DECISION_FILES = \[([^\]]*)\]", read(SKILL_DIR / "engine/assemble.mjs"))
+        self.assertIsNotNone(decision_files, "DECISION_FILES is no longer where this test reads it")
+        decision_files = re.findall(r'"([^"]+)"', decision_files.group(1))
+        self.assertTrue(decision_files, "read no decision files from assemble.mjs")
         for name in ("judge-brief.md", "build-page.md"):
             text = read(REFERENCES / name)
             missing = [f for f in sorted(fields) if f"`{f}`" not in text]
             missing += [s for s in shapes if f"`{s}`" not in text]
+            missing += [f for f in decision_files if f"`{f}`" not in text]
             self.assertFalse(missing, f"{name} does not name {missing}")
 
 
