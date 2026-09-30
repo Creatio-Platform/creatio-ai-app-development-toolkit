@@ -208,10 +208,10 @@ class BriefSelfSufficiencyTests(unittest.TestCase):
         engine = read(SKILL_DIR / "engine/designspec.mjs") + read(SKILL_DIR / "engine/migrate.mjs")
         for label in ("✅ Done", "❌ MISSING", "⚠ verify", "⛔ EVIDENCE MIS-FILED"):
             self.assertIn(f"`{label}`", report)
-            self.assertIn(label, engine, f"the engine no longer writes {label!r}")
+            self.assertIn(label, engine, f"judge-brief quotes {label!r} but the engine does not print it")
         for phrase in ("judged convincing", "the judge REJECTED the evidence", "NOT judged", "DISAGREES"):
             self.assertIn(phrase, report)
-            self.assertIn(phrase, engine, f"the engine no longer writes {phrase!r}")
+            self.assertIn(phrase, engine, f"judge-brief quotes {phrase!r} but the engine does not print it")
 
 
 class ReferencePlacementTests(unittest.TestCase):

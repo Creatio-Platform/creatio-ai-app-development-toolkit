@@ -90,7 +90,9 @@ reads `judge.json` beside `evidence.json` and settles each evidence row from the
 it writes is what the person who owns the migration is shown, and it quotes you:
 
 - `convincing: true` on a complete evidence record — the row is `✅ Done`, "judged convincing". A
-  `true` does not close a row whose record is incomplete: that row stays `⚠ verify`.
+  `true` does not close a row whose record is incomplete, or whose record raises findings that no
+  decision in `decisions.md` / `findings.md` names: that row stays `⚠ verify`, because a raised
+  finding is closed by the decision that takes it, not by a verdict.
 - `convincing: false` — the row is `❌ MISSING`, "the judge REJECTED the evidence", followed by your
   `why` verbatim. The row stays open and comes back as a repair task, so `why` has to say what is
   wrong with the record in words a builder can act on.
