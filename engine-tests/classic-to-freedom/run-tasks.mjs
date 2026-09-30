@@ -8523,16 +8523,27 @@ const locateRow = (dir, label) => {
     {
       const m = appManifest({ decisionsWithoutDeliverable: OTHERS, deliverableStatus: { "main#method:init": WONT("D5") } });
       const f = folder("decisions-status", m);
-      const r = f.cli();
-      const init = locateRow(f.dir, "Handler — `init`");
+      // The split puts the `init` row alone in its task, so the status closes that whole task.
+      const INIT = "Handler — `init`";
+      const entry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
+      const groups = checklistGroups(runMigration(appManifest({ decisionsWithoutDeliverable: OTHERS })), optsOf(m));
+      const splitPath = path.join(f.base, "split.json");
+      fs.writeFileSync(splitPath, JSON.stringify({ items: [
+        { id: "init", title: "init", pageKey: "main", writesTo: "main", rows: [INIT] },
+        { id: "page", title: "Page", pageKey: "main", writesTo: "main", rows: groups.flatMap((g) => (g.pageKey === "main" && g.rows.some((x) => x.label === INIT)
+          ? g.rows.filter((x) => x.label !== INIT).map((x) => x.label) : [entry(g)])) },
+      ] }));
+      const r = f.cli("--split", splitPath);
+      const init = locateRow(f.dir, INIT);
       const next = f.cli("--next");
       check("T2: the same decision cited by a `wont-do` status cuts — the row arrives `wont-do — <title> (D5)` marked `D5=`",
         () => r.status === 0 && init?.r.outcomeKind === "wont-do" && init.r.outcome === "wont-do — Init handler not carried over (D5)" && init.d === "D5=",
         () => ({ status: r.status, out: (r.stdout + r.stderr).slice(0, 600), init: init?.r, d: init?.d }));
-      check("T2: `--next` answers over that folder and offers no task whose every row is closed",
-        () => next.status === 0 && !/NOTHING WRITTEN/.test(next.stdout)
-          && readTaskDir(f.dir).filter((t) => t.rows.every((r2) => r2.outcomeKind)).every((t) => !next.stdout.includes(`[${t.id}]`)),
-        () => ({ status: next.status, out: next.stdout.slice(0, 900) }));
+      const closed = readTaskDir(f.dir).filter((t) => t.rows.every((r2) => r2.outcomeKind));
+      check("T2: `--next` answers over that folder and does not offer the task the status closed (anti-vacuity: that task is closed and in the checked list)",
+        () => next.status === 0 && !/NOTHING WRITTEN/.test(next.stdout) && init?.t.rows.length === 1
+          && closed.some((t) => t.id === init.t.id) && closed.every((t) => !next.stdout.includes(`[${t.id}]`)),
+        () => ({ status: next.status, out: next.stdout.slice(0, 900), initTask: init?.t.rows.map((x) => [x.label, x.outcomeKind]), closed: closed.map((t) => t.id) }));
       fs.rmSync(f.base, { recursive: true, force: true });
     }
     {
@@ -8641,6 +8652,12 @@ const locateRow = (dir, label) => {
         () => JSON.stringify(open) === JSON.stringify([{ id: "D4", title: "four" }])
           && TASKS_MODULE.unaccountedDecisions(DECS, { tasks: tasksOf([[1, "D1"], [2, "D2="]]), deliverableStatus: { "main#x": WONT("D3") }, withoutDeliverable: ["D4"] }).length === 0,
         () => open);
+      const buildOf = (entry) => TASKS_MODULE.unaccountedDecisions(DECS, { tasks: tasksOf([[1, "D1"], [2, "D2="]]), deliverableStatus: { "main#x": WONT("D3"), "main#y": entry }, withoutDeliverable: [] });
+      const buildCites = buildOf({ status: "build", decision: "D4" });
+      const buildBare = buildOf({ status: "build" });
+      check("T1 (unit): a `build` status that carries a `decision` accounts for that D<N>; one without a `decision` accounts for none",
+        () => buildCites.length === 0 && JSON.stringify(buildBare) === JSON.stringify([{ id: "D4", title: "four" }]),
+        () => ({ buildCites, buildBare }));
       const bare = tmp("decisions-first-dispatch");
       const pendingBare = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "", rows: [] }]);
       const nonce = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "abc", rows: [] }]);
