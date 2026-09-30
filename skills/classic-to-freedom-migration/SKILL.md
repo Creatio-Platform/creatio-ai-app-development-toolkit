@@ -473,7 +473,7 @@ in full (7.0-7.7) and step 8's driver side; below is what stays in view during t
 (`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
 `AskUserQuestion`, then stop until it is answered.
 
-**7.1b More than one task? Run `--tasks <migration-folder>/build-tasks --handoff`**, relay its prompt for a fresh
+**7.1b Over `TASK_BUDGET.run`? Run `--tasks <migration-folder>/build-tasks --handoff`**, relay its prompt for a fresh
 session and STOP (again when a `--verify` opens repairs).
 
 **7.2 The orchestrator contract** — six rules, each stated in full in the reference:

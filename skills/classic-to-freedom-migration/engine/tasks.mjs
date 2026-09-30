@@ -4363,22 +4363,29 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
 // folder, never typed by the driver: a hand-written hand-off note is a prose-only rule, and those were skipped.
 export const RESUME_FILE = "resume.md";
 
-// True when `text` holds `word` as a whole token — not as the prefix or the tail of a longer version string.
-const TOKEN_CHAR = /[\w-]/;
-function hasToken(text, word) {
-  for (let at = text.indexOf(word); at >= 0; at = text.indexOf(word, at + 1)) {
-    const before = at > 0 ? text[at - 1] : "";
-    const after = text[at + word.length] || "";
-    if (!TOKEN_CHAR.test(before) && !TOKEN_CHAR.test(after)) return true;
-  }
-  return false;
+// A `Field: value` line with its list marker, bold and backticks dropped, as `[field, value]`, or null.
+function entryField(line) {
+  const plain = line.replace(/^\s*[-*]\s*/, "").replaceAll("**", "").replaceAll("`", "").trim();
+  const m = /^([A-Za-z][A-Za-z ]*?):\s*(.*)$/.exec(plain);
+  return m ? [m[1].toLowerCase(), m[2].trim()] : null;
 }
-// The `decisions.md` line that approves THIS plan version: one that says `Plan version` and names the version as a
-// whole token, so `plan-4f9c` does not pass for `plan-4f9c2ab17e03`. Returned without its list marker, or null.
+// The `decisions.md` line that approves THIS plan version, read per `## ` entry: the entry must hold a
+// `Plan version:` field whose value IS the version (so `plan-4f9c` does not pass for `plan-4f9c2ab17e03`) AND a
+// non-empty `Approved by:` field. A line that only mentions the version, or a scope-change entry that records the
+// new version before anyone approved it, is not an approval. Returns that entry's `Plan version` line without its
+// list marker, or null.
 export function planApprovalLine(decisionsText, planVersion) {
   if (!planVersion) return null;
+  const entries = [[]];
   for (const line of String(decisionsText || "").split(/\r?\n/)) {
-    if (/plan version/i.test(line) && hasToken(line, planVersion)) return line.replace(/^\s*[-*]\s*/, "").trim();
+    if (/^##\s/.test(line)) entries.push([]);
+    entries[entries.length - 1].push(line);
+  }
+  for (const lines of entries) {
+    const fields = lines.map((line) => [line, entryField(line)]).filter(([, f]) => f);
+    const approved = fields.some(([, [name, value]]) => name === "approved by" && value !== "");
+    const versionLine = fields.find(([, [name, value]]) => name === "plan version" && value === planVersion);
+    if (approved && versionLine) return versionLine[0].replace(/^\s*[-*]\s*/, "").trim();
   }
   return null;
 }

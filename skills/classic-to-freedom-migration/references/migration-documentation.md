@@ -102,7 +102,7 @@ Separate confirmed facts from inferences.
 Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) — **written directly by `--out`**, its Overview/Main-scope values supplied via `manifest.planMeta`, plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
 - This is the contract the user approves.
 - **Frozen after approval.** Do not edit it to reflect progress.
-- Any scope or strategy change requires a new entry in `decisions.md` and explicit re-approval. The version bump is AUTOMATIC and is not something to type: the change goes into the manifest, `--plan --out` is re-run, and the engine's `**Plan version:**` string moves with it. Record what changed, why, and the new version.
+- Any scope or strategy change requires a new entry in `decisions.md` and explicit re-approval. The version bump is AUTOMATIC and is not something to type: the change goes into the manifest, `--plan --out` is re-run, and the engine's `**Plan version:**` string moves with it. Record what changed, why, and the new version. That entry is not the approval: only an entry holding both `Approved by:` and `Plan version:` with that exact version counts as one (`--handoff` refuses without it).
 
 ### customizations.md — the Classic behaviour analysis
 Written by the **`classic-ui-expert`** run (SKILL.md step 5.1) — a workflow, a sub-agent, or that skill invoked inline — not by hand. It answers the imperative rows the engine can enumerate but not explain — a method whose trigger is unresolved, a method assigned from another module, a `message` whose counterpart is in another schema, a `mixin`.
@@ -258,7 +258,7 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 - Decision: <what was decided>
 - Rationale: <why>
 - Approved by: <user>
-- Plan version: <v1 | v2 | …>   # required on the plan-approval entry — the build compares it to plan.md
+- Plan version: <v1 | v2 | …>   # required on the plan-approval entry, beside a non-empty Approved by — the build compares it to plan.md
 - Affects: <task IDs>
 ```
 

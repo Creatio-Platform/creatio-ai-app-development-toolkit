@@ -160,7 +160,8 @@ same guidance, and here there is only one builder. A 31-row section came out as 
 sub-agents before this, one of them caching material nobody else read.
 
 **7.1b Hand off to a fresh session — then STOP.** Once the plan is approved and sliced, and the
-run has **more than one task**, the build loop leaves this session: everything above it (discovery,
+run is **over `TASK_BUDGET.run`** (it has more than one task besides its review, not just the
+`Whole migration` build), the build loop leaves this session: everything above it (discovery,
 the plan, its approval) would otherwise be paid for again on every build turn. With the `Route:`
 line written (7.0), run
 `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --handoff`
@@ -171,7 +172,7 @@ while the current plan version has no approval entry in `decisions.md`, the fold
 `worklog.md` has no `Route:` line, or the manifest path does not exist — fix what it names and run
 it again. Then give the user the resume prompt it printed, to paste into a fresh session, and
 **STOP**: no `--start` and no dispatch in this session. The same hand-off happens again when a
-step-8 `--verify --tasks` opens repair tasks. A one-task run (below `TASK_BUDGET.run`: one build
+step-8 `--verify --tasks` opens repair tasks. A run below `TASK_BUDGET.run` (the `Whole migration`
 task and its review) stays in this session.
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.

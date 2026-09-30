@@ -5783,12 +5783,21 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
   const V = "plan-4f9c2ab17e03";
   check("planApprovalLine: a `Plan version:` line naming the version is the approval, returned without its list marker",
     () => planApprovalLine(`# Decisions\n- Approved by: user\n- Plan version: \`${V}\`\n`, V) === `Plan version: \`${V}\``);
-  check("planApprovalLine: the version must be a WHOLE token — a prefix or an extension of it is a different plan",
-    () => planApprovalLine("- Plan version: `plan-4f9c`", V) === null && planApprovalLine(`- Plan version: \`${V}0\``, V) === null
-      && planApprovalLine("- Plan version: `plan-4f9c2ab17e03-b`", V) === null);
-  check("planApprovalLine: the version on a line that is not a `Plan version` line is not an approval",
-    () => planApprovalLine(`- Rationale: supersedes ${V}`, V) === null && planApprovalLine("", V) === null
-      && planApprovalLine(`- Plan version: ${V}`, null) === null);
+  const BY = "- Approved by: user\n";
+  check("planApprovalLine: the version must be the WHOLE `Plan version:` value — a prefix or an extension of it is a different plan",
+    () => planApprovalLine(`${BY}- Plan version: \`plan-4f9c\``, V) === null && planApprovalLine(`${BY}- Plan version: \`${V}0\``, V) === null
+      && planApprovalLine(`${BY}- Plan version: \`plan-4f9c2ab17e03-b\``, V) === null);
+  check("planApprovalLine: the version on a line that is not a `Plan version:` field is not an approval",
+    () => planApprovalLine(`${BY}- Rationale: supersedes ${V}`, V) === null && planApprovalLine("", V) === null
+      && planApprovalLine(`${BY}Plan version ${V} rejected`, V) === null && planApprovalLine(`${BY}- Plan version: ${V}`, null) === null);
+  check("planApprovalLine: an entry that names the version with no (or an empty) `Approved by:` is not an approval — a scope change records the new version before it is approved",
+    () => planApprovalLine(`## 2026-09-30 — Scope change\n- Decision: drop a page\n- Plan version: \`${V}\`\n`, V) === null
+      && planApprovalLine(`## Scope change\n- Approved by:\n- Plan version: ${V}\n`, V) === null);
+  check("planApprovalLine: `Approved by:` and `Plan version:` must be in the SAME `## ` entry",
+    () => planApprovalLine(`## Earlier\n${BY}- Plan version: plan-000000000000\n## Scope change\n- Plan version: ${V}\n`, V) === null);
+  check("planApprovalLine: the full template entry passes, bold field names too, and its `Plan version` line is returned",
+    () => planApprovalLine(`## Scope change\n- Plan version: ${V}\n## 2026-09-30 — Plan approved\n- Decision: build\n- Rationale: ok\n${BY}- Plan version: \`${V}\`\n- Affects: all\n`, V) === `Plan version: \`${V}\``
+      && planApprovalLine(`## Plan approved\n- **Approved by:** user\n- **Plan version:** \`${V}\`\n`, V) === `**Plan version:** \`${V}\``);
   check("worklogRoute: a plain, bold or listed `Route:` line is read, and the LAST one wins",
     () => worklogRoute("Route: agent") === "Route: agent" && worklogRoute("- **Route:** `inline`") === "Route: inline"
       && worklogRoute("Route: agent\n## later\nRoute: codex\n") === "Route: codex",
@@ -5888,6 +5897,13 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     /manifest .*does not exist/, /rerun step 4/);
   refusalCase("no-route", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent\n", "")), {},
     /no `Route:` line/, /7\.0/);
+  refusalCase("scope-change-only", (c) => fs.writeFileSync(path.join(c, "decisions.md"),
+    `# Decisions And Approvals\n\n## 2026-09-30 — Scope change\n- Decision: drop a page\n- Rationale: out of scope\n${APPROVAL}\n`), {},
+  /no approval of plan version/, /Approved by:/);
+  // Before the first dispatch `--next` refuses a folder whose decisions.md holds a D<N> nothing cites, so the
+  // hand-off refuses it too: the fresh session's first `--next` would be refused.
+  refusalCase("uncited-decision", (c) => fs.appendFileSync(path.join(c, "decisions.md"), "\n## D9 — an uncited decision\n"), {},
+    /D9 — an uncited decision/, /decisionsWithoutDeliverable/);
   {
     // An unsliced folder is refused WITHOUT being created: the refresh `--tasks` modes run creates the folder.
     const copy = path.join(tmp("cli-handoff-uncut"), "mig folder");

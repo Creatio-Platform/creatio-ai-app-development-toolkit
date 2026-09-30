@@ -3625,9 +3625,10 @@ function handoffCauses(result, dir, folder) {
       + ` (orchestrate-build.md 7.1): \`${TASKS_FLAG} ${shellArg(dir)} ${SPLIT_FLAG} split.json\`, then hand off.`);
   }
   if (!planApprovalLine(readTextOr(path.join(folder, "decisions.md")), result.planVersion)) {
-    causes.push(`decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\` (no`
-      + " `Plan version:` line names it). Record the approval naming that version (orchestrate-build.md 7.1 step 1),"
-      + " then hand off — a fresh session builds only the plan an approval names.");
+    causes.push(`decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\` (no entry`
+      + ` holds both a \`Plan version: ${result.planVersion}\` field and a non-empty \`Approved by:\` field). Record the`
+      + " approval naming that version and who approved it (orchestrate-build.md 7.1 step 1), then hand off — a fresh"
+      + " session builds only the plan an approval names.");
   }
   if (!worklogRoute(readTextOr(path.join(folder, "worklog.md")))) {
     causes.push(`worklog.md in ${folder} has no \`Route:\` line. Resolve the dispatch route first (orchestrate-build.md`
@@ -3646,7 +3647,7 @@ function runHandoffMode(result, dir, opts, ctx) {
     return `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:\n`
       + causes.map((c) => `  — ${c}`).join("\n") + "\n";
   }
-  const set = syncTaskDir(tasksDir, result, opts);
+  const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
   const answer = startableTasks(set, tasksDir);
   const resumeFile = path.join(folder, RESUME_FILE);
