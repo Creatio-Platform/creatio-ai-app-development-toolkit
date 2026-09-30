@@ -102,10 +102,13 @@ const coSeeded = mergeHierarchy(load("contract", [
 ]), { seedTemplate: seed });
 check("F2: Contract Header/Tabs resolved by seed (not unresolved)",
   !coSeeded.unresolvedParents.includes("Header") && !coSeeded.unresolvedParents.includes("Tabs"));
-// #2 on real data: ContractSumGroup is REMOVED by WorkOverride yet ContractSumBlock still nests under
-// it — a genuine orphan the old (tombstone-as-defined) diagnostic masked. It must now surface.
-check("F2/#2: a group removed by a schema surfaces as unresolved (real Contract orphan, not masked)",
-  coSeeded.unresolvedParents.includes("ContractSumGroup"));
+// Real data: SalesContracts inserts ContractSumGroup and its child ContractSumBlock, and the higher WorkOverride removes
+// the group. Classic removes the whole subtree, so the child is gone with it — no unresolved parent — and, being a
+// client element, it is listed in removed[] under the group's remover.
+check("cascade (real Contract): a child a LOWER layer placed in ContractSumGroup goes with it when WorkOverride removes the group — no unresolved parent, listed in removed[]",
+  !coSeeded.unresolvedParents.includes("ContractSumGroup") && !coSeeded.items.some((i) => i.name === "ContractSumBlock")
+  && coSeeded.removed.some((r) => r.name === "ContractSumBlock" && r.removedBy === "WorkOverride"),
+  () => ({ unresolvedParents: coSeeded.unresolvedParents, removed: coSeeded.removed }));
 check("F2: Contract entity survives seed (seed has no entitySchemaName)", coSeeded.entity === "Contract");
 
 /* ---- F1: POSITIVE warning assertions (the mechanism must fire, not just clear after seeding) ---- */
@@ -117,6 +120,9 @@ check("F1: unseeded Contract raises merge-onto-absent warnings (base tabs/button
 
 /* ---- F1: move/remove-onto-absent branches (synthetic schemas pin the drop + tombstone outcomes) ---- */
 const synth = (pkg, ops) => makeSchema(pkg, { entity: "X", diff: ops }); // shared shape (see _testkit.mjs)
+// A complete-looking base seed (200 real-bodied methods, no diff): a merge onto a name nothing defines is settled
+// only over a seed like this — with no seed it is most likely the missing base element and stays a block.
+const fullSeed = { seedTemplate: [makeSchema("Seed", { entity: "X", methods: Array.from({ length: 200 }, (_, i) => `m${i}`) })] };
 
 const moved = mergeHierarchy([synth("T", [{ operation: "move", name: "Ghost", parentName: "Nowhere" }])]);
 check("F1: move-onto-absent is dropped (item never materialises)", !moved.items.some(i => i.name === "Ghost"));
@@ -151,7 +157,6 @@ check("a stray remove amid real removes — real ones stay in removed[], the str
 // A LATER layer that DOES define the name is the genuine ordering signal: the remove ran before its target existed.
 for (const [label, laterOp] of /** @type {[string, object][]} */ ([
   ["insert", { operation: "insert", name: "Late", parentName: "Header", propertyName: "items", bindTo: "Late" }],
-  ["merge", { operation: "merge", name: "Late", values: { caption: "x" } }],
   ["move", { operation: "move", name: "Late", parentName: "Header" }],
   ["parentName", { operation: "insert", name: "Kid", parentName: "Late", propertyName: "items", bindTo: "Kid" }],
 ])) {
@@ -160,6 +165,17 @@ for (const [label, laterOp] of /** @type {[string, object][]} */ ([
   check(`remove of a name a LATER layer references (${String(label)}) stays CORRECTNESS and names that layer (F1)`,
     !!w && w.severity === "correctness" && /referenced by Later/.test(w.hint) && /schema order \(F1\)/.test(w.hint), () => r.warnings);
 }
+// A later MERGE of the name defines nothing — it places no element, and a merge onto a missing name is a no-op too —
+// so the remove is still a no-op, and so is the merge.
+const rmThenMerge = mergeHierarchy([synth("Early", [{ operation: "remove", name: "Late" }]), synth("Later", [{ operation: "merge", name: "Late", values: { caption: "x" } }])], fullSeed);
+const rmThenMergeW = rmThenMerge.warnings.find((x) => x.op === "remove" && x.name === "Late");
+check("remove of a name only a LATER merge mentions is FIDELITY — a merge is not a definition — and its hint says so",
+  rmThenMergeW?.severity === "fidelity" && /Merges name it, but a merge places nothing/.test(rmThenMergeW.hint)
+  && !/schema order \(F1\)/.test(rmThenMergeW.hint) && !rmThenMerge.removed.length, () => rmThenMerge.warnings);
+const mergeThenRm = mergeHierarchy([synth("Early", [{ operation: "merge", name: "Late", values: { caption: "x" } }]), synth("Later", [{ operation: "remove", name: "Late" }])], fullSeed);
+check("the reverse order — merge of a name nothing defines, then a remove of it — leaves one FIDELITY merge note, no removed[] entry and no element",
+  mergeThenRm.warnings.length === 1 && mergeThenRm.warnings[0].op === "merge" && mergeThenRm.warnings[0].severity === "fidelity"
+  && !mergeThenRm.removed.length && !mergeThenRm.items.some((i) => i.name === "Late"), () => mergeThenRm);
 // Two layers both removing the same stray name are still two no-ops — a remove is not a reference.
 const twice = mergeHierarchy([synth("A", [{ operation: "remove", name: "e" }]), synth("B", [{ operation: "remove", name: "e" }])]);
 check("a second remove of the same never-defined name does not turn the first into an ordering signal",
@@ -273,6 +289,14 @@ const rmInSeedW = warnOf(rmInSeed, "tplStray");
 check("a stray remove inside a SEED layer is FIDELITY, not in removed[], and pre-closed as template-owned (`fromTemplate`, accepted n/a)",
   rmInSeedW?.severity === "fidelity" && rmInSeedW.fromTemplate === true && rmInSeedW.accepted === true && rmInSeedW.disposition === "n/a"
   && !rmInSeed.removed.some((r) => r.name === "tplStray"), () => rmInSeedW);
+// The same holds for a stray MERGE inside a seed layer: a no-op, closed by the engine over a complete seed.
+const mergeInSeed = (n) => mergeHierarchy([synth("P", [])], { seedTemplate: [seedWith(n, [{ operation: "merge", name: "tplStrayM", values: { caption: "c" } }])] });
+const mergeInSeedW = mergeInSeed(200).warnings.find((w) => w.name === "tplStrayM");
+const mergeInPartialW = mergeInSeed(20).warnings.find((w) => w.name === "tplStrayM");
+check("a stray merge inside a SEED layer is FIDELITY and pre-closed as the template's own no-op merge over a complete seed, and stays open over a partial one",
+  mergeInSeedW?.severity === "fidelity" && mergeInSeedW.fromTemplate === true && mergeInSeedW.accepted === true && /no-op merge/.test(mergeInSeedW.note)
+  && mergeInPartialW?.severity === "fidelity" && !mergeInPartialW.accepted && /PARTIAL/.test(mergeInPartialW.hint),
+  () => ({ complete: mergeInSeedW, partial: mergeInPartialW }));
 // …unless the seed itself is partial: then the seed's own completeness is in question and the note stays open.
 const rmInPartialSeed = mergeHierarchy([synth("P", [])], { seedTemplate: [seedWith(20, [{ operation: "remove", name: "tplStray" }])] });
 check("a SEED-layer no-op over a partial seed is NOT pre-closed — the partial-seed caveat must reach the reader",
@@ -410,19 +434,54 @@ const rReal = resurrectThenAlias.items.find((i) => i.name === "Real");
 check("resurrect clears neverDefined: Top's `merge \"Old\"` lands on the resurrected Old, not on the alias target Real",
   rOld?.caption === "c" && rReal && rReal.caption !== "c", () => ({ old: rOld, real: rReal }));
 
-/* ---- F2: a parent removed by a lower schema must surface as unresolved (no false all-clear) ---- */
-const tomb = mergeHierarchy([
-  synth("base", [
-    { operation: "insert", name: "Grp", itemType: 15 },
-    { operation: "insert", name: "F", parentName: "Grp", propertyName: "items", bindTo: "Col" },
-  ]),
-  synth("top", [{ operation: "remove", name: "Grp" }]),
-]);
-check("F2: parent surviving only as a tombstone is reported unresolved (engine⇄mapper consistent)",
-  tomb.unresolvedParents.includes("Grp") && !tomb.items.some(i => i.name === "Grp"));
+/* ---- a removed container takes the children it held with it; a child placed there afterwards is an orphan ----
+   `JsonApplier.remove` drops the node with its `items`, whichever layer authored them. A child inserted or moved
+   under the container in the SAME or a LATER layer arrives after it is gone (a layer's removes run before its
+   inserts and moves), so its parent is unresolved — the engine⇄mapper consistency rule for a tombstoned parent. */
+const grpBase = [
+  { operation: "insert", name: "Grp", itemType: 15 },
+  { operation: "insert", name: "F", parentName: "Grp", propertyName: "items", bindTo: "Col" },
+];
+const tomb = mergeHierarchy([synth("base", grpBase), synth("top", [{ operation: "remove", name: "Grp" }])]);
+check("cascade: removing a container also removes the child a LOWER page layer placed in it — no unresolved parent, the child listed in removed[] under the container's remover",
+  !tomb.unresolvedParents.includes("Grp") && !tomb.items.some((i) => ["Grp", "F"].includes(i.name))
+  && tomb.removed.some((r) => r.name === "F" && r.removedBy === "top" && !r.fromTemplate),
+  () => ({ unresolvedParents: tomb.unresolvedParents, removed: tomb.removed }));
+const tombLate = mergeHierarchy([synth("base", grpBase), synth("top", [{ operation: "remove", name: "Grp" }]),
+  synth("later", [{ operation: "insert", name: "Late", parentName: "Grp", propertyName: "items", bindTo: "Late" }])]);
+check("cascade: a child inserted under the container by a LATER layer, after it was removed, stays alive and its parent surfaces as unresolved",
+  tombLate.unresolvedParents.includes("Grp") && tombLate.items.some((i) => i.name === "Late") && !tombLate.items.some((i) => i.name === "F"),
+  () => ({ unresolvedParents: tombLate.unresolvedParents, items: tombLate.items.map((i) => i.name) }));
+const tombMoved = mergeHierarchy([synth("base", [...grpBase, { operation: "insert", name: "Other", parentName: "Header", propertyName: "items", bindTo: "O" }]),
+  synth("top", [{ operation: "remove", name: "Grp" }]), synth("later", [{ operation: "move", name: "Other", parentName: "Grp" }])]);
+check("cascade: an element MOVED into the container after it was removed is not swept — its placement is the move's layer, not the insert's",
+  tombMoved.unresolvedParents.includes("Grp") && tombMoved.items.some((i) => i.name === "Other"),
+  () => ({ unresolvedParents: tombMoved.unresolvedParents, items: tombMoved.items.map((i) => i.name) }));
+const tombSet = mergeHierarchy([synth("base", grpBase), synth("mid", [{ operation: "set", name: "S", parentName: "Grp", values: { bindTo: "S" } }]),
+  synth("top", [{ operation: "remove", name: "Grp" }])]);
+check("cascade: an element a `set` created under the container in a LOWER layer goes with it too — every op that creates a record stamps its layer",
+  !tombSet.items.some((i) => i.name === "S") && !tombSet.unresolvedParents.includes("Grp"),
+  () => ({ items: tombSet.items.map((i) => i.name), unresolvedParents: tombSet.unresolvedParents }));
+const tombBaseMoved = mergeHierarchy([synth("a", [{ operation: "insert", name: "Grp", itemType: 15 }]), synth("b", [{ operation: "remove", name: "Grp" }]),
+  synth("c", [{ operation: "move", name: "BaseFld", parentName: "Grp" }])],
+  { seedTemplate: [makeSchema("Tpl", { diff: [{ operation: "insert", name: "Header", itemType: 15 },
+    { operation: "insert", name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "B" }], methods: ["a", "b", "c", "d", "e", "f"] })] });
+check("cascade: a BASE element a client layer moves into a container after it was removed is not swept — it surfaces as an orphan instead of vanishing",
+  tombBaseMoved.items.some((i) => i.name === "BaseFld") && tombBaseMoved.unresolvedParents.includes("Grp"),
+  () => ({ items: tombBaseMoved.items.map((i) => i.name), unresolvedParents: tombBaseMoved.unresolvedParents }));
+const tombDeep = mergeHierarchy([synth("a", [
+  { operation: "insert", name: "Grp", itemType: 15 },
+  { operation: "insert", name: "Mid", parentName: "Grp", propertyName: "items", itemType: 15 }]),
+  synth("b", [{ operation: "insert", name: "Leaf", parentName: "Mid", propertyName: "items", bindTo: "L" }]),
+  synth("c", [{ operation: "remove", name: "Grp" }])]);
+check("cascade(deep, page layers): Grp (layer a) → Mid (a) → Leaf (b), Grp removed by c — the whole subtree goes, each client element listed in removed[]",
+  !tombDeep.items.some((i) => ["Mid", "Leaf"].includes(i.name)) && !tombDeep.unresolvedParents.length
+  && ["Mid", "Leaf"].every((n) => tombDeep.removed.some((r) => r.name === n && r.removedBy === "c")),
+  () => ({ items: tombDeep.items.map((i) => i.name), removed: tombDeep.removed, unresolvedParents: tombDeep.unresolvedParents }));
 // CASCADE REMOVE — removing a container drops its BASE (templateOwned) subtree (Classic runtime parity), so a
-// heavily-layered page's base remove+re-layout does not FALSE-block on unresolvedParents; but a CLIENT-authored
-// orphan of the same removed container still SURFACES (never silently drop client content). Both in one fixture.
+// heavily-layered page's base remove+re-layout does not FALSE-block on unresolvedParents; but a child the REMOVING
+// layer itself places under the container runs after the remove, so it has no parent in Classic and still SURFACES.
+// Both in one fixture.
 const casc = mergeHierarchy(
   [makeSchema("Client", { entity: "X", diff: [
     { operation: "insert", name: "ClientChild", parentName: "BaseGrp", propertyName: "items", bindTo: "CliCol" }, // client content placed under the base group
@@ -434,7 +493,7 @@ const casc = mergeHierarchy(
   ], methods: ["a", "b", "c", "d", "e", "f"] })] });
 check("cascade: a BASE (templateOwned) child of a removed container is SWEPT (runtime parity — no false unresolvedParent, not in alive)",
   !casc.items.some((i) => i.name === "BaseChild"));
-check("cascade: a CLIENT-authored orphan of the same removed container still SURFACES (unresolvedParents) — client content not silently dropped",
+check("cascade: a child the removing layer places under the same container (its insert runs after the remove) still SURFACES (unresolvedParents)",
   casc.unresolvedParents.includes("BaseGrp") && casc.items.some((i) => i.name === "ClientChild"));
 // the sweep must propagate DEEP, not one level — a GRANDCHILD of a removed container is
 // swept too (silent client-content drop is the stated risk if propagation is shallow).
@@ -478,11 +537,11 @@ const realRun = (...ops) => mergeHierarchy([parseSchema(realBody(ops.join(",")),
 // Two LAYERS, which is the realistic shape and the only one that can express "a later schema changes this".
 // Within ONE layer the runtime runs all merges BEFORE any insert, so a single-layer insert+merge pair tests
 // array-order semantics that the runtime does not have — see the group-ordering pins below.
-const realRun2 = (opsA, opsB) => mergeHierarchy([parseSchema(realBody(opsA), "A"), parseSchema(realBody(opsB), "B")]);
+const realRun2 = (opsA, opsB, opts = {}) => mergeHierarchy([parseSchema(realBody(opsA), "A"), parseSchema(realBody(opsB), "B")], opts);
 
 /* ---- `set` must not hide CLIENT-authored children ----
-   `cascadeRemove` deliberately skips non-templateOwned items (its `!it.templateOwned` guard) so client-authored
-   removals surface individually, and `removed[]` filters out anything carrying `cascadeRemoved`. Setting that
+   `cascadeRemove` flags only templateOwned children as `cascadeRemoved`, so a swept client child stays in removed[] as
+   its own decision row, and `removed[]` filters out anything carrying `cascadeRemoved`. Setting that
    flag on EVERY direct child would make a client element inside a replaced container vanish from the decision rows with no
    per-element diagnostic — the op's warning counts dropped children but a count is not an element. Mixed ownership is
    the only shape that discriminates. */
@@ -511,15 +570,16 @@ check("a later op targeting the ALIAS name reaches the real element — the tabl
   aliasResolved.items.find((i) => i.name === "RealFld")?.caption === "Resources.Strings.ViaAlias"
   && !aliasResolved.items.some((i) => i.name === "OldFld"),
   () => aliasResolved.items.map((i) => `${i.name}:${i.caption}`));
-// Control: WITHOUT the alias the same merge finds nothing and produces the engine-only stub instead. Without this,
-// "resolution works" could be satisfied by resolving every unknown name to something.
+// Control: WITHOUT the alias the same merge finds nothing — a no-op, so it neither patches `RealFld` nor leaves an
+// element of its own. Without this, "resolution works" could be satisfied by resolving every unknown name to something.
 const aliasAbsent = realRun2(
   `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Orig"}}`,
-  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.ViaAlias"}}`);
-check("with NO alias registered the same merge does NOT reach the element — it falls through to the engine-only stub, so resolution is driven by the table and not by name guessing",
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.ViaAlias"}}`, fullSeed);
+check("with NO alias registered the same merge does NOT reach the element — it is a no-op onto a name nothing defines, so resolution is driven by the table and not by name guessing",
   aliasAbsent.items.find((i) => i.name === "RealFld")?.caption === "Resources.Strings.Orig"
-  && aliasAbsent.items.find((i) => i.name === "OldFld")?.engineOnlyStub === true,
-  () => aliasAbsent.items.map((i) => `${i.name}:${i.caption}:stub=${i.engineOnlyStub}`));
+  && !aliasAbsent.items.some((i) => i.name === "OldFld")
+  && aliasAbsent.warnings.some((w) => w.op === "merge" && w.name === "OldFld" && w.severity === "fidelity"),
+  () => ({ items: aliasAbsent.items.map((i) => `${i.name}:${i.caption}`), warnings: aliasAbsent.warnings }));
 const aliasExclOp = realRun2(
   `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"},alias:{name:"OldFld",excludeOperations:["remove"]}}`,
   `{operation:"remove",name:"OldFld"}`);
@@ -585,16 +645,55 @@ check("a merge that does NOT carry `caption` leaves it intact — otherwise 'pre
   untouchedCap.items.find((i) => i.name === "F")?.caption === "Resources.Strings.Cap",
   () => untouchedCap.items.find((i) => i.name === "F"));
 
-/* ---- a merge onto an item nothing defined is an ENGINE-ONLY stub, and now says so ----
+/* ---- a merge onto an item nothing defined ----
    The runtime finds no item, returns false (json-applier.js L688) and `applyOperations` throws that away (L301) —
-   a silent no-op. The engine records a stub instead, deliberately, because a merge onto nothing means a missing base
-   seed or schemas out of order. Unmarked, though, every consumer reads that stub as an element on the rendered page. */
-const stubRun = realRun(`{operation:"merge",name:"Ghost",values:{bindTo:"Name"}}`);
+   a silent no-op. The engine records an ENGINE-ONLY stub, flagged `engineOnlyStub`, because a merge onto nothing can
+   mean a missing base seed or schemas out of order. Once the fold is known it keeps the stub only when something
+   DEFINES the name (an insert, move, set, a child parented under it, an alias): otherwise the merge is a no-op, its
+   note is FIDELITY and the stub leaves the page. */
+const stubRun = realRun2(`{operation:"merge",name:"Ghost",values:{bindTo:"Name"}}`,
+  `{operation:"insert",name:"Kid",parentName:"Ghost",propertyName:"items",values:{bindTo:"Kid"}}`);
 const ghost = stubRun.items.find((i) => i.name === "Ghost");
-check("a merge-onto-missing stub is flagged `engineOnlyStub` and its warning states the runtime does nothing there — the stub is a diagnostic, not a claim about the page",
+check("a merge-onto-missing stub whose name a later child is parented under is flagged `engineOnlyStub`, stays CORRECTNESS and states the runtime does nothing there",
   ghost?.engineOnlyStub === true
-  && (stubRun.warnings || []).some((w) => w.name === "Ghost" && /runtime silently does nothing/.test(w.hint || "")),
+  && (stubRun.warnings || []).some((w) => w.name === "Ghost" && w.severity === "correctness" && /runtime silently does nothing/.test(w.hint || "")
+    && /referenced by B \(parentName, a later layer\)/.test(w.hint || "")),
   () => ({ ghost, warnings: (stubRun.warnings || []).map((w) => w.hint) }));
+const noOpMergeOps = [`{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7}}`,
+  `{operation:"merge",name:"Ghost",parentName:"Absent",propertyName:"items",values:{caption:"x"}}`];
+const noOpMerge = realRun2(...noOpMergeOps, fullSeed);
+const noOpMergeW = noOpMerge.warnings.find((w) => w.name === "Ghost");
+check("a merge of a name NOTHING in the fold defines is a FIDELITY note, and its stub leaves the page — no element, and the `parentName` it carried is no unresolved parent",
+  noOpMergeW?.severity === "fidelity" && /no effect in Classic unless the chain is incomplete/.test(noOpMergeW.hint)
+  && /JsonApplier\.merge. finds no item/.test(noOpMergeW.hint)
+  && !noOpMerge.items.some((i) => i.name === "Ghost") && !noOpMerge.unresolvedParents.includes("Absent")
+  && !noOpMerge.removed.some((r) => r.name === "Ghost"),
+  () => ({ warnings: noOpMerge.warnings, items: noOpMerge.items.map((i) => i.name), unresolvedParents: noOpMerge.unresolvedParents }));
+// Over NO seed, or a skeletal one, the same merge is most likely the missing base element: it stays a block and its
+// stub keeps the `parentName` it carried as an unresolved parent — the report a seedless section fold relies on.
+for (const [label, opts] of /** @type {[string, object][]} */ ([
+  ["no seed", {}],
+  ["a skeletal seed", { seedTemplate: [makeSchema("Seed", { entity: "X", methods: ["a"] })] }],
+])) {
+  const r = realRun2(...noOpMergeOps, opts);
+  const w = r.warnings.find((x) => x.name === "Ghost");
+  check(`over ${label} a merge of a name nothing defines stays CORRECTNESS and keeps its stub — the missing base element must still block`,
+    w?.severity === "correctness" && /may (lack|define) 'Ghost'/.test(w.hint) && r.items.some((i) => i.name === "Ghost" && i.engineOnlyStub)
+    && r.unresolvedParents.includes("Absent"), () => ({ warning: w, unresolvedParents: r.unresolvedParents }));
+}
+const mergeLaterInsert = realRun2(`{operation:"merge",name:"Late",values:{caption:"x"}}`,
+  `{operation:"insert",name:"Late",parentName:"Header",propertyName:"items",values:{bindTo:"Late"}}`);
+check("a merge of a name a LATER layer inserts stays CORRECTNESS and names that layer — the merge ran before its target existed (F1)",
+  mergeLaterInsert.warnings.some((w) => w.name === "Late" && w.severity === "correctness" && /referenced by B \(insert, a later layer\)/.test(w.hint)
+    && /schema order \(F1\)/.test(w.hint)),
+  () => mergeLaterInsert.warnings);
+const sameLayerMergeSeeded = mergeHierarchy([parseSchema(realBody([
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Ins"}}`,
+  `{operation:"merge",name:"Fld",values:{caption:"Resources.Strings.Merged"}}`].join(",")), "T")], fullSeed);
+check("the same-layer merge + insert pair is the restate idiom — FIDELITY, the merge's values do not reach the element",
+  sameLayerMergeSeeded.warnings.some((w) => w.op === "merge" && w.name === "Fld" && w.severity === "fidelity" && (w.hint || "").startsWith("defined by the same layer")
+    && /its values never reach the element/.test(w.hint)),
+  () => sameLayerMergeSeeded.warnings);
 check("an ordinary insert is NOT flagged as an engine-only stub — the marker has to distinguish, not decorate everything",
   realRun(`{operation:"insert",name:"Real",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`)
     .items.find((i) => i.name === "Real")?.engineOnlyStub === false,
@@ -997,11 +1096,13 @@ check("a still-unmodelled remove key is a FIDELITY warning (advisory), not a cor
   () => unRun.warnings);
 
 // The CORRECTNESS half — each of the five producers, asserted by severity rather than by trust.
-const ghostMerge = mergeHierarchy([ps("G", [{ operation: "merge", name: "Ghost", values: { caption: "x" } }])]);
+// the merge is kept a correctness one by a child the same layer places under it: the name is defined somewhere
+const ghostMerge = mergeHierarchy([ps("G", [{ operation: "merge", name: "Ghost", values: { caption: "x" } },
+  { operation: "insert", name: "Kid", parentName: "Ghost", propertyName: "items", values: { bindTo: "Kid" } }])]);
 const ghostMove = mergeHierarchy([ps("G", [{ operation: "move", name: "Ghost", parentName: "Header" }])]);
 const ghostRemove = mergeHierarchy([ps("G", [{ operation: "remove", name: "Ghost" }])]);
 const ghostSet = mergeHierarchy([ps("G", [{ operation: "set", name: "Ghost", values: { bindTo: "Ghost" } }])]);
-check("merge/move/set onto an item no lower schema defined are all CORRECTNESS warnings (the gate must still block)",
+check("merge (of a name something defines)/move/set onto an item no lower schema defined are all CORRECTNESS warnings (the gate must still block)",
   [ghostMerge, ghostMove, ghostSet].every((r) => r.warnings.length === 1 && r.warnings[0].severity === "correctness"),
   () => [ghostMerge, ghostMove, ghostSet].map((r) => r.warnings.map((w) => w.severity)));
 // `remove` is not on that list: a remove of a name nothing in the fold ever defines has no effect in Classic,

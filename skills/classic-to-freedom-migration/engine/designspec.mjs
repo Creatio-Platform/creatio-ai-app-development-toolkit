@@ -335,13 +335,17 @@ const WORKPLACE_HOWTO = "Resolve the section's `SysModule.Id` FIRST (nothing els
   + " `{ \"workplaces\": <row count>, \"names\": [...] }` — the COUNT of the rows that came back, not a flag."
   + " NOT `find-app`: it reports the app's own schemas and is blind to a section registered over a BORROWED"
   + " entity, which it then reports as absent.";
-const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
+// `SysModuleReport` describes the STANDARD print menu only. A client layer can bind a print button's menu to a
+// collection its own code fills (`controlConfig.menu.items`); that menu is then not read from `SysModuleReport` at all,
+// and the step-5.1 behaviour card of the method filling the collection is what describes it.
+const PRINT_MENU_REBOUND = "Exception: when a step-5.1 behaviour card says a client layer binds a print button's menu to a collection its own code fills, that card decides the button — `SysModuleReport` does not describe that menu, and finding no rows there does not drop it.";
+const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action. " + PRINT_MENU_REBOUND;
 // The standard card actions an on-stand signal decides, from the mapping table. Matched by exact name: a custom
 // action whose name merely contains "print" or "process" (`printContract`) is its own deliverable, and `RunProcess`
 // (a process launched from a page method) is settled by its `process-launch` item, never by the section's menu.
 const CARD_ACTION_SIGNALS = cardActionSignals();
 const NOTHING_BEHIND = {
-  printables: "no printables/reports for this section (checked `SysModuleReport` on-stand)",
+  printables: "no printables/reports for this section (checked `SysModuleReport` on-stand). " + PRINT_MENU_REBOUND,
   processes: "no process connected to this section (checked `ProcessInModules` on-stand)",
 };
 // The one verdict a signal-decided card action gets, read by its Layout cell and by its deliverable status:
