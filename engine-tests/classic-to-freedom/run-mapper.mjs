@@ -7623,6 +7623,30 @@ check("detail add-mechanism: each raised as a decision + rendered in the plan (c
   dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
   && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
   () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+// OOTB selection-window wrappers the + calls directly: `PICUtilities.openProductLookupToLink` and
+// `LookupMultiAddMixin.openLookupWithMultiSelect`. Each is a lookup add, with the same decision row.
+{
+  const wrapperRun = (name, addRecord) => runMigration({
+    entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"${name}",entitySchemaName:"WChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { [name]: { body: `define("${name}",[],function(){return{entitySchemaName:"WChild",methods:{addRecord:function(){${addRecord}}}};});`, editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS,
+  });
+  for (const [name, call] of [
+    ["ProductLinkDetail", `PICUtilities.openProductLookupToLink(this, "Product", this.onProductsSelected);`],
+    ["MultiSelectDetail", `this.openLookupWithMultiSelect(true);`],
+  ]) {
+    const run = wrapperRun(name, call);
+    const det = run.changeSet.details.find((d) => d.detailSchema === name);
+    check(`detail add-mechanism: addRecord → ${call.split("(")[0]} is a lookup add with a detail-add-mechanism decision`,
+      det?.addMode?.lookup === true
+      && run.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism" && n.item.startsWith(name))
+      && /ADDS via a lookup/.test(run.plan),
+      () => ({ addMode: det?.addMode, decisions: run.changeSet.needsDecision.map((n) => n.kind) }));
+  }
+  check("detail add-mechanism: a longer identifier containing a wrapper name is NOT a lookup signal (word-bounded)",
+    detectAddMode(`define("W",[],function(){return{methods:{addRecord:function(){this.openLookupWithMultiSelectX();this.myopenProductLookupToLink();}}};});`) === null);
+}
 // review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
 // (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
 // "attach existing" grid button, fixes the list filters) is NOW detected. It was invisible to detectAddMode before

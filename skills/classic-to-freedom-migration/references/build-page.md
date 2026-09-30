@@ -268,7 +268,8 @@ rules. The plan-phase half stays in `SKILL.md`.
 - **Detail add flow ≠ plain related list.** Many details are NOT a default add-new list: they ADD
   via a **lookup** (pick existing), call a backend **service** to link/insert, and/or are an
   **inline-editable grid**. The engine detects this from the detail body
-  (`openLookup`/`addFromLookup`, `serviceName`/`callService`,
+  (`openLookup`/`addFromLookup`/`openLookupWithMultiSelect`/`openProductLookupToLink`,
+  `serviceName`/`callService`,
   `ConfigurationGrid`/`getCellControlsConfig`) and raises a `detail-add-mechanism` ⚠ naming the
   lookup/service/editable-columns. An **editable-grid** detail is emitted as an **`Editable list`**
   (target `crt.DataGrid` + `features.editable.enable`, carrying the editable columns) — not a
