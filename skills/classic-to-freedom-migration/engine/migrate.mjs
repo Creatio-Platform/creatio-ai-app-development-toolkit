@@ -3372,17 +3372,18 @@ function refusalCause(set, dir) {
   return "the cut does not resolve against this plan";
 }
 
+// Remedies that do not depend on the refused set.
+const FIXED_REMEDIES = {
+  [REFUSED_STATUS]: " Add the decision to decisions.md, or correct the entry, then re-run.",
+  [REFUSED_RETIRED]: " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
+    + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row.",
+  [REFUSED_CUT]: " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
+    + " produced it.",
+};
+
 function refusalRemedy(set) {
-  if (set.refusal === REFUSED_STATUS) return " Add the decision to decisions.md, or correct the entry, then re-run.";
+  if (Object.hasOwn(FIXED_REMEDIES, set.refusal)) return FIXED_REMEDIES[set.refusal];
   if (set.refusal === REFUSED_DECISIONS) return decisionsRemedy(set);
-  if (set.refusal === REFUSED_RETIRED) {
-    return " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
-      + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row.";
-  }
-  if (set.refusal === REFUSED_CUT) {
-    return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
-      + " produced it.";
-  }
   if (set.refusal === REFUSED_COVERAGE) {
     // The engine picks no owner: which item a row belongs to is the judgement the split records. What FALLING
     // BACK reaches depends on what is still in play — dropping a handed-in flag reads the folder's own frozen

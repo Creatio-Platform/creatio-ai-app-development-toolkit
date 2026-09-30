@@ -8516,7 +8516,7 @@ const locateRow = (dir, label) => {
       check("T1: the refusal names the D<N> and its title, a valid `<page>#<id>`, the `deliverableStatus` entry shape and the `decisionsWithoutDeliverable` marker",
         () => /D5 — Init handler not carried over/.test(r.stdout) && r.stdout.includes("main#method:init")
           && /manifest\.deliverableStatus/.test(r.stdout) && /"status": "wont-do", "decision": "D<N>"/.test(r.stdout)
-          && /manifest\.decisionsWithoutDeliverable/.test(r.stdout) && !OTHERS.some((d) => new RegExp(`\\b${d} — `).test(r.stdout)),
+          && /manifest\.decisionsWithoutDeliverable/.test(r.stdout) && !OTHERS.some((d) => new RegExp(String.raw`\b${d} — `).test(r.stdout)),
         () => r.stdout.slice(0, 1500));
       fs.rmSync(f.base, { recursive: true, force: true });
     }
