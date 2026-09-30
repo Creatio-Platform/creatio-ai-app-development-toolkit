@@ -2192,6 +2192,38 @@ class ConsentTelemetryHomeFallbackTests(unittest.TestCase):
             home.replace("\\", "/"), "C:/Users/dev/AppData/Local/creatio/clio/telemetry")
 
 
+class ConsentBomTests(unittest.TestCase):
+    """consentGranted() strips a leading UTF-8 BOM before parsing. Windows editors and
+    PowerShell's `Out-File` write one, and a strip that silently stopped matching would make
+    JSON.parse throw and read a granted consent as not granted — telemetry would go quiet
+    while every BOM-less test stayed green.
+    """
+
+    def _consent_granted(self, raw: str):
+        if not NODE:
+            self.skipTest("node not available")
+        tmp_root = tempfile.mkdtemp(prefix="caadt-consent-bom-test-")
+        Path(tmp_root, "consent.json").write_text(raw, encoding="utf-8")
+        module = (ROOT / "hooks" / "telemetry" / "consent.mjs").as_uri()
+        script = Path(tmp_root) / "probe.mjs"
+        script.write_text(
+            f"const {{ consentGranted }} = await import({json.dumps(module)});\n"
+            "process.stdout.write(JSON.stringify(consentGranted()));\n",
+            encoding="utf-8",
+        )
+        env = {**_base_env(), "CLIO_TELEMETRY_HOME": tmp_root}
+        result = subprocess.run([NODE, str(script)], capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(result.stderr, "", result.stderr)
+        return json.loads(result.stdout)
+
+    def test_a_bom_prefixed_granted_consent_is_granted(self):
+        self.assertIs(self._consent_granted("﻿" + json.dumps({"telemetry_consent": "granted"})), True)
+
+    def test_a_bom_prefixed_denied_consent_stays_denied(self):
+        # Control arm: the strip must not turn every BOM-prefixed file into a grant.
+        self.assertIs(self._consent_granted("﻿" + json.dumps({"telemetry_consent": "denied"})), False)
+
+
 class CursorTelemetryHookWiringTests(unittest.TestCase):
     """Cursor is the one host whose hook config the installer can write itself."""
 
