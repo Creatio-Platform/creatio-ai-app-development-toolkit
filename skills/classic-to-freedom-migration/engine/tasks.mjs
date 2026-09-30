@@ -2781,6 +2781,12 @@ export function resolveFrozenMode(dir, opts = {}) {
 export function stampedModes(dir) {
   return [...new Set(readExisting(dir).map((e) => e.meta?.reconcileMode).filter((m) => RECONCILE_MODES.has(m)))];
 }
+// Every DISTINCT non-empty reconcileMode value stamped across the folder's task files, valid OR not — so the CLI can
+// refuse an UNRECOGNISED stamp (e.g. `Classic-Layout`) when the dotfile is dropped, rather than silently reading it as
+// overlay the way `stampedModes` (which drops unrecognised values) would. A corrupted dotfile is refused the same way.
+export function rawStampedValues(dir) {
+  return [...new Set(readExisting(dir).map((e) => e.meta?.reconcileMode).filter((m) => typeof m === "string" && m.trim()))];
+}
 // The reconcile mode stamped on the folder's existing task files, or null — the source for restoring a lost `.reconcile-mode`.
 // A single distinct stamp restores; zero or an ambiguous DISAGREEMENT returns null so the caller treats it like a corrupted
 // dotfile (refused / unstamped) rather than trusting whichever file happens to scan first.

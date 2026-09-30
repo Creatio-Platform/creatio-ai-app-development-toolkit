@@ -5074,6 +5074,35 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const vMix = cliTasks(["--tasks", dCliMix, "--verify", "--built", bfMix], RECON);
     check("verify on a dropped-dotfile folder with DISAGREEING stamps is refused (EXTRA gate not silently overlaid)",
       () => vMix.status === 1 && /DISAGREEING/.test(vMix.stderr || vMix.stdout || ""), () => vMix.stderr);
+    // BOTH index.md AND .reconcile-mode gone, task files still stamped: the guard keys off the task files (not the
+    // regenerable index), so a no-flag re-slice restores the mode from the stamp rather than slipping through as a fresh cut.
+    const dCliNoIdx = path.join(tmp("mode_lost_cli_noindex"), "bt");
+    cliTasks(["--tasks", dCliNoIdx, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliNoIdx);
+    fs.rmSync(path.join(dCliNoIdx, TASK_INDEX_FILE), { force: true });
+    const rNoIdx = cliTasks(["--tasks", dCliNoIdx], RECON);
+    check("CLI: a no-flag re-slice with BOTH index.md and .reconcile-mode gone restores classic-layout from the task stamps (not a silent fresh-cut overlay)",
+      () => rNoIdx.status === 0 && readFrozenMode(dCliNoIdx) === RECONCILE_MODE_CLASSIC, () => ({ status: rNoIdx.status, frozen: readFrozenMode(dCliNoIdx), err: rNoIdx.stderr }));
+    // An UNRECOGNISED stamp with the dotfile dropped is refused the same way a corrupted dotfile is (not read as overlay).
+    const dCliBad = path.join(tmp("mode_lost_cli_badstamp"), "bt");
+    cliTasks(["--tasks", dCliBad, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliBad);
+    for (const t of readTaskDir(dCliBad)) {
+      const p = path.join(dCliBad, t.file);
+      fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: Classic-Layout"));
+    }
+    const rBad = cliTasks(["--tasks", dCliBad], RECON);
+    check("CLI: a dropped-dotfile folder whose task stamps hold an UNRECOGNISED value is refused (not read as overlay)",
+      () => rBad.status === 1 && /UNRECOGNISED/.test(rBad.stderr || rBad.stdout || ""), () => rBad.stderr);
+    // --decide on a mixed-stamp dropped-dotfile folder is refused too (the guard runs on every --tasks entry path).
+    const dCliDecMix = path.join(tmp("mode_lost_cli_decide_mixed"), "bt");
+    cliTasks(["--tasks", dCliDecMix, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliDecMix);
+    const engDecMix = readTaskDir(dCliDecMix).find((t) => t.origin === "engine");
+    fs.writeFileSync(path.join(dCliDecMix, engDecMix.file), fs.readFileSync(path.join(dCliDecMix, engDecMix.file), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    const rDecMix = cliTasks(["--tasks", dCliDecMix, "--decide", "D13", "--wont-do", "--pages", "main"], RECON);
+    check("CLI: --decide on a dropped-dotfile folder with DISAGREEING stamps is refused (guard runs on the --decide entry path)",
+      () => rDecMix.status === 1 && /DISAGREEING/.test(rDecMix.stderr || rDecMix.stdout || ""), () => rDecMix.stderr);
   }
   // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
   {

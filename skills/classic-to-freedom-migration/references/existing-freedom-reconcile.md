@@ -87,9 +87,9 @@ The rule, **in both `overlay` and `classic-layout`**:
   settings. Do NOT move, re-insert, reorder, restyle or remove it. `classic-layout` does NOT re-lay it
   to its Classic slot — it is a standard component, not a plan field/detail.
 - **Its Classic counterpart is NOT migrated.** No insert, no related list, no tab and no tab-order
-  entry taken from the Classic element. The plan/task row for it closes **`n-a — standard Freedom
-  component kept`**. This is a documented disposition, not a user decision, and nothing is rebuilt
-  beside the kept component.
+  entry taken from the Classic element. Close the plan/task row for it with `--decide <rowKey> --wont-do`
+  (reason: `standard Freedom component kept — counterpart not migrated`) — the engine records the
+  decision and `--verify --tasks` reads it back. Nothing is rebuilt beside the kept component.
 - **Absent on the Freedom page → migrate the Classic element as usual**, placed per the mode.
 - **Contents stay with the component.** A plan field the kept component already renders (e.g. Account /
   Contact inside Connected to) is NOT inserted a second time elsewhere; it becomes a `decisions.md`
@@ -185,8 +185,9 @@ Handlers, business rules, and auto-fills are ported **exactly as in a normal mig
   always **kept**; a removal you cannot tie to the plan is a decision, not a silent act.
 - **Both — keep the standard Freedom components.** Feed, Attachments, Connected to and Timeline the page
   already ships are kept as-is, and their Classic counterparts (`ESNTab` / `FileDetailV2` /
-  `EntityConnectionsDetailV2` / `TimelineTab`) are NOT migrated; that row closes `n-a — standard Freedom
-  component kept`. Only when the component is ABSENT on the Freedom page is the Classic element migrated.
+  `EntityConnectionsDetailV2` / `TimelineTab`) are NOT migrated; close that row with `--decide <rowKey>
+  --wont-do` (reason: `standard Freedom component kept — counterpart not migrated`). Only when the
+  component is ABSENT on the Freedom page is the Classic element migrated.
 - **Both — no duplicates.** Always target the existing Freedom section; never fork a second section for
   the same entity. `validate-page` before saving. Every removal must trace to evidence (a Classic delta
   op in Mode 1, the plan's field/detail set in Mode 2); if you cannot show it, treat it as a manual

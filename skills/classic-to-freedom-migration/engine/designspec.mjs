@@ -3156,10 +3156,14 @@ function keptConnectionFieldNames(ctx) {
 // The `classic-extras` row — ❌ EXTRA listing base field controls to remove, or ✅ when there are none. A field CONTROL
 // the maximum matching could not assign to any expected name (`opToName[oi] < 0`) is a base field the mode was supposed
 // to REMOVE — unless it is a lookup inside a KEPT "Connected to" group (exempt by element name OR bound column).
+// `crt.ImageInput` is NOT in this removal set: a plan image binds through `values.value` (not the `control` the Fields
+// row keys on), so its name is never in `vk.names` here — flagging it would report a correctly built plan image as EXTRA.
+// Image presence is gated by the separate image row; this row is text/lookup/date/checkbox/number controls only.
+const EXTRA_EXEMPT_TYPE = "crt.ImageInput";
 function classicLayoutExtraRow(identified, opToName, ctx) {
   const kept = keptConnectionFieldNames(ctx);
   const extras = identified.filter((o, oi) => opToName[oi] < 0 && LAYOUT_FIELD_RE.test(o.type || "")
-    && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
+    && o.type !== EXTRA_EXEMPT_TYPE && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
   if (!extras.length) return ["✅ Done", "no base field control outside the plan", "ok"];
   const ov = extras.length > 8 ? "…" : "";
   return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}`, "missing"];

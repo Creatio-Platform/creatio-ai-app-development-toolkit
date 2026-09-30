@@ -523,18 +523,22 @@ class ReconcileModeDocTests(unittest.TestCase):
 
     def test_standard_components_kept_not_migrated(self):
         # Feed / Attachments / Connected to / Timeline are standard Freedom components: a reconcile keeps
-        # them and does NOT migrate their Classic counterpart, in BOTH modes. The counterpart row closes
-        # as a documented disposition (n-a), not a user decision; only an ABSENT component is migrated.
+        # them and does NOT migrate their Classic counterpart, in BOTH modes. The counterpart row is closed
+        # with `--decide ... --wont-do`, the closure the engine recognises for an agent; only an ABSENT
+        # component is migrated.
         reconcile = read_text(RECONCILE_DOC)
         missing = missing_markers(reconcile, [
             "Feed", "Attachments", "Connected to", "Timeline",
             "KEEP it as-is",
             "Classic counterpart is NOT migrated",
-            "n-a — standard Freedom component kept",
+            "--wont-do",
+            "standard Freedom component kept",
             "Absent on the Freedom page → migrate",
             "both `overlay` and `classic-layout`",
         ])
         self.assertFalse(missing, f"the standard-component rule must pin these; missing {missing}")
+        # The `n-a` close token is not a closure the engine accepts, so it must not appear as an instruction.
+        self.assertNotIn("n-a — standard Freedom component kept", reconcile)
         # The build procedure and the mode gate carry the same rule, not just the reference doc.
         self.assertIn("standard Freedom component", flat(read_text(BUILD_EXEC_DOC)))
         gate = paragraph(read_text(MIGRATION_SKILL), RECONCILE_MODE_GATE_HEAD)

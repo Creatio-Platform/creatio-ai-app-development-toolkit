@@ -12115,6 +12115,14 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
   const builtClean = { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" }] } } } };
   check("verify: classic-layout with EXACTLY the plan's fields raises no EXTRA",
     () => !/❌ EXTRA/.test(renderVerify(rn, { planMeta: reconPm, reconcileMode: "classic-layout" }, builtClean).markdown));
+  // A built crt.ImageInput is NOT flagged EXTRA: a plan image binds via `values.value`, so its element name is never in
+  // the field name set — flagging it would report a correctly built plan image as EXTRA. Image presence has its own row.
+  const builtImg = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" }, { name: "PhotoImage", type: "crt.ImageInput" }] } } } };
+  const vImg = renderVerify(rn, { planMeta: reconPm, reconcileMode: "classic-layout" }, builtImg);
+  check("verify: a built crt.ImageInput is NOT flagged EXTRA on classic-layout (plan images bind via values.value, not control)",
+    () => !/PhotoImage/.test(vImg.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || ""),
+    () => vImg.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
 }
 
 /* the classic-layout EXTRA gate does NOT flag a lookup that lives inside a KEPT "Connected to" connection group
