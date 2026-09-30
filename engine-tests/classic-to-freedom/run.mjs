@@ -691,7 +691,7 @@ const sameLayerMergeSeeded = mergeHierarchy([parseSchema(realBody([
   `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Ins"}}`,
   `{operation:"merge",name:"Fld",values:{caption:"Resources.Strings.Merged"}}`].join(",")), "T")], fullSeed);
 check("the same-layer merge + insert pair is the restate idiom — FIDELITY, the merge's values do not reach the element",
-  sameLayerMergeSeeded.warnings.some((w) => w.op === "merge" && w.name === "Fld" && w.severity === "fidelity" && /^defined by the same layer/.test(w.hint)
+  sameLayerMergeSeeded.warnings.some((w) => w.op === "merge" && w.name === "Fld" && w.severity === "fidelity" && (w.hint || "").startsWith("defined by the same layer")
     && /its values never reach the element/.test(w.hint)),
   () => sameLayerMergeSeeded.warnings);
 check("an ordinary insert is NOT flagged as an engine-only stub — the marker has to distinguish, not decorate everything",
