@@ -2171,11 +2171,11 @@ function cultureMapOf(v) {
   return out;
 }
 // The page strings the mapper reads: `resources` (key → en-US text) and `resourceStrings` (key → every culture, or
-// null). A key only `resourceStrings` carries gets its en-US text in `resources`; a key in both keeps `resources`'.
+// null). A key `resourceStrings` carries takes its en-US text from them, so the text and its cultures share one source.
 export function pageStringsOf(manifest) {
   const resourceStrings = cultureMapOf(manifest?.resourceStrings);
   const derived = Object.fromEntries(Object.entries(resourceStrings || {}).map(([k, c]) => [k, defaultCultureText(c)]));
-  return { resources: { ...derived, ...plainObject(manifest?.resources) }, resourceStrings };
+  return { resources: { ...plainObject(manifest?.resources), ...derived }, resourceStrings };
 }
 // A sub-page's texts in the root result: the ChangeSet's `resources`, `resourceCultures` and `resourceSources`.
 function pageTextsOf(cs) {

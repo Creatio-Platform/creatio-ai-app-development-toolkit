@@ -11758,10 +11758,18 @@ const n2TreeManifest = (titleA, titleB) => ({
       && detailOf(coTextsOld.changeSet, "InvoiceDetailV2")?.caption === "Contract invoices",
     () => coTextsOld.changeSet.needsDecision.filter((n) => /detail-(caption|text)/.test(n.kind)).map((n) => n.item));
   // R9 — list columns bound to an entity column carry no page caption key; the platform titles them.
-  check("texts R9: every registered key comes from a page string or a detail string — no key for an entity-bound list column",
-    () => Object.entries(tcs.resourceSources).every(([k, src]) => /^page · /.test(src) || new RegExp("^\\w+ · \\w+$").test(src))
-      && !Object.keys(tcs.resources).some((k) => (tcs.details || []).some((d) => (d.columns || []).some((c) => k === c || k === c + "Caption"))),
-    () => tcs.resourceSources);
+  {
+    const m = coTextsManifest();
+    m.detailSchemas.ContractProductDetailV2 = { ...m.detailSchemas.ContractProductDetailV2, body: `define("ContractProductDetailV2",[],function(){return{entitySchemaName:"OrderProduct",diff:[{operation:"insert",name:"DataGrid",values:{}},{operation:"insert",name:"ProductCol",parentName:"DataGrid",propertyName:"items",values:{bindTo:"Product"}},{operation:"insert",name:"QtyCol",parentName:"DataGrid",propertyName:"items",values:{bindTo:"Quantity"}}]};});` };
+    const cs = runMigration(m, { baseDir: FIX }).changeSet;
+    const cols = detailOf(cs, "ContractProductDetailV2")?.columns || [];
+    const colKey = (k) => cols.some((c) => [c, c + "Caption"].some((n) => k === n || k.endsWith("_" + n)));
+    check("texts R9: every registered key comes from a page string or a detail string — no key for an entity-bound list column",
+      () => cols.length === 2 && cols.includes("Product") && cols.includes("Quantity")
+        && Object.entries(cs.resourceSources).every(([, src]) => /^page · /.test(src) || /^\w+ · \w+$/.test(src))
+        && !Object.keys(cs.resources).some(colKey),
+      () => ({ cols, keys: Object.keys(cs.resources) }));
+  }
   // T7 / R10 — verification compares the built text with the Classic value in every culture.
   const builtWith = (mutate) => {
     const strings = JSON.parse(JSON.stringify(tcs.resourceCultures));
@@ -11791,6 +11799,78 @@ const n2TreeManifest = (titleA, titleB) => ({
         { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } });
       return (v.markdown.split("\n").find((l) => l.includes("Form page")) || "").includes("✅");
     });
+  check("texts T7: a Classic key the built page does not carry is absent in every culture and leaves the row unverified",
+    () => {
+      const row = formRowOf(builtWith((s) => { delete s.Document_Caption; }));
+      return row.includes("⚠") && !row.includes("✅") && row.includes("Document_Captionˋ en-US") && row.includes("Document_Captionˋ fr-FR");
+    },
+    () => formRowOf(builtWith((s) => { delete s.Document_Caption; })));
+  check("texts T7: a built page read without `resources` leaves a row with Classic texts unverified, not done",
+    () => {
+      const row = formRowOf({ pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      return row.includes("⚠") && !row.includes("✅") && row.includes("carries no ˋresourcesˋ");
+    },
+    () => formRowOf({ pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } }));
+  // T4 / R6 — a detail text that cannot be read is a Confirm item the migration result never reports as done.
+  check("texts T4: an unreadable detail text is listed in ⚠ Confirm as `detail-text`, and the migration result does not report it as done",
+    () => {
+      const planHit = /\*\*\[detail-text\]\*\* DocumentDetailV2 · SelectDocumentMessage/.test(coTextsOld.plan);
+      const v = renderVerify(coTextsOld, checklistOpts(coTextsManifest({ withCultures: false })), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      const line = v.markdown.split("\n").find((l) => l.includes("[detail-text] DocumentDetailV2 · SelectDocumentMessage")) || "";
+      return planHit && line !== "" && !line.includes("✅");
+    },
+    () => coTextsOld.plan.split("\n").filter((l) => /detail-text/.test(l)));
+  // A detail string inherited from a base schema arrives in the detail's `resourceStrings` and resolves like its own.
+  check("texts: a detail text the body reads from an inherited string resolves from the detail's strings — no `detail-text` Confirm",
+    () => {
+      const m = coTextsManifest();
+      const body = DOC_DETAIL_BODY.replace("this.callParent(arguments);", "this.callParent(arguments);\n        this.set(\"AddCaption\", this.get(\"Resources.Strings.AddButtonCaption\"));");
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, body };
+      const cs = runMigration(m, { baseDir: FIX }).changeSet;
+      return cs.resources.Document_AddButtonCaption === "Add" && cs.resourceCultures.Document_AddButtonCaption?.["fr-FR"] === "Ajouter"
+        && !cs.needsDecision.some((n) => n.kind === "detail-text");
+    });
+  // One source per key: a key `resourceStrings` carries takes its en-US text from them, not from the flat `resources`.
+  check("texts: a key whose flat en-US text differs from its `resourceStrings` en-US takes both from `resourceStrings`, and a built page with those texts closes the row",
+    () => {
+      const m = coTextsManifest();
+      m.resources = { ...m.resources, GeneralInfoTabCaption: "General info (flat)" };
+      const run = runMigration(m, { baseDir: FIX });
+      const strings = JSON.parse(JSON.stringify(run.changeSet.resourceCultures));
+      const row = renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } })
+        .markdown.split("\n").find((l) => l.includes("Form page")) || "";
+      return run.changeSet.resources.GeneralInfoTabCaption === "General information"
+        && run.changeSet.resourceCultures.GeneralInfoTabCaption["en-US"] === "General information" && row.includes("✅");
+    });
+  // A folded child page and a mini page check their own texts in every culture, like the typed page.
+  {
+    const m = coTextsManifest();
+    m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, editPage: "DocumentPageV2" };
+    m.childPageSchemas = { DocumentPageV2: { entity: "Document", seed: m.seed, schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+    m.addRecordMiniPage = { schema: "ContractMiniPage" };
+    m.miniPageSchemas = { ContractMiniPage: { entity: "Contract", seed: m.seed,
+      schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY.replace('"DocumentPageV2"', '"ContractMiniPage"').replace('"Document"', '"Contract"') }],
+      resourceStrings: { DocTabCaption: { "en-US": "Main", "fr-FR": "Principal" } } } };
+    m.section = [{ pkg: "CoreContracts", body: `define("ContractSectionV2",[],function(){return{entitySchemaName:"Contract",methods:{},diff:[]};});` }];
+    const run = runMigration(m, { baseDir: FIX });
+    const childKey = run.childPages.find((c) => c.resolvedFrom === "DocumentPageV2")?.pageKey;
+    const miniKey = run.miniPage?.pageKey;
+    const subPage = (en, fr) => ({ viewConfig: [{ name: "DocTab", type: "crt.TabContainer", caption: "#ResourceString(DocTabCaption)#",
+      items: [{ name: "Number", type: "crt.Input", control: "$Number" }] }], resources: { strings: { DocTabCaption: { "en-US": en, "fr-FR": fr } } } });
+    const subVerify = (childFr, miniFr) => renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] },
+      [childKey]: subPage("Document", childFr), [miniKey]: subPage("Main", miniFr) } }).rows;
+    const formOutcome = (rows, key) => rows.find((r) => r.pageKey === key && r.deliverable.startsWith("Form page"));
+    for (const [label, key, wrong] of [["folded child", childKey, (fr) => subVerify(fr, "Principal")], ["mini", miniKey, (fr) => subVerify("Pièce", fr)]]) {
+      check(`texts ${label}: a ${label} page whose fr-FR text differs from Classic fails its own form-page row, once; a matching one closes it`,
+        () => {
+          const bad = wrong("Autre");
+          return !!key && formOutcome(bad, key)?.outcome === "missing" && formOutcome(bad, key).evidence.includes("fr-FR")
+            && bad.filter((r) => String(r.evidence).includes("\"Autre\"")).length === 1
+            && formOutcome(subVerify("Pièce", "Principal"), key)?.outcome === "ok";
+        },
+        () => ({ key, bad: formOutcome(wrong("Autre"), key), right: formOutcome(subVerify("Pièce", "Principal"), key) }));
+    }
+  }
 }
 
 // A typed page is a page like the form page: its own form-page row carries its texts and is checked against that

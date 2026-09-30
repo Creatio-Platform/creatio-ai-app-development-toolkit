@@ -4645,15 +4645,14 @@ function builtStringsOf(page) {
   }
   return out;
 }
-// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is left to
-// the row's own check.
+// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is absent
+// in every culture; a payload with no `resources` is `unread`.
 function textMismatches(texts, ctx) {
   const built = builtStringsOf(ctx.page);
   const differ = [], absent = [];
-  if (!built) return { differ, absent };
+  if (!built) return { differ, absent, unread: true };
   for (const t of texts || []) {
-    const got = built[t.key];
-    if (!got) continue;
+    const got = built[t.key] || {};
     for (const [culture, want] of Object.entries(t.cultures || {})) {
       if (typeof got[culture] !== "string") absent.push(`\`${t.key}\` ${culture}`);
       else if (got[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${got[culture]}" ≠ Classic "${want}"`);
@@ -4662,11 +4661,13 @@ function textMismatches(texts, ctx) {
   return { differ, absent };
 }
 // A text that differs from Classic in any culture fails the row; a Classic culture the built page does not carry
-// leaves a passing row unverified. Rows already MISSING or not machine-checked keep their verdict.
+// leaves a passing row unverified, and so does a built page read without its strings. Rows already MISSING or not
+// machine-checked keep their verdict.
 function withTextCheck(verdict, vk, ctx) {
   const [, ev, outcome] = verdict;
   if (!vk?.texts?.length || (outcome !== "ok" && outcome !== "unverified")) return verdict;
-  const { differ, absent } = textMismatches(vk.texts, ctx);
+  const { differ, absent, unread } = textMismatches(vk.texts, ctx);
+  if (unread && outcome === "ok") return ["⚠ verify", `${ev}; built page carries no \`resources\` to compare ${vk.texts.length} Classic text(s) against`, "unverified", ...verdict.slice(3)];
   if (differ.length) return ["❌ MISSING", `${ev}; built text differs from Classic: ${differ.join("; ")}`, "missing", ...verdict.slice(3)];
   if (absent.length && outcome === "ok") return ["⚠ verify", `${ev}; built page has no text in ${absent.join(", ")}`, "unverified", ...verdict.slice(3)];
   return verdict;
