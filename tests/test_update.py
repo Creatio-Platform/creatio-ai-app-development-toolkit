@@ -25,6 +25,13 @@ def load_update():
     return mod
 
 
+def load_install():
+    spec = importlib.util.spec_from_file_location("caadt_install_for_update", ROOT / "installer" / "install.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _make_release_zip(path: Path, version: str) -> None:
     base = f"creatio-ai-app-development-toolkit-{version}"
     with zipfile.ZipFile(path, "w") as archive:
@@ -231,7 +238,7 @@ class UpdateAgentsTests(unittest.TestCase):
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=record):
             updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
 
-        self.assertEqual((updated, failed), (["claude"], []))
+        self.assertEqual((updated, list(failed)), (["claude"], []))
         self.assertEqual(
             calls,
             [
@@ -252,7 +259,7 @@ class UpdateAgentsTests(unittest.TestCase):
                 ["cursor"], fresh_root=self.fresh_root, silent=True
             )
 
-        self.assertEqual((updated, failed), (["cursor"], []))
+        self.assertEqual((updated, list(failed)), (["cursor"], []))
         self.assertEqual(len(calls), 1)
         install_script = str(self.fresh_root / "installer" / "install.py")
         self.assertEqual(calls[0][1], install_script)
@@ -264,7 +271,7 @@ class UpdateAgentsTests(unittest.TestCase):
     def test_cursor_without_source_is_failure(self):
         with patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
             updated, failed = self.upd.update_agents(["cursor"], fresh_root=None, silent=True)
-        self.assertEqual((updated, failed), ([], ["cursor"]))
+        self.assertEqual((updated, list(failed)), ([], ["cursor"]))
         run.assert_not_called()
 
     def test_codex_delegates_to_install_py_reinstall(self):
@@ -280,14 +287,14 @@ class UpdateAgentsTests(unittest.TestCase):
         with patch.object(self.upd.subprocess, "run", side_effect=record):
             updated, failed = self.upd.update_agents(["codex"], fresh_root=self.fresh_root, silent=True)
 
-        self.assertEqual((updated, failed), (["codex"], []))
+        self.assertEqual((updated, list(failed)), (["codex"], []))
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1:], [str(self.fresh_root / "installer" / "install.py"), "--target", "codex"])
 
     def test_codex_without_source_is_failure(self):
         with patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
             updated, failed = self.upd.update_agents(["codex"], fresh_root=None, silent=True)
-        self.assertEqual((updated, failed), ([], ["codex"]))
+        self.assertEqual((updated, list(failed)), ([], ["codex"]))
         run.assert_not_called()
 
     def test_updates_exactly_the_targets_handed(self):
@@ -311,7 +318,7 @@ class UpdateAgentsTests(unittest.TestCase):
         ):
             updated, failed = self.upd.update_agents(["copilot", "claude"], silent=True, home=self.home)
         self.assertEqual(updated, ["claude"])
-        self.assertEqual(failed, ["copilot"])
+        self.assertEqual(list(failed), ["copilot"])
 
     def test_step_passes_timeout_and_blocks_stdin(self):
         seen: dict = {}
@@ -334,7 +341,7 @@ class UpdateAgentsTests(unittest.TestCase):
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=side):
             updated, failed = self.upd.update_agents(["copilot"], silent=True)
-        self.assertEqual((updated, failed), ([], ["copilot"]))
+        self.assertEqual((updated, list(failed)), ([], ["copilot"]))
 
     def test_resolver_failure_recorded(self):
         # CLI not on PATH → resolve raises RuntimeError → that agent fails.
@@ -342,7 +349,7 @@ class UpdateAgentsTests(unittest.TestCase):
             self.upd.agent_cli, "resolve_claude_command", side_effect=RuntimeError("not in PATH")
         ):
             updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
-        self.assertEqual((updated, failed), ([], ["claude"]))
+        self.assertEqual((updated, list(failed)), ([], ["claude"]))
 
 
 class NamedWorkflowRefreshTests(unittest.TestCase):
@@ -449,7 +456,7 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
         ), patch.object(self.upd.subprocess, "run", side_effect=ok):
             updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
 
-        self.assertEqual((updated, failed), (["claude"], []))
+        self.assertEqual((updated, list(failed)), (["claude"], []))
         self.assertTrue((self.home / ".claude" / "workflows" / "creatio-x.js").exists())
 
     def test_a_non_claude_update_does_not_touch_user_scope(self):
@@ -502,7 +509,7 @@ class UpdateMainTests(unittest.TestCase):
             patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "copilot"]),
             patch.object(self.upd, "acquire_source") as acquire,
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=(["claude", "copilot"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["claude", "copilot"], {})),
             patch.object(self.upd.os, "chdir") as chdir,
             patch("builtins.print") as mock_print,
         ):
@@ -521,7 +528,7 @@ class UpdateMainTests(unittest.TestCase):
 
         def fake_update_agents(target_ids, *, fresh_root=None, silent=False):
             captured["fresh_root"] = fresh_root
-            return (list(target_ids), [])
+            return (list(target_ids), {})
 
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["cursor"]),
@@ -587,7 +594,7 @@ class UpdateMainTests(unittest.TestCase):
 
         def fake_update_agents(target_ids, *, fresh_root=None, silent=False):
             captured["fresh_root"] = fresh_root
-            return (["codex"], ["cursor"])
+            return (["codex"], {"cursor": "could not obtain the release source needed to update cursor"})
 
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex", "cursor"]),
@@ -606,20 +613,24 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(self.upd, "update_agents", return_value=([], {"codex": "boom"})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print"),
         ):
             result = self.upd.main([])
         self.assertEqual(result, 1)
 
-    def test_failure_prints_running_agent_hint(self):
-        # A failure must surface the running-agent remediation hint: the raw CLI
-        # error (e.g. a locked plugin file) rarely names the real cause.
+    def test_lock_failure_prints_running_agent_hint(self):
+        # A locked plugin file surfaces the running-agent remediation hint: the raw
+        # CLI error rarely names the real cause.
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(
+                self.upd,
+                "update_agents",
+                return_value=([], {"codex": "EBUSY: resource busy or locked, rename 'x'"}),
+            ),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -632,7 +643,7 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=(["codex"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["codex"], {})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -645,7 +656,11 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(
+                self.upd,
+                "update_agents",
+                return_value=([], {"codex": "EBUSY: resource busy or locked"}),
+            ),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -659,7 +674,7 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd.version_check, "latest_release_version") as latest,
-            patch.object(self.upd, "update_agents", return_value=(["codex"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["codex"], {})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print"),
         ):
@@ -672,7 +687,7 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd.version_check, "latest_release_version") as latest,
-            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(self.upd, "update_agents", return_value=([], {"codex": "boom"})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print"),
         ):
@@ -711,7 +726,7 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "cursor"]),
             patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "9.9.9")),
-            patch.object(self.upd, "update_agents", return_value=(["claude", "cursor"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["claude", "cursor"], {})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -727,7 +742,7 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "cursor"]),
             patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "9.9.9")),
-            patch.object(self.upd, "update_agents", return_value=(["claude", "cursor"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["claude", "cursor"], {})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -742,7 +757,7 @@ class UpdateMainTests(unittest.TestCase):
         with (
             patch.object(self.upd, "detect_installed_target_ids", return_value=["cursor"]),
             patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "9.9.9")),
-            patch.object(self.upd, "update_agents", return_value=(["cursor"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["cursor"], {})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -758,7 +773,7 @@ class UpdateMainTests(unittest.TestCase):
             patch.object(self.upd, "detect_installed_target_ids", return_value=["claude"]),
             patch.object(self.upd, "acquire_source") as acquire,
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=(["claude"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["claude"], {})),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print") as mock_print,
         ):
@@ -766,6 +781,242 @@ class UpdateMainTests(unittest.TestCase):
         acquire.assert_not_called()  # no Cursor → no source acquisition
         printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
         self.assertIn("to v0.2.0", printed)
+
+
+# ---------------------------------------------------------------------------
+# update.py — failure classification and remediation hints
+# ---------------------------------------------------------------------------
+
+DELETED_BRANCH_OUTPUT = (
+    "claude plugin marketplace update creatio failed: Failed to refresh marketplace 'creatio': "
+    "Failed to clone marketplace repository: Cloning into '...'...\n"
+    "fatal: Remote branch claude/migration-orchestrated-todo-build not found in upstream origin"
+)
+LOCK_HINT = (
+    "A running agent can lock its plugin files and block the update. "
+    "Close the agent(s) above and re-run this command."
+)
+RELEASE_MARKETPLACE_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
+# The plugin-update step failing on a marketplace pinned to a deleted branch, as the CLI prints it.
+DELETED_BRANCH_PLUGIN_UPDATE_OUTPUT = (
+    "Failed to clone repository: Cloning into '...\\.claude\\plugins\\cache\\temp_git_...'\n"
+    "fatal: Remote branch claude/migration-orchestrated-todo-build not found in upstream origin"
+)
+
+
+class FailureHintTests(unittest.TestCase):
+    """Each failed agent gets the hint that matches its error text, not a fixed guess."""
+
+    def setUp(self):
+        self.upd = load_update()
+        # Hints resolve each agent's CLI the way the update does; pin the result so
+        # the assertions do not depend on what this machine has on PATH.
+        for name, value in (("resolve_claude_command", ["claude"]), ("resolve_copilot_command", ["copilot"])):
+            patcher = patch.object(self.upd.agent_cli, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_marketplace_url_is_shared_with_the_installer(self):
+        self.assertEqual(self.upd.agent_cli.MARKETPLACE_GIT_URL, RELEASE_MARKETPLACE_URL)
+
+    def test_deleted_branch_is_classified_with_its_name(self):
+        self.assertEqual(
+            self.upd.classify_failure(DELETED_BRANCH_OUTPUT),
+            ("deleted_branch", "claude/migration-orchestrated-todo-build"),
+        )
+
+    def test_missing_remote_ref_names_the_branch_without_refs_heads(self):
+        self.assertEqual(
+            self.upd.classify_failure("fatal: couldn't find remote ref refs/heads/feature/gone"),
+            ("deleted_branch", "feature/gone"),
+        )
+
+    def test_deleted_branch_hint_gives_restore_commands_and_no_lock_hint(self):
+        hint = self.upd.failure_hint("claude", DELETED_BRANCH_OUTPUT)
+        self.assertIn("claude/migration-orchestrated-todo-build", hint)
+        self.assertIn("claude plugin marketplace remove creatio", hint)
+        self.assertIn(f"claude plugin marketplace add {RELEASE_MARKETPLACE_URL}", hint)
+        self.assertIn("claude plugin install creatio-ai-app-development-toolkit@creatio", hint)
+        self.assertNotIn("A running agent can lock", hint)
+
+    def test_deleted_branch_hint_uses_the_failing_agents_cli(self):
+        hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn("copilot plugin marketplace remove creatio --force\n", hint)
+        self.assertNotIn("claude plugin", hint)
+
+    def test_copilot_remove_flags_match_the_installer(self):
+        install = load_install()
+        with (
+            patch.object(install, "resolve_copilot_command", return_value=["copilot"]),
+            patch.object(install, "register_remote_marketplace_and_install_plugin") as register,
+            patch.object(install, "ensure_required_references"),
+            patch.object(install, "remove_tree_if_exists"),
+        ):
+            install.install_copilot(Path("."), Path("."))
+        flags = register.call_args.kwargs["marketplace_remove_flags"]
+        hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn(f"copilot plugin marketplace remove creatio {' '.join(flags)}\n", hint)
+
+    def test_claude_remove_command_carries_no_flags(self):
+        hint = self.upd.failure_hint("claude", DELETED_BRANCH_OUTPUT)
+        self.assertIn("claude plugin marketplace remove creatio\n", hint)
+
+    def test_deleted_branch_hint_uses_the_resolved_cli_path(self):
+        with patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["C:/tools/copilot.cmd"]):
+            hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn("  C:/tools/copilot.cmd plugin marketplace remove creatio --force\n", hint)
+        self.assertIn(f"  C:/tools/copilot.cmd plugin marketplace add {RELEASE_MARKETPLACE_URL}\n", hint)
+        self.assertIn("  C:/tools/copilot.cmd plugin install creatio-ai-app-development-toolkit@creatio", hint)
+        self.assertNotIn("  copilot plugin", hint)
+
+    def test_deleted_branch_hint_quotes_a_resolved_command_with_spaces(self):
+        wrapper = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "C:/Program Files/copilot.ps1"]
+        with patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=wrapper):
+            hint = self.upd.failure_hint("copilot", DELETED_BRANCH_OUTPUT)
+        self.assertIn(
+            '  powershell -ExecutionPolicy Bypass -File "C:/Program Files/copilot.ps1" plugin install ', hint
+        )
+
+    def test_deleted_branch_hint_falls_back_to_the_binary_name_when_the_cli_cannot_be_resolved(self):
+        with patch.object(self.upd.agent_cli, "resolve_claude_command", side_effect=RuntimeError("not in PATH")):
+            hint = self.upd.failure_hint("claude", DELETED_BRANCH_OUTPUT)
+        self.assertIn("  claude plugin marketplace remove creatio\n", hint)
+        self.assertIn("  claude plugin install creatio-ai-app-development-toolkit@creatio", hint)
+
+    def test_deleted_branch_hint_for_a_reinstall_target_names_the_branch_without_cli_commands(self):
+        for target_id in ("cursor", "codex"):
+            with self.subTest(target_id=target_id):
+                hint = self.upd.failure_hint(target_id, DELETED_BRANCH_OUTPUT)
+                self.assertIn("claude/migration-orchestrated-todo-build", hint)
+                self.assertNotIn("plugin install", hint)
+                self.assertNotIn("lock", hint.lower())
+
+    def test_lock_errors_yield_the_lock_hint(self):
+        for error in (
+            "EBUSY: resource busy or locked, rename 'C:\\x'",
+            "The process cannot access the file because it is being used by another process.",
+            "EPERM: operation not permitted, unlink 'x'",
+            "Access is denied.",
+            "access denied",
+        ):
+            with self.subTest(error=error):
+                self.assertEqual(self.upd.classify_failure(error), ("lock", None))
+                self.assertEqual(self.upd.failure_hint("claude", error), LOCK_HINT)
+
+    def test_other_errors_yield_a_generic_hint_without_a_lock_claim(self):
+        for error in ("boom", "timed out after 600s", "could not obtain the release source needed to update cursor"):
+            with self.subTest(error=error):
+                self.assertEqual(self.upd.classify_failure(error), ("other", None))
+                hint = self.upd.failure_hint("cursor", error)
+                self.assertTrue(hint)
+                self.assertNotIn("lock", hint.lower())
+
+    def _run_main(self, argv, failed):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=list(failed)),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=([], failed)),
+            patch.object(self.upd.os, "chdir"),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.upd.main(argv)
+        return result, stderr.getvalue()
+
+    def test_deleted_branch_end_to_end_prints_branch_hint_not_lock_hint(self):
+        def side(cmd, **kw):
+            if cmd[1:4] == ["plugin", "marketplace", "update"]:
+                return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr=DELETED_BRANCH_OUTPUT)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude"]),
+            patch.object(self.upd.agent_cli, "resolve_claude_command", return_value=["claude"]),
+            patch.object(self.upd.subprocess, "run", side_effect=side),
+            patch.object(self.upd, "refresh_claude_named_workflows", return_value=[]),
+            patch.object(self.upd.os, "chdir"),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.upd.main([])
+
+        err = stderr.getvalue()
+        self.assertEqual(result, 1)
+        self.assertIn("ERROR updating claude: claude plugin marketplace update creatio failed: ", err)
+        self.assertIn("Failed  1 agent(s): claude\n", err)
+        self.assertIn("claude/migration-orchestrated-todo-build", err)
+        self.assertIn("claude plugin marketplace remove creatio", err)
+        self.assertIn(f"claude plugin marketplace add {RELEASE_MARKETPLACE_URL}", err)
+        self.assertIn("claude plugin install creatio-ai-app-development-toolkit@creatio", err)
+        self.assertNotIn("A running agent can lock", err)
+
+    def test_deleted_branch_on_the_plugin_update_step_prints_branch_hint_not_lock_hint(self):
+        def side(cmd, **kw):
+            if cmd[1:3] == ["plugin", "update"]:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=1, stdout="", stderr=DELETED_BRANCH_PLUGIN_UPDATE_OUTPUT
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude"]),
+            patch.object(self.upd.subprocess, "run", side_effect=side) as run,
+            patch.object(self.upd, "refresh_claude_named_workflows", return_value=[]),
+            patch.object(self.upd.os, "chdir"),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.upd.main([])
+
+        err = stderr.getvalue()
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            [call.args[0][1:] for call in run.call_args_list],
+            [
+                ["plugin", "marketplace", "update", "creatio"],
+                ["plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+            ],
+        )
+        self.assertIn(
+            "ERROR updating claude: claude plugin update creatio-ai-app-development-toolkit@creatio failed: ", err
+        )
+        self.assertIn("pinned to branch 'claude/migration-orchestrated-todo-build'", err)
+        self.assertIn("claude plugin marketplace remove creatio\n", err)
+        self.assertIn(f"claude plugin marketplace add {RELEASE_MARKETPLACE_URL}", err)
+        self.assertIn("claude plugin install creatio-ai-app-development-toolkit@creatio", err)
+        self.assertNotIn("A running agent can lock", err)
+
+    def test_update_agents_maps_each_failed_agent_to_its_error(self):
+        with (
+            patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]),
+            patch.object(
+                self.upd.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="EBUSY"),
+            ),
+        ):
+            updated, failed = self.upd.update_agents(["copilot"], silent=True)
+        self.assertEqual(updated, [])
+        self.assertEqual(list(failed), ["copilot"])
+        self.assertIn("EBUSY", failed["copilot"])
+
+    def test_identical_hints_are_printed_once(self):
+        _, err = self._run_main([], {"claude": "EBUSY: locked", "copilot": "Access is denied."})
+        self.assertEqual(err.count(LOCK_HINT), 1)
+        self.assertIn("Failed  2 agent(s): claude, copilot\n", err)
+
+    def test_mixed_failures_print_each_matching_hint(self):
+        _, err = self._run_main([], {"claude": DELETED_BRANCH_OUTPUT, "copilot": "EBUSY: locked"})
+        self.assertIn("claude plugin marketplace remove creatio", err)
+        self.assertEqual(err.count(LOCK_HINT), 1)
+
+    def test_silent_failure_prints_no_hint(self):
+        result, err = self._run_main(["--silent"], {"claude": DELETED_BRANCH_OUTPUT})
+        self.assertEqual(result, 1)
+        self.assertEqual(err, "")
 
 
 if __name__ == "__main__":

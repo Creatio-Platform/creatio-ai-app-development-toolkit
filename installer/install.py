@@ -22,6 +22,7 @@ if str(_INSTALLER_DIR) not in sys.path:
 
 import agent_cli  # noqa: E402  (bound for test patch targets: installer.agent_cli.*)
 from agent_cli import (  # noqa: E402
+    MARKETPLACE_GIT_URL,
     MARKETPLACE_NAME,
     PLUGIN_NAME,
     PLUGIN_SOURCE,
@@ -30,7 +31,6 @@ from agent_cli import (  # noqa: E402
     resolve_copilot_command,
 )
 
-MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
 NAMED_WORKFLOW_DIR_NAME = "workflows"
 WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
@@ -1144,7 +1144,7 @@ def install_copilot(repo_root: Path, home: Path) -> None:
     copilot_command = resolve_copilot_command()
     register_remote_marketplace_and_install_plugin(
         copilot_command,
-        marketplace_remove_flags=["--force"],
+        marketplace_remove_flags=list(agent_cli.COPILOT_MARKETPLACE_REMOVE_FLAGS),
     )
 
 

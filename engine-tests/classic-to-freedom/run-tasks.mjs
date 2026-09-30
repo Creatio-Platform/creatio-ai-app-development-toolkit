@@ -163,7 +163,7 @@ const SET6 = buildTaskSet(runMigration(MANIFEST6), optsOf(MANIFEST6));
 // The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
 const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
 const keysOf = (set) => [...new Set(pageTasks(set).map((t) => t.pageKey))];
-const cliTasksEarly = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
+const cliTasksEarly = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
 const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === pageKey && t.group === group);
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
@@ -2351,7 +2351,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     {
       // Defined locally: the shared `cliTasks` below is declared after this block.
       const cli = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
-        { input: JSON.stringify(manifest), encoding: "utf8" });
+        { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
       // The folder is cut BY THE CLI, which slices with the real default budget — a folder cut in-process with the
       // test's own budget carries different ids, and every closure written into it would read as stale instead.
       // "services": closures with no clock. Exit 2, every file named.
@@ -2491,7 +2491,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
 }
 
 console.log("\n===== migrate.mjs --tasks <dir> (CLI) =====");
-const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
+const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
 // The CLI has no `run: 0` to hand it, so it slices this small fixture with the REAL default budget — which
 // collapses it. Everything the CLI block asserts about counts and file names has to be read off that set.
 const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
@@ -3917,7 +3917,7 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
 console.log("\n===== end to end through the CLI: the run FAILS and the list is generated, not summarised =====");
 {
   const cliT = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
-    { input: JSON.stringify(manifest), encoding: "utf8" });
+    { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
   const dP = path.join(tmp("notbuilt-cli"), "build-tasks");
   cliT(["--tasks", dP], MANIFEST);
   const victim = readTaskDir(dP).find((t) => t.rows.length >= 2);
@@ -4860,7 +4860,7 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
    ================================================================================================ */
 console.log("\n===== the migration result report — one artifact, computed from the ledger AND the built pages =====");
 {
-  const cliR = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
+  const cliR = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
   const closeAll = (dir) => {
     for (;;) {
       const tasks = readTaskDir(dir);
@@ -5768,7 +5768,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
       () => res.status === 1 && /--next/.test(res.stderr || "") && (res.stdout || "").trim() === "",
       () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
   }
-  const alone = spawnSync(process.execPath, [MIGRATE, "-", "--next"], { input: JSON.stringify(MANIFEST), encoding: "utf8" });
+  const alone = spawnSync(process.execPath, [MIGRATE, "-", "--next"], { cwd: DIR, input: JSON.stringify(MANIFEST), encoding: "utf8" });
   check("--next without --tasks: exit 1 — it answers a question about a task FOLDER, and without one there is nothing to answer about",
     () => alone.status === 1 && /--tasks/.test(alone.stderr || ""),
     () => ({ status: alone.status, stderr: alone.stderr }));
