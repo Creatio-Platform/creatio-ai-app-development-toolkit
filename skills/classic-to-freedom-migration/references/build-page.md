@@ -180,9 +180,13 @@ NOT done** — mark the page's own row `⚠ Partial` and do not report the task 
 one per evidence id. The engine derives every id and writes the file, with each id as a key, the
 first time the read plan is written — and never rewrites a file that exists, so an id a re-sliced or
 re-planned run added can be missing from it. Fill the value under the key your row names. When that
-key is absent, add it, built from the shapes below with your task's `pageKey:` and the row's kind and
-item exactly as the row prints them; never shorten or rename a key. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per
-⚠ Confirm item), `<pageKey>#childpage`, `list#listpage:<kind>:<item>` and
+key is absent, add it by copying the id character for character from `evidenceIds` in
+`reads/index.json`, which every `--reads` rewrites for the current plan — never type one from a row's
+label, which is escaped for display, and never shorten or rename a key.
+
+The ids come in five shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
+page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
+`list#listpage:<kind>:<item>` and
 `<pageKey>#datasource:<name>`, where `<pageKey>` is `main`, `list`, `child:<Entity>`,
 `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two pages would otherwise
 share a key). A record is complete only when its fields have the right shape:
