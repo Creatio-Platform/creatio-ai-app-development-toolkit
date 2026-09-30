@@ -11713,6 +11713,37 @@ const n2TreeManifest = (titleA, titleB) => ({
       return child?.changeSet?.resourceCultures?.DocTabCaption?.["fr-FR"] === "Pièce"
         && child.changeSet.resourceSources.DocTabCaption === "page · DocTabCaption";
     });
+  // A sub-page bundle may carry `resourceStrings` alone (no flat `resources`): its en-US texts come from them.
+  const DOC_PAGE_BODY = `define("DocumentPageV2",[],function(){return{entitySchemaName:"Document",diff:[{operation:"insert",name:"DocTab",parentName:"Tabs",propertyName:"tabs",values:{caption:{bindTo:"Resources.Strings.DocTabCaption"},items:[]}},{operation:"insert",name:"Number",parentName:"DocTab",propertyName:"items",values:{bindTo:"Number"}}]};});`;
+  const DOC_PAGE_STRINGS = { DocTabCaption: { "en-US": "Document", "fr-FR": "Pièce" } };
+  const stringsOnly = (cs) => cs?.resources?.DocTabCaption === "Document" && cs.resourceCultures?.DocTabCaption?.["fr-FR"] === "Pièce";
+  check("texts: a child page bundle with `resourceStrings` and no `resources` keeps its en-US texts and its other cultures",
+    () => {
+      const m = coTextsManifest();
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, editPage: "DocumentPageV2" };
+      m.childPageSchemas = { DocumentPageV2: { entity: "Document", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+      const run = runMigration(m, { baseDir: FIX });
+      return stringsOnly(run.childPages.find((c) => c.resolvedFrom === "DocumentPageV2")?.changeSet) && !/Translations not migrated/.test(run.plan);
+    });
+  check("texts: a typed page bundle with `resourceStrings` and no `resources` keeps its en-US texts and its other cultures",
+    () => {
+      const m = coTextsManifest();
+      m.typedPages = [{ schema: "DocumentPageV2", type: "Doc" }];
+      m.typedPageSchemas = { DocumentPageV2: { entity: "Contract", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+      return stringsOnly(runMigration(m, { baseDir: FIX }).typedPages?.[0]?.changeSet);
+    });
+  check("texts: a mini page bundle with `resourceStrings` and no `resources` keeps its en-US texts and its other cultures",
+    () => {
+      const m = coTextsManifest();
+      m.addRecordMiniPage = { schema: "DocumentPageV2" };
+      m.miniPageSchemas = { DocumentPageV2: { entity: "Contract", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+      m.section = [{ pkg: "CoreContracts", body: `define("ContractSectionV2",[],function(){return{entitySchemaName:"Contract",methods:{},diff:[]};});` }];
+      const run = runMigration(m, { baseDir: FIX });
+      return stringsOnly(run.miniPage?.changeSet);
+    }, () => "mini page changeSet lacks the en-US / fr-FR texts");
   // T5 / R4 / R11 — a manifest without `resourceStrings` still plans, in en-US, and says translations need a newer clio.
   check("texts T5: without `resourceStrings` the plan is still produced from the flat en-US `resources`",
     () => typeof coTextsOld.plan === "string" && coTextsOld.changeSet.resources.GeneralInfoTabCaption === "General information"
@@ -11762,8 +11793,8 @@ const n2TreeManifest = (titleA, titleB) => ({
     });
 }
 
-// A typed page is a page like the form page: its `page:typed:<schema>` row carries that page's own texts and is
-// checked against that page's built strings in every culture.
+// A typed page is a page like the form page: its own form-page row carries its texts and is checked against that
+// page's built strings in every culture.
 {
   const TYPED_BODY = `define("ContractTermsPage", [], function() {
   return {
@@ -11783,23 +11814,27 @@ const n2TreeManifest = (titleA, titleB) => ({
       schemas: [{ pkg: "CoreContracts", body: TYPED_BODY }], resources: { TermsTabCaption: "Terms" }, resourceStrings: typedStrings } },
   };
   const typedRun = runMigration(typedManifest, { baseDir: FIX });
-  const typedRow = checklistGroups(typedRun, checklistOpts(typedManifest)).flatMap((g) => g.rows)
-    .find((r) => r.deliverableId === "page:typed:ContractTermsPage");
-  check("texts typed: the `page:typed:<schema>` row carries the typed page's own texts, checked against that page",
-    () => typedRow?.vk.textsPage === "typed:ContractTermsPage"
-      && typedRow.vk.texts.some((t) => t.key === "TermsTabCaption" && t.cultures["fr-FR"] === "Conditions" && t.source === "page · TermsTabCaption"),
-    () => typedRow?.vk);
-  const typedLine = (frText) => renderVerify(typedRun, checklistOpts(typedManifest), {
+  const typedRows = checklistGroups(typedRun, checklistOpts(typedManifest)).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })));
+  const typedFormRow = typedRows.find((r) => r.pageKey === "typed:ContractTermsPage" && r.deliverableId === "page:form");
+  check("texts typed: the typed page's own form-page row carries its texts; the main page's `page:typed:<schema>` row does not",
+    () => typedFormRow?.vk.texts?.some((t) => t.key === "TermsTabCaption" && t.cultures["fr-FR"] === "Conditions" && t.source === "page · TermsTabCaption")
+      && !typedRows.find((r) => r.deliverableId === "page:typed:ContractTermsPage")?.vk.texts,
+    () => typedFormRow?.vk);
+  const typedVerify = (frText) => renderVerify(typedRun, checklistOpts(typedManifest), {
     typedFormsBuilt: true,
     pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] },
-      "typed:ContractTermsPage": { viewConfig: [{ name: "X", type: "crt.Input" }],
+      "typed:ContractTermsPage": { viewConfig: [{ name: "TermsTab", type: "crt.TabContainer", caption: "#ResourceString(TermsTabCaption)#",
+        items: [{ name: "Number", type: "crt.Input", control: "$Number" }] }],
         resources: { strings: { TermsTabCaption: { "en-US": "Terms", "fr-FR": frText } } } } },
-  }).markdown.split("\n").find((l) => l.includes("Typed form `ContractTermsPage`")) || "";
+  }).rows;
+  const typedFormOutcome = (frText) => typedVerify(frText).find((r) => r.pageKey === "typed:ContractTermsPage" && r.deliverable.startsWith("Form page built"));
   check("texts typed: the typed page's texts reach the root result as `changeSet.resourceCultures`",
     () => typedRun.typedPages[0]?.changeSet?.resourceCultures?.TermsTabCaption?.["fr-FR"] === "Conditions");
-  check("texts typed: a typed page whose fr-FR text differs from Classic fails its row; a matching one closes it",
-    () => typedLine("Termes").includes("❌") && typedLine("Termes").includes("TermsTabCaption") && typedLine("Conditions").includes("✅"),
-    () => ({ wrong: typedLine("Termes"), right: typedLine("Conditions") }));
+  check("texts typed: a typed page whose fr-FR text differs from Classic fails its own form-page row, once; a matching one closes it",
+    () => typedFormOutcome("Termes")?.outcome === "missing" && typedFormOutcome("Termes").evidence.includes("TermsTabCaption")
+      && typedVerify("Termes").filter((r) => String(r.evidence).includes("TermsTabCaption")).length === 1
+      && typedFormOutcome("Conditions")?.outcome === "ok",
+    () => ({ wrong: typedFormOutcome("Termes"), right: typedFormOutcome("Conditions") }));
 }
 
 // The related-list title order, one step at a time, including a `captionName` a higher layer does not restate.

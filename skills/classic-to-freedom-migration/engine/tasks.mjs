@@ -465,7 +465,7 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
 // A row's Classic `texts` are left out too: they are checked against the built page, not built by a different task.
 const digestVk = (vk) => {
-  const v = vk?.texts ? { ...vk, texts: undefined, textsPage: undefined } : vk;
+  const v = vk?.texts ? { ...vk, texts: undefined } : vk;
   return v?.type === "layout" && v.names ? { ...v, names: undefined } : v;
 };
 // A PLAN BOUNDARY is digested as a marker, not by its reason text: a row flipping between "build it" and "the plan

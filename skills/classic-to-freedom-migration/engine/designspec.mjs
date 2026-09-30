@@ -2342,8 +2342,8 @@ function classicTexts(resources, cultures, sources) {
   return Object.keys(resources || {}).filter((k) => resources[k] != null)
     .map((k) => ({ key: k, cultures: cultures?.[k] || { "en-US": resources[k] }, source: sources?.[k] || null }));
 }
-// A row's text data, checked against the built page `textsPage` (the row's own page when omitted).
-const textsVk = (texts, textsPage) => (texts.length ? { texts, ...(textsPage ? { textsPage } : {}) } : {});
+// A row's text data, checked against the row's own built page.
+const textsVk = (texts) => (texts.length ? { texts } : {});
 function templateNameNote(name) {
   if (String(name || "").endsWith("Template")) return "";
   return " — ⚠ that is not a Freedom template schema name (they end in `Template`, e.g. `ListPageV3Template`); fix"
@@ -2436,7 +2436,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (!typed.length) pages.push({ deliverableId: "page:form", label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage", ...textsVk(texts) } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
-  for (const t of typed) { const ts = typedTypeSuffix(t); const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ deliverableId: `page:typed:${t.schema}`, label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built", ...textsVk(classicTexts(t.changeSet?.resources, t.changeSet?.resourceCultures, t.changeSet?.resourceSources), `typed:${t.schema}`) } }); }
+  for (const t of typed) { const ts = typedTypeSuffix(t); const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ deliverableId: `page:typed:${t.schema}`, label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
@@ -4628,7 +4628,8 @@ function resolveRowKinds(r, ctxFor, key) {
   if (r.na) return naRow(r);
   if (r.status?.kind === STATUS_WONT_DO) return [`Won't do — ${esc(r.status.decision || "?")}`, "a planning decision (`manifest.deliverableStatus`) — nothing to build, nothing to check", "skip"];
   if (r.info) return infoRow(r);
-  return withTextCheck(resolveVk(r.vk, ctxFor(key)), r.vk, ctxFor(r.vk?.textsPage || key));
+  const ctx = ctxFor(key);
+  return withTextCheck(resolveVk(r.vk, ctx), r.vk, ctx);
 }
 // The built page's strings as `{ key: { culture: text } }`: get-page's `resources.strings`, and a flat
 // `{ key: text }` read as en-US. Null when the payload carries no `resources`.

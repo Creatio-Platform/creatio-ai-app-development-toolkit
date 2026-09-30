@@ -452,12 +452,12 @@ export function mapToFreedom(eff, opts = {}) {
     if (t.cultures) resourceCultures[key] = t.cultures;
     resourceSources[key] = t.source;
   };
-  // A page string by its Classic key or `Resources.Strings.` reference: its text, cultures and source, or null.
+  // A page string by its Classic key or `Resources.Strings.` reference: its key, text, cultures and source, or null.
   const pageText = (raw) => {
     if (!raw) return null;
     const key = resources[resourceKey(raw)] == null ? raw : resourceKey(raw);
     if (resources[key] == null) return null;
-    return { text: resources[key], cultures: pageCultures?.[key] ?? null, source: `page · ${key}` };
+    return { key, text: resources[key], cultures: pageCultures?.[key] ?? null, source: `page · ${key}` };
   };
   const captionKey = (raw, fallbackName) => raw
     ? resourceKey(raw)
@@ -1413,7 +1413,7 @@ function mapDetails(ctx, containers, profileRegion) {
 // `Caption` string. The detail schema's caption (`title`) is never a title. Null when none of the three is readable.
 function classicDetailTitle(d, dinfo, pageText) {
   const onPage = pageText(d.captionName) ?? pageText(d.key ? d.key + "DetailCaptionOnPage" : null);
-  if (onPage) return { ...onPage, key: onPage.source.slice("page · ".length) };
+  if (onPage) return onPage;
   const own = dinfo?.strings?.Caption;
   if (!own) return null;
   return { text: defaultCultureText(own), cultures: own, source: `${d.schemaName} · Caption`, key: detailTextKey(d, "Caption") };
@@ -1432,11 +1432,11 @@ const detailTextKey = (d, k) => `${d.key || d.schemaName}_${k}`;
 function detailCaptionDecision(d) {
   const named = d.captionName ? `the page string '${d.captionName}' (captionName), ` : "";
   return { kind: "detail-caption", item: d.schemaName || d.key,
-    reason: `related list '${d.key}' has no Classic title — none of ${named}the page string '${d.key}DetailCaptionOnPage' or the '${d.schemaName}' detail's own Caption string could be read. Confirm the title in every culture; do NOT invent one, and do NOT use the detail schema's caption` };
+    reason: `related list '${d.key}' has no Classic title — none of ${named}the page string '${d.key}DetailCaptionOnPage' or the '${d.schemaName}' detail's own Caption string could be read. Confirm the title; do NOT invent one, and do NOT use the detail schema's caption` };
 }
 function detailTextDecision(d, t) {
   return { kind: "detail-text", item: t.source,
-    reason: `the '${d.schemaName}' detail shows the string '${t.classicKey}', and its Classic text could not be read — confirm the text in every culture; do NOT invent one or reuse a nearby caption` };
+    reason: `the '${d.schemaName}' detail shows the string '${t.classicKey}', and its Classic text could not be read — confirm the text; do NOT invent one or reuse a nearby caption` };
 }
 
 // The en-US text of a `{ culture: text }` map, else its first culture's.

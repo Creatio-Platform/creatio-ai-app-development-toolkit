@@ -1202,7 +1202,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
     t.ruleCount = (res.changeSet?.pageBusinessRules || []).length + (res.changeSet?.entityBusinessRules || []).length;
     t.ruleSources = res.changeSet?.ruleSourceCount || 0;
-    t.changeSet = pageTextsOf(res.changeSet); // the typed page's own texts, carried on its `page:typed:<schema>` row
+    t.changeSet = pageTextsOf(res.changeSet);
     // A typed page is a FIRST-CLASS scope of the surface (step 5.1: "every record page including typed variants"): it
     // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
     t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);

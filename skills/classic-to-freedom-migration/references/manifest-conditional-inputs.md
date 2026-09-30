@@ -150,9 +150,9 @@ a name nothing in the supplied chain defines it stays `correctness` and blocks.
 ## Texts — the page and its details carry localizable strings
 
 - **`resourceStrings` (page) and `detailSchemas.<Detail>.resourceStrings`** — the same strings as
-  `resources`, in every Classic culture (`{ "Key": { "en-US": "…", "fr-FR": "…" } }`), as
-  `get-classic-page-sources` writes them. The engine echoes the en-US text of each string the page
-  uses on `changeSet.resources` and its values in the other cultures on `changeSet.resourceCultures`
+  `resources`, in every Classic culture (`{ "Key": { "en-US": "…", "fr-FR": "…" } }`). The engine
+  echoes the en-US text of each string the page uses on `changeSet.resources` and its values in the
+  other cultures on `changeSet.resourceCultures`
   (key → { culture → text }), with the Classic string each came from on `changeSet.resourceSources`.
   Authoring those values is part of the build. A folded child, typed or mini page carries the same
   three fields on its own `changeSet` in the result.
