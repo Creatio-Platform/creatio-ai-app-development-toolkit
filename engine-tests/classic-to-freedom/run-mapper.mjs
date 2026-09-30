@@ -12,7 +12,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, posCell } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, posCell, boundAttributeOf } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -12110,6 +12110,12 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => /Owner/.test(extraLine1) && !/ESNFeed/.test(extraLine1), () => extraLine1);
   check("verify: overlay does NOT flag the base field (base positions/extras kept by design)",
     () => !/❌ EXTRA/.test(renderVerify(rn, { planMeta: reconPm, reconcileMode: "overlay" }, builtWithExtra).markdown));
+  // On an overlay reconcile the classic-extras row is PRESENT but reads "not applicable" (a no-op) — it can never block,
+  // and because verifyRowKey is label-keyed (not positional) its presence cannot orphan a decided row.
+  const ovExtraLine = renderVerify(rn, { planMeta: reconPm, reconcileMode: "overlay" }, builtWithExtra).markdown
+    .split("\n").find((l) => /No base field controls outside the plan/.test(l)) || "";
+  check("verify: on an overlay reconcile the classic-extras row is present but reads not applicable (no-op, never blocks)",
+    () => /not applicable/.test(ovExtraLine) && !/❌/.test(ovExtraLine), () => ovExtraLine);
   check("verify: no mode (verify without --tasks) does NOT flag extras",
     () => !/❌ EXTRA/.test(renderVerify(rn, { planMeta: reconPm }, builtWithExtra).markdown));
   const builtClean = { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" }] } } } };
@@ -12269,6 +12275,34 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
   const fLine = vP.markdown.split("\n").find((l) => /Fields —/.test(l)) || "";
   check("verify: a field bound to `$PDS_<Column>` (no Designer hash) matches by column — not missing, not EXTRA",
     () => /✅/.test(fLine) && !/❌ EXTRA/.test(vP.markdown) && !/missing:/.test(fLine), () => fLine);
+}
+
+/* boundAttributeOf unwraps the primary-data-source binding to the bare column identically for the hashed Designer form
+   and the plain `$PDS_<Column>` form, reads value-bound (`value`/`checked`) bindings too, keeps a builder-chosen name
+   without a `PDS_` prefix as written, and returns null for anything that is not a `$` binding. */
+{
+  check("boundAttributeOf: `$PDS_Foo_abc123` (hashed Designer form) → Foo",
+    () => boundAttributeOf({ control: "$PDS_Foo_abc123" }) === "Foo");
+  check("boundAttributeOf: `$PDS_Foo` (no Designer hash) → Foo",
+    () => boundAttributeOf({ control: "$PDS_Foo" }) === "Foo");
+  check("boundAttributeOf: a builder-chosen `$Foo` (no PDS_ prefix) is compared as written → Foo",
+    () => boundAttributeOf({ control: "$Foo" }) === "Foo");
+  check("boundAttributeOf: value-bound (`value`/`checked`) bindings unwrap the same way",
+    () => boundAttributeOf({ value: "$PDS_Bar_zzzzzz" }) === "Bar" && boundAttributeOf({ checked: "$PDS_Done" }) === "Done");
+  check("boundAttributeOf: a bare `$PDS_` with no column keeps the prefix (nothing to unwrap)",
+    () => boundAttributeOf({ control: "$PDS_" }) === "PDS_");
+  check("boundAttributeOf: a non-`$` binding is not a column identity → null",
+    () => boundAttributeOf({ control: "Foo" }) === null && boundAttributeOf({}) === null);
+}
+/* the `$PDS_<Column>` unwrap applies on a REBUILD verify too (not only a reconcile): a rebuilt page whose field binds
+   `$PDS_<Col>` still matches the plan column by identity. */
+{
+  const rnRb = runMigration({ entity: "X", entityColumns: { Foo: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Foo",parentName:"Header",propertyName:"items",values:{bindTo:"Foo"}}]};});` }] }, { baseDir: FIX });
+  const builtRb = { pages: { main: { viewConfig: { items: [{ name: "NumberInput_XFoo", type: "crt.NumberInput", control: "$PDS_Foo" }] } } } };
+  const fRb = renderVerify(rnRb, {}, builtRb).markdown.split("\n").find((l) => /Fields —/.test(l)) || "";
+  check("verify (REBUILD, no mode): a field bound to `$PDS_<Column>` still matches the plan column by identity",
+    () => /✅/.test(fRb) && !/missing:/.test(fRb), () => fRb);
 }
 
 // ================================================================================================

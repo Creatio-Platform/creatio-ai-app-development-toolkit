@@ -2770,9 +2770,15 @@ export function resolveFrozenMode(dir, opts = {}) {
   // A corrupted dotfile is refused by the CLI before we get here; still, never trust an unrecognised value.
   if (st.present) return null;
   // The dotfile is ABSENT. If existing task files still carry a `reconcileMode:` stamp, the dotfile was lost (e.g. a
-  // copy dropped it) — restore it from the stamp rather than silently re-slicing every task back to overlay.
-  const stamped = frozenModeFromTasks(dir);
-  if (stamped) { freezeMode(dir, stamped); return stamped; }
+  // copy dropped it) — restore it from the stamp rather than silently re-slicing every task back to overlay. An
+  // UNRECOGNISED or DISAGREEING stamp is ambiguous: THROW so a LIBRARY caller (a direct `syncTaskDir`) fails closed
+  // instead of silently re-slicing the folder to overlay. A CLI caller is already refused, with a friendlier message,
+  // by `guardFrozenModeState` before reaching here.
+  const unknown = rawStampedValues(dir).filter((m) => !RECONCILE_MODES.has(m));
+  if (unknown.length) throw new Error(`the folder's .reconcile-mode is absent and its task files carry an unrecognised mode stamp (${unknown.join(", ")}); fix the stamps or start a fresh folder`);
+  const stamps = stampedModes(dir);
+  if (stamps.length > 1) throw new Error(`the folder's .reconcile-mode is absent and its task files carry disagreeing modes (${stamps.join(", ")}); fix the stamps or start a fresh folder`);
+  if (stamps.length === 1) { freezeMode(dir, stamps[0]); return stamps[0]; }
   return null;
 }
 // The DISTINCT valid reconcile modes stamped across the folder's existing task files. The cut stamps EVERY task file

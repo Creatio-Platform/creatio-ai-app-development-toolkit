@@ -5103,6 +5103,24 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     const rDecMix = cliTasks(["--tasks", dCliDecMix, "--decide", "D13", "--wont-do", "--pages", "main"], RECON);
     check("CLI: --decide on a dropped-dotfile folder with DISAGREEING stamps is refused (guard runs on the --decide entry path)",
       () => rDecMix.status === 1 && /DISAGREEING/.test(rDecMix.stderr || rDecMix.stdout || ""), () => rDecMix.stderr);
+    // LIBRARY-level: syncTaskDir (via resolveFrozenMode) THROWS on ambiguous stamps with a dropped dotfile, so a direct
+    // caller that never passes through the CLI guard fails closed rather than silently re-slicing the folder to overlay.
+    const dLibMix = path.join(tmp("mode_lib_mixed"), "bt");
+    const libSet = syncTaskDir(dLibMix, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dLibMix);
+    const engLibMix = libSet.tasks.find((t) => t.origin === "engine").file;
+    fs.writeFileSync(path.join(dLibMix, engLibMix), fs.readFileSync(path.join(dLibMix, engLibMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    check("syncTaskDir THROWS on DISAGREEING task stamps with a dropped dotfile (library fail-closed, not a silent overlay re-slice)",
+      () => { try { syncTaskDir(dLibMix, RUN, checklistOpts(MANIFEST)); return false; } catch (e) { return /disagreeing/i.test(e.message); } });
+    const dLibBad = path.join(tmp("mode_lib_badstamp"), "bt");
+    const libBadSet = syncTaskDir(dLibBad, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dLibBad);
+    for (const t of libBadSet.tasks) {
+      const p = path.join(dLibBad, t.file);
+      if (fs.existsSync(p)) fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: Classic-Layout"));
+    }
+    check("syncTaskDir THROWS on an UNRECOGNISED task stamp with a dropped dotfile (library fail-closed)",
+      () => { try { syncTaskDir(dLibBad, RUN, checklistOpts(MANIFEST)); return false; } catch (e) { return /unrecognised/i.test(e.message); } });
   }
   // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
   {
