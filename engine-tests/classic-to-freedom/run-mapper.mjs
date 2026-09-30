@@ -2663,6 +2663,14 @@ check("card-actions: ViewOptions is native (the template ships it); Tag template
   && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
 check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
   /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
+check("card-actions: the Print how-to says a step-5.1 card that shows a rebound print menu decides the button — SysModuleReport does not describe that menu",
+  /\| Print \| Action \|.*Exception: when a step-5\.1 behaviour card says a client layer binds a print button's menu to a collection its own code fills, that card decides the button/.test(caCs.designSpec),
+  () => (caCs.designSpec.match(/^\| Print \|.*$/m) || ["(no Print row)"])[0]);
+const caCsNone = runMigration({ entity: "X", signals: { printables: { resolved: true, present: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("card-actions: a Print action dropped for 'no printables' carries the same rebound-menu exception in its verdict",
+  /no printables\/reports for this section \(checked `SysModuleReport` on-stand\)\. Exception: when a step-5\.1 behaviour card/.test(caCsNone.designSpec + caCsNone.plan),
+  () => (caCsNone.designSpec.match(/^.*no printables.*$/m) || ["(no verdict line)"])[0]);
 check("card-actions: Process migrates only if a process is connected + shows how to check (ProcessInModules → VwSysProcess)",
   /\| Process \| Action \|.*Migrate ONLY if a process is connected.*ProcessInModules/.test(caCs.designSpec)
   && !/VwSysProcessEntityConnection/.test(caCs.designSpec));
@@ -4154,9 +4162,11 @@ check("#3 detail-editability: STILL flagged when the detail schema was NOT bundl
   /detail-editability/.test(deUnbundled.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
-// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
+// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one. A child is
+// placed under it so the name is defined somewhere and the stub is kept (a merge of a name nothing defines is dropped).
 const rv4 = mergeHierarchy([L("P", { entity: "X", diff: [
-  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" })] })]);
+  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" }),
+  di({ name: "GhostKid", parentName: "GhostBtn", propertyName: "items", bindTo: "Kid" })] })]);
 const rv4i = (rv4.items || []).find((i) => i.name === "GhostBtn");
 check("RV4: merge-onto-absent stub carries visible/tip/caption (full insert shape), + a merge warning",
   !!rv4i && rv4i.visible === false && rv4i.tip === "Resources.Strings.T" && rv4i.caption === "Resources.Strings.C"
@@ -5224,6 +5234,28 @@ check("the blocked list page still RENDERS its partial reading, with the verdict
   () => renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).filter((l) => /List page|approvable/.test(l)).slice(0, 6));
 check("a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
+// A section run with NO `section.seed` reports the missing base chain through its merges onto base elements: those
+// stay correctness (the section gate has no no-seed reason of its own), so the list gate stays blocked.
+const svNoSeed = runMigration({ ...svManifest(), section: { schemas: [{ pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:${JSON.stringify([
+  { operation: "merge", parentName: "DataGridContainer", propertyName: "items", name: "DataGrid", values: { type: "tiled" } }])}};});` }],
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("a section with NO `section.seed` whose layer merges a base element keeps the list gate BLOCKED — the merge is the only report of the missing seed",
+  () => svNoSeed.listGate?.blocked === true && /correctness warning/.test((svNoSeed.listGate?.reasons || []).join(" "))
+    && /DataGridContainer/.test((svNoSeed.listGate?.reasons || []).join(" ")),
+  () => svNoSeed.listGate);
+// A section layer that merges a button no section schema defines — the record page's `PrintButton`, copied into the
+// section with the parent it has on the card. Classic ignores the merge, so the list gate stays open: the note is
+// fidelity, and the stub's `parentName` is no unresolved parent.
+const svStrayMerge = [{ pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:${JSON.stringify([
+  { operation: "merge", parentName: "RightContainer", propertyName: "items", name: "PrintButton", values: { caption: "Print" } }])}};});` }];
+const svStrayRun = runMigration({ ...svManifest(), section: { schemas: svStrayMerge, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("a section merge of an element no section schema defines leaves the list gate open — no unresolved parent from its `parentName`, and the element is not published as a section element",
+  () => svStrayRun.listGate?.blocked === false && !/RightContainer|PrintButton/.test((svStrayRun.listGate?.reasons || []).join(" "))
+    && !JSON.stringify(svStrayRun.section?.sectionView || {}).includes("PrintButton"),
+  () => ({ gate: svStrayRun.listGate, sectionView: svStrayRun.section?.sectionView }));
 
 /* --- the section path's attribution and counts ------------------------------------------
    A button's package is the layer that declares it, not a later layer that only hides it. `activeRowActions` is the
@@ -11818,9 +11850,11 @@ const n2TreeManifest = (titleA, titleB) => ({
     /fidelity note\(s\)/.test(fid.plan) && /KEPT \(correct\)/.test(fid.plan) && /warningDispositions/.test(fid.plan),
     () => (fid.plan.match(/^>.*fidelity.*$/m) || ["(no advisory line)"])[0]);
 
-  // CORRECTNESS: a merge onto an item no lower schema defined. Still a hard block — and the reason now QUOTES the
-  // warning that actually fired instead of the one summary string that sent the remedy search to the wrong file.
-  const corr = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }]);
+  // CORRECTNESS: a merge onto an item no lower schema defined, whose name a child placed under it still expects. A hard
+  // block — and the reason QUOTES the warning that actually fired, not one summary string pasted onto every producer.
+  const ghostDiff = [{ operation: "merge", name: "Ghost", values: { caption: "x" } },
+    { operation: "insert", name: "Kid", parentName: "Ghost", propertyName: "items", values: { bindTo: "Kid" } }];
+  const corr = mkRun(ghostDiff);
   const corrReason = (corr.gate.reasons || []).find((r) => r.startsWith("warnings ")) || "";
   check("a CORRECTNESS warning still blocks the gate",
     corr.gate.blocked === true && /correctness/.test(corrReason), () => corr.gate.reasons);
@@ -11841,7 +11875,7 @@ const n2TreeManifest = (titleA, titleB) => ({
     !(typo.effective.warnings || [])[0].accepted && /fidelity note\(s\)/.test(typo.plan),
     () => (typo.effective.warnings || [])[0]);
   // And the hatch is fidelity-ONLY: a correctness warning names a real missing item, which no operator can decide away.
-  const refused = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }],
+  const refused = mkRun(ghostDiff,
     { warningDispositions: { "merge:Ghost": { resolved: true, disposition: "accepted" } } });
   check("(item 5): a disposition aimed at a CORRECTNESS warning is REFUSED — the gate still blocks and the refusal is rendered, never silently honoured",
     refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
@@ -11884,6 +11918,16 @@ const n2TreeManifest = (titleA, titleB) => ({
     && (ghostProps.gate.reasons || []).some((r) => /remove 'Ghost' @P/.test(r))
     && ghostProps.effective.removed === 0,
     () => ({ w: ghostPropsW, reasons: ghostProps.gate.reasons }));
+  // A `merge` of a name NO layer and NO seed defines is the same no-op in Classic: it does not block, and it closes.
+  const noOpMergeRun = mkRun([...noOpDiff.slice(0, 2), { operation: "merge", name: "SaaSMetricsTab", values: { order: 2 } }]);
+  const noOpMergeW = (noOpMergeRun.effective.warnings || []).find((w) => w.op === "merge" && w.name === "SaaSMetricsTab");
+  check("a merge of a never-defined name does NOT block the gate, renders as a fidelity advisory, and `warningDispositions` closes it",
+    noOpMergeRun.gate.blocked === false && noOpMergeW?.severity === "fidelity"
+    && /no effect in Classic unless the chain is incomplete: 'SaaSMetricsTab'/.test(noOpMergeRun.plan)
+    && mkRun([...noOpDiff.slice(0, 2), { operation: "merge", name: "SaaSMetricsTab", values: { order: 2 } }],
+      { warningDispositions: { "merge:SaaSMetricsTab:P": { resolved: true, disposition: "n/a", note: "copied merge of a tab no layer inserts" } } })
+      .effective.warnings.find((w) => w.name === "SaaSMetricsTab")?.accepted === true,
+    () => ({ reasons: noOpMergeRun.gate.reasons, warning: noOpMergeW }));
   // …while a remove whose name a LATER layer defines is still the ordering signal, and still blocks.
   const late = runMigration({ entity: "E", noParentTemplate: true, schemas: [
     { pkg: "Early", body: `define("Early",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "Late" }])}};});` },
