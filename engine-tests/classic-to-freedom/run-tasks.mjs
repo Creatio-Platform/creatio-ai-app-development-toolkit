@@ -5817,8 +5817,22 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     // The decisions.md TEMPLATE in migration-documentation.md, filled in the obvious way, must pass the gate the
     // hand-off applies — a template whose value line carries its own explanation fails the exact version match.
     const doc = fs.readFileSync(path.join(ENGINE_DIR, "..", "references", "migration-documentation.md"), "utf8");
-    const block = (/### decisions\.md\s*```markdown\n([\s\S]*?)```/.exec(doc) || [])[1] || "";
-    const filled = block.replace("<user>", "Kamil").replaceAll("plan-<hash>", V).replaceAll(/<[^>\n]*>/g, "x");
+    const fence = "```markdown\n";
+    const open = doc.indexOf(fence, doc.indexOf("### decisions.md\n"));
+    const block = open < 0 ? "" : doc.slice(open + fence.length, doc.indexOf("```", open + fence.length));
+    // Every remaining `<placeholder>` on a line becomes `x`; a linear scan, so no regex can backtrack.
+    const fillPlaceholders = (line) => {
+      let out = "";
+      let at = 0;
+      for (let lt = line.indexOf("<"); lt >= 0; lt = line.indexOf("<", at)) {
+        const gt = line.indexOf(">", lt);
+        if (gt < 0) break;
+        out += line.slice(at, lt) + "x";
+        at = gt + 1;
+      }
+      return out + line.slice(at);
+    };
+    const filled = block.replace("<user>", "Kamil").replaceAll("plan-<hash>", V).split("\n").map(fillPlaceholders).join("\n");
     check("planApprovalLine: the decisions.md TEMPLATE entry, filled in, is an approval of that version",
       () => block.includes("Plan version:") && planApprovalLine(filled, V) === `Plan version: ${V}`,
       () => ({ block, filled, got: planApprovalLine(filled, V) }));
