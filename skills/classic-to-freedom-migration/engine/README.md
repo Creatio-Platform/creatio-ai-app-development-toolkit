@@ -491,7 +491,10 @@ the entry carries them — or, failing any caption match, by holding exactly the
 field, among containers whose type or name contains `Tab` that are a `crt.TabContainer` or a direct child of a
 `crt.TabPanel`, or for a row with no field names by the one tab whose content matches it exactly, else ☐ confirm on-stand /
 header, measured
-inside the container; a container-less payload is judged page-wide and says so) and the `cardnative` row (template button element names). A `[module-dep]` row is
+inside the container; a container-less payload is judged page-wide and says so) and the `cardnative` row (template control element names, each of the kind that control is: a reload is an
+action carrier, a tag control is a `crt.TagSelect`; ViewOptions, which the plan builds nothing for, is not in it).
+The standard `Card action — Print` / `— Process` / `— RunProcess` rows close on a built element whose `clicked.request`
+is `crt.PrintablesRequest` / `crt.RunBusinessProcessRequest`, never on any `crt.Button`. A `[module-dep]` row is
 informational (`info`, ℹ noted). The ungated `List page →` identity row is dropped when the gated `List template →`
 row exists.
 
