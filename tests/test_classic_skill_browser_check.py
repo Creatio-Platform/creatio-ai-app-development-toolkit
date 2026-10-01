@@ -151,6 +151,18 @@ class CheapEvidenceReferenceTests(unittest.TestCase):
         for name in ("SelectQuery", "UpdateQuery"):
             self.assertIn(name, hooks[0])
 
+    def test_the_read_out_unpacks_a_batch_into_its_items_and_their_own_results(self):
+        readouts = [s for s in self.snippets() if "rootSchemaName" in s]
+        self.assertTrue(readouts, "no read-out snippet narrows by rootSchemaName")
+        self.assertIn("q.body.items", readouts[0])
+        self.assertIn("queryResults", readouts[0])
+
+    def test_the_hook_keeps_each_response_whole(self):
+        hooks = [s for s in self.snippets() if "XMLHttpRequest" in s]
+        self.assertTrue(hooks, "no request hook snippet")
+        keep = hooks[0][hooks[0].index("const keep"):hooks[0].index("const open")]
+        self.assertNotIn(".slice(", keep)
+
     @unittest.skipIf(shutil.which("node") is None, "node is not on PATH")
     def test_every_snippet_parses(self):
         snippets = self.snippets()

@@ -21,8 +21,8 @@ kind that answers the question, and stop when it has:
 1. **The data requests the page sends** — the `SelectQuery` / `UpdateQuery` bodies, captured by the request hook
    below, installed before the page loads. One read answers the data checks: a ForwardReference field, each
    detail's filters, the columns a save writes.
-2. **The console** (e.g. `read_console_messages`, or the collector in the next section on a surface that cannot
-   read it) — a render or binding error names its own cause there.
+2. **The console** (e.g. `read_console_messages`, or the collector under *The order: console, then error
+   boundary, then structure* on a surface that cannot read it) — a render or binding error names its own cause there.
 3. **DOM reads** (e.g. `find`, `javascript_tool`) — one targeted string per question, such as a caption or a
    component that must be present; never a page dump.
 4. **A screenshot** (e.g. `computer` → screenshot) only where the layout is the thing checked — island order,
@@ -47,7 +47,8 @@ window.__dq = [];
     return entry;
   };
   const keep = (entry, value) => {
-    entry.response = (typeof value === 'string' ? value : JSON.stringify(value)).slice(0, 4000);
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    try { entry.response = JSON.parse(text); } catch (e) { entry.response = text; }
   };
   const open = XMLHttpRequest.prototype.open;
   const send = XMLHttpRequest.prototype.send;
@@ -72,13 +73,20 @@ window.__dq = [];
 ```
 
 Read it back narrowed to the one schema you are checking — the page's entity, or one detail's — never the whole
-array; a `BatchQuery` is unpacked into the queries it carries:
+array. A `BatchQuery` is unpacked into the queries it carries in `items`, and each one is paired with its own
+entry of the batch response's `queryResults`; a result's rows are cut to the first five, never its values:
 
 ```js
 // replace <Entity> with the schema you are checking
+const rowsOf = r => (r && typeof r === 'object' && Array.isArray(r.rows))
+  ? { success: r.success, rowCount: r.rows.length, rows: r.rows.slice(0, 5) } : r;
 JSON.stringify(window.__dq
-  .flatMap(q => (q.body && Array.isArray(q.body.queries))
-    ? q.body.queries.map(b => ({ op: q.op, body: b, response: q.response })) : [q])
+  .flatMap(q => {
+    const subs = q.body && (Array.isArray(q.body.items) ? q.body.items : q.body.queries);
+    if (!Array.isArray(subs)) return [q];
+    const results = (q.response && Array.isArray(q.response.queryResults)) ? q.response.queryResults : [];
+    return subs.map((b, i) => ({ op: String((b && b.__type) || q.op).split('.').pop(), body: b, response: results[i] }));
+  })
   .filter(q => q.body && q.body.rootSchemaName === '<Entity>')
   .map(q => ({
     op: q.op,
@@ -86,7 +94,7 @@ JSON.stringify(window.__dq
       .map(([alias, c]) => (c && c.expression && c.expression.columnPath) || alias),
     written: Object.keys((q.body.columnValues && q.body.columnValues.items) || {}),
     filters: q.body.filters,
-    response: q.response,
+    response: rowsOf(q.response),
   })));
 ```
 
@@ -122,10 +130,12 @@ the console tells you *why*, which is the only thing you can act on.
 
 The in-app browser surface (`read_console_messages`, `read_network_requests`) reads the console directly. The
 Chrome-control surface does not — with that one you must install a collector BEFORE the page loads, because
-errors thrown during bootstrap are gone by the time you ask:
+errors thrown during bootstrap are gone by the time you ask. Install it the way the request hook is installed: in
+the Creatio tab that is already open, then open the page by an in-app route change — a reload or a typed URL is a
+full page load and discards it:
 
 ```js
-// run this on a blank tab, THEN navigate — not after the page is already broken
+// run this in the open Creatio tab, THEN open the page by in-app route — not after the page is already broken
 window.__err = [];
 addEventListener('error', e => window.__err.push(String(e.message)));
 addEventListener('unhandledrejection', e => window.__err.push('rejection: ' + String(e.reason)));

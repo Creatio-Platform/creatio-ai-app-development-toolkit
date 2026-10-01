@@ -243,6 +243,8 @@ evidence is the rule and the tool names are examples:
    most one per page — and that screenshot is the one the `creatio-ui-guidelines` review reuses,
    not a second.
 
-The hook snippet, how each check reads off it, and the console collector for a surface that cannot
-read the console are in `./references/freedom-ui-browser-check.md` → *Cheap evidence first*. It is
-a reference: list its headings and read that section, not the whole file.
+The hook snippet and how each check reads off it are in
+`./references/freedom-ui-browser-check.md` → *Cheap evidence first*; the console collector for a
+surface that cannot read the console is in the same file under *The order: console, then error
+boundary, then structure*. It is a reference: list its headings and read those sections, not the
+whole file.
