@@ -2872,6 +2872,19 @@ const plParallelWrongMode = runExistingSection(FULL_PLACEMENT, "--plan", { ...FU
 check("placement gate: planMeta.parallelSection with a mode other than 'new-app' is INCOMPLETE — a parallel section is a new app",
   plParallelWrongMode.status === 2 && /planMeta\.parallelSection is true but placement\.sectionHost\.mode is 'existing-app'/.test(plParallelWrongMode.stderr || ""),
   () => plParallelWrongMode.stderr);
+// `isParallelSection` also needs `freedomExists`; without it the flag would be dropped and the plan would quietly
+// render as a plain Rebuild with no parallel-section banner — so the gate refuses it instead.
+const plParallelNoFreedom = runExistingSection(newAppPlacement, "--plan", { ...FULL_PLANMETA, parallelSection: true });
+check("placement gate: planMeta.parallelSection WITHOUT planMeta.freedomExists is INCOMPLETE — a parallel section is built next to an existing Freedom section, never silently a plain Rebuild",
+  plParallelNoFreedom.status === 2 && /planMeta\.parallelSection is true but planMeta\.freedomExists is not true/.test(plParallelNoFreedom.stderr || ""),
+  () => plParallelNoFreedom.stderr);
+// The placement banner asks for the keys the gate requires — one source (requiredPlacementKeys), so an
+// 'existing-section' plan is never sent after the three owning-app facts it does not need.
+const placementBannerKeys = (out) => ((out || "").split("\n").find((l) => /Record the answers in `manifest\.placement`/.test(l)) || "").match(/manifest\.placement` \(([^)]*)\)/)?.[1] || "";
+check("plan banner: a blocked 'existing-section' plan lists only `targetPackageEditable` · `sectionHost` (control: a blocked 'existing-app' plan lists all five keys)",
+  placementBannerKeys(plExistingNoNames.stdout) === "`targetPackageEditable` · `sectionHost`"
+  && placementBannerKeys(plNoPrimary.stdout) === "`targetPackageEditable` · `application` · `primaryPackage` · `targetPackageInApplication` · `sectionHost`",
+  () => ({ existingSection: placementBannerKeys(plExistingNoNames.stdout), existingApp: placementBannerKeys(plNoPrimary.stdout) }));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -8124,6 +8137,24 @@ check("existing-section: engineStatusReason closes the MAIN form-template row an
   /existing-section/.test(engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, esCtx) || "")
   && engineStatusReason({ deliverableId: "template:form", pageKey: "child:UsrChild" }, esCtx) == null
   && engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, {}) == null);
+// The same closure end to end: a real `runMigration` checklist for an 'existing-section' run with a folded mini page
+// closes the MAIN form-template row and keeps the mini page's own template row gated.
+{
+  const esMiniBody = (name, field) => `define("${name}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});`;
+  const esMiniRun = runMigration({
+    entity: "X", seed: CLEAN_SEED, targetPackage: "UsrX",
+    schemas: [{ pkg: "P", body: esMiniBody("XPage", "F") }],
+    addRecordMiniPage: { schema: "XMiniPage" },
+    miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: esMiniBody("XMiniPage", "MF") }] } },
+    planMeta: { ...docPlanMeta, freedomExists: true }, signals: FULL_SIGNALS,
+    placement: { targetPackageEditable: { resolved: true, value: true }, sectionHost: { resolved: true, mode: "existing-section", listPage: "X_ListPage", formPage: "X_FormPage" } },
+  });
+  const tplRows = (esMiniRun.checklist || "").split("\n").filter((l) => /\| Form template → /.test(l));
+  check("existing-section (end to end): the checklist closes the MAIN form-template row (N/A) and keeps the mini page's `BaseMiniPageTemplate` row gated",
+    tplRows.some((l) => /Form template → `PageWithTabsFreedomTemplate`/.test(l) && /N\/A — .*existing-section/.test(l))
+    && tplRows.some((l) => /Form template → `BaseMiniPageTemplate`/.test(l) && /☐ pending/.test(l) && !/N\/A/.test(l)),
+    () => tplRows);
+}
 const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",

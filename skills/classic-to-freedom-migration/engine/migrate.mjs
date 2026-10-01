@@ -962,9 +962,9 @@ const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXI
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
 export function placementIssues(manifest) {
-  const p = manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
-  const has = (k) => p[k] && typeof p[k] === "object" && p[k].resolved === true;
-  const unresolved = requiredPlacementKeys(p, has).filter((k) => !has(k));
+  const p = placementOf(manifest);
+  const has = (k) => isResolvedFact(p, k);
+  const unresolved = requiredPlacementKeys(p).filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -983,16 +983,33 @@ export function placementIssues(manifest) {
   // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs.
   if (mode === "existing-app") issues.push(...existingAppIssues(p, target));
   if (mode === EXISTING_SECTION_MODE) issues.push(...existingSectionIssues(p.sectionHost, manifest.planMeta));
-  if (manifest.planMeta?.parallelSection === true && mode !== "new-app") {
-    issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
-  }
+  issues.push(...parallelSectionIssues(manifest.planMeta, mode));
   return issues;
 }
+const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
 // `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
-// target package and the host decision are required.
+// target package and the host decision are required. The ONE source for both the gate above and the keys the
+// plan's placement banner asks for — a banner listing keys the gate does not need sends the agent after answers
+// nobody reads.
 const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
-function requiredPlacementKeys(p, has) {
-  return has("sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
+function requiredPlacementKeys(p) {
+  return isResolvedFact(p, "sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
+}
+// The `parallelSection` contract. A parallel section is a NEW app and section built next to an EXISTING Freedom
+// section, so it needs both the 'new-app' host and `freedomExists`. Without `freedomExists` the flag is dropped by
+// `isParallelSection` and the plan quietly renders as a plain Rebuild with no parallel-section banner — so it is a
+// blocker, not a no-op.
+function parallelSectionIssues(planMeta, mode) {
+  if (planMeta?.parallelSection !== true) return [];
+  const issues = [];
+  if (mode !== "new-app") {
+    issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
+  }
+  if (planMeta.freedomExists !== true) {
+    issues.push("planMeta.parallelSection is true but planMeta.freedomExists is not true — a parallel section is built next to an EXISTING Freedom section; without one the plan would be a plain Rebuild. Set planMeta.freedomExists: true, or drop parallelSection when no Freedom section exists.");
+  }
+  return issues;
 }
 // The `existing-section` contract. The plan targets two pages that already exist, so it must name them, and the
 // main-scope Call must be a reconcile: an extension of an existing page is never a rebuild.
@@ -1057,6 +1074,8 @@ export function checklistOpts(manifest, opts = {}) {
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
+    // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
+    placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
