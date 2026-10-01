@@ -133,9 +133,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   cannot be bound — a 94-item split of a real plan put it second, ahead of both. And an item carrying a page's
   judged `Quality gates` row may not precede an item that still writes that page: a verdict filed on a page that is
   still being built is not a verdict. The page's FILED `Quality gates` row (`quality:ran`) goes in the page's last
-  writer — the last item whose `writesTo` names that page — never in a read-only item, an earlier writer or an item
-  writing another page: the design-pass record is filed on the finished page. A page no item declares as its
-  `writesTo` has no such writer, so its filed row is refused until one does. That review also WAITS on every writer of its page, which matters precisely
+  writer, never in a read-only item or an earlier writer: the design-pass record is filed on the finished page. When
+  an item's `writesTo` names the page, the last such item is that writer, and an item writing another page is
+  refused. When no item declares the page as
+  its `writesTo`, its rows are built inside writers of other pages, and the filed row goes in the last writing item
+  that carries the page's rows. That review also WAITS on every writer of its page, which matters precisely
   because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
   And a page's `[attribute-virtual] X` row may not sit in a later item than a handler row on that page whose method
   sets X: each handler row carries the attributes its own body sets (`writesAttrs`, beside the `vk`, so the row

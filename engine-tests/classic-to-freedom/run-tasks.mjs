@@ -9027,15 +9027,10 @@ const locateRow = (dir, label) => {
     // The two handlers get a task of their own, so a cleared cell has a closed task to reopen.
     const handlers = new Set(["Handler — `onA`", "Handler — `onB`"]);
     const groupEntry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
-    // Every other page gets an item that declares it as its `writesTo`, so each page's filed gate row has a writer.
-    const groupsST = checklistGroups(RUN_ST, OPTS_ST);
-    const otherPages = [...new Set(groupsST.map((g) => g.pageKey).filter((k) => k !== "main"))];
     const split = parseSplit(JSON.stringify({ items: [
       { id: "methods", title: "methods", pageKey: "main", writesTo: "main", rows: [...handlers] },
       { id: "page", title: "Page", pageKey: "main", writesTo: "main",
-        rows: groupsST.filter((g) => g.pageKey === "main" && !g.rows.every((r) => handlers.has(r.label))).map(groupEntry) },
-      ...otherPages.map((k, n) => ({ id: `other-page-${n + 1}`, title: k, pageKey: "main", writesTo: k,
-        rows: groupsST.filter((g) => g.pageKey === k).map(groupEntry) })),
+        rows: checklistGroups(RUN_ST, OPTS_ST).filter((g) => !(g.pageKey === "main" && g.rows.every((r) => handlers.has(r.label)))).map(groupEntry) },
     ] })).split;
     const { base, dir } = cut("status-reconcile", RUN_ST, OPTS_ST, split);
     const locate = (label) => locateRow(dir, label);
@@ -9322,10 +9317,7 @@ const locateRow = (dir, label) => {
     const split = parseSplit(JSON.stringify({ items: [
       ...Object.entries(CLOSED).map(([id, rows]) => ({ id, title: id, pageKey: "main", writesTo: "main", rows })),
       { id: "page", title: "Page", pageKey: "main", writesTo: "main",
-        rows: groups.filter((g) => g.pageKey === "main" && !g.rows.every((r) => claimed.has(r.label))).map(entry) },
-      // Every other page in an item that declares it as its `writesTo`, so each page's filed gate row has a writer.
-      ...[...new Set(groups.map((g) => g.pageKey).filter((k) => k !== "main"))].map((k, n) => ({ id: `other-page-${n + 1}`,
-        title: k, pageKey: "main", writesTo: k, rows: groups.filter((g) => g.pageKey === k).map(entry) })),
+        rows: groups.filter((g) => !(g.pageKey === "main" && g.rows.every((r) => claimed.has(r.label)))).map(entry) },
     ] })).split;
     const { base, dir, set } = cut("status-closed-task", run, opts, split);
     const fileOf = (id) => path.join(dir, set.tasks.find((t) => t.id === id).file);
@@ -9494,11 +9486,8 @@ const locateRow = (dir, label) => {
       const splitPath = path.join(f.base, "split.json");
       fs.writeFileSync(splitPath, JSON.stringify({ items: [
         { id: "init", title: "init", pageKey: "main", writesTo: "main", rows: [INIT] },
-        { id: "page", title: "Page", pageKey: "main", writesTo: "main", rows: groups.filter((g) => g.pageKey === "main").flatMap((g) => (g.rows.some((x) => x.label === INIT)
+        { id: "page", title: "Page", pageKey: "main", writesTo: "main", rows: groups.flatMap((g) => (g.pageKey === "main" && g.rows.some((x) => x.label === INIT)
           ? g.rows.filter((x) => x.label !== INIT).map((x) => x.label) : [entry(g)])) },
-        // Every other page in an item that declares it as its `writesTo`, so each page's filed gate row has a writer.
-        ...[...new Set(groups.map((g) => g.pageKey).filter((k) => k !== "main"))].map((k, n) => ({ id: `other-page-${n + 1}`,
-          title: k, pageKey: "main", writesTo: k, rows: groups.filter((g) => g.pageKey === k).map(entry) })),
       ] }));
       const r = f.cli("--split", splitPath);
       const init = locateRow(f.dir, INIT);
@@ -10108,16 +10097,31 @@ console.log("\n===== a split must give the filed gate row to the page's last wri
     () => crossed.refused && filedMentions(crossed.problems).some((p) => p.includes(`\`${otherWriter.id}\``)
       && p.includes(`writes \`${otherWriter.writesTo}\``) && p.includes("`the-build`, the last item that writes `main`")),
     () => crossed.problems);
-  // No item declares `writesTo: main`: main's rows ride in a writer of another page. No item is an honest target, so
-  // the row is refused wherever it sits and the remedy is to declare the writer.
-  const undeclared = refused([
-    ...others.map((i) => (i === otherWriter ? { ...i, rows: [...i.rows, ...[...rest, filedRow].map(onMain)] } : i)),
+  // No item declares `writesTo: main`: main's rows ride in writers of other pages. The last WRITING item that
+  // carries main's rows finishes the page, so it holds the filed row; an earlier carrier is refused, and the
+  // refusal never says that either item writes `main`.
+  const carriers = others.filter((i) => i.writesTo && i.writesTo !== "main");
+  const [firstCarrier, lastCarrier] = [carriers[0], carriers.at(-1)];
+  const restHalf = Math.ceil(rest.length / 2);
+  const carrying = (filedIn) => refused([
+    ...others.map((i) => {
+      if (i === firstCarrier) return { ...i, rows: [...i.rows, ...rest.slice(0, restHalf).map(onMain), ...(filedIn === i ? [onMain(filedRow)] : [])] };
+      if (i === lastCarrier) return { ...i, rows: [...i.rows, ...rest.slice(restHalf).map(onMain), ...(filedIn === i ? [onMain(filedRow)] : [])] };
+      return i;
+    }),
     splitItem("the-review", "main", "", [judgedRow])]);
-  const undeclaredFiled = filedMentions(undeclared.problems || []);
-  check("split: when NO item declares `writesTo: main`, `main`'s filed row in a writer of another page is refused, and the remedy is to give an item `writesTo: main` — never 'move it into the last item that writes `main`'",
-    () => undeclared.refused && undeclaredFiled.length === 1 && undeclaredFiled[0].includes("`writesTo: main`")
-      && undeclaredFiled[0].includes(`\`${otherWriter.id}\``) && !/the last item that writes `main`/.test(undeclaredFiled[0]),
-    () => undeclared.problems);
+  check("split (anti-vacuity): the fixture has two writers of pages other than `main` to carry main's rows",
+    () => carriers.length >= 2 && firstCarrier !== lastCarrier, () => others.map((i) => [i.id, i.writesTo]));
+  const inLastCarrier = carrying(lastCarrier);
+  check("split: when NO item declares `writesTo: main`, `main`'s filed row in the LAST writing item that carries `main` rows is accepted, even though that item writes another page",
+    () => !inLastCarrier.refused, () => inLastCarrier.problems);
+  const inFirstCarrier = carrying(firstCarrier);
+  const firstFiled = filedMentions(inFirstCarrier.problems || []);
+  check("split: …and in an EARLIER carrier it is refused, naming the last carrier as \"the last item that carries `main` rows\" — never claiming either item writes `main`",
+    () => inFirstCarrier.refused && firstFiled.length === 1 && firstFiled[0].includes(`\`${firstCarrier.id}\``)
+      && firstFiled[0].includes(`\`${lastCarrier.id}\`, the last item that carries \`main\` rows`)
+      && !/writes `main`/.test(firstFiled[0]),
+    () => inFirstCarrier.problems);
   // The same seam on the list page: two writers, the filed row in the first.
   const listGates = GROUPS.find((g) => g.pageKey === LIST_PAGE_KEY && g.baseTitle === "Quality gates").rows;
   const listFiled = listGates.find((r) => r.deliverableId === "quality:ran").label;

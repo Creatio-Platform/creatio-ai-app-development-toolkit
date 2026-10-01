@@ -303,44 +303,52 @@ function reviewBeforeItsPage(items) {
 }
 
 // THE FIFTH CHECKED SEAM. A page's filed gate row is closed by the design pass over the FINISHED page, so the item
-// holding it is the page's last writer: the last item whose `writesTo` names the page. A read-only item files
-// nothing, an earlier writer would file a record for a page a later item still changes, and an item writing
-// another page builds a different page. A page no item declares as its `writesTo` has no writer to hold the row,
-// so the row is refused wherever it sits and the remedy is to declare one.
-function lastWriterOf(items, page) {
+// holding it is the page's last writer. When any item's `writesTo` names the page, that is the last such item: a
+// read-only item files nothing, an earlier writer would file a record for a page a later item still changes, and
+// an item writing another page builds a different page. When no item names the page, its rows are built inside
+// writers of other pages, and the last WRITING item that carries any of its rows is the one that finishes it.
+function declaredWriterOf(items, page) {
   let at = -1;
   items.forEach((it, i) => { if (it.declaredWritesTo === page) at = i; });
   return at;
 }
 function lastCarrierOf(items, page) {
   let at = -1;
-  items.forEach((it, i) => { if (it.rows.some((r) => r.pageKey === page)) at = i; });
+  items.forEach((it, i) => { if (it.declaredWritesTo && it.rows.some((r) => r.pageKey === page)) at = i; });
   return at;
 }
-const filedGateMisplacement = (it, page) => {
+// The item that holds the page's filed row, and whether a `writesTo` declares it (false: it only carries rows).
+function lastWriterOf(items, page) {
+  const declared = declaredWriterOf(items, page);
+  return declared >= 0 ? { at: declared, declared: true } : { at: lastCarrierOf(items, page), declared: false };
+}
+const filedGateMisplacement = (it, page, owner) => {
   if (!it.declaredWritesTo) {
     return "but that item writes nothing — filing the design-pass record is build work, and a read-only item only judges it";
   }
+  if (!owner.declared) return `but a LATER writing item still carries \`${page}\` rows — the design pass files its record on the finished page`;
   if (it.declaredWritesTo !== page) return `but that item writes \`${it.declaredWritesTo}\`, not that page`;
   return "but a LATER item still writes that page — the design pass files its record on the finished page";
 };
-function filedGateRemedy(items, page) {
-  const last = lastWriterOf(items, page);
-  if (last >= 0) return `Move it into \`${items[last].id}\`, the last item that writes \`${page}\`.`;
-  const carrier = lastCarrierOf(items, page);
-  return `No item declares \`writesTo: ${page}\`: give the item that builds that page \`writesTo: ${page}\``
-    + ` (\`${items[carrier].id}\` is the last item that carries \`${page}\` rows) and put the row there.`;
+function filedGateRemedy(items, page, owner) {
+  if (owner.declared) return `Move it into \`${items[owner.at].id}\`, the last item that writes \`${page}\`.`;
+  if (owner.at >= 0) {
+    return `Move it into \`${items[owner.at].id}\`, the last item that carries \`${page}\` rows (no item declares \`writesTo: ${page}\`).`;
+  }
+  return `No writing item carries \`${page}\` rows: give the item that builds that page \`writesTo: ${page}\` and put the row there.`;
 }
 function filedGateOutsideLastWriter(items) {
   const out = [];
   items.forEach((it, i) => {
     for (const r of it.rows) {
-      if (!isFiledGateRow(r) || lastWriterOf(items, r.pageKey) === i) continue;
+      if (!isFiledGateRow(r)) continue;
+      const owner = lastWriterOf(items, r.pageKey);
+      if (owner.at === i) continue;
       const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${QUALITY_FILED_ID}\`, record \`${r.pageKey}#quality-gates\`) of \`${r.pageKey}\``;
-      const why = filedGateMisplacement(it, r.pageKey);
+      const why = filedGateMisplacement(it, r.pageKey, owner);
       const claims = `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
         + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
-      out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey)} ${claims}`);
+      out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey, owner)} ${claims}`);
     }
   });
   return out;
