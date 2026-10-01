@@ -194,9 +194,14 @@ wait for the user to ask for a UI review.
    that artifact does not exist yet; `get-page` before `update-page`; `validate-page` before saving; the business-rule creators for supported rules;
    `update-client-unit-schema` only for non-page schemas or when raw updates are explicitly needed.
    - **A `success` from `validate-page`/`update-page` is NOT proof the page works** — clio reports
-     `success` for bodies that fail at runtime. After saving a page, and always before building
-     anything that depends on it (its details, child pages, dependent rules), open it in the browser
-     (or run a runtime render check) and confirm it loads without console/render errors.
+     `success` for bodies that fail at runtime. So make ONE browser check per task, after your last
+     save — not after each edit — and before you close the task: open the page (or run a runtime
+     render check), confirm it loads without console/render errors, and read the evidence your rows
+     need in the order *Evidence, cheapest first* below gives. Between edits the evidence is the
+     saved schema read back with `get-page`, which also answers while a tab is frozen. Open the page
+     again only after fixing a defect that check found. Anything that builds on the page — its
+     details, child pages, dependent rules — is either your own later edit, covered by that one
+     check, or another task, which starts only after yours closes.
    - **Run the `creatio-ui-guidelines` review on every page you build — this is a DONE-GATE, not
      optional.** Invoke the skill (via the Skill tool) the moment the page is saved, BEFORE you
      report it done or build anything on it. It may NOT be marked `PENDING`/"later" and skipped — an
@@ -219,3 +224,25 @@ wait for the user to ask for a UI review.
    `roadmap.md` and refresh the README dashboard — the documentation standard still applies. That is
    IN ADDITION to your task file's `status` and `## Notes`, which are what the orchestrator and the
    re-slice read.
+
+**Evidence, cheapest first.** Your one browser check reads the cheapest evidence that answers the
+question, and stops when it has. Browser surfaces name their tools differently, so the kind of
+evidence is the rule and the tool names are examples:
+
+1. **The data requests the page sends** — the `SelectQuery` / `UpdateQuery` bodies, captured by a
+   request hook installed before the page loads. It answers the data checks your rows carry: a
+   ForwardReference field (a column reached through a lookup) is populated on open when its path is
+   in the page's `SelectQuery` columns and its value comes back; each detail's `SelectQuery` carries
+   the filters that link it to the open record and every filter the plan names; a save's
+   `UpdateQuery` shows the columns it wrote.
+2. **The console** (e.g. `read_console_messages`) — a render or binding error names its own cause
+   there.
+3. **DOM reads** (e.g. `find`, `javascript_tool`) — one targeted string per question, such as a
+   caption or a component that must be present; never a page dump.
+4. **A screenshot** (e.g. `computer` → screenshot) only where the layout is the thing checked, at
+   most one per page — and that screenshot is the one the `creatio-ui-guidelines` review reuses,
+   not a second.
+
+The hook snippet, how each check reads off it, and the console collector for a surface that cannot
+read the console are in `./references/freedom-ui-browser-check.md` → *Cheap evidence first*. It is
+a reference: list its headings and read that section, not the whole file.
