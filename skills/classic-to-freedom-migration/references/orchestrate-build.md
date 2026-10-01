@@ -229,13 +229,14 @@ task and its review) stays in this session.
    task, so a page is never built against an unanswered question. (A question that could change
    WHICH pages exist blocks the plan at the structure gate instead, so it never reaches a task.)
 
-   **The record files exist from the first slice on.** Every `--tasks`, `--next` and `--start`
-   keeps `evidence.json`, `judge.json` and `recorded.json` in the migration folder current: each id
+   **The record files exist from the first slice on.** Every `--tasks`, `--next`, `--start` and
+   `--handoff` keeps `evidence.json`, `judge.json` and `recorded.json` in the migration folder current: each id
    the plan publishes is a key, an id the plan gains is added, and a value already filed is never
    changed or dropped. A file that does not parse is reported on stdout and left as it is — repair
    its JSON by hand, keeping every value, then re-run. So a builder files its evidence record during
    its own task — the page's LAST build task files the `<pageKey>#quality-gates` record — and the
-   review judges it; `--reads` at 7.4 adds the read plan, not the record files.
+   review judges it; `--reads` at 7.4 writes the read plan and merges the record files the same
+   way, never overwriting a filed value.
 
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`

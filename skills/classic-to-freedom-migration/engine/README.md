@@ -64,7 +64,7 @@ the agent still resolves that itself, and a key read against the wrong page come
 engine writes `reads/index.json` and owns every filename in it; page keys carry `:`, `@` and `#`, so the key is
 slugged and the mapping recorded, and nothing downstream parses a filename. It also keeps the `evidence.json` /
 `judge.json` / `recorded.json` record files current with every published id already a key, the same merge every
-`--tasks` / `--next` / `--start` runs: an id a file lacks is added, a value already filed is never changed or
+`--tasks` / `--next` / `--start` / `--handoff` runs: an id a file lacks is added, a value already filed is never changed or
 dropped, and a file that does not parse is reported and left as it is. Like
 `--tasks`, it WRITES rather than prints, so it refuses a second mode flag instead of losing to it.
 

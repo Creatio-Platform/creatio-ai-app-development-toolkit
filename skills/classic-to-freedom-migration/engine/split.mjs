@@ -331,7 +331,9 @@ function filedGateOutsideLastWriter(items) {
       const why = filedGateMisplacement(it, r.pageKey);
       const into = last >= 0 ? `Move it into \`${items[last].id}\`, the last item that writes \`${r.pageKey}\`.`
         : `Move it into the last item that writes \`${r.pageKey}\`.`;
-      out.push(`${row} is in \`${it.id}\` ${why}. ${into}`);
+      const claims = `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
+        + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
+      out.push(`${row} is in \`${it.id}\` ${why}. ${into} ${claims}`);
     }
   });
   return out;
