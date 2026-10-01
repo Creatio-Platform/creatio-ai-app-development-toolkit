@@ -11,9 +11,9 @@ could have returned anything. This file exists to make that loop impossible to r
 
 ## Cheap evidence first
 
-A build task opens the browser ONCE, after its last save — not after each edit; between edits the evidence is
-the saved schema read back with `get-page`. Browser checks are at most TWO per task: the second only to
-confirm the fix of a defect the first check found, never a third. What the one check costs is decided by the
+Browser checks are at most TWO per task: a build task opens the browser once, after its last save — not after
+each edit — and a second time only to confirm the fix of a defect the first check found, never a third. Between
+edits the evidence is the saved schema read back with `get-page`. What the one check costs is decided by the
 evidence it reads: on one measured section, page-build tasks that verified through screenshots and DOM reads
 cost about 4.5× the ones that did not. Browser surfaces name
 their tools differently, so the kind of evidence is the rule and the tool names are examples. Read the cheapest

@@ -265,6 +265,9 @@ whole file.
 **Report the count.** Every task that saved a page writes one line under `## Notes`, verbatim in
 this shape: `Browser checks: N — <what each check answered>`, e.g. `Browser checks: 2 — 1: loads
 clean, Owner populated, Visa detail filtered by Id, AC-2 UpdateQuery wrote Status; 2: confirms the
-Status caption fix`. Write it even when you opened nothing (`Browser checks: 0 — <why the read-backs
-sufficed>`). The engine cannot see your tool calls, so this line is how a reviewer, the judge and the
-cost counter see that the cap held; N above 2 is a defect in the task, reported as such.
+Status caption fix`. Write it even when you opened nothing (`Browser checks: 0 — <the runtime render
+check used instead, or why no browser surface was available>`): N=0 is valid only when the required
+post-save check ran as a runtime render check or no browser surface was available, never because the
+`get-page` read-backs looked right — they read back the saved schema, not the running page. The
+engine cannot see your tool calls, so this line is how a reviewer and the judge see that the cap
+held; N above 2 is a defect in the task, reported as such.

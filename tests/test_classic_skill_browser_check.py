@@ -113,6 +113,11 @@ class OneCheckPerTaskTests(unittest.TestCase):
         self.assertIn("at most TWO per task", cheap)
         self.assertIn("confirm the fix of a defect the first check found", cheap)
 
+    def test_the_reference_states_the_norm_and_its_exception_in_one_sentence(self):
+        cheap = flat(section(read(BROWSER_CHECK), CHEAP_HEADING, "\n## "))
+        self.assertRegex(cheap, r"opens the browser once, after its last save[^.]*a second time only to confirm the fix")
+        self.assertNotIn("ONCE", cheap)
+
     def test_the_per_save_wording_is_gone(self):
         self.assertNotIn("After saving a page, and always before building anything that depends on it", self.text)
 
@@ -145,6 +150,24 @@ class BrowserChecksNotesLineTests(unittest.TestCase):
         notes = section(read(EXECUTION), "**Report the count.**", "\n\n")
         self.assertIn("Every task that saved a page", flat(notes))
         self.assertIn("Browser checks: 0", flat(notes))
+
+    def test_no_check_is_valid_only_without_a_browser_surface_or_with_a_render_check(self):
+        # A get-page read-back reads the saved schema, not the running page, so it never
+        # stands in for the post-save check.
+        notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
+        self.assertRegex(notes, r"N=0 is valid only when[^.]*runtime render check[^.]*no browser surface")
+        self.assertRegex(notes, r"never because the `get-page` read-backs")
+        self.assertNotIn("why the read-backs sufficed", notes)
+
+    def test_a_count_above_the_cap_is_a_defect(self):
+        notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
+        self.assertIn("N above 2 is a defect in the task", notes)
+
+    def test_the_line_names_only_readers_that_exist(self):
+        # The judge reads a task's Notes by hand; nothing parses the line automatically.
+        notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
+        self.assertIn("a reviewer and the judge", notes)
+        self.assertNotIn("cost counter", notes)
 
 
 class BehaviourEvidenceTests(unittest.TestCase):
