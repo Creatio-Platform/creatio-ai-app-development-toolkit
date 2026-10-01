@@ -321,9 +321,13 @@ rules.
   `detail-row-actions` ⚠ (and a `⚠ no row Copy/Delete` note in the Layout table), independent of
   the add flow: an add-disabled detail can keep its row actions and vice versa. Build the Freedom
   list rows without the named Copy/Delete actions and keep records opening from the list on
-  click: set `rowToolbarItems` to the actions the Classic detail keeps (Open alone when both Copy
-  and Delete are gone), never to `[]`, per the read-only detail rule and its recipe in the
-  `creatio-ui-guidelines` reference `page-layout-and-controls.md`. A
+  click: set `rowToolbarItems` to only the actions the Classic detail keeps — Open alone when both
+  Copy and Delete are gone, as one `crt.MenuItem` (localized caption, icon `edit-row-action`)
+  whose `clicked` fires `crt.UpdateRecordRequest` for the row's record. Never set it to `[]` and
+  never set `features.rows.toolbar: false`: any value replaces all the platform's default row
+  actions, so both leave the rows with no Open. The full recipe (the exact `clicked` params and
+  the Open item's guards) is the read-only detail rule in the `creatio-ui-guidelines` reference
+  `page-layout-and-controls.md`. A
   removed Classic Edit maps to nothing: Freedom has no separate Edit row action, so it never means
   "stop records opening". When the override is in a form the engine cannot read (a reference to
   another function, an over-long body), the same ⚠ says its effect is **UNKNOWN** and the Layout

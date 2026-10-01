@@ -46,10 +46,25 @@ class ReadOnlyRowMenuRecipeTests(unittest.TestCase):
         self.assertIn("useRelativeContext: true", rule)
         self.assertIn("{ enable: false, itemsCreation: false }", rule)
 
+    def test_rule_open_item_mirrors_the_platform_open_item(self):
+        # The platform's own Open (DataGridActionsPreprocessor) has a localized caption, the
+        # edit-row-action icon, is hidden without an edit page and disabled in create mode.
+        rule = self.rule()
+        self.assertIn("localized `caption`", rule)
+        self.assertIn("#ResourceString(", rule)
+        self.assertIn('never a hard-coded English `"Open"` literal', rule)
+        self.assertNotIn("captioned Open", rule)
+        self.assertNotIn('caption: "Open"', rule)
+        self.assertIn('`icon: "edit-row-action"`', rule)
+        self.assertIn("hidden when the list's entity has no edit page", rule)
+        self.assertIn("create mode", rule)
+        self.assertIn("`disabled`", rule)
+
     def test_rule_says_why_an_empty_list_or_a_hidden_toolbar_loses_open(self):
         rule = self.rule()
         self.assertIn("`rowToolbarItems: []`", rule)
-        self.assertIn("`rows.toolbar: false`", rule)
+        self.assertIn("`features.rows.toolbar: false`", rule)
+        self.assertIsNone(re.search(r"(?<!features\.)rows\.toolbar", rule))
         self.assertIn("no Open", rule)
 
     def test_rule_still_asks_to_confirm_the_shape_on_the_target_version(self):
@@ -62,12 +77,32 @@ class ReadOnlyRowMenuRecipeTests(unittest.TestCase):
         self.assertIn("`rowToolbarItems`", item)
         self.assertIn("only Open", item)
         self.assertIn("`crt.UpdateRecordRequest`", item)
+        self.assertIn("localized caption", item)
+        self.assertIn("`edit-row-action`", item)
+        self.assertIn("`features.rows.toolbar: false`", item)
+        self.assertIsNone(re.search(r"(?<!features\.)rows\.toolbar", item))
+
+    def note(self):
+        return paragraph(BUILD_PAGE, "- **Removed row actions are their own line.**")
 
     def test_migration_row_actions_note_points_at_the_guideline_recipe(self):
-        note = paragraph(BUILD_PAGE, "- **Removed row actions are their own line.**")
+        note = self.note()
         self.assertIn("`rowToolbarItems`", note)
         self.assertIn("page-layout-and-controls.md", note)
         self.assertNotIn("the row-action property comes from `get-component-info`", note)
+
+    def test_migration_row_actions_note_carries_the_short_recipe_inline(self):
+        # Builders read build-page.md during the build task; the ui-guidelines pass runs last,
+        # so the note itself must say what to build, not only where the rule lives.
+        note = self.note()
+        self.assertIn("Open alone when both Copy and Delete are gone", note)
+        self.assertIn("`crt.MenuItem`", note)
+        self.assertIn("`crt.UpdateRecordRequest`", note)
+        self.assertIn("`edit-row-action`", note)
+        self.assertIn("localized caption", note)
+        self.assertIn("Never set it to `[]`", note)
+        self.assertIn("never set `features.rows.toolbar: false`", note)
+        self.assertIsNone(re.search(r"(?<!features\.)rows\.toolbar", note))
 
 
 if __name__ == "__main__":
