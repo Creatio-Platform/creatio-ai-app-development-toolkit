@@ -9847,12 +9847,27 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   check("record files: `--next` writes them too — a folder whose record files went missing gets them back from the mode the orchestrator runs most",
     () => [0, 2].includes(next.status) && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
     () => ({ status: next.status, stderr: next.stderr, state: recordState(base) }));
-  for (const f of RECORD_FILES) fs.rmSync(path.join(base, f), { force: true });
-  const startable = startableTasks(syncTaskDir(dir, RUN2, checklistOpts(MANIFEST2)), dir).startable[0];
-  const started = startable ? cliTasks(["--tasks", dir, "--start", startable.id], MANIFEST2) : null;
-  check("record files: `--start` writes them too — the task it starts may be the one that files the first record",
-    () => started?.status === 0 && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
-    () => ({ startable: startable?.id, status: started?.status, stderr: started?.stderr, state: recordState(base) }));
+  // `--start` on a PAGE BUILD task: the page it builds files its own records, the `Quality gates` one included.
+  // The CLI's own budget keeps this small plan in one Whole-migration task, so the folder is cut by a split that
+  // gives every page its own build item.
+  const startBase = tmp("records-start");
+  const startDir = path.join(startBase, "build-tasks");
+  const startSplit = path.join(startBase, "split.json");
+  fs.writeFileSync(startSplit, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
+  const cutStart = cliTasks(["--tasks", startDir, "--split", startSplit], MANIFEST);
+  // The page's dependencies are dispatched and closed first, so `--start` opens the page task itself.
+  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => /^page:/.test(t.artifact || ""));
+  if (pageTask) clearDepsOf(startDir, pageTask.id, RUN, checklistOpts(MANIFEST));
+  const startable = startableTasks(syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)), startDir).startable;
+  const startedPage = pageTask?.artifact.slice("page:".length);
+  const pageIds = PLAN.evidenceIds.filter((id) => id.startsWith(`${startedPage}#`));
+  for (const f of RECORD_FILES) fs.rmSync(path.join(startBase, f), { force: true });
+  const started = pageTask ? cliTasks(["--tasks", startDir, "--start", pageTask.id], MANIFEST) : null;
+  check("record files: `--start` on a page build task writes them too — `evidence.json` and `judge.json` hold every evidence id of THAT page, its `#quality-gates` record included",
+    () => started?.status === 0 && startable.some((t) => t.id === pageTask.id) && pageIds.includes(`${startedPage}#quality-gates`)
+      && ["evidence.json", "judge.json"].every((f) => pageIds.every((id) => Object.hasOwn(readJson(startBase, f), id))),
+    () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 200)], startable: startable.map((t) => t.artifact), task: pageTask && [pageTask.id, pageTask.artifact], pageIds, status: started?.status, stderr: started?.stderr, state: recordState(startBase) }));
+  fs.rmSync(startBase, { recursive: true, force: true });
 
   // `--reads` runs the same merge: it adds an id the file lacks and keeps every filed value.
   const filedAgain = readJson(base, "evidence.json");
