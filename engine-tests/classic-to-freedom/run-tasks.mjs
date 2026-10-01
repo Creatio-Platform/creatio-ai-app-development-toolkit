@@ -24,6 +24,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { readPlan } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -1443,7 +1444,9 @@ console.log("\n===== a review waits for the page it judges, and may not precede 
 // on a page that is still being built. The `Quality gates` rows name the page, so the engine says so.
 {
   const rows = allRows("main");
-  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows[0].label;
+  // The JUDGED row is what makes an item a review; the filed row is build work and stays with the writer.
+  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows
+    .find((r) => r.deliverableId === "quality:judged").label;
   const build = rows.filter((r) => r !== gateRow);
   const REVIEW = splitItem("the-review", "main", "", [gateRow]);
   const BUILD = splitItem("the-build", "main", "main", build);
@@ -9737,6 +9740,216 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
       () => ({ synced: synced.status, err: synced.stdout.slice(0, 400), lists, decided, rows: lists.map(([, n]) => [after.rows[n - 1]?.outcome, map.get(n)]) }));
     fs.rmSync(base, { recursive: true, force: true });
   }
+}
+
+console.log("\n===== the record files exist from slicing on, and a re-slice merges into them =====");
+// A builder files its evidence record during the build, so `evidence.json` / `judge.json` / `recorded.json` must
+// already exist when the first build task starts — not only after the `--reads` step that runs once every build
+// task is done. Every task-folder mode writes them into the MIGRATION folder (the parent of the task folder), and
+// writing into an existing file only ever ADDS a missing id.
+{
+  const RECORD_FILES = ["evidence.json", "judge.json", "recorded.json"];
+  const PLAN = readPlan(RUN, checklistOpts(MANIFEST));
+  const PLAN2 = readPlan(RUN2, checklistOpts(MANIFEST2));
+  const readJson = (base, f) => (fs.existsSync(path.join(base, f)) ? JSON.parse(fs.readFileSync(path.join(base, f), "utf8")) : {});
+  const recordState = (base) => Object.fromEntries(RECORD_FILES.map((f) => [f, fs.existsSync(path.join(base, f))
+    ? fs.readFileSync(path.join(base, f), "utf8").slice(0, 120) : null]));
+  check("record files (anti-vacuity): the fixture publishes evidence ids, and the grown plan publishes one the first does not",
+    () => PLAN.evidenceIds.length > 0 && PLAN2.evidenceIds.some((id) => !PLAN.evidenceIds.includes(id)),
+    () => ({ a: PLAN.evidenceIds, b: PLAN2.evidenceIds }));
+
+  const base = tmp("records");
+  const dir = path.join(base, "build-tasks");
+  const run = cliTasks(["--tasks", dir], MANIFEST);
+  check("record files: `--tasks` on a fresh folder writes `evidence.json` and `judge.json` beside the task folder with EVERY published id already a key — the first builder files into a file that exists",
+    () => run.status === 0 && ["evidence.json", "judge.json"].every((f) => {
+      const doc = readJson(base, f);
+      return PLAN.evidenceIds.every((id) => Object.prototype.hasOwnProperty.call(doc, id));
+    }),
+    () => ({ status: run.status, stderr: run.stderr, files: fs.readdirSync(base), state: recordState(base) }));
+  check("record files: the empty value beside each id is the one `--reads` writes — both findings lists scaffolded on an evidence record, `convincing: null` on a verdict",
+    () => {
+      const ev = readJson(base, "evidence.json"), ju = readJson(base, "judge.json");
+      return PLAN.evidenceIds.every((id) => Array.isArray(ev[id].findings) && Array.isArray(ev[id].findingsRaised)
+        && ev[id].referencePage === "" && ju[id].convincing === null);
+    }, () => recordState(base));
+  check("record files: `recorded.json` follows the plan — written with every builder-recorded key when the plan has any, absent when it has none",
+    () => PLAN.builderRecorded.length
+      ? PLAN.builderRecorded.every((b) => readJson(base, "recorded.json")[b.reachabilityKey] === null)
+      : !fs.existsSync(path.join(base, "recorded.json")),
+    () => ({ builderRecorded: PLAN.builderRecorded, state: recordState(base) }));
+
+  // A filed value, an id the plan does not publish, and a verdict — all three must come back untouched.
+  const ownId = PLAN.evidenceIds[0];
+  const filed = { referencePage: "Contacts_FormPage", components: ["crt.Input", "crt.ComboBox"], findings: ["kept"], findingsRaised: [], note: "ünïcode · `tick`" };
+  const ev = readJson(base, "evidence.json");
+  ev[ownId] = filed;
+  ev["gone#quality-gates"] = { referencePage: "Old" };
+  fs.writeFileSync(path.join(base, "evidence.json"), JSON.stringify(ev, null, 2) + "\n");
+  const ju = readJson(base, "judge.json");
+  ju[ownId] = { convincing: true, why: "names the page and the components" };
+  fs.writeFileSync(path.join(base, "judge.json"), JSON.stringify(ju, null, 2) + "\n");
+  const grown = cliTasks(["--tasks", dir], MANIFEST2);
+  const ev2 = readJson(base, "evidence.json"), ju2 = readJson(base, "judge.json");
+  const added = PLAN2.evidenceIds.filter((id) => !PLAN.evidenceIds.includes(id));
+  check("record files: a re-slice after the plan GAINS an evidence id inserts that id into both files — a page added to the plan gets a slot without anyone retyping its id",
+    () => grown.status === 0 && added.length > 0 && added.every((id) => id in ev2 && id in ju2)
+      && PLAN2.evidenceIds.every((id) => id in ev2 && id in ju2),
+    () => ({ status: grown.status, stderr: grown.stderr, added, keys: Object.keys(ev2) }));
+  check("record files: …and a value already filed is kept BYTE-IDENTICAL, in both files — the merge adds keys, it never rewrites an answer",
+    () => JSON.stringify(ev2[ownId]) === JSON.stringify(filed)
+      && JSON.stringify(ju2[ownId]) === JSON.stringify({ convincing: true, why: "names the page and the components" }),
+    () => ({ evidence: ev2[ownId], judge: ju2[ownId] }));
+  check("record files: …and a key the plan does not publish is KEPT — dropping it would delete a record somebody filed",
+    () => JSON.stringify(ev2["gone#quality-gates"]) === JSON.stringify({ referencePage: "Old" }),
+    () => Object.keys(ev2));
+  const before = fs.readFileSync(path.join(base, "evidence.json"), "utf8");
+  cliTasks(["--tasks", dir], MANIFEST2);
+  check("record files: a re-slice with nothing to add leaves the file's bytes exactly as they were",
+    () => fs.readFileSync(path.join(base, "evidence.json"), "utf8") === before,
+    () => fs.readFileSync(path.join(base, "evidence.json"), "utf8").slice(0, 200));
+
+  // An unparseable file is somebody's record the engine cannot read. Reported, never replaced.
+  const broken = "{ \"main#quality-gates\": { \"referencePage\": \"half-writ";
+  fs.writeFileSync(path.join(base, "judge.json"), broken);
+  const reported = cliTasks(["--tasks", dir], MANIFEST2);
+  check("record files: an UNPARSEABLE existing file is reported by name on stdout and left byte for byte as it was — the engine cannot tell what it holds, so it never overwrites it",
+    () => reported.status === 0 && fs.readFileSync(path.join(base, "judge.json"), "utf8") === broken
+      && /judge\.json/.test(reported.stdout || "") && /not overwritten|left as it is|NOT (READ|WRITTEN)/i.test(reported.stdout || ""),
+    () => ({ status: reported.status, stdout: (reported.stdout || "").slice(-600), back: fs.readFileSync(path.join(base, "judge.json"), "utf8") }));
+  fs.writeFileSync(path.join(base, "judge.json"), JSON.stringify(ju2, null, 2) + "\n");
+
+  // `--next` and `--start` read the cut, so they keep the files current the same way.
+  for (const f of RECORD_FILES) fs.rmSync(path.join(base, f), { force: true });
+  const next = cliTasks(["--tasks", dir, "--next"], MANIFEST2);
+  check("record files: `--next` writes them too — a folder whose record files went missing gets them back from the mode the orchestrator runs most",
+    () => [0, 2].includes(next.status) && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
+    () => ({ status: next.status, stderr: next.stderr, state: recordState(base) }));
+  for (const f of RECORD_FILES) fs.rmSync(path.join(base, f), { force: true });
+  const startable = startableTasks(syncTaskDir(dir, RUN2, checklistOpts(MANIFEST2)), dir).startable[0];
+  const started = startable ? cliTasks(["--tasks", dir, "--start", startable.id], MANIFEST2) : null;
+  check("record files: `--start` writes them too — the task it starts may be the one that files the first record",
+    () => started && started.status === 0 && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
+    () => ({ startable: startable?.id, status: started?.status, stderr: started?.stderr, state: recordState(base) }));
+
+  // `--reads` runs the same merge: it adds an id the file lacks and keeps every filed value.
+  const filedAgain = readJson(base, "evidence.json");
+  filedAgain[ownId] = filed;
+  delete filedAgain[added[0]];
+  fs.writeFileSync(path.join(base, "evidence.json"), JSON.stringify(filedAgain, null, 2) + "\n");
+  const reads = cliTasks(["--reads", base], MANIFEST2);
+  const ev3 = readJson(base, "evidence.json");
+  check("record files: `--reads` merges the same way — the missing id is added and the filed value survives",
+    () => reads.status === 0 && added[0] in ev3 && JSON.stringify(ev3[ownId]) === JSON.stringify(filed),
+    () => ({ status: reads.status, stderr: reads.stderr, keys: Object.keys(ev3) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== the filed half of a page's quality gate belongs to the page's LAST build task =====");
+// The `quality:ran` row says the design pass ran and its record was filed. Filing is the builder's act and the
+// review only judges it, so the row goes to the build task that finishes the page and the review keeps the judged
+// row alone.
+{
+  const FILED = "quality:ran", JUDGED = "quality:judged";
+  const hasRow = (t, id) => t.rows.some((r) => r.deliverableId === id);
+  const writersOf = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact).sort((a, b) => a.order - b.order);
+  const mainWriters = writersOf(SET5, "page:main");
+  check("filed gate (anti-vacuity): the bulk fixture really cuts `page:main` into several build tasks",
+    () => mainWriters.length > 1, () => SET5.tasks.map((t) => `${t.order}:${t.artifact}·${t.group}`));
+  check("filed gate: a page cut into several build tasks carries `quality:ran` in its LAST build task only",
+    () => hasRow(mainWriters.at(-1), FILED) && mainWriters.slice(0, -1).every((t) => !hasRow(t, FILED)),
+    () => mainWriters.map((t) => ({ order: t.order, rows: t.rows.map((r) => r.deliverableId || "—") })));
+  check("filed gate: …and it is that task's LAST row — the design pass looks at the page every other row of the task built",
+    () => mainWriters.at(-1).rows.at(-1).deliverableId === FILED,
+    () => mainWriters.at(-1).rows.map((r) => r.deliverableId || r.label.slice(0, 30)));
+  check("filed gate: the page's review task carries the judged row and nothing else of the gate",
+    () => {
+      const review = SET5.tasks.find((t) => t.artifact === "review:main");
+      return review && hasRow(review, JUDGED) && !hasRow(review, FILED) && review.writesTo === "";
+    }, () => SET5.tasks.find((t) => t.artifact === "review:main")?.rows.map((r) => r.deliverableId));
+  check("filed gate: the review still waits on EVERY build task of the page it judges, the one that files the record included",
+    () => {
+      const review = SET5.tasks.find((t) => t.artifact === "review:main");
+      return mainWriters.every((w) => review.dependsOn.includes(w.id));
+    }, () => ({ deps: SET5.tasks.find((t) => t.artifact === "review:main")?.dependsOn, writers: mainWriters.map((t) => t.id) }));
+  check("filed gate: on every page of the per-artifact cut exactly ONE task owns `quality:ran`, and it is that page's last writer",
+    () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
+      const owners = SET.tasks.filter((t) => t.rows.some((r) => r.deliverableId === FILED && r.pageKey === k));
+      const writers = SET.tasks.filter((t) => t.writesTo && t.rows.some((r) => r.pageKey === k));
+      const last = writers.sort((a, b) => a.order - b.order).at(-1);
+      return owners.length === 1 && owners[0] === last;
+    }), () => SET.tasks.map((t) => `${t.order}:${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
+  const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+  const whole = collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+  const wholeReview = collapsed.tasks.find((t) => t.artifact === "review:whole");
+  check("filed gate: in a COLLAPSED run the Whole-migration task owns every page's `quality:ran` and the review owns only the judged rows",
+    () => whole && wholeReview
+      && ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => whole.rows.some((r) => r.deliverableId === FILED && r.pageKey === k))
+      && !hasRow(wholeReview, FILED) && hasRow(wholeReview, JUDGED),
+    () => collapsed.tasks.map((t) => `${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
+  check("filed gate: the row text is unchanged by the move — it is the plan's row, so `--verify` resolves it as before",
+    () => {
+      const plan = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows.find((r) => r.deliverableId === FILED);
+      return SET.tasks.some((t) => t.writesTo && t.rows.some((r) => r.label === plan.label && r.group === "Quality gates"));
+    }, () => "the filed row by label");
+
+  // A folder whose review task holds the filed row with an Outcome on it: re-slicing moves the row to the page's
+  // last build task, and the Outcome moves with it.
+  const d = path.join(tmp("filed-carry"), "build-tasks");
+  const first = syncTaskDir(d, RUN5, OPTS5);
+  const lastBuild = writersOf(first, "page:main").at(-1);
+  const review = first.tasks.find((t) => t.artifact === "review:main");
+  const filedRow = lastBuild.rows.find((r) => r.deliverableId === FILED);
+  let carried = null;
+  if (filedRow && review) {
+    // The filed row in the review task, and absent from the build task.
+    const oldReview = { ...review, rows: [filedRow, ...review.rows] };
+    const oldBuild = { ...lastBuild, rows: lastBuild.rows.filter((r) => r !== filedRow) };
+    fs.writeFileSync(path.join(d, oldBuild.file), renderTaskFile(oldBuild, first));
+    fs.writeFileSync(path.join(d, oldReview.file), setOutcome(renderTaskFile(oldReview, first), 1, "built"));
+    syncTaskDir(d, RUN5, OPTS5);
+    const after = readTaskDir(d).find((t) => t.id === lastBuild.id);
+    carried = after?.rows.find((r) => r.label === filedRow.label);
+  }
+  check("filed gate: re-slicing a folder whose REVIEW task recorded an Outcome on the filed row carries that Outcome to the build task that now owns the row",
+    () => carried && /built/.test(carried.outcome),
+    () => ({ filedRow: !!filedRow, review: !!review, carried }));
+  fs.rmSync(path.dirname(d), { recursive: true, force: true });
+}
+
+console.log("\n===== a split must give the filed gate row to the page's last writer =====");
+{
+  const rows = allRows("main");
+  const gates = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows;
+  const filedRow = gates.find((r) => r.deliverableId === "quality:ran").label;
+  const judgedRow = gates.find((r) => r.deliverableId === "quality:judged").label;
+  const rest = rows.filter((r) => r !== filedRow && r !== judgedRow);
+  const others = FULL_SPLIT.items.filter((i) => i.pageKey !== "main");
+  const refused = (items) => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  const readOnly = refused([splitItem("the-build", "main", "main", rest), ...others,
+    splitItem("the-review", "main", "", [filedRow, judgedRow])]);
+  check("split: the filed `quality:ran` row claimed by a READ-ONLY item is refused, naming the row, its page and the item to move it into",
+    () => readOnly.refused && readOnly.problems.some((p) => /quality:ran/.test(p) && p.includes("the-review")
+      && p.includes("`main`") && p.includes("the-build")),
+    () => readOnly.problems);
+  const half = Math.ceil(rest.length / 2);
+  const early = refused([splitItem("first-half", "main", "main", [...rest.slice(0, half), filedRow]),
+    splitItem("second-half", "main", "main", rest.slice(half)), ...others,
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split: the filed row in a writer that a LATER item still writes after is refused, naming that later item as the owner",
+    () => early.refused && early.problems.some((p) => /quality:ran/.test(p) && p.includes("first-half") && p.includes("second-half")),
+    () => early.problems);
+  const right = refused([splitItem("first-half", "main", "main", rest.slice(0, half)),
+    splitItem("second-half", "main", "main", [...rest.slice(half), filedRow]), ...others,
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split: the filed row in the page's last writer and the judged row in a later read-only review is accepted — and the writer is not mistaken for a review",
+    () => {
+      if (right.refused) return false;
+      const set = mergeTaskSet(right, []);
+      const owner = set.tasks.find((t) => t.id === "second-half");
+      const rev = set.tasks.find((t) => t.id === "the-review");
+      return !(owner.reviewsArtifacts || []).length && rev.dependsOn.includes("second-half") && rev.dependsOn.includes("first-half");
+    }, () => right.problems || mergeTaskSet(right, []).tasks.map((t) => `${t.id}→${t.dependsOn.join(",")}`));
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
