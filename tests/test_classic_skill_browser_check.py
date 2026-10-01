@@ -5,7 +5,11 @@ every DOM read stays in its conversation for the rest of the task. So a build ta
 the browser ONCE, after its last save, and reads the cheapest evidence that answers the
 question first - the data requests the page sends, then the console, then the DOM - with
 a screenshot only where the layout itself is what is checked. Between edits the evidence
-is the saved schema read back with `get-page`. These tests keep that rule in the brief
+is the saved schema read back with `get-page`; a second check only confirms the fix of a
+defect the first found, and there is no third. A rule or handler is exercised with one value
+change per acceptance criterion and read off the captured request or one DOM read, and every
+page-writing task reports its count in a `Browser checks:` Notes line, because the engine
+never sees the tool calls. These tests keep that rule in the brief
 every builder reads whole, keep the request-hook recipe in the reference the builder looks
 up, and keep that reference handed to every task kind that builds or repairs a page.
 """
@@ -27,8 +31,13 @@ CHEAP_HEADING = "## Cheap evidence first"
 POINTER = "`./references/freedom-ui-browser-check.md` → *Cheap evidence first*"
 # The evidence kinds, cheapest first, each by a phrase its list item must carry.
 RANKING = ("SelectQuery", "read_console_messages", "javascript_tool", "screenshot")
-# The task kinds that save a page body and so open it in the browser.
-PAGE_WRITING_KINDS = ("Page build", "Repair round", "Whole migration")
+# The task kinds that save a page body and so open it in the browser. Section dashboards
+# are built inside the list page's build task and open that page too.
+PAGE_WRITING_KINDS = ("Page build", "Repair round", "Whole migration", "Section dashboards")
+# Wording that allows a re-open after every fix with no count; the two-check cap stands in its place.
+UNCAPPED_RECHECK = "only after fixing a defect that check found"
+# The paragraph that follows the ranked list in the brief and in the reference.
+BEHAVIOUR_ANCHOR = "A rule or handler is behaviour"
 
 
 def read(path):
@@ -87,8 +96,22 @@ class OneCheckPerTaskTests(unittest.TestCase):
     def test_between_edits_the_evidence_is_a_schema_read_back(self):
         self.assertRegex(self.text, r"[Bb]etween edits[^.]*`get-page`")
 
-    def test_a_second_check_is_only_for_a_defect_the_first_one_found(self):
-        self.assertIn("only after fixing a defect that check found", self.text)
+    def test_the_brief_caps_the_checks_at_two(self):
+        self.assertIn("At most TWO browser checks per task", self.text)
+        self.assertRegex(self.text, r"second[^.]*only to confirm the fix of a defect the first check found")
+        self.assertIn("there is no third", self.text)
+
+    def test_any_other_question_between_saves_is_a_read_back(self):
+        self.assertRegex(self.text, r"other question between saves[^.]*`get-page`[^.]*never by opening the page")
+
+    def test_the_uncapped_recheck_wording_is_gone(self):
+        for path in (EXECUTION, BROWSER_CHECK):
+            self.assertNotIn(UNCAPPED_RECHECK, flat(read(path)), path.name)
+
+    def test_the_reference_states_the_same_cap(self):
+        cheap = flat(section(read(BROWSER_CHECK), CHEAP_HEADING, "\n## "))
+        self.assertIn("at most TWO per task", cheap)
+        self.assertIn("confirm the fix of a defect the first check found", cheap)
 
     def test_the_per_save_wording_is_gone(self):
         self.assertNotIn("After saving a page, and always before building anything that depends on it", self.text)
@@ -99,6 +122,64 @@ class OneCheckPerTaskTests(unittest.TestCase):
         hits = [b for b in bullets if "after each edit" in b and "browser" in b.lower()]
         self.assertTrue(hits, "no Known Traps bullet names a browser check after each edit")
         self.assertIn("get-page", hits[0])
+
+    def test_build_page_names_the_save_check_fix_loop_as_a_trap(self):
+        traps = section(read(BUILD_PAGE), "## Known Traps", "\n## ")
+        bullets = [flat(b) for b in re.findall(r"^- (\*\*.+?)(?=^- |\Z)", traps, re.M | re.S)]
+        hits = [b for b in bullets if "save-check-fix" in b]
+        self.assertTrue(hits, "no Known Traps bullet names the save-check-fix loop")
+        self.assertIn("at most two", hits[0])
+
+
+class BrowserChecksNotesLineTests(unittest.TestCase):
+    """The engine never sees a tool call, so the count is visible only if the task writes it."""
+
+    def setUp(self):
+        self.text = flat(read(EXECUTION))
+
+    def test_the_brief_requires_the_notes_line(self):
+        self.assertIn("`Browser checks: N — <what each check answered>`", self.text)
+        self.assertRegex(self.text, r"Browser checks: N[^.]*under `## Notes`|under `## Notes`[^.]*Browser checks: N")
+
+    def test_every_page_writing_task_writes_it_even_with_no_check(self):
+        notes = section(read(EXECUTION), "**Report the count.**", "\n\n")
+        self.assertIn("Every task that saved a page", flat(notes))
+        self.assertIn("Browser checks: 0", flat(notes))
+
+
+class BehaviourEvidenceTests(unittest.TestCase):
+    """A rule or handler is checked by one value change per AC, read off the request or the DOM."""
+
+    def behaviour(self, path, start, end):
+        return flat(section(section(read(path), start, end), BEHAVIOUR_ANCHOR, "\n\n"))
+
+    def assert_behaviour_step(self, text, where):
+        self.assertIn("get-page", text, f"{where}: the wiring is not checked in get-page first")
+        self.assertIn("one value change per AC", text, where)
+        self.assertRegex(text, r"e\.g\. `form_input`", where)
+        self.assertIn("captured `UpdateQuery`", text, where)
+        self.assertIn("one DOM read", text, where)
+        self.assertIn("read the record back", text, where)
+        self.assertRegex(text, r"AC that says something must NOT happen[^.]*exercised", where)
+
+    def test_the_brief_ranking_has_a_behaviour_step(self):
+        text = self.behaviour(EXECUTION, "**Evidence, cheapest first.**", "The hook snippet")
+        self.assert_behaviour_step(text, EXECUTION.name)
+
+    def test_the_reference_carries_the_behaviour_recipe(self):
+        text = self.behaviour(BROWSER_CHECK, CHEAP_HEADING, "**The request hook.**")
+        self.assert_behaviour_step(text, BROWSER_CHECK.name)
+        self.assertIn("not a click-and-type sequence", text)
+
+
+class HandlerProofTests(unittest.TestCase):
+    def test_the_handler_paragraph_names_the_proof(self):
+        para = flat(section(read(BUILD_PAGE), "**A ported behaviour's Evidence lists every AC", "\n\n"))
+        self.assertIn("fires on a UI save in the browser", para)
+        self.assertIn("captured `UpdateQuery`", para)
+        self.assertIn("read the record back", para)
+        self.assertRegex(para, r"detail[^.]*captured `SelectQuery` filter")
+        self.assertIn("`build-task-execution.md` → *Evidence, cheapest first*", para)
 
 
 class EvidenceRankingTests(unittest.TestCase):

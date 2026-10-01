@@ -198,8 +198,12 @@ wait for the user to ask for a UI review.
      save — not after each edit — and before you close the task: open the page (or run a runtime
      render check), confirm it loads without console/render errors, and read the evidence your rows
      need in the order *Evidence, cheapest first* below gives. Between edits the evidence is the
-     saved schema read back with `get-page`, which also answers while a tab is frozen. Open the page
-     again only after fixing a defect that check found. Anything that builds on the page — its
+     saved schema read back with `get-page`, which also answers while a tab is frozen; any other
+     question between saves is answered by that `get-page` read-back, never by opening the page.
+     At most TWO browser checks per task: the second is allowed only to confirm the fix of a defect
+     the first check found, and there is no third. A defect the second check still shows is written
+     under `## Notes` with what that check saw — it is not a reason to open the page again; a
+     save-check-fix loop is the cost this cap removes. Anything that builds on the page — its
      details, child pages, dependent rules — is either your own later edit, covered by that one
      check, or another task, which starts only after yours closes.
    - **Run the `creatio-ui-guidelines` review on every page you build — this is a DONE-GATE, not
@@ -243,8 +247,24 @@ evidence is the rule and the tool names are examples:
    most one per page — and that screenshot is the one the `creatio-ui-guidelines` review reuses,
    not a second.
 
+A rule or handler is behaviour, and it is checked in the same order. Its wiring — the rule, the
+handler, the attribute it sets — is read in `get-page`, without the browser. On the stand, inside
+that one check, exercise it with one value change per AC (e.g. `form_input` on the field the AC
+names, not a click-and-type sequence) and read the result off the cheapest evidence: the captured
+`UpdateQuery` of the save for what a save wrote, or one DOM read for what the page shows (a field
+made required, read-only or hidden). Where the handler writes data, read the record back. An AC
+that says something must NOT happen is still exercised: make its one value change and show the
+request or the record without the effect.
+
 The hook snippet and how each check reads off it are in
 `./references/freedom-ui-browser-check.md` → *Cheap evidence first*; the console collector for a
 surface that cannot read the console is in the same file under *The order: console, then error
 boundary, then structure*. It is a reference: list its headings and read those sections, not the
 whole file.
+
+**Report the count.** Every task that saved a page writes one line under `## Notes`, verbatim in
+this shape: `Browser checks: N — <what each check answered>`, e.g. `Browser checks: 2 — 1: loads
+clean, Owner populated, Visa detail filtered by Id, AC-2 UpdateQuery wrote Status; 2: confirms the
+Status caption fix`. Write it even when you opened nothing (`Browser checks: 0 — <why the read-backs
+sufficed>`). The engine cannot see your tool calls, so this line is how a reviewer, the judge and the
+cost counter see that the cap held; N above 2 is a defect in the task, reported as such.
