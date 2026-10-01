@@ -303,14 +303,18 @@ function reviewBeforeItsPage(items) {
 }
 
 // THE FIFTH CHECKED SEAM. A page's filed gate row is closed by the design pass over the FINISHED page, so the item
-// holding it is the page's last writer: a read-only item files nothing, and an earlier writer would file a record
-// for a page a later item still changes. The last writer is the last item whose `writesTo` names the page; for a
-// page no item names, it is the last writing item that carries any of that page's rows.
+// holding it is the page's last writer: the last item whose `writesTo` names the page. A read-only item files
+// nothing, an earlier writer would file a record for a page a later item still changes, and an item writing
+// another page builds a different page. A page no item declares as its `writesTo` has no writer to hold the row,
+// so the row is refused wherever it sits and the remedy is to declare one.
 function lastWriterOf(items, page) {
   let at = -1;
   items.forEach((it, i) => { if (it.declaredWritesTo === page) at = i; });
-  if (at >= 0) return at;
-  items.forEach((it, i) => { if (it.declaredWritesTo && it.rows.some((r) => r.pageKey === page)) at = i; });
+  return at;
+}
+function lastCarrierOf(items, page) {
+  let at = -1;
+  items.forEach((it, i) => { if (it.rows.some((r) => r.pageKey === page)) at = i; });
   return at;
 }
 const filedGateMisplacement = (it, page) => {
@@ -320,20 +324,23 @@ const filedGateMisplacement = (it, page) => {
   if (it.declaredWritesTo !== page) return `but that item writes \`${it.declaredWritesTo}\`, not that page`;
   return "but a LATER item still writes that page — the design pass files its record on the finished page";
 };
+function filedGateRemedy(items, page) {
+  const last = lastWriterOf(items, page);
+  if (last >= 0) return `Move it into \`${items[last].id}\`, the last item that writes \`${page}\`.`;
+  const carrier = lastCarrierOf(items, page);
+  return `No item declares \`writesTo: ${page}\`: give the item that builds that page \`writesTo: ${page}\``
+    + ` (\`${items[carrier].id}\` is the last item that carries \`${page}\` rows) and put the row there.`;
+}
 function filedGateOutsideLastWriter(items) {
   const out = [];
   items.forEach((it, i) => {
     for (const r of it.rows) {
-      if (!isFiledGateRow(r)) continue;
-      const last = lastWriterOf(items, r.pageKey);
-      if (last === i) continue;
+      if (!isFiledGateRow(r) || lastWriterOf(items, r.pageKey) === i) continue;
       const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${QUALITY_FILED_ID}\`, record \`${r.pageKey}#quality-gates\`) of \`${r.pageKey}\``;
       const why = filedGateMisplacement(it, r.pageKey);
-      const into = last >= 0 ? `Move it into \`${items[last].id}\`, the last item that writes \`${r.pageKey}\`.`
-        : `Move it into the last item that writes \`${r.pageKey}\`.`;
       const claims = `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
         + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
-      out.push(`${row} is in \`${it.id}\` ${why}. ${into} ${claims}`);
+      out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey)} ${claims}`);
     }
   });
   return out;
