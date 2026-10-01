@@ -68,7 +68,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
-import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
+import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, unreadableRecordLine, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
 
@@ -3442,6 +3442,16 @@ function splitRefusalText(set, dir) {
     + `\n${refusalRemedy(set).trim()}${shape}\n`;
 }
 
+// THE RECORD FILES, kept current by every mode that reads the cut. A builder files its evidence record during the
+// build, so `evidence.json` / `judge.json` / `recorded.json` have to exist from the first slice on, in the MIGRATION
+// folder — the parent of the task folder, the same folder `--reads` writes into. The merge only ever adds an id the
+// plan publishes; a value already filed is never changed or dropped.
+function keepRecordFiles(result, tasksDir, opts) {
+  const folder = path.dirname(path.resolve(tasksDir));
+  const { written, unreadable } = ensureRecordFiles(folder, readPlan(result, opts));
+  return { folder, written, warning: unreadableRecordLine(folder, unreadable) };
+}
+
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
@@ -3457,6 +3467,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
     const refusal = startRefusalText(set, startId, dir);
     if (refusal) { startRefusalFailure = true; return refusal; }
   }
+  const records = keepRecordFiles(result, dir, opts);
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = attentionSummary(set);
   // FROZEN ONLY ONCE IT RESOLVED. Copying the file in before validation would leave a folder whose frozen cut is
@@ -3471,6 +3482,11 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
     // is what a human reads; it is not what anyone picks from.
     `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Do NOT pick the next task off that index: ask the engine with \`${TASKS_FLAG} ${dir} ${NEXT_FLAG}\`, which answers with every task startable right now and the exact \`${START_FLAG}\` command for each. Hand each named task to its OWN sub-agent, and re-run this mode after every status change.`,
   ];
+  if (records.written.length) {
+    lines.push(`Record files ${records.written.map((f) => "`" + f + "`").join(", ")} written in ${records.folder} with every`
+      + " published id as a key — builders file their evidence records into them during the build.");
+  }
+  if (records.warning) lines.push(records.warning);
   const refused = set.blocked?.length || 0;
   if (refused) {
     lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
@@ -3610,10 +3626,11 @@ function runNextMode(result, dir, opts, cmdFor) {
   if (noFolder) { nextRefusalFailure = true; return noFolder; }
   const set = syncTaskDir(dir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
+  const { warning } = keepRecordFiles(result, dir, opts);
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return nextAnswerLines(answer, dir, cmdFor).join("\n") + "\n";
+  return [...nextAnswerLines(answer, dir, cmdFor), ...(warning ? [warning] : [])].join("\n") + "\n";
 }
 
 // `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
@@ -3663,6 +3680,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   }
   const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
+  const { warning } = keepRecordFiles(result, tasksDir, opts);
   const answer = startableTasks(set, tasksDir);
   // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
   // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
@@ -3691,7 +3709,7 @@ function runHandoffMode(result, dir, opts, ctx) {
     + " SESSION now.",
   "Give the user the prompt below to paste into a fresh session, then STOP: do not `--start` or dispatch",
   "anything more in this session. The fresh session reads resume.md and orchestrate-build.md → Resuming.",
-  "", prompt, ""].join("\n");
+  ...(warning ? ["", warning] : []), "", prompt, ""].join("\n");
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -4245,13 +4263,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // publishes can never be a key nobody was told to read. That is why the engine owns this list.
   else if (readsDir) {
     let plan;
+    let records;
     try {
       plan = readPlan(result, checklistOpts(manifest));
       writeReadIndex(readsDir, plan);
-      // …and the skeletons for the two halves the stand does not hold, so no id is ever retyped.
-      writeEvidenceSkeletons(readsDir, plan);
+      // …and the record files for the halves the stand does not hold, merged the way every task-folder mode merges
+      // them, so no id is ever retyped and no filed value is lost.
+      records = ensureRecordFiles(readsDir, plan);
     } catch (e) { fail(`could not write the read plan to ${readsDir}: ${e.message}`); }
     output = renderReadPlan(plan, readsDir);
+    const warning = unreadableRecordLine(readsDir, records.unreadable);
+    if (warning) output += "\n" + warning + "\n";
   }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
   // be a second opinion on seams the folder froze.

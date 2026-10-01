@@ -123,31 +123,54 @@ export function readPlan(result, opts = {}) {
   return { version: READS_INDEX_VERSION, planVersion: result?.planVersion || null, reads, builderRecorded, evidenceIds };
 }
 
-// The skeletons the agent FILLS rather than authors: every published id already a key, an empty value beside it.
-// A record filed under a mistyped id is a record the gate reports as never filed. Written ONLY when absent —
-// they carry the run's own answers, and regenerating one would delete them.
-export function writeEvidenceSkeletons(dir, plan) {
+// The record files the agent FILLS rather than authors: every published id already a key, an empty value beside
+// it. A record filed under a mistyped id is a record the gate reports as never filed. They carry the run's own
+// answers, so an existing file is MERGED, never regenerated: an id the plan publishes and the file lacks is added
+// with the empty value, and every key already there — filed, empty, or one the plan has since dropped — keeps its
+// value. A file that does not parse as a JSON object is somebody's record the engine cannot read, so it is left
+// byte for byte as it is and reported. `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`.
+// Returns the files written (created or extended) and the files left unread.
+export function ensureRecordFiles(dir, plan) {
   const written = [];
-  for (const [file, empty] of [[EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
-    [JUDGE_SKELETON_FILE, { convincing: null }]]) {
-    const full = path.join(dir, file);
-    if (fs.existsSync(full) || !plan.evidenceIds.length) continue;
-    const skel = {};
-    for (const id of plan.evidenceIds) skel[id] = { ...empty };
-    fs.writeFileSync(full, JSON.stringify(skel, null, 2) + "\n");
-    written.push(file);
+  const unreadable = [];
+  // Each file with the empty value written beside a key it lacks.
+  const slots = (plan.evidenceIds?.length ? [
+    [EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
+    [JUDGE_SKELETON_FILE, { convincing: null }],
+  ] : []).map(([file, empty]) => [file, plan.evidenceIds, empty]);
+  // `null`, not `false`: nothing has been recorded yet, and `false` is an answer — the row stays unconfirmed until
+  // the build agent replaces it.
+  const recorded = (plan.builderRecorded || []).map((b) => b.reachabilityKey);
+  if (recorded.length) slots.push([RECORDED_SKELETON_FILE, recorded, null]);
+  for (const [file, keys, empty] of slots) {
+    const res = mergeRecordFile(path.join(dir, file), keys, empty);
+    if (res === UNREADABLE) unreadable.push(file);
+    else if (res) written.push(file);
   }
-  const recorded = plan.builderRecorded || [];
-  const full = path.join(dir, RECORDED_SKELETON_FILE);
-  if (recorded.length && !fs.existsSync(full)) {
-    // `null`, not `false`: nothing has been recorded yet, and `false` is an answer — the row stays unconfirmed
-    // until the build agent replaces it.
-    const skel = {};
-    for (const b of recorded) skel[b.reachabilityKey] = null;
-    fs.writeFileSync(full, JSON.stringify(skel, null, 2) + "\n");
-    written.push(RECORDED_SKELETON_FILE);
+  return { written, unreadable };
+}
+const UNREADABLE = Symbol("unreadable");
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// true when the file was written, false when it already held every key, UNREADABLE when it could not be read.
+function mergeRecordFile(full, keys, empty) {
+  let doc = {};
+  if (fs.existsSync(full)) {
+    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch { return UNREADABLE; }
+    if (!isPlainObject(doc)) return UNREADABLE;
   }
-  return written;
+  const missing = keys.filter((k) => !Object.prototype.hasOwnProperty.call(doc, k));
+  if (!missing.length && fs.existsSync(full)) return false;
+  for (const k of missing) doc[k] = structuredClone(empty);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, JSON.stringify(doc, null, 2) + "\n");
+  return true;
+}
+// The one line every mode prints for a record file it could not read.
+export function unreadableRecordLine(dir, files) {
+  if (!files?.length) return null;
+  return `⚠ ${files.map((f) => "`" + f + "`").join(", ")} in ${dir} could not be read as a JSON object — NOT READ and`
+    + " NOT WRITTEN, left as it is: the engine cannot tell which records it holds, so it adds no id to it. Repair"
+    + " the JSON by hand, keeping every value already filed, then re-run.";
 }
 export const EVIDENCE_SKELETON_FILE = "evidence.json";
 export const JUDGE_SKELETON_FILE = "judge.json";
@@ -203,7 +226,8 @@ export function renderReadPlan(plan, dir) {
       `Written for you with all ${plan.evidenceIds.length} published id(s) already as keys — **fill the values, never`
       + " the keys.** The evidence records a build agent filed, and the independent verdict on them, live in no page"
       + " body and on no stand row, so nothing can read them back; an id retyped off this table is the one that goes"
-      + " wrong. An existing file is never overwritten. Leave a record out and its row says so in its own words.");
+      + " wrong. An existing file is merged, never overwritten: an id it lacks is added and every filed value is"
+      + " kept. Leave a record out and its row says so in its own words.");
   }
   if (plan.builderRecorded?.length) {
     L.push("", "**Not reads — the BUILD agent records these**", "",
