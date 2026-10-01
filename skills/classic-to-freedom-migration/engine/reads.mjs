@@ -128,8 +128,10 @@ export function readPlan(result, opts = {}) {
 // answers, so an existing file is MERGED, never regenerated: an id the plan publishes and the file lacks is added
 // with the empty value, and every key already there — filed, empty, or one the plan has since dropped — keeps its
 // value. A file that does not parse as a JSON object is somebody's record the engine cannot read, so it is left
-// byte for byte as it is and reported. `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`.
-// Returns the files written (created or extended) and the files left unread.
+// byte for byte as it is and reported. The file is replaced atomically, and only while it still holds the bytes
+// the merge read: a builder filing a record at the same moment keeps that record (see `mergeRecordFile`).
+// `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`. Returns the files written (created or
+// extended), the files left unread, and the files another writer kept changing under the merge.
 export function ensureRecordFiles(dir, plan) {
   // Each file with the empty value written beside a key it lacks.
   const slots = (plan.evidenceIds?.length ? [
@@ -140,14 +142,18 @@ export function ensureRecordFiles(dir, plan) {
   // the build agent replaces it.
   const recorded = (plan.builderRecorded || []).map((b) => b.reachabilityKey);
   if (recorded.length) slots.push([RECORDED_SKELETON_FILE, recorded, null]);
-  const by = { [MERGE_WRITTEN]: [], [MERGE_UNCHANGED]: [], [MERGE_UNREADABLE]: [] };
+  const by = { [MERGE_WRITTEN]: [], [MERGE_UNCHANGED]: [], [MERGE_UNREADABLE]: [], [MERGE_CONTENDED]: [] };
   for (const [file, keys, empty] of slots) by[mergeRecordFile(path.join(dir, file), keys, empty)].push(file);
-  return { written: by[MERGE_WRITTEN], unreadable: by[MERGE_UNREADABLE] };
+  return { written: by[MERGE_WRITTEN], unreadable: by[MERGE_UNREADABLE], contended: by[MERGE_CONTENDED] };
 }
-// What one merge did to its file.
+// What one merge did to its file. MERGE_RACED is internal: the file changed between the read and the replace.
 const MERGE_WRITTEN = "written";
 const MERGE_UNCHANGED = "unchanged";
 const MERGE_UNREADABLE = "unreadable";
+const MERGE_CONTENDED = "contended";
+const MERGE_RACED = "raced";
+// How many times a merge re-reads a file that changed under it before it leaves the file to the other writer.
+export const MERGE_ATTEMPTS = 3;
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 // The parsed record, or null when the text is not a JSON object. Only the PARSE is caught: a file the process
 // cannot read at all (a directory in its place, no permission) throws to the caller.
@@ -157,23 +163,58 @@ function parseRecordObject(text) {
     return isPlainObject(doc) ? doc : null;
   } catch { return null; }
 }
+// The file's bytes, or null when there is no file.
+const readBytes = (full) => (fs.existsSync(full) ? fs.readFileSync(full) : null);
+const sameBytes = (a, b) => (a === null || b === null ? a === b : a.equals(b));
+// A builder may file a record while a mode merges. Each attempt merges onto the bytes it just read; when the file
+// changed before the replace, the next attempt merges onto the fresh content, so only keys still missing are
+// added and the other writer's values stand. A file that keeps changing is left to that writer and reported.
 function mergeRecordFile(full, keys, empty) {
-  const exists = fs.existsSync(full);
-  const doc = exists ? parseRecordObject(fs.readFileSync(full, "utf8")) : {};
+  for (let attempt = 0; attempt < MERGE_ATTEMPTS; attempt++) {
+    const outcome = mergeOnce(full, keys, empty);
+    if (outcome !== MERGE_RACED) return outcome;
+  }
+  return MERGE_CONTENDED;
+}
+function mergeOnce(full, keys, empty) {
+  const seen = readBytes(full);
+  const doc = seen === null ? {} : parseRecordObject(seen.toString("utf8"));
   if (!doc) return MERGE_UNREADABLE;
   const missing = keys.filter((k) => !Object.hasOwn(doc, k));
-  if (!missing.length && exists) return MERGE_UNCHANGED;
+  if (!missing.length && seen !== null) return MERGE_UNCHANGED;
   for (const k of missing) doc[k] = structuredClone(empty);
-  fs.mkdirSync(path.dirname(full), { recursive: true });
-  fs.writeFileSync(full, JSON.stringify(doc, null, 2) + "\n");
-  return MERGE_WRITTEN;
+  return replaceIfUnchanged(full, seen, JSON.stringify(doc, null, 2) + "\n") ? MERGE_WRITTEN : MERGE_RACED;
 }
-// The one line every mode prints for a record file it could not read.
-export function unreadableRecordLine(dir, files) {
-  if (!files?.length) return null;
-  return `⚠ ${files.map((f) => "`" + f + "`").join(", ")} in ${dir} could not be read as a JSON object — NOT READ and`
-    + " NOT WRITTEN, left as it is: the engine cannot tell which records it holds, so it adds no id to it. Repair"
-    + " the JSON by hand, keeping every value already filed, then re-run.";
+// Writes `text` to a temp file in the same folder and renames it over `full`, so a reader sees the old file or
+// the new one and never half of either. Renames only while `full` still holds `seen`; returns whether it did.
+// The temp file never outlives the call.
+function replaceIfUnchanged(full, seen, text) {
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const temp = path.join(path.dirname(full), `.${path.basename(full)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(temp, text);
+    if (!sameBytes(readBytes(full), seen)) return false;
+    fs.renameSync(temp, full);
+    return true;
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+// The line every mode prints for the record files it left as they were, or null when it left none.
+export function recordFilesWarning(dir, { unreadable = [], contended = [] } = {}) {
+  const names = (files) => files.map((f) => "`" + f + "`").join(", ");
+  const lines = [];
+  if (unreadable.length) {
+    lines.push(`⚠ ${names(unreadable)} in ${dir} could not be read as a JSON object — NOT READ and NOT WRITTEN, left as`
+      + " it is: the engine cannot tell which records it holds, so it adds no id to it. Repair the JSON by hand,"
+      + " keeping every value already filed, then re-run.");
+  }
+  if (contended.length) {
+    lines.push(`⚠ ${names(contended)} in ${dir} changed under the engine ${MERGE_ATTEMPTS} times in a row while it added`
+      + " the missing ids — NOT WRITTEN, left to the other writer so no record it filed is lost. Re-run once that"
+      + " writer is done.");
+  }
+  return lines.length ? lines.join("\n") : null;
 }
 export const EVIDENCE_SKELETON_FILE = "evidence.json";
 export const JUDGE_SKELETON_FILE = "judge.json";

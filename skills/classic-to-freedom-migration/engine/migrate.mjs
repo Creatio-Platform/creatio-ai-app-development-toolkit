@@ -68,7 +68,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
-import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, unreadableRecordLine, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
+import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
 
@@ -3451,10 +3451,10 @@ function splitRefusalText(set, dir) {
 function keepRecordFiles(result, tasksDir, opts) {
   const folder = path.dirname(path.resolve(tasksDir));
   try {
-    const { written, unreadable } = ensureRecordFiles(folder, readPlan(result, opts));
-    return { folder, written, unreadable, warning: unreadableRecordLine(folder, unreadable) };
+    const records = ensureRecordFiles(folder, readPlan(result, opts));
+    return { folder, ...records, warning: recordFilesWarning(folder, records) };
   } catch (e) {
-    return { folder, written: [], unreadable: [], warning: recordFailureLine(folder, e) };
+    return { folder, written: [], unreadable: [], contended: [], warning: recordFailureLine(folder, e) };
   }
 }
 const recordFailureLine = (folder, e) => `⚠ The record files in ${folder} were NOT brought up to date (${folder}: ${e.message}).`
@@ -4287,7 +4287,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       records = ensureRecordFiles(readsDir, plan);
     } catch (e) { fail(`could not write the read plan to ${readsDir}: ${e.message}`); }
     output = renderReadPlan(plan, readsDir);
-    const warning = unreadableRecordLine(readsDir, records.unreadable);
+    const warning = recordFilesWarning(readsDir, records);
     if (warning) output += "\n" + warning + "\n";
   }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would

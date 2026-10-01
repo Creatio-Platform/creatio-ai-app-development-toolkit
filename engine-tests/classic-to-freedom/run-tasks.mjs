@@ -24,7 +24,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
-import { readPlan } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
+import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -9881,6 +9881,51 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
     () => ({ status: blockedNext.status, stdout: (blockedNext.stdout || "").slice(-600), stderr: (blockedNext.stderr || "").slice(0, 600) }));
   fs.rmSync(blockedBase, { recursive: true, force: true });
   fs.rmSync(base, { recursive: true, force: true });
+
+  // A builder filing a record WHILE a mode merges. The racer writes the builder's value into `evidence.json` each
+  // time the merge reads that file, up to `fires` times — between the merge's read and its replace.
+  const raceBase = tmp("records-race");
+  const evFile = path.join(raceBase, "evidence.json");
+  const [builderId, missingId] = [PLAN.evidenceIds[0], PLAN.evidenceIds.at(-1)];
+  const seedRace = () => {
+    for (const f of fs.readdirSync(raceBase)) fs.rmSync(path.join(raceBase, f), { force: true });
+    const seed = Object.fromEntries(PLAN.evidenceIds.filter((id) => id !== missingId).map((id) => [id, { referencePage: "" }]));
+    fs.writeFileSync(evFile, JSON.stringify(seed, null, 2) + "\n");
+  };
+  const withRacer = (fires, fn) => {
+    const realRead = fs.readFileSync;
+    let fired = 0;
+    fs.readFileSync = (p, ...rest) => {
+      const out = realRead(p, ...rest);
+      if (path.resolve(String(p)) === path.resolve(evFile) && fired < fires) {
+        fired += 1;
+        const doc = JSON.parse(realRead(evFile, "utf8"));
+        doc[builderId] = { referencePage: "Raced_FormPage", components: ["crt.Input"], findings: ["mine"], findingsRaised: [], n: fired };
+        fs.writeFileSync(evFile, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return out;
+    };
+    try { return fn(); } finally { fs.readFileSync = realRead; }
+  };
+  const tempsLeft = () => fs.readdirSync(raceBase).filter((f) => f.endsWith(".tmp"));
+  check("record files (anti-vacuity): the plan publishes at least two evidence ids, so one can be filed and another missing",
+    () => builderId && missingId && builderId !== missingId, () => PLAN.evidenceIds);
+  seedRace();
+  const raced = withRacer(1, () => ensureRecordFiles(raceBase, PLAN));
+  const racedDoc = JSON.parse(fs.readFileSync(evFile, "utf8"));
+  check("record files: a builder that files a record between the merge's read and its replace KEEPS that record — the merge re-reads the fresh file and adds only the id still missing",
+    () => raced.written.includes("evidence.json") && racedDoc[builderId]?.referencePage === "Raced_FormPage"
+      && racedDoc[builderId]?.n === 1 && Object.hasOwn(racedDoc, missingId) && tempsLeft().length === 0,
+    () => ({ raced, builder: racedDoc[builderId], missing: Object.hasOwn(racedDoc, missingId), temps: tempsLeft() }));
+  seedRace();
+  const contended = withRacer(Infinity, () => ensureRecordFiles(raceBase, PLAN));
+  const contendedDoc = JSON.parse(fs.readFileSync(evFile, "utf8"));
+  check("record files: a file that changes under EVERY merge attempt is left to the other writer and reported as contended — its latest record stands and no temp file is left behind",
+    () => contended.contended.includes("evidence.json") && !contended.written.includes("evidence.json")
+      && contendedDoc[builderId]?.n >= MERGE_ATTEMPTS && !Object.hasOwn(contendedDoc, missingId) && tempsLeft().length === 0
+      && /changed under the engine/.test(recordFilesWarning(raceBase, contended) || ""),
+    () => ({ contended, builder: contendedDoc[builderId], temps: tempsLeft() }));
+  fs.rmSync(raceBase, { recursive: true, force: true });
 }
 
 console.log("\n===== the filed half of a page's quality gate belongs to the page's LAST build task =====");
