@@ -60,8 +60,10 @@ earlier work there can be overwritten: the agent cannot see which earlier change
 replace. Use it only after the user explicitly agrees; never by default.
 
 **Option 2 — the new app.** Ask for the app name and workplace, and which page opens the object's
-records outside the new section (default: only inside the new section — the existing section and its
-default page binding are not changed). Then build it as `new-app` per `./references/build-scaffolding.md`.
+records outside the new section (default: the existing page stays the object's default, so the
+existing section and its default page binding are not changed). The page binding is per object, not
+per section, so a binding change made for the new section also changes what the existing section
+opens — say so in the question. Then build it as `new-app` per `./references/build-scaffolding.md`.
 
 ## The mental model
 

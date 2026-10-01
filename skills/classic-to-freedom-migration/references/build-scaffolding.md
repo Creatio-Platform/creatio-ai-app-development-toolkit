@@ -65,7 +65,13 @@ build does this, in this order, inside the ONE task that owns the page:
 4. `create-related-page-addon` for the entity, in the target package, pointing the default page at
    the new `schemaUId`. Then `get-related-page-addon` and confirm `pageSchemaUId` + `isDefault` read
    back as you set them — the list page opens whatever this record says, and a build that skips it
-   leaves a section whose rows open nothing.
+   leaves a section whose rows open nothing. **For a parallel section (`planMeta.parallelSection`) do
+   not do this step on your own.** The RelatedPage add-on is per object, not per section, and its
+   `pages` list replaces the object's whole configuration: pointing the default at the new page also
+   moves the EXISTING section's rows, and the add-record path, to it. Keep the existing default entry
+   unless the user's answer to "which page opens the records outside the new section" says
+   otherwise; when the new section's rows must open the new page and the binding cannot do that
+   without changing the existing section, stop and ask the user.
 5. **Give the new page a primary data source before anything binds to it.** A page `create-page`
    made from a template carries the template's `#PrimaryDataSourceName()#` macro UNEXPANDED, so it
    has no data source of its own: declare a `crt.EntityDataSource` (scope `page`) over the entity in

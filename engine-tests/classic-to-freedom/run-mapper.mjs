@@ -2090,6 +2090,21 @@ check("an approved `pages-only-no-menu` plan publishes NO `list` key and no gate
       && !rows.some((r) => r.list); },
   () => ({ keys: [...new Set(checklistGroups(lpRun, lpNoMenuOpts).map((g) => g.pageKey))],
     listMarked: checklistGroups(lpRun, lpNoMenuOpts).flatMap((g) => g.rows).filter((r) => r.list).map((r) => r.label) }));
+// An `existing-section` plan EXTENDS the existing list page: its columns and filters stay gated work on the `list`
+// key, while the list template row is closed — the existing page keeps its own template.
+const lpExistingOpts = { ...lpOpts, sectionHostMode: "existing-section", existingSection: { listPage: "Applicant_ListPage", formPage: "Applicant_FormPage" } };
+check("existing-section: the list page's columns stay GATED on the `list` key, and a missing column is a hard MISSING — the list is extended, not dropped",
+  () => { const groups = checklistGroups(lpRun, lpExistingOpts);
+    const rows = groups.flatMap((g) => g.rows);
+    const v = renderVerify(lpRun, lpExistingOpts, LP_BUILT(LP_ALL_COLS.slice(1), LP_FILTERS));
+    return groups.some((g) => g.pageKey === "list") && rows.some((r) => r.label.startsWith("List columns") && r.vk && !r.na)
+      && lpListTally(v).missing >= 1; },
+  () => lpListTally(renderVerify(lpRun, lpExistingOpts, LP_BUILT(LP_ALL_COLS.slice(1), LP_FILTERS))));
+check("existing-section: the list template row is N/A — a list page built on another template is not a defect of an extended page (control: the same page under the default mode is flagged)",
+  () => { const row = checklistGroups(lpRun, lpExistingOpts).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:list-template");
+    const ctrl = (lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV2FreedomTemplate"))).openRows || []).some((r) => /List template/.test(r.deliverable));
+    return /existing-section/.test(row?.na || "") && ctrl; },
+  () => checklistGroups(lpRun, lpExistingOpts).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:list-template"));
 check("GATE: a list page REPORTED AS NOT BUILT (`false`) fails for that reason — not as an empty grid or a short filter bar, because the repair is to build the page rather than to add columns to one",
   () => { const v = renderVerify(lpRun, lpOpts, { pages: { list: false } });
     return lpListTally(v).missing >= 1
@@ -2812,6 +2827,17 @@ check("checklist: 'existing-section' keeps the list page as work — it is exten
   () => (clExisting.stdout || "").split("\n").filter((l) => /List page/.test(l)).join("\n"));
 check("placement gate: the 'existing-app' refusal names 'existing-section' among the alternatives",
   /existing-section/.test(plNoPrimary.stderr || ""));
+const plExistingMinimal = runExistingSection({ targetPackageEditable: existingSectionPlacement.targetPackageEditable, sectionHost: existingSectionPlacement.sectionHost }, "--plan");
+check("placement gate: 'existing-section' needs only the target package and the host decision — the owning app's facts do not bear on a mode that registers nothing",
+  plExistingMinimal.status === 0 && !/PLAN INCOMPLETE/.test(plExistingMinimal.stderr || ""),
+  () => plExistingMinimal.stderr);
+check("placement gate (control): the SAME minimal placement under 'existing-app' still names the unresolved app facts",
+  /placement\.application not resolved/.test(runExistingSection({ targetPackageEditable: existingSectionPlacement.targetPackageEditable, sectionHost: { resolved: true, mode: "existing-app" } }, "--plan").stderr || ""));
+const dcmSignals = { ...FULL_SIGNALS, dcm: { resolved: true, present: true, names: ["Contract case"] } };
+const plExistingDcm = runMigrate(["-", "--plan"], { input: JSON.stringify({ ...placementBase, signals: dcmSignals, planMeta: { ...FULL_PLANMETA, freedomExists: true }, placement: existingSectionPlacement }), encoding: "utf8" });
+check("plan: 'existing-section' with a DCM case keeps the existing page's template — the banner adds the progress bar into it and never re-templates or re-binds the page",
+  /DCM case present, existing page kept/.test(plExistingDcm.stdout || "") && !/Build it on \*\*`PageWithTabsAndProgressBarTemplate`\*\*/.test(plExistingDcm.stdout || ""),
+  () => (plExistingDcm.stdout || "").split("\n").filter((l) => /Template —/.test(l)).join("\n"));
 const { formTemplate: _noTpl, ...pmNoFormTemplate } = FULL_PLANMETA;
 const plExistingNoTpl = runExistingSection(existingSectionPlacement, "--plan", { ...pmNoFormTemplate, freedomExists: true });
 check("plan: 'existing-section' needs no planMeta.formTemplate — the existing form page keeps its own template, so there is none to choose",
@@ -4221,6 +4247,15 @@ check("STRUCTURE: a non-typed Rebuild form that folds to 0 FIELDS is BLOCKED (ho
   () => hollowForm.structure.issues);
 check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1 field is NOT blocked (even with details)",
   stVerifiedNone.structure.issues.every((i) => !/0 FIELDS/.test(i)));
+// The 0-field gate exempts only a reconcile, which extends a page that already has a body. A parallel section
+// rebuilds its form from the Classic page, so a hollow fold blocks it exactly like a plain Rebuild.
+const hollowManifest = { entity: "X", detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"D",parentName:"Tabs",values:{itemType:2}}]};});` }] };
+const hollowParallel = runMigration({ ...hollowManifest, planMeta: { freedomExists: true, parallelSection: true } }, { baseDir: FIX });
+const hollowReconcile = runMigration({ ...hollowManifest, planMeta: { freedomExists: true } }, { baseDir: FIX });
+check("STRUCTURE: a hollow 0-field fold BLOCKS a parallel-section Rebuild (planMeta.parallelSection) but not a reconcile of an existing page",
+  hollowParallel.structure.issues.some((i) => /0 FIELDS/.test(i)) && hollowReconcile.structure.issues.every((i) => !/0 FIELDS/.test(i)),
+  () => ({ parallel: hollowParallel.structure.issues, reconcile: hollowReconcile.structure.issues }));
 // Detail editability lives in the detail's OWN config, not on the master. When the
 // detail schema IS bundled (get-classic-migration-bundle gathers detailSchemas), editability is RESOLVED — no
 // per-detail "confirm view-only vs add/edit/delete" line. It fires ONLY when the schema was NOT bundled.

@@ -401,7 +401,9 @@ function miniPageIssue(miniPage, miniPageVerified) {
 // hard BLOCK. TOP-LEVEL only (visited.size===0); nested folds have their own 0-field handling. Reconcile exempt.
 // Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
 function hollowFormIssue(changeSet, typedPages, manifest, visited) {
-  if (typedPages.length || visited.size !== 0 || manifest.planMeta?.freedomExists) return null;
+  // Only a reconcile is exempt: it extends a page that already has a body. A parallel section is a Rebuild.
+  const reconciles = manifest.planMeta?.freedomExists && manifest.planMeta?.parallelSection !== true;
+  if (typedPages.length || visited.size !== 0 || reconciles) return null;
   const mainFields = countFormFields(changeSet.viewConfigDiff);
   if (mainFields !== 0) return null;
   return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
@@ -962,7 +964,7 @@ const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", "ex
 export function placementIssues(manifest) {
   const p = manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
   const has = (k) => p[k] && typeof p[k] === "object" && p[k].resolved === true;
-  const unresolved = PLACEMENT_KEYS.filter((k) => !has(k));
+  const unresolved = requiredPlacementKeys(p, has).filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -985,6 +987,12 @@ export function placementIssues(manifest) {
     issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
   }
   return issues;
+}
+// `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
+// target package and the host decision are required.
+const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
+function requiredPlacementKeys(p, has) {
+  return has("sectionHost") && p.sectionHost.mode === "existing-section" ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
 }
 // The `existing-section` contract. The plan targets two pages that already exist, so it must name them, and the
 // main-scope Call must be a reconcile: an extension of an existing page is never a rebuild.

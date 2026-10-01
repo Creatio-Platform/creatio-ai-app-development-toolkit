@@ -924,7 +924,8 @@ function childFormRecommendation(cs, fields, opts) {
 // with that (a mini page has no header area) and mis-fires on a flat child whose fields merely sit in a Header
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
 function headerTemplateRecommendation(cs, opts, result) {
-  if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
+  // An extended existing page keeps its own template, so there is no template to recommend.
+  if (opts.isMiniPage || opts.isChildPage || isExistingSection(opts) || cs.headerLayout !== "wide") return [];
   // when the object HAS a DCM case, the DCM progress-bar template banner is the SINGLE
   // template steer; a second top-area recommendation here only competes with it. Defer to the DCM banner.
   const dcmPresent = result?.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
@@ -1810,6 +1811,13 @@ function renderChildMappings(childs) {
 
 // The template-choice banner: typed → per-type form template (+ DCM steer + shared-form note); non-typed DCM →
 // progress-bar template steer. Own fn for Sonar CC 15. Returns the lines to push.
+// An extended page keeps its own template, so the only template note left is the DCM one: the progress bar is
+// added into the existing page rather than reached by re-templating it.
+function existingSectionTemplateBanner(result) {
+  const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  if (!dcmPresent) return [];
+  return ["> **Template — DCM case present, existing page kept:** the extended form page keeps its own template. If it has no stage progress bar, add `crt.EntityStageProgressBar` into it — do NOT re-template or re-bind the existing page."];
+}
 function renderTemplateBanner(result, entity, typed, someBindOnly, formTpl) {
   const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
   if (typed.length) {
@@ -2191,7 +2199,7 @@ function renderPlanWith(result, opts) {
   // ships the stage progress bar the plain templates lack; hand-adding `crt.EntityStageProgressBar` is the fallback.)
   P.push(
     ...buildChildScopeRows(childs, opts), "", ...renderChildScopeLegend(childs),
-    ...renderTemplateBanner(result, entity, typed, someBindOnly, formTpl),
+    ...(isExistingSection(opts) ? existingSectionTemplateBanner(result) : renderTemplateBanner(result, entity, typed, someBindOnly, formTpl)),
     "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
     ...renderMiniPageMapping(result),
   );
