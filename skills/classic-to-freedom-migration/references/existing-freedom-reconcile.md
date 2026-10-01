@@ -44,13 +44,13 @@ is reconciled.
 
 Record the answer in `decisions.md`, then the follow-ups for that option.
 
-**Option 1 — the package.** Create it with `create-package` through `clio-run` (args
-`environment-name`, `package-name`, `dependencies` = the package of each base page) and use the
-returned `package-name` — it carries the stand's prefix — as `manifest.targetPackage`. Resolve the
-contract with `get-tool-contract` first: `tool-not-found` means the installed clio has no such tool;
-stop and report it as a blocker, and do not create the package another way. `package-created: true`
-with `success: false` means the package exists but a later step failed — the dependencies were not
-applied, or the read-back failed; fix that before any page write. Save each page with `update-page` /
+**Option 1 — the package.** Create a new package that depends on the package of each base page,
+with clio's `create-package` through `clio-run`. Take its arguments and its result fields from
+`get-tool-contract`, not from this file: `tool-not-found` means the installed clio has no such tool —
+stop and report it as a blocker, and do not create the package another way. Use the package name the
+tool returns (the stand can prefix it) as `manifest.targetPackage`. A result saying the package was
+created but a later step (its dependencies, its read-back) failed is a blocker too: settle it before
+any page write. Save each page with `update-page` /
 `sync-pages` passing `target-package-uid` of that package, so the replacing schema lands there and
 not in the base page's package.
 

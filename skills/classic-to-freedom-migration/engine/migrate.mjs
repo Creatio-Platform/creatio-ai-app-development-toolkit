@@ -59,6 +59,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
@@ -402,8 +403,7 @@ function miniPageIssue(miniPage, miniPageVerified) {
 // Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
 function hollowFormIssue(changeSet, typedPages, manifest, visited) {
   // Only a reconcile is exempt: it extends a page that already has a body. A parallel section is a Rebuild.
-  const reconciles = manifest.planMeta?.freedomExists && manifest.planMeta?.parallelSection !== true;
-  if (typedPages.length || visited.size !== 0 || reconciles) return null;
+  if (typedPages.length || visited.size !== 0 || reconcilesExisting(manifest.planMeta)) return null;
   const mainFields = countFormFields(changeSet.viewConfigDiff);
   if (mainFields !== 0) return null;
   return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
@@ -957,7 +957,7 @@ const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage"
 // missing menu entry is a plan decision, not a surprise found two hours into a build. `existing-section` — a
 // Freedom section for this object is already in the menu and the user chose to extend it: nothing is registered,
 // the Classic customizations land as extensions of that section's own list and form pages in the target package.
-const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", "existing-section"];
+const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXISTING_SECTION_MODE];
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
@@ -982,7 +982,7 @@ export function placementIssues(manifest) {
   }
   // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs.
   if (mode === "existing-app") issues.push(...existingAppIssues(p, target));
-  if (mode === "existing-section") issues.push(...existingSectionIssues(p.sectionHost, manifest.planMeta));
+  if (mode === EXISTING_SECTION_MODE) issues.push(...existingSectionIssues(p.sectionHost, manifest.planMeta));
   if (manifest.planMeta?.parallelSection === true && mode !== "new-app") {
     issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
   }
@@ -992,7 +992,7 @@ export function placementIssues(manifest) {
 // target package and the host decision are required.
 const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
 function requiredPlacementKeys(p, has) {
-  return has("sectionHost") && p.sectionHost.mode === "existing-section" ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
+  return has("sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
 }
 // The `existing-section` contract. The plan targets two pages that already exist, so it must name them, and the
 // main-scope Call must be a reconcile: an extension of an existing page is never a rebuild.
@@ -1074,10 +1074,10 @@ export function checklistOpts(manifest, opts = {}) {
 // An `existing-section` form page keeps its own template, so there is no template to choose.
 function formTemplateMissing(pm, manifest) {
   const blank = (v) => v == null || String(v).trim() === "";
-  return manifest.placement?.sectionHost?.mode !== "existing-section" && blank(pm.formTemplate) && blank(manifest.template);
+  return manifest.placement?.sectionHost?.mode !== EXISTING_SECTION_MODE && blank(pm.formTemplate) && blank(manifest.template);
 }
 function existingSectionPages(host) {
-  if (host?.mode !== "existing-section") return null;
+  if (host?.mode !== EXISTING_SECTION_MODE) return null;
   return { listPage: host.listPage ?? null, formPage: host.formPage ?? null };
 }
 // A SUB-page's checklist opts. Deliberately NOT the parent's threaded through: with the parent's planMeta the

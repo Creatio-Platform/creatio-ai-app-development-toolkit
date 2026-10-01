@@ -52,8 +52,10 @@ package. Everything below follows from that one fact.
 | A Freedom section for the object is already in the menu, and the user chose a parallel one | `new-app` + `planMeta.parallelSection: true` | A second section over the same object, built from the full Classic page; the existing section is not changed. Only by the user's choice, asked once before the plan. |
 
 Record the answers in `manifest.placement` — `targetPackageEditable`, `application`,
-`primaryPackage`, `targetPackageInApplication` and `sectionHost.mode` (plus `sectionHost.listPage` / `formPage` for `existing-section`), each as
+`primaryPackage`, `targetPackageInApplication` and `sectionHost.mode`, each as
 `{ "resolved": true, … }`; `migrate.mjs --plan` refuses to present a plan until they are resolved.
+`existing-section` registers nothing, so it needs only `targetPackageEditable` and `sectionHost`
+(with `listPage` / `formPage`).
 
 **`new-app` is ONE `create-app` call, never `create-app` followed by `create-app-section`.** Pass
 `optional-template-data-json` with BOTH `useExistingEntitySchema: true` and `entitySchemaName: "<Entity>"`

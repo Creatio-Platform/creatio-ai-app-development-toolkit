@@ -1925,10 +1925,11 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
 // from the full Classic page.
 // The user's choice is recorded explicitly (`planMeta.parallelSection`): `new-app` alone is also the section host
 // of an extended form page that has no section yet.
-const isParallelSection = (pm) => !!pm.freedomExists && pm.parallelSection === true;
-const reconcilesExisting = (pm) => !!pm.freedomExists && !isParallelSection(pm);
+export const isParallelSection = (pm) => !!pm?.freedomExists && pm.parallelSection === true;
+export const reconcilesExisting = (pm) => !!pm?.freedomExists && !isParallelSection(pm);
+export const EXISTING_SECTION_MODE = "existing-section";
 // The one discriminator for the existing-section mode; `opts.existingSection` carries only the page names.
-const isExistingSection = (opts) => opts.sectionHostMode === "existing-section";
+const isExistingSection = (opts) => opts.sectionHostMode === EXISTING_SECTION_MODE;
 const existingPageTarget = (name) => `\`${esc(name || "?")}\` (existing — extended)`;
 // The banner under Main scope that says which of the three cases this plan is: extend the existing section,
 // build a parallel one, or reconcile an existing page.

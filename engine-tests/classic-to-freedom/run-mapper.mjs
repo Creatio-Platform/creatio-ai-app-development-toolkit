@@ -13,7 +13,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -2857,7 +2857,7 @@ check("placement gate: 'existing-section' over a TYPED entity is INCOMPLETE — 
 // (h) A PARALLEL section is the user's explicit choice (`planMeta.parallelSection`): the new section's pages are
 // built from the full Classic page, so the Call is Rebuild and the plan says the existing section is left alone.
 const plParallel = runExistingSection(newAppPlacement, "--plan", { ...FULL_PLANMETA, freedomExists: true, parallelSection: true });
-check("plan: 'new-app' + planMeta.freedomExists is a parallel section — Call Rebuild, the existing section is NOT changed, no reconcile banner",
+check("plan: 'new-app' + planMeta.freedomExists + planMeta.parallelSection is a parallel section — Call Rebuild, the existing section is NOT changed, no reconcile banner",
   plParallel.status === 0 && /\| SupportUnit form page \| PageWithTabsFreedomTemplate \| Rebuild \|/.test(plParallel.stdout || "")
   && /Parallel section — the user's choice/.test(plParallel.stdout || "") && !/Update \(reconcile\)/.test(plParallel.stdout || ""),
   () => (plParallel.stdout || "").split("\n").filter((l) => /form page \||Parallel|Reconcile/.test(l)).join("\n"));
@@ -8113,6 +8113,17 @@ const hdrNone = renderDesignSpec({ entity: "H", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("header→top-area: NOT recommended when headerLayout is absent (standard left-profile page)",
   !/Template recommendation — header elements present/.test(hdrNone));
+const hdrExisting = renderDesignSpec({ entity: "H", changeSet: { headerLayout: "wide", viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, { sectionHostMode: "existing-section" });
+check("header→top-area: NOT recommended under 'existing-section' — the extended existing page keeps its own template (control: the same body under the default mode recommends it)",
+  !/Template recommendation — header elements present/.test(hdrExisting) && /Template recommendation — header elements present/.test(hdrBase));
+// Only the MAIN form page's template row closes under 'existing-section': a child or mini page of the same run is
+// still built on its own template, so its row keeps the gate.
+const esCtx = { sectionHostMode: "existing-section" };
+check("existing-section: engineStatusReason closes the MAIN form-template row and leaves a child page's template row open (control: the default mode closes neither)",
+  /existing-section/.test(engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, esCtx) || "")
+  && engineStatusReason({ deliverableId: "template:form", pageKey: "child:UsrChild" }, esCtx) == null
+  && engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, {}) == null);
 const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",
