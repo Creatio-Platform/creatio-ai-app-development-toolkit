@@ -101,7 +101,7 @@ The user names a package or application, says "the whole app/package", or "migra
 - Treat the package/application as the unit of work. Run the full inventory + dependency graph first (step 0).
 - Classify every Classic schema, because they migrate differently:
   - **Own section/page** — a self-contained section the app owns (a custom `*Section`/`*Page` over the app's own entity) → migrate as a new Freedom list/form page.
-  - **Replacing / extension schema** — a `replacing` schema that injects behavior into a base section (e.g. a replacing `ContactPageV2` adding fields to the standard Contact card) → migrate as an additive delta on the *existing* Freedom page for that entity, never a duplicate section.
+  - **Replacing / extension schema** — a `replacing` schema that injects behavior into a base section (e.g. a replacing `ContactPageV2` adding fields to the standard Contact card) → migrate as an additive delta on the *existing* Freedom page for that entity; a second section only via step 3.2.
 - Decide package placement once for the whole app and reuse it for every artifact.
 - Order by dependency, not alphabetically: entities/data sources → own sections → replacing/extension deltas → backend/process/permission logic.
 - The whole-package deliverable is a `roadmap.md` that INDEXES one **engine-written** plan per page (each page = its own `migrate.mjs --plan --out <page>.plan.md`, presented verbatim), plus the shared `discovery.md`/`decisions.md`. The engine is single-page by design, so do NOT hand-assemble one merged plan doc — that would violate Contract rule 2 (present the engine's file verbatim). "Consolidated" = the roadmap index over per-page engine-written plans, not a hand-merged document.
@@ -110,7 +110,7 @@ The user names a package or application, says "the whole app/package", or "migra
 
 The Classic section being migrated **already has a Freedom UI section/page for the same entity**, and the client's value is the customizations they layered on top of the Classic section in their own packages.
 
-- The unit of work is the client's **customization delta**, not the whole Classic page. Target the existing Freedom section; never create a duplicate.
+- The unit of work is the client's **customization delta**, not the whole Classic page. Target the existing Freedom section unless the user picks a parallel one (3.2).
 - Reconcile both directions: what the client added in Classic but is missing on Freedom gets **added**; what is on Freedom but contradicts the client's Classic setup (never added, or explicitly removed/hidden) gets **removed/hidden** — within the customization scope only.
 - **Absence is not intent to remove.** Never strip a base/standard Freedom element that has no Classic analog just because it is absent from the delta — flag it as a manual decision.
 - Follow `./references/existing-freedom-reconcile.md` for the isolate-delta → read-Freedom → diff → apply → verify procedure, and record every removal with its Classic evidence. The presented plan must include the reconciliation diff (added / modified / removed-hidden).
@@ -173,20 +173,17 @@ Runtime discovery:
 
 Decide *where* Freedom artifacts can be created before choosing templates. Follow `./references/classic-to-freedom-mapping.md` (Package Placement Mapping) for the decision table and the evidence to collect.
 
-1. Identify the Classic owning package/app: name, UId, maintainer, installed app, dependencies, lock/read-only state; whether existing Freedom pages for the entity already live in an editable app/package.
-2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable and touching it risks a shared/base package).
-3. Record evidence + decision in the plan. If the user specified a strategy, still verify it is technically possible and call out conflicts. Whole-package → decide once and reuse (a vendor/locked owning package ⇒ new package/app for the app's own sections + replacing deltas for base sections it extends).
+1. Identify the Classic owning package/app: name, UId, maintainer, installed app, dependencies, lock state; existing Freedom pages for the entity and their packages (step 3.2).
+2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable; touching it risks a shared/base package).
+3. Record evidence + decision in the plan. Verify a user-specified strategy is technically possible; call out conflicts. Whole-package → decide once and reuse (a vendor/locked owning package ⇒ new package/app for the app's own sections + replacing deltas for base sections it extends).
 
 **3.1 — A writable package is NOT enough: settle whether an APP can host the section (`manifest.placement`).**
-Finding an editable package answers "where do pages go". It does not answer "can the section be
-registered in the menu" — and a run that conflates the two builds every page, then discovers at the
-last unit that `create-app-section` cannot run at all. **`create-app-section` takes no package
+An editable package answers "where do pages go", not "can the section be registered in the menu" —
+conflating them builds every page, then finds at the last unit that `create-app-section` cannot run. **`create-app-section` takes no package
 parameter: it writes to the APP's PRIMARY package.** So a menu-registered section needs the app's
-primary package to BE the target package, and to be writable. Customer stands carry every
-combination — fully locked packages, partly unlocked ones (an extension package unlocked over a
-locked base), install-time app wrappers with **no primary package at all** (an app created by
-installing a package carries one only when the package shipped an app descriptor). None of this is
-derivable from the page bodies, so record it as facts, not prose — the engine gates `--plan` on it:
+primary package to BE the target package, and to be writable — and an app installed from a package
+may have **no primary package at all**. None of this is derivable from the page bodies, so record it
+as facts, not prose — the engine gates `--plan` on it:
 
 ```json
 "placement": {
@@ -213,12 +210,14 @@ Then decide `sectionHost.mode` — and put the decision to the user whenever it 
 | Mode | When | What the build does |
 |---|---|---|
 | `existing-app` | the app's primary package IS the target package and is editable | `create-app-section` into that app |
-| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | ONE `create-app` call that carries the entity — see `./references/build-scaffolding.md`. It returns the app, its own editable primary package, AND the section over the existing object. Do NOT follow it with `create-app-section` |
+| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | ONE `create-app` call carrying the entity (the app, its editable primary package and the section) — never followed by `create-app-section`; see `./references/build-scaffolding.md` |
 | `pages-only-no-menu` | the user accepts pages reachable by URL / page bindings only | no registration; the checklist row is rendered as a deliberate drop, not a gated deliverable |
+| `existing-section` | the user extends the existing Freedom section (step 3.2) | no registration; extensions of `sectionHost.listPage`/`formPage` in the target package |
 
-**The `new-app` call itself, and why nobody repairs an app's package composition on their own, are in
-`./references/build-scaffolding.md`.** The Scaffolding task that makes the call is handed that file (step 7.3);
-read it here only to explain the `new-app` mode to the user.
+**The `new-app` call, and why nobody repairs an app's package composition, are in
+`./references/build-scaffolding.md`** (handed to the Scaffolding task, step 7.3); read it here only to explain the mode.
+
+**3.2 — A Freedom section/page for the object already exists:** before the plan, ask the user ONCE: extend it (default) or build a parallel section, per `./references/existing-freedom-reconcile.md` (*Choosing the path*); answer in `decisions.md`.
 
 ### 4. Reconstruct The Effective Classic Page (engine)
 

@@ -1663,7 +1663,7 @@ function renderPlanBanners(result, opts) {
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];
-  if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (\`targetPackageEditable\` · \`application\` · \`primaryPackage\` · \`targetPackageInApplication\` · \`sectionHost\`), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable.`, "");
+  if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (\`targetPackageEditable\` · \`application\` · \`primaryPackage\` · \`targetPackageInApplication\` · \`sectionHost\`), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable. \`existing-section\` registers nothing: it needs the existing section's \`listPage\` / \`formPage\` names on \`sectionHost\` and \`planMeta.freedomExists: true\`.`, "");
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **dashboards** = \`execute-esq\` (NOT \`odata-read\` — it drops the plain-Guid \`SysModule.SectionSchemaUId\`) on \`SysDashboard\` filtered \`Section\` = the section's \`SysModule.Id\`, select \`["Id","Caption"]\`, then read which package SHIPS each dashboard from the \`SysDashboard\` data bindings and record it as \`items:[{ id, caption, sourcePackage? }]\` (omitted = stand data only). That is the read; \`saveInPackage\` (defaulting from it) and \`skip\` (absent unless recorded) are the user's decisions — the full two-step chain is in the skill's \`signals\` step. **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
@@ -1892,11 +1892,14 @@ function buildSizeLine(typed, cs, fields) {
 // Main-scope table rows: list page + (form page | shared base) + one row per typed form. Extracted for Sonar CC 15.
 // mainCall / someBindOnly / formTpl are recomputed here (rather than passed) to stay under Sonar's parameter limit.
 function buildScopeRows(pm, opts, entity, typed, fill) {
-  const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
+  const mainCall = reconcilesExisting(pm) ? "Update (reconcile)" : "Rebuild";
   const someBindOnly = typed.some((t) => t.bindOnly);
   const formTpl = pm.formTemplate || opts.template || null;
-  const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
-  if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
+  const ex = isExistingSection(opts) ? opts.existingSection || {} : null;
+  const listTarget = ex ? existingPageTarget(ex.listPage) : fill(pm.listTemplate, "<FILL: Freedom list template>");
+  const formTarget = ex ? existingPageTarget(ex.formPage) : fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>");
+  const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${listTarget} | ${mainCall} |`];
+  if (!typed.length) rows.push(`| ${esc(entity)} form page | ${formTarget} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
     const typeSuffix = typedTypeSuffix(t); // the RESOLVED Type name (typeName / typeColumnDisplayValue); a raw GUID only as a ⚠ fallback
@@ -1910,6 +1913,26 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   return rows;
 }
 
+// The plan reconciles an existing Freedom page unless the user chose a PARALLEL section, whose pages are built
+// from the full Classic page.
+// The user's choice is recorded explicitly (`planMeta.parallelSection`): `new-app` alone is also the section host
+// of an extended form page that has no section yet.
+const isParallelSection = (pm) => !!pm.freedomExists && pm.parallelSection === true;
+const reconcilesExisting = (pm) => !!pm.freedomExists && !isParallelSection(pm);
+// The one discriminator for the existing-section mode; `opts.existingSection` carries only the page names.
+const isExistingSection = (opts) => opts.sectionHostMode === "existing-section";
+const existingPageTarget = (name) => `\`${esc(name || "?")}\` (existing — extended)`;
+// The banner under Main scope that says which of the three cases this plan is: extend the existing section,
+// build a parallel one, or reconcile an existing page.
+function freedomExistsBanner(pm, opts) {
+  if (!pm.freedomExists) return [];
+  if (isExistingSection(opts)) {
+    const ex = opts.existingSection || {};
+    return [`> **Extend the existing section** (\`placement.sectionHost.mode = existing-section\`): the Freedom section for this object stays as it is in the menu — no app or section is created, and both pages keep their own templates. The Classic customizations go as extensions of \`${esc(ex.listPage || "?")}\` and \`${esc(ex.formPage || "?")}\` into the target package \`${esc(opts.targetPackage || "?")}\`. Read each page with \`get-page\`, apply the design below as a customization delta (added/modified/removed-hidden), and save it with \`update-page\` / \`sync-pages\` passing \`target-package-uid\` of \`${esc(opts.targetPackage || "?")}\` — without it the replacing schema lands in the base page's package. Procedure: \`${RECONCILE_REFERENCE}\`.`];
+  }
+  if (isParallelSection(pm)) return ["> **Parallel section — the user's choice** (`placement.sectionHost.mode = new-app`): a Freedom section for this object already exists and is NOT changed. A new app and section over the same object are built from the full Classic page, so users see two sections for one object."];
+  return ["> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `" + RECONCILE_REFERENCE + "`."];
+}
 // The `Rebuild (child)` row's target: the template the SHARED rule picks, so this AGREES with the per-child
 // recommendation banner. Unknown count (an unmapped real page) → generic. Own fn for Sonar CC 15.
 function rebuildChildTarget(c) {
@@ -2157,7 +2180,7 @@ function renderPlanWith(result, opts) {
   const formTpl = pm.formTemplate || opts.template || null;
   const scopeRows = buildScopeRows(pm, opts, entity, typed, fill);
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
-  if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `" + RECONCILE_REFERENCE + "`.");
+  P.push(...freedomExistsBanner(pm, opts));
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
@@ -2414,8 +2437,10 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
 // this row is unconditional (clearing `planMeta.sectionSchema` gates the `Navigable section registered` row and
 // the whole `List page` group, not this one), so without the split every sub-page inherited a `<FILL: list
 // template>` row it can never satisfy. Its own fn so `buildPageRows` gains no branch (Sonar CC 15).
-function listPageRows(pm, fill, isMain) {
-  return isMain ? [{ deliverableId: "page:list", label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }] : [];
+function listPageRows(pm, opts, fill, isMain) {
+  if (!isMain) return [];
+  const target = isExistingSection(opts) ? existingPageTarget(opts.existingSection?.listPage) : fill(pm.listTemplate, "<FILL: list template>");
+  return [{ deliverableId: "page:list", label: `List page → ${target}` }];
 }
 // The `Form page` label. A SUB-page whose template is not a plan choice (`childTemplateChoice` returned `null`, so
   // D2 emits no `template` vk and publishes no `expectedTemplate`) must NOT render `Form page → <FILL: form template>`
@@ -2423,12 +2448,13 @@ function listPageRows(pm, fill, isMain) {
 // can ever fill. Only the MAIN page keeps the `<FILL: …>` prompt, where an unnamed template IS a real plan gap
 // (and `planMetaMissing` gates it). Own fn so `buildPageRows` gains no branch (Sonar CC 15).
 function formPageLabel(pm, opts, fill, isMain) {
+  if (isMain && isExistingSection(opts)) return `Form page → ${existingPageTarget(opts.existingSection?.formPage)}`;
   const tpl = pm.formTemplate || opts.template;
   if (isMain || (tpl != null && String(tpl).trim() !== "")) return `Form page → ${fill(tpl, "<FILL: form template>")}`;
   return "Form page built — no template is pinned for this sub-page (the plan derived no template choice for it, so there is nothing to match against)";
 }
 function buildPageRows(result, opts, pm, typed, fill, isMain) {
-  const pages = [...listPageRows(pm, fill, isMain), ...entityRows(result), ...placementRows(opts)];
+  const pages = [...listPageRows(pm, opts, fill, isMain), ...entityRows(result), ...placementRows(opts)];
   if (!typed.length) pages.push({ deliverableId: "page:form", label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
@@ -2480,18 +2506,21 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // ships pages without a menu entry ON PURPOSE, so emitting the row there would demand evidence for something
   // the plan decided not to do — a permanent false red. It is replaced by an explicit dropped row rather than
   // dropped silently: the reader must still see that the section is unreachable from the menu, and that this
-  // was chosen. Any other mode (including a plan that recorded no placement at all) keeps the gated row.
-  if (pm.sectionSchema || result.section) {
-    pages.push(opts.sectionHostMode === "pages-only-no-menu"
-      ? { deliverableId: "page:section", label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
-      : { deliverableId: "page:section", label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
+  // was chosen. An `existing-section` run registers nothing either: its section is already in the menu. Any other
+  // mode (including a plan that recorded no placement at all) keeps the gated row.
+  if (pm.sectionSchema || result.section) pages.push(sectionRow(opts));
+  return pages;
+}
+// The navigable-section row for the decided host mode. Only a mode that registers a section carries the gate.
+function sectionRow(opts) {
+  if (opts.sectionHostMode === "pages-only-no-menu") return { deliverableId: "page:section", label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" };
+  if (isExistingSection(opts)) return { deliverableId: "page:section", label: "Navigable section — **already registered** (`placement.sectionHost.mode = existing-section`): the existing Freedom section stays in the menu as it is; nothing is registered and no workplace binding changes" };
+  return { deliverableId: "page:section", label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
         // The QUERY, not just the question. The bindings live in `SysModuleInWorkplace` and that is the only read
         // that counts them: `find-app` reports the app's own schemas and is blind to a section registered over a
         // BORROWED entity, which it then reports as absent.
         query: WORKPLACE_HOWTO,
-        miss: "the section is not in the menu — its pages are unreachable" } });
-  }
-  return pages;
+        miss: "the section is not in the menu — its pages are unreachable" } };
 }
 // List-page contents checklist rows (columns / quick filters / section actions). Returns the rows. Extracted for CC.
 // `result.miniPage` is gated on the SAME `isMain` flag the Form/List split already threads: D3 clears a sub-page's
@@ -2683,6 +2712,15 @@ function childPageReason(row) {
   const meta = childScopeMeta(row.child);
   return meta.closed ? meta.target : null;
 }
+const EXISTING_SECTION_REASON = "`placement.sectionHost.mode = existing-section` — the section and its pages already exist; nothing is registered and each page keeps its own template";
+const EXISTING_SECTION_IDS = new Set(["page:section", "page:list-template"]);
+// The main form page's template row closes too; a child or mini page under the same run is still built on its
+// own template.
+function existingSectionReason(row, ctx) {
+  if (!isExistingSection(ctx)) return null;
+  const mainFormTemplate = row.deliverableId === "template:form" && (row.pageKey ?? "main") === "main";
+  return EXISTING_SECTION_IDS.has(row.deliverableId) || mainFormTemplate ? EXISTING_SECTION_REASON : null;
+}
 const PAGES_ONLY_IDS = new Set(["page:section", "page:list-template", "page:list-not-built", "list-columns"]);
 function pagesOnlyReason(row, ctx) {
   if (ctx.sectionHostMode !== "pages-only-no-menu" || !row.deliverableId) return null;
@@ -2692,7 +2730,7 @@ function fieldReason(row) {
   return SECRET_TYPE_LABELS.has(row.fieldType) ? `${row.fieldType} — a hashed or encrypted column has no Freedom field that renders its value` : null;
 }
 export function engineStatusReason(row, ctx = {}) {
-  return cardActionReason(row, ctx) || childPageReason(row) || pagesOnlyReason(row, ctx) || fieldReason(row);
+  return cardActionReason(row, ctx) || childPageReason(row) || pagesOnlyReason(row, ctx) || existingSectionReason(row, ctx) || fieldReason(row);
 }
 // THE status of one deliverable: the engine's conclusion (`not-applicable`, with its reason), else the person's
 // manifest entry (`wont-do` with its D<N>, or an explicit `build`), else null — build as planned.

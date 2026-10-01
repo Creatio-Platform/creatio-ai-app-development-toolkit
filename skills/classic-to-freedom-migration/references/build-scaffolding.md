@@ -34,10 +34,20 @@ named identically in the app's page list, and paid an extra ~90-second call for 
 
 **Never repair an app's package composition on your own.** Linking a package to an app or flipping
 its primary flag changes which package owns the app's identity and where the Section Wizard writes
-every future schema. Surface it as a decision with the three `sectionHost.mode` values —
+every future schema. Surface it as a decision with the `sectionHost.mode` values —
 `existing-app` (`create-app-section` into the app, which needs the app's primary package to be the
-target package and editable), `new-app` (the one `create-app` call above) and `pages-only-no-menu`
-(no menu registration; the pages are reached by URL and page bindings) — and the user picks.
+target package and editable), `new-app` (the one `create-app` call above), `pages-only-no-menu`
+(no menu registration; the pages are reached by URL and page bindings) and, when a Freedom section
+for the object is already in the menu, `existing-section` — and the user picks.
+
+## `existing-section` scaffolds no app and no section
+
+The section is already in the menu, so this task makes no `create-app`, `create-app-section` or
+`create-page` call. Its work is the target package: confirm it exists and depends on the package of
+each base page (`create-package` made it in planning). Every page write in the
+build is an extension of `sectionHost.listPage` / `sectionHost.formPage`, saved with
+`target-package-uid` of the target package so the replacing schema lands there and not in the base
+page's package. Re-templating below does not apply: the existing page keeps its template.
 
 ## Re-templating the scaffolded form page
 

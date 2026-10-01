@@ -436,7 +436,8 @@ one place: the engine's own conclusion first (it becomes `na`, with the reason t
 manifest entry (it rides as `status` beside `vk`). The engine closes a standard Print / Run-process button when its
 on-stand signal (`cardActionSignals()` in `mapping-table.mjs`) found nothing behind it, the standard card actions of
 a child page, the `separate page?` row of a child that keeps its Classic card, is cyclic or has no edit page, and
-the rows a `pages-only-no-menu` run does not build. `RunProcess` and custom actions are never closed by a signal.
+the rows a `pages-only-no-menu` run does not build, and the section-registration and list-template rows of an
+`existing-section` run, whose section and list page already exist. `RunProcess` and custom actions are never closed by a signal.
 
 The plan prints **Won't do** — `D<N>: <title>` or the engine's reason on the deliverable's own line (the card-action
 Layout row, the method and member tables, the child-scope row) and lists every other closed deliverable under
