@@ -9786,7 +9786,7 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   check("record files: `--tasks` on a fresh folder writes `evidence.json` and `judge.json` beside the task folder with EVERY published id already a key — the first builder files into a file that exists",
     () => run.status === 0 && ["evidence.json", "judge.json"].every((f) => {
       const doc = readJson(base, f);
-      return PLAN.evidenceIds.every((id) => Object.prototype.hasOwnProperty.call(doc, id));
+      return PLAN.evidenceIds.every((id) => Object.hasOwn(doc, id));
     }),
     () => ({ status: run.status, stderr: run.stderr, files: fs.readdirSync(base), state: recordState(base) }));
   check("record files: the empty value beside each id is the one `--reads` writes — both findings lists scaffolded on an evidence record, `convincing: null` on a verdict",
@@ -9851,7 +9851,7 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   const startable = startableTasks(syncTaskDir(dir, RUN2, checklistOpts(MANIFEST2)), dir).startable[0];
   const started = startable ? cliTasks(["--tasks", dir, "--start", startable.id], MANIFEST2) : null;
   check("record files: `--start` writes them too — the task it starts may be the one that files the first record",
-    () => started && started.status === 0 && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
+    () => started?.status === 0 && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
     () => ({ startable: startable?.id, status: started?.status, stderr: started?.stderr, state: recordState(base) }));
 
   // `--reads` runs the same merge: it adds an id the file lacks and keeps every filed value.

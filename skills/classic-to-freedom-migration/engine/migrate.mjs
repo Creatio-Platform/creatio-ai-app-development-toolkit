@@ -3451,6 +3451,16 @@ function keepRecordFiles(result, tasksDir, opts) {
   const { written, unreadable } = ensureRecordFiles(folder, readPlan(result, opts));
   return { folder, written, warning: unreadableRecordLine(folder, unreadable) };
 }
+// What a mode prints about the record files: the files it wrote, then any warning.
+function recordFileLines(records) {
+  const lines = [];
+  if (records.written.length) {
+    lines.push(`Record files ${records.written.map((f) => "`" + f + "`").join(", ")} written in ${records.folder} with every`
+      + " published id as a key — builders file their evidence records into them during the build.");
+  }
+  if (records.warning) lines.push(records.warning);
+  return lines;
+}
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
@@ -3481,12 +3491,8 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
     // `--next` exists to replace, and a contradiction the engine would be printing against itself. The index
     // is what a human reads; it is not what anyone picks from.
     `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Do NOT pick the next task off that index: ask the engine with \`${TASKS_FLAG} ${dir} ${NEXT_FLAG}\`, which answers with every task startable right now and the exact \`${START_FLAG}\` command for each. Hand each named task to its OWN sub-agent, and re-run this mode after every status change.`,
+    ...recordFileLines(records),
   ];
-  if (records.written.length) {
-    lines.push(`Record files ${records.written.map((f) => "`" + f + "`").join(", ")} written in ${records.folder} with every`
-      + " published id as a key — builders file their evidence records into them during the build.");
-  }
-  if (records.warning) lines.push(records.warning);
   const refused = set.blocked?.length || 0;
   if (refused) {
     lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
@@ -3626,11 +3632,11 @@ function runNextMode(result, dir, opts, cmdFor) {
   if (noFolder) { nextRefusalFailure = true; return noFolder; }
   const set = syncTaskDir(dir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
-  const { warning } = keepRecordFiles(result, dir, opts);
+  const records = recordFileLines(keepRecordFiles(result, dir, opts));
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return [...nextAnswerLines(answer, dir, cmdFor), ...(warning ? [warning] : [])].join("\n") + "\n";
+  return [...nextAnswerLines(answer, dir, cmdFor), ...records].join("\n") + "\n";
 }
 
 // `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
@@ -3680,7 +3686,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   }
   const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
-  const { warning } = keepRecordFiles(result, tasksDir, opts);
+  const records = recordFileLines(keepRecordFiles(result, tasksDir, opts));
   const answer = startableTasks(set, tasksDir);
   // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
   // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
@@ -3709,7 +3715,7 @@ function runHandoffMode(result, dir, opts, ctx) {
     + " SESSION now.",
   "Give the user the prompt below to paste into a fresh session, then STOP: do not `--start` or dispatch",
   "anything more in this session. The fresh session reads resume.md and orchestrate-build.md → Resuming.",
-  ...(warning ? ["", warning] : []), "", prompt, ""].join("\n");
+  ...(records.length ? ["", ...records] : []), "", prompt, ""].join("\n");
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.

@@ -131,8 +131,6 @@ export function readPlan(result, opts = {}) {
 // byte for byte as it is and reported. `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`.
 // Returns the files written (created or extended) and the files left unread.
 export function ensureRecordFiles(dir, plan) {
-  const written = [];
-  const unreadable = [];
   // Each file with the empty value written beside a key it lacks.
   const slots = (plan.evidenceIds?.length ? [
     [EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
@@ -142,28 +140,27 @@ export function ensureRecordFiles(dir, plan) {
   // the build agent replaces it.
   const recorded = (plan.builderRecorded || []).map((b) => b.reachabilityKey);
   if (recorded.length) slots.push([RECORDED_SKELETON_FILE, recorded, null]);
-  for (const [file, keys, empty] of slots) {
-    const res = mergeRecordFile(path.join(dir, file), keys, empty);
-    if (res === UNREADABLE) unreadable.push(file);
-    else if (res) written.push(file);
-  }
-  return { written, unreadable };
+  const by = { [MERGE_WRITTEN]: [], [MERGE_UNCHANGED]: [], [MERGE_UNREADABLE]: [] };
+  for (const [file, keys, empty] of slots) by[mergeRecordFile(path.join(dir, file), keys, empty)].push(file);
+  return { written: by[MERGE_WRITTEN], unreadable: by[MERGE_UNREADABLE] };
 }
-const UNREADABLE = Symbol("unreadable");
+// What one merge did to its file.
+const MERGE_WRITTEN = "written";
+const MERGE_UNCHANGED = "unchanged";
+const MERGE_UNREADABLE = "unreadable";
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-// true when the file was written, false when it already held every key, UNREADABLE when it could not be read.
 function mergeRecordFile(full, keys, empty) {
   let doc = {};
   if (fs.existsSync(full)) {
-    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch { return UNREADABLE; }
-    if (!isPlainObject(doc)) return UNREADABLE;
+    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch { return MERGE_UNREADABLE; }
+    if (!isPlainObject(doc)) return MERGE_UNREADABLE;
   }
-  const missing = keys.filter((k) => !Object.prototype.hasOwnProperty.call(doc, k));
-  if (!missing.length && fs.existsSync(full)) return false;
+  const missing = keys.filter((k) => !Object.hasOwn(doc, k));
+  if (!missing.length && fs.existsSync(full)) return MERGE_UNCHANGED;
   for (const k of missing) doc[k] = structuredClone(empty);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, JSON.stringify(doc, null, 2) + "\n");
-  return true;
+  return MERGE_WRITTEN;
 }
 // The one line every mode prints for a record file it could not read.
 export function unreadableRecordLine(dir, files) {
