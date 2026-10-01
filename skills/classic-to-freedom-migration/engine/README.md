@@ -62,8 +62,10 @@ the agent still resolves that itself, and a key read against the wrong page come
 
 `<dir>` is the MIGRATION FOLDER — the one holding `build-tasks/` — so the raw responses stay beside the run. The
 engine writes `reads/index.json` and owns every filename in it; page keys carry `:`, `@` and `#`, so the key is
-slugged and the mapping recorded, and nothing downstream parses a filename. It also writes `evidence.json` /
-`judge.json` skeletons with every published evidence id already a key, and never overwrites an existing one. Like
+slugged and the mapping recorded, and nothing downstream parses a filename. It also keeps the `evidence.json` /
+`judge.json` / `recorded.json` record files current with every published id already a key, the same merge every
+`--tasks` / `--next` / `--start` runs: an id a file lacks is added, a value already filed is never changed or
+dropped, and a file that does not parse is reported and left as it is. Like
 `--tasks`, it WRITES rather than prints, so it refuses a second mode flag instead of losing to it.
 
 **`--verify --from <dir>` — the payload COMPOSED, not handed over.** The other half of that contract: it reads
@@ -126,8 +128,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
   that build the typed pages: routing binds each Type form by the Type column, so a form that is not built yet
   cannot be bound — a 94-item split of a real plan put it second, ahead of both. And an item carrying a page's
-  `Quality gates` rows may not precede an item that still writes that page: a verdict filed on a page that is
-  still being built is not a verdict. That review also WAITS on every writer of its page, which matters precisely
+  judged `Quality gates` row may not precede an item that still writes that page: a verdict filed on a page that is
+  still being built is not a verdict. The page's FILED `Quality gates` row (`quality:ran`) goes in the page's last
+  writer, never in a read-only item or an earlier writer: the design-pass record is filed on the finished page. That review also WAITS on every writer of its page, which matters precisely
   because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
   And a page's `[attribute-virtual] X` row may not sit in a later item than a handler row on that page whose method
   sets X: each handler row carries the attributes its own body sets (`writesAttrs`, beside the `vk`, so the row
@@ -285,8 +288,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   orchestrator-authored file declares for itself. `rowsDigest` covers the verifier payload as well as the label, so
   a RENAMED field raises drift even though neither the caption nor the count moved.
 - **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
-  its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
-  `Quality gates` review is its last task. Base-field overrides sit between the layout that creates the fields and
+  its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task, its filed
+  `Quality gates` row (`quality:ran`) is the last row of its last build task, and its `Quality gates` review — the
+  judged row — is its last task. Base-field overrides sit between the layout that creates the fields and
   the coverage that counts them: they are changes APPLIED ONTO the template's existing fields, so the fields must
   exist first and the counts must see the result. A page's `[attribute-virtual]` rows come before its business
   rules and `Custom methods` handlers, because a handler that writes an undeclared attribute does nothing; the rest
