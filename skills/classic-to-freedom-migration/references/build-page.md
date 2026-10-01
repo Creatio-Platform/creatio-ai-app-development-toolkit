@@ -265,6 +265,12 @@ rules.
   what leaves a one-field island. → the mapping reference → *Embedded profile cards*.
 - **`success` mistaken for "works".** clio returns `success` for bodies that fail at runtime —
   render in the browser.
+- **Browser checked after each edit.** Opening the page after every save, with screenshots and DOM
+  walks as the evidence, made one section's page-build tasks cost about 4.5× those that skipped it.
+  One browser check per task, after the last save; between edits read the saved schema back with
+  `get-page`; and read the cheap evidence first — the data requests, then the console, then the
+  DOM, a screenshot only for layout — as `build-task-execution.md` → *Evidence, cheapest first*
+  ranks it.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
