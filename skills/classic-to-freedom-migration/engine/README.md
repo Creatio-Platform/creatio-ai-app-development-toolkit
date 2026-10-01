@@ -65,7 +65,10 @@ engine writes `reads/index.json` and owns every filename in it; page keys carry 
 slugged and the mapping recorded, and nothing downstream parses a filename. It also keeps the `evidence.json` /
 `judge.json` / `recorded.json` record files current with every published id already a key, the same merge every
 `--tasks` / `--next` / `--start` / `--handoff` runs: an id a file lacks is added, a value already filed is never changed or
-dropped, and a file that does not parse is reported and left as it is. Like
+dropped, and a file that does not parse as a JSON object is reported and left as it is. The file is replaced
+atomically (a temp file renamed over it) and only while it still holds the bytes the merge read, so a builder filing a
+record at the same moment keeps it; a file that keeps changing under the merge is reported and left to that writer. A
+failure to write them is a warning on a task-folder mode's answer, never a crash of that mode. Like
 `--tasks`, it WRITES rather than prints, so it refuses a second mode flag instead of losing to it.
 
 **`--verify --from <dir>` — the payload COMPOSED, not handed over.** The other half of that contract: it reads
@@ -130,7 +133,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   cannot be bound — a 94-item split of a real plan put it second, ahead of both. And an item carrying a page's
   judged `Quality gates` row may not precede an item that still writes that page: a verdict filed on a page that is
   still being built is not a verdict. The page's FILED `Quality gates` row (`quality:ran`) goes in the page's last
-  writer, never in a read-only item or an earlier writer: the design-pass record is filed on the finished page. That review also WAITS on every writer of its page, which matters precisely
+  writer — the last item whose `writesTo` names that page — never in a read-only item, an earlier writer or an item
+  writing another page: the design-pass record is filed on the finished page. A page no item declares as its
+  `writesTo` has no such writer, so its filed row is refused until one does. That review also WAITS on every writer of its page, which matters precisely
   because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
   And a page's `[attribute-virtual] X` row may not sit in a later item than a handler row on that page whose method
   sets X: each handler row carries the attributes its own body sets (`writesAttrs`, beside the `vk`, so the row
@@ -287,7 +292,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   the index calls it `Step`, which is the queue position and not the same fact as the `order` an
   orchestrator-authored file declares for itself. `rowsDigest` covers the verifier payload as well as the label, so
   a RENAMED field raises drift even though neither the caption nor the count moved.
-- **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
+- **The build order is leaf-first, with declared exceptions.** Sub-pages precede `main`, a grandchild precedes
   its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task, its filed
   `Quality gates` row (`quality:ran`) is the last row of its last build task, and its `Quality gates` review — the
   judged row — is its last task. Base-field overrides sit between the layout that creates the fields and
@@ -297,7 +302,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   of `Other declared logic worklist` stays after the handlers, since an `attribute-dependency` row wires an
   attribute to the method it triggers. Every `GROUP_PHASE` key has to be a title `checklistGroups` emits, and the
   goldens check that against designspec's source: a renamed group otherwise drops to the default phase without any
-  warning. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  warning. The run opens with the `Reference cache`, then `Scaffolding`
   (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
   and the page shells, the preconditions every other task needs.
 - **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
