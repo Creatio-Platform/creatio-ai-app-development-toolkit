@@ -149,14 +149,20 @@ const MERGE_WRITTEN = "written";
 const MERGE_UNCHANGED = "unchanged";
 const MERGE_UNREADABLE = "unreadable";
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// The parsed record, or null when the text is not a JSON object. Only the PARSE is caught: a file the process
+// cannot read at all (a directory in its place, no permission) throws to the caller.
+function parseRecordObject(text) {
+  try {
+    const doc = JSON.parse(text);
+    return isPlainObject(doc) ? doc : null;
+  } catch { return null; }
+}
 function mergeRecordFile(full, keys, empty) {
-  let doc = {};
-  if (fs.existsSync(full)) {
-    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch { return MERGE_UNREADABLE; }
-    if (!isPlainObject(doc)) return MERGE_UNREADABLE;
-  }
+  const exists = fs.existsSync(full);
+  const doc = exists ? parseRecordObject(fs.readFileSync(full, "utf8")) : {};
+  if (!doc) return MERGE_UNREADABLE;
   const missing = keys.filter((k) => !Object.hasOwn(doc, k));
-  if (!missing.length && fs.existsSync(full)) return MERGE_UNCHANGED;
+  if (!missing.length && exists) return MERGE_UNCHANGED;
   for (const k of missing) doc[k] = structuredClone(empty);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, JSON.stringify(doc, null, 2) + "\n");

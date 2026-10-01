@@ -9864,6 +9864,22 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   check("record files: `--reads` merges the same way — the missing id is added and the filed value survives",
     () => reads.status === 0 && added[0] in ev3 && JSON.stringify(ev3[ownId]) === JSON.stringify(filed),
     () => ({ status: reads.status, stderr: reads.stderr, keys: Object.keys(ev3) }));
+
+  // A record file the process cannot read or write at all — here a DIRECTORY where `evidence.json` belongs — is
+  // a warning on the mode's answer, never a crash of the mode.
+  const blockedBase = tmp("records-blocked");
+  const blockedDir = path.join(blockedBase, "build-tasks");
+  fs.mkdirSync(path.join(blockedBase, "evidence.json"));
+  const blockedTasks = cliTasks(["--tasks", blockedDir], MANIFEST2);
+  const blockedNext = cliTasks(["--tasks", blockedDir, "--next"], MANIFEST2);
+  const failureWarned = (r) => /NOT brought up to date/.test(r.stdout || "") && (r.stdout || "").includes(blockedBase);
+  check("record files: a record file the engine cannot touch (a directory named `evidence.json`) makes `--tasks` print the failure as a warning and exit normally",
+    () => blockedTasks.status === 0 && failureWarned(blockedTasks) && /--- progress ---/.test(blockedTasks.stdout),
+    () => ({ status: blockedTasks.status, stdout: (blockedTasks.stdout || "").slice(-600), stderr: (blockedTasks.stderr || "").slice(0, 600) }));
+  check("record files: …and `--next` still names the startable task with its `--start` command, the warning beside it",
+    () => [0, 2].includes(blockedNext.status) && failureWarned(blockedNext) && /--start /.test(blockedNext.stdout),
+    () => ({ status: blockedNext.status, stdout: (blockedNext.stdout || "").slice(-600), stderr: (blockedNext.stderr || "").slice(0, 600) }));
+  fs.rmSync(blockedBase, { recursive: true, force: true });
   fs.rmSync(base, { recursive: true, force: true });
 }
 

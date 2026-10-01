@@ -3445,12 +3445,21 @@ function splitRefusalText(set, dir) {
 // THE RECORD FILES, kept current by every mode that reads the cut. A builder files its evidence record during the
 // build, so `evidence.json` / `judge.json` / `recorded.json` have to exist from the first slice on, in the MIGRATION
 // folder — the parent of the task folder, the same folder `--reads` writes into. The merge only ever adds an id the
-// plan publishes; a value already filed is never changed or dropped.
+// plan publishes; a value already filed is never changed or dropped. Keeping them current is a side duty of the
+// mode, so a failure here (a plan shape `readPlan` cannot read, a folder the process cannot write) becomes a
+// warning line and the mode still gives its own answer.
 function keepRecordFiles(result, tasksDir, opts) {
   const folder = path.dirname(path.resolve(tasksDir));
-  const { written, unreadable } = ensureRecordFiles(folder, readPlan(result, opts));
-  return { folder, written, warning: unreadableRecordLine(folder, unreadable) };
+  try {
+    const { written, unreadable } = ensureRecordFiles(folder, readPlan(result, opts));
+    return { folder, written, unreadable, warning: unreadableRecordLine(folder, unreadable) };
+  } catch (e) {
+    return { folder, written: [], unreadable: [], warning: recordFailureLine(folder, e) };
+  }
 }
+const recordFailureLine = (folder, e) => `⚠ The record files in ${folder} were NOT brought up to date (${folder}: ${e.message}).`
+  + " The rest of this mode's answer is unaffected. Fix the cause and re-run it, so every published id has a key for"
+  + " the builders to file under.";
 // What a mode prints about the record files: the files it wrote, then any warning.
 function recordFileLines(records) {
   const lines = [];
