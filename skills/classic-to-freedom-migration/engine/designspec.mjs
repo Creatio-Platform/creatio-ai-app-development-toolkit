@@ -2187,17 +2187,17 @@ function renderPlanWith(result, opts) {
   // on each typed row so the template mandate is not lost (it must not live only on the suppressed base row).
   const formTpl = pm.formTemplate || opts.template || null;
   const scopeRows = buildScopeRows(pm, opts, entity, typed, fill);
-  P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
-  P.push(...freedomExistsBanner(pm, opts));
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  // Main-scope rows + Call legend, then the DCM template banner, then the LIST PAGE first (so the Add mini-page
-  // mapping sits right after it), then the add-mini-page mapping — ONE combined push (Sonar S7778); the form /
+  // Main-scope rows (+ the existing-Freedom banner), child rows + Call legend, then the DCM template banner,
+  // then the LIST PAGE first (so the Add mini-page mapping sits right after it), then the add-mini-page mapping — ONE combined push (Sonar S7778); the form /
   // per-type mappings follow below. (DCM present → the banner steers to `PageWithTabsAndProgressBarTemplate`, which
   // ships the stage progress bar the plain templates lack; hand-adding `crt.EntityStageProgressBar` is the fallback.)
   P.push(
+    "### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows,
+    ...freedomExistsBanner(pm, opts),
     ...buildChildScopeRows(childs, opts), "", ...renderChildScopeLegend(childs),
     ...(isExistingSection(opts) ? existingSectionTemplateBanner(result) : renderTemplateBanner(result, entity, typed, someBindOnly, formTpl)),
     "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
