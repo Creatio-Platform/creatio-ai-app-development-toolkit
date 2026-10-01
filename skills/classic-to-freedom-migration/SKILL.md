@@ -80,6 +80,7 @@ name (older clio), stop emitting for the rest of the run and carry on.
 - A Creatio section/page URL, or a section/page/entity name.
 - A Creatio package or application name, when the whole package/app must be migrated.
 - Optional Creatio environment name.
+- A migration folder with `resume.md`: skip steps 0-6, read `./references/orchestrate-build.md` → *Resuming*.
 
 ## Migration Scope
 
@@ -462,18 +463,18 @@ Never batch decisions into one prose message ("confirm A2 and A8"). Record every
 
 ### 7. Implement The Approved Plan — Slice It, Then Orchestrate One Task At A Time
 
-Step 6 ends with an approved plan. This step does **not** build it here. It cuts the plan into a folder of
-one-task files and then walks that folder, handing **one task at a time** to its own sub-agent.
+This step does **not** build the approved plan here: it cuts it into one-task files and hands
+**one task at a time** to its own sub-agent.
 
 **When the plan is approved, read `./references/orchestrate-build.md` ONCE, before you slice.** It holds this step
-in full — 7.0 the dispatch route, 7.1 recording the approval and slicing the plan, 7.2 the orchestrator contract,
-7.3 what each sub-agent is handed (the task-kind → brief table), 7.4 the read-back and the judge, 7.5 repair, 7.6
-whole-package scope — and step 8's driver side. What follows is the part you keep in view while the build runs; it
-does not replace it.
+in full (7.0-7.7) and step 8's driver side; below is what stays in view during the build.
 
 **7.0 Resolve the dispatch route before the first `--start`** and write it into `worklog.md` as a `Route:` line
 (`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
 `AskUserQuestion`, then stop until it is answered.
+
+**7.1b Over `TASK_BUDGET.run`? Run `--tasks <migration-folder>/build-tasks --handoff`**, relay its prompt for a fresh
+session and STOP (again when a `--verify` opens repairs).
 
 **7.2 The orchestrator contract** — six rules, each stated in full in the reference:
 
@@ -511,7 +512,7 @@ payload shape are in `./references/orchestrate-build.md` → *Step 8 — the dri
 close report (the Plan-vs-Done rows, per-AC evidence, gate-toggle safety, the `Quality gates` rows) is in
 `./references/build-page.md`.
 
-**Clean up (step 4.2 inputs).** Once a page/section is `VALIDATED`, delete its temporary input directory (the manifest + fetched Classic bodies) — it is stand-sourced customer data with no further use. The versioned outputs (`plan.md`, `worklog.md`, the built Freedom artifacts) stay.
+**Clean up (step 4.2 inputs).** Once a page/section is `VALIDATED`, delete its temporary input directory (manifest, Classic bodies) and `resume-manifest.json` — stand-sourced customer data with no further use. The versioned outputs (`plan.md`, `worklog.md`, the built Freedom artifacts) stay.
 
 ## References
 

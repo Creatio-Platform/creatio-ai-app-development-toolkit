@@ -31,7 +31,32 @@ mean. No sub-agent is handed this file — each gets the briefs its task kind na
 
 **Your own whole reads, each once:** `plan.md` at approval (7.1 records its version), `decisions.md`,
 and the `--- progress ---` block the engine prints — you paste that block, you do not re-read it.
-Everything else you open during the build is a targeted read.
+Everything else you open during the build is a targeted read. A resumed session's whole reads are
+`resume.md` and this file instead, and nothing else — see *Resuming* below.
+
+## Resuming — a fresh session continues the build from `resume.md`
+
+The build loop runs in a fresh session once the plan is sliced (7.1b), because every build turn pays
+for the whole conversation before it, and a driver that also carried discovery and planning pays for
+them on every build turn. When the user hands you a migration folder that holds
+`resume.md` (the prompt 7.1b printed names it), you are that fresh session:
+
+1. **Skip steps 0-6.** Do not re-read `discovery.md`, `plan.md`, the manifest or the stand material
+   behind them, and do not re-run `--plan`: the plan is approved and sliced, and the approval entry
+   in `decisions.md` names the plan version `resume.md` records.
+2. **Read `resume.md` whole, once, then this file** — the two are your only whole reads; `decisions.md`
+   and `worklog.md` are targeted reads from here on, by heading, when a task needs an entry. Take
+   the manifest path (the copy `resume-manifest.json` beside it), the task folder, the environment
+   and the `Route:` from `resume.md`; the route
+   stands for the rest of the run (7.0 — never switch mid-run; if this session's host withholds
+   what the route needs, the 7.0 ROUTE GATE question is how you ask).
+3. **Continue the 7.2 loop with the `--next` command `resume.md` ends on** —
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --next` — and carry
+   on exactly as 7.2-7.5 and step 8 say. The engine answers from the folder; `resume.md` is not
+   updated as you go, so trust `--next`, not the snapshot in it.
+4. **Something you need is not in the folder?** A fact the build needs that lived only in the
+   earlier conversation is a gap in `decisions.md` / `worklog.md`: ask the user and record the answer
+   there. Do not widen what you read to find it.
 
 ## Step 7 — slice the plan, then orchestrate one task at a time
 
@@ -135,6 +160,27 @@ exactly two files: everything that writes the stand (app, package, section, ever
 is no `Reference cache` in such a run — it exists to stop several fresh contexts re-fetching the
 same guidance, and here there is only one builder. A 31-row section came out as six tasks and five
 sub-agents before this, one of them caching material nobody else read.
+
+**7.1b Hand off to a fresh session — then STOP.** Once the plan is approved and sliced, and the
+run is **over `TASK_BUDGET.run`** (it has more than one task besides its review, not just the
+`Whole migration` build), the build loop leaves this session: everything above it (discovery,
+the plan, its approval) would otherwise be paid for again on every build turn. With the `Route:`
+line written (7.0), run
+`node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --handoff`
+It writes `<migration-folder>/resume.md` — manifest path, folder, environment, the approved plan
+version, the route, the progress block, the next task and one resume prompt — every value computed
+from the folder, so **never write `resume.md` yourself** — and it copies the manifest beside it as
+`resume-manifest.json`, which `resume.md` names, so the fresh session never needs your temporary
+input folder. It refuses (exit **2**, nothing written), in stages, naming every cause of a stage at
+once: a plan with gaps; a manifest path that does not exist, or a manifest on stdin; then together a
+folder not sliced, no `## ` entry in `decisions.md` holding both `Plan version:` with exactly the
+current version and a non-empty `Approved by:`, and no `worklog.md` `Route:` naming one of the 7.0
+routes; then a `D<N>` in `decisions.md` nothing cites; then a `--next` answer of `ledger` or
+`stuck`. Fix what it names and run it again. Then give the user the resume prompt it printed, to
+paste into a fresh session, and
+**STOP**: no `--start` and no dispatch in this session. The same hand-off happens again when a
+step-8 `--verify --tasks` opens repair tasks. A run below `TASK_BUDGET.run` (the `Whole migration`
+task and its review) stays in this session.
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
@@ -467,6 +513,11 @@ self-reported.** On an orchestrated run the gate is
 the payload.** Step 7.4's `--reads` named every file; this composes
 `built.json` out of them, writes it and `verify.md` into that folder, and gates on it.
 
+**When that run opens repair tasks, hand off again (7.1b).** `--verify --tasks` writing a repair
+round means more build turns are coming, and the verify reads that preceded them are the heaviest
+material this session holds. Run `--tasks <migration-folder>/build-tasks --handoff`, give the user
+the resume prompt, and STOP; the fresh session dispatches the repair tasks through `--next`.
+
 **`--verify --built <file>` is the REPLAY path** — the same gate against a payload already composed
 (the `built.json` from an earlier run, or a recorded fixture). Use it to re-check a run offline,
 never to author a payload by hand.
@@ -562,7 +613,7 @@ the engine declined to touch the folder, so nothing it names was cut, started or
 is on stdout under the banner — a plan-level gap, a split that claims a row twice or names a row the
 plan does not have, a frozen cut that does not resolve against the plan, or one of the `--start`
 holds above. Fix the cause named there and re-run; **every mode that prints it answers this same
-code** (`--tasks`, `--tasks --next`, `--tasks --route`, `--tasks --start`, `--verify --tasks`), so
+code** (`--tasks`, `--tasks --next`, `--tasks --route`, `--tasks --start`, `--tasks --handoff`, `--verify --tasks`), so
 the verdict does not depend on which command asked. `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete`
 is yours to repair: build the missing pieces, file the on-stand evidence, re-verify.
 `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including
