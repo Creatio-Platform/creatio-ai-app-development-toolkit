@@ -13,7 +13,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -2090,6 +2090,21 @@ check("an approved `pages-only-no-menu` plan publishes NO `list` key and no gate
       && !rows.some((r) => r.list); },
   () => ({ keys: [...new Set(checklistGroups(lpRun, lpNoMenuOpts).map((g) => g.pageKey))],
     listMarked: checklistGroups(lpRun, lpNoMenuOpts).flatMap((g) => g.rows).filter((r) => r.list).map((r) => r.label) }));
+// An `existing-section` plan EXTENDS the existing list page: its columns and filters stay gated work on the `list`
+// key, while the list template row is closed — the existing page keeps its own template.
+const lpExistingOpts = { ...lpOpts, sectionHostMode: "existing-section", existingSection: { listPage: "Applicant_ListPage", formPage: "Applicant_FormPage" } };
+check("existing-section: the list page's columns stay GATED on the `list` key, and a missing column is a hard MISSING — the list is extended, not dropped",
+  () => { const groups = checklistGroups(lpRun, lpExistingOpts);
+    const rows = groups.flatMap((g) => g.rows);
+    const v = renderVerify(lpRun, lpExistingOpts, LP_BUILT(LP_ALL_COLS.slice(1), LP_FILTERS));
+    return groups.some((g) => g.pageKey === "list") && rows.some((r) => r.label.startsWith("List columns") && r.vk && !r.na)
+      && lpListTally(v).missing >= 1; },
+  () => lpListTally(renderVerify(lpRun, lpExistingOpts, LP_BUILT(LP_ALL_COLS.slice(1), LP_FILTERS))));
+check("existing-section: the list template row is N/A — a list page built on another template is not a defect of an extended page (control: the same page under the default mode is flagged)",
+  () => { const row = checklistGroups(lpRun, lpExistingOpts).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:list-template");
+    const ctrl = (lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV2FreedomTemplate"))).openRows || []).some((r) => /List template/.test(r.deliverable));
+    return /existing-section/.test(row?.na || "") && ctrl; },
+  () => checklistGroups(lpRun, lpExistingOpts).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:list-template"));
 check("GATE: a list page REPORTED AS NOT BUILT (`false`) fails for that reason — not as an empty grid or a short filter bar, because the repair is to build the page rather than to add columns to one",
   () => { const v = renderVerify(lpRun, lpOpts, { pages: { list: false } });
     return lpListTally(v).missing >= 1
@@ -2777,6 +2792,99 @@ check("placement gate: mode 'new-app' clears the gate (the build creates its own
   planWithPlacement(newAppPlacement).status === 0);
 check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
   /Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
+// (g) 'existing-section' — a Freedom section for the object is already in the menu and the user chose to extend
+// it. Same owning-app facts as the no-primary leg above, which blocks 'existing-app': this mode registers nothing,
+// so it clears the gate, and the plan targets the two existing pages by name.
+const existingSectionPlacement = { ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "CrtVendorPkg", editable: false }, targetPackageInApplication: { resolved: true, value: false },
+  sectionHost: { resolved: true, mode: "existing-section", listPage: "SupportUnit_ListPage", formPage: "SupportUnit_FormPage" } };
+const runExistingSection = (placement, mode, planMeta = { ...FULL_PLANMETA, freedomExists: true }) => runMigrate(["-", mode], {
+  input: JSON.stringify({ ...placementBase, planMeta, placement }), encoding: "utf8" });
+const plExisting = runExistingSection(existingSectionPlacement, "--plan");
+check("placement gate: mode 'existing-section' clears the gate on an app whose primary package is locked and is not the target — nothing is registered, so no primary match is required",
+  plExisting.status === 0 && !/PLAN INCOMPLETE/.test(plExisting.stderr || ""),
+  () => plExisting.stderr);
+check("plan: 'existing-section' targets the existing list and form pages by name, calls them Update (reconcile), and says no app or section is created",
+  /\| SupportUnitSection \(list page\) \| `SupportUnit_ListPage` \(existing — extended\) \| Update \(reconcile\) \|/.test(plExisting.stdout || "")
+  && /\| SupportUnit form page \| `SupportUnit_FormPage` \(existing — extended\) \| Update \(reconcile\) \|/.test(plExisting.stdout || "")
+  && /Extend the existing section/.test(plExisting.stdout || "") && /no app or section is created/.test(plExisting.stdout || "")
+  && /into the target package `UsrSU`/.test(plExisting.stdout || "") && !/do NOT create a duplicate/.test(plExisting.stdout || ""),
+  () => (plExisting.stdout || "").split("\n").filter((l) => /list page\)|form page \||Extend the existing/.test(l)).join("\n"));
+const plExistingNoNames = runExistingSection({ ...existingSectionPlacement, sectionHost: { resolved: true, mode: "existing-section" } }, "--plan");
+check("placement gate: 'existing-section' without the existing list/form page names is INCOMPLETE — the plan cannot target pages it does not name",
+  plExistingNoNames.status === 2 && /sectionHost\.listPage \/ sectionHost\.formPage are not both named/.test(plExistingNoNames.stderr || ""),
+  () => plExistingNoNames.stderr);
+const plExistingNoFreedom = runExistingSection(existingSectionPlacement, "--plan", FULL_PLANMETA);
+check("placement gate: 'existing-section' without planMeta.freedomExists is INCOMPLETE — extending an existing section is a reconcile, never a rebuild",
+  plExistingNoFreedom.status === 2 && /planMeta\.freedomExists is not true/.test(plExistingNoFreedom.stderr || ""),
+  () => plExistingNoFreedom.stderr);
+const clExisting = runExistingSection(existingSectionPlacement, "--checklist");
+check("checklist: 'existing-section' renders the section row as already registered and closed (N/A), never the gated registration row",
+  (clExisting.stdout || "").split("\n").some((l) => /Navigable section — \*\*already registered\*\*/.test(l) && /N\/A — .*existing-section/.test(l))
+  && !/Navigable section registered in exactly ONE workplace/.test(clExisting.stdout || ""),
+  () => (clExisting.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
+check("checklist: 'existing-section' keeps the list page as work — it is extended, not dropped like pages-only-no-menu",
+  /List page → `SupportUnit_ListPage` \(existing — extended\)/.test(clExisting.stdout || "") && !/NOT built/.test(clExisting.stdout || ""),
+  () => (clExisting.stdout || "").split("\n").filter((l) => /List page/.test(l)).join("\n"));
+check("placement gate: the 'existing-app' refusal names 'existing-section' among the alternatives",
+  /existing-section/.test(plNoPrimary.stderr || ""));
+const plExistingMinimal = runExistingSection({ targetPackageEditable: existingSectionPlacement.targetPackageEditable, sectionHost: existingSectionPlacement.sectionHost }, "--plan");
+check("placement gate: 'existing-section' needs only the target package and the host decision — the owning app's facts do not bear on a mode that registers nothing",
+  plExistingMinimal.status === 0 && !/PLAN INCOMPLETE/.test(plExistingMinimal.stderr || ""),
+  () => plExistingMinimal.stderr);
+check("placement gate (control): the SAME minimal placement under 'existing-app' still names the unresolved app facts",
+  /placement\.application not resolved/.test(runExistingSection({ targetPackageEditable: existingSectionPlacement.targetPackageEditable, sectionHost: { resolved: true, mode: "existing-app" } }, "--plan").stderr || ""));
+const dcmSignals = { ...FULL_SIGNALS, dcm: { resolved: true, present: true, names: ["Contract case"] } };
+const plExistingDcm = runMigrate(["-", "--plan"], { input: JSON.stringify({ ...placementBase, signals: dcmSignals, planMeta: { ...FULL_PLANMETA, freedomExists: true }, placement: existingSectionPlacement }), encoding: "utf8" });
+check("plan: 'existing-section' with a DCM case keeps the existing page's template — the banner adds the progress bar into it and never re-templates or re-binds the page",
+  /DCM case present, existing page kept/.test(plExistingDcm.stdout || "") && !/Build it on \*\*`PageWithTabsAndProgressBarTemplate`\*\*/.test(plExistingDcm.stdout || ""),
+  () => (plExistingDcm.stdout || "").split("\n").filter((l) => /Template —/.test(l)).join("\n"));
+const { formTemplate: _noTpl, ...pmNoFormTemplate } = FULL_PLANMETA;
+const plExistingNoTpl = runExistingSection(existingSectionPlacement, "--plan", { ...pmNoFormTemplate, freedomExists: true });
+check("plan: 'existing-section' needs no planMeta.formTemplate — the existing form page keeps its own template, so there is none to choose",
+  plExistingNoTpl.status === 0 && !/PLAN INCOMPLETE/.test(plExistingNoTpl.stderr || "") && !/<FILL: Freedom form template>/.test(plExistingNoTpl.stdout || ""),
+  () => plExistingNoTpl.stderr);
+check("checklist: 'existing-section' targets the existing form page and closes its template row (N/A) even when a template was recorded",
+  /Form page → `SupportUnit_FormPage` \(existing — extended\)/.test(clExisting.stdout || "")
+  && (clExisting.stdout || "").split("\n").some((l) => /Form template →/.test(l) && /N\/A — .*existing-section/.test(l)),
+  () => (clExisting.stdout || "").split("\n").filter((l) => /Form (page|template)/.test(l)).join("\n"));
+check("plan: the 'existing-section' banner names the save call and target-package-uid, so the replacing schema lands in the target package",
+  /`target-package-uid` of `UsrSU`/.test(plExisting.stdout || "") && /`update-page` \/ `sync-pages`/.test(plExisting.stdout || ""));
+const plExistingTyped = runMigrate(["-", "--plan"], { input: JSON.stringify({ ...placementBase, planMeta: { ...FULL_PLANMETA, freedomExists: true }, placement: existingSectionPlacement,
+  typedPages: [{ schema: "SUTypeAPage", type: "A" }, { schema: "SUTypeBPage", type: "B" }], typedPageSchemas: {} }), encoding: "utf8" });
+check("placement gate: 'existing-section' over a TYPED entity is INCOMPLETE — the mode names one form page and cannot target a page per record type",
+  plExistingTyped.status === 2 && /typed form pages — this mode extends one list page and one form page only/.test(plExistingTyped.stderr || ""),
+  () => plExistingTyped.stderr);
+// (h) A PARALLEL section is the user's explicit choice (`planMeta.parallelSection`): the new section's pages are
+// built from the full Classic page, so the Call is Rebuild and the plan says the existing section is left alone.
+const plParallel = runExistingSection(newAppPlacement, "--plan", { ...FULL_PLANMETA, freedomExists: true, parallelSection: true });
+check("plan: 'new-app' + planMeta.freedomExists + planMeta.parallelSection is a parallel section — Call Rebuild, the existing section is NOT changed, no reconcile banner",
+  plParallel.status === 0 && /\| SupportUnit form page \| PageWithTabsFreedomTemplate \| Rebuild \|/.test(plParallel.stdout || "")
+  && /Parallel section — the user's choice/.test(plParallel.stdout || "") && !/Update \(reconcile\)/.test(plParallel.stdout || ""),
+  () => (plParallel.stdout || "").split("\n").filter((l) => /form page \||Parallel|Reconcile/.test(l)).join("\n"));
+// 'new-app' is also the section host of an EXTENDED form page that has no section yet — without the explicit flag
+// the existing form page is reconciled, never rebuilt.
+const plExtendFormNewApp = runExistingSection(newAppPlacement, "--plan");
+check("plan: 'new-app' + planMeta.freedomExists WITHOUT parallelSection reconciles the existing form page — Call Update (reconcile), no parallel banner",
+  plExtendFormNewApp.status === 0 && /\| SupportUnit form page \| PageWithTabsFreedomTemplate \| Update \(reconcile\) \|/.test(plExtendFormNewApp.stdout || "")
+  && !/Parallel section/.test(plExtendFormNewApp.stdout || ""),
+  () => (plExtendFormNewApp.stdout || "").split("\n").filter((l) => /form page \||Parallel|Reconcile/.test(l)).join("\n"));
+const plParallelWrongMode = runExistingSection(FULL_PLACEMENT, "--plan", { ...FULL_PLANMETA, freedomExists: true, parallelSection: true });
+check("placement gate: planMeta.parallelSection with a mode other than 'new-app' is INCOMPLETE — a parallel section is a new app",
+  plParallelWrongMode.status === 2 && /planMeta\.parallelSection is true but placement\.sectionHost\.mode is 'existing-app'/.test(plParallelWrongMode.stderr || ""),
+  () => plParallelWrongMode.stderr);
+// `isParallelSection` also needs `freedomExists`; without it the flag would be dropped and the plan would quietly
+// render as a plain Rebuild with no parallel-section banner — so the gate refuses it instead.
+const plParallelNoFreedom = runExistingSection(newAppPlacement, "--plan", { ...FULL_PLANMETA, parallelSection: true });
+check("placement gate: planMeta.parallelSection WITHOUT planMeta.freedomExists is INCOMPLETE — a parallel section is built next to an existing Freedom section, never silently a plain Rebuild",
+  plParallelNoFreedom.status === 2 && /planMeta\.parallelSection is true but planMeta\.freedomExists is not true/.test(plParallelNoFreedom.stderr || ""),
+  () => plParallelNoFreedom.stderr);
+// The placement banner asks for the keys the gate requires — one source (requiredPlacementKeys), so an
+// 'existing-section' plan is never sent after the three owning-app facts it does not need.
+const placementBannerKeys = (out) => ((out || "").split("\n").find((l) => /Record the answers in `manifest\.placement`/.test(l)) || "").match(/manifest\.placement` \(([^)]*)\)/)?.[1] || "";
+check("plan banner: a blocked 'existing-section' plan lists only `targetPackageEditable` · `sectionHost` (control: a blocked 'existing-app' plan lists all five keys)",
+  placementBannerKeys(plExistingNoNames.stdout) === "`targetPackageEditable` · `sectionHost`"
+  && placementBannerKeys(plNoPrimary.stdout) === "`targetPackageEditable` · `application` · `primaryPackage` · `targetPackageInApplication` · `sectionHost`",
+  () => ({ existingSection: placementBannerKeys(plExistingNoNames.stdout), existingApp: placementBannerKeys(plNoPrimary.stdout) }));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -4152,6 +4260,15 @@ check("STRUCTURE: a non-typed Rebuild form that folds to 0 FIELDS is BLOCKED (ho
   () => hollowForm.structure.issues);
 check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1 field is NOT blocked (even with details)",
   stVerifiedNone.structure.issues.every((i) => !/0 FIELDS/.test(i)));
+// The 0-field gate exempts only a reconcile, which extends a page that already has a body. A parallel section
+// rebuilds its form from the Classic page, so a hollow fold blocks it exactly like a plain Rebuild.
+const hollowManifest = { entity: "X", detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"D",parentName:"Tabs",values:{itemType:2}}]};});` }] };
+const hollowParallel = runMigration({ ...hollowManifest, planMeta: { freedomExists: true, parallelSection: true } }, { baseDir: FIX });
+const hollowReconcile = runMigration({ ...hollowManifest, planMeta: { freedomExists: true } }, { baseDir: FIX });
+check("STRUCTURE: a hollow 0-field fold BLOCKS a parallel-section Rebuild (planMeta.parallelSection) but not a reconcile of an existing page",
+  hollowParallel.structure.issues.some((i) => /0 FIELDS/.test(i)) && hollowReconcile.structure.issues.every((i) => !/0 FIELDS/.test(i)),
+  () => ({ parallel: hollowParallel.structure.issues, reconcile: hollowReconcile.structure.issues }));
 // Detail editability lives in the detail's OWN config, not on the master. When the
 // detail schema IS bundled (get-classic-migration-bundle gathers detailSchemas), editability is RESOLVED — no
 // per-detail "confirm view-only vs add/edit/delete" line. It fires ONLY when the schema was NOT bundled.
@@ -8009,6 +8126,35 @@ const hdrNone = renderDesignSpec({ entity: "H", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("header→top-area: NOT recommended when headerLayout is absent (standard left-profile page)",
   !/Template recommendation — header elements present/.test(hdrNone));
+const hdrExisting = renderDesignSpec({ entity: "H", changeSet: { headerLayout: "wide", viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, { sectionHostMode: "existing-section" });
+check("header→top-area: NOT recommended under 'existing-section' — the extended existing page keeps its own template (control: the same body under the default mode recommends it)",
+  !/Template recommendation — header elements present/.test(hdrExisting) && /Template recommendation — header elements present/.test(hdrBase));
+// Only the MAIN form page's template row closes under 'existing-section': a child or mini page of the same run is
+// still built on its own template, so its row keeps the gate.
+const esCtx = { sectionHostMode: "existing-section" };
+check("existing-section: engineStatusReason closes the MAIN form-template row and leaves a child page's template row open (control: the default mode closes neither)",
+  /existing-section/.test(engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, esCtx) || "")
+  && engineStatusReason({ deliverableId: "template:form", pageKey: "child:UsrChild" }, esCtx) == null
+  && engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, {}) == null);
+// The same closure end to end: a real `runMigration` checklist for an 'existing-section' run with a folded mini page
+// closes the MAIN form-template row and keeps the mini page's own template row gated.
+{
+  const esMiniBody = (name, field) => `define("${name}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});`;
+  const esMiniRun = runMigration({
+    entity: "X", seed: CLEAN_SEED, targetPackage: "UsrX",
+    schemas: [{ pkg: "P", body: esMiniBody("XPage", "F") }],
+    addRecordMiniPage: { schema: "XMiniPage" },
+    miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: esMiniBody("XMiniPage", "MF") }] } },
+    planMeta: { ...docPlanMeta, freedomExists: true }, signals: FULL_SIGNALS,
+    placement: { targetPackageEditable: { resolved: true, value: true }, sectionHost: { resolved: true, mode: "existing-section", listPage: "X_ListPage", formPage: "X_FormPage" } },
+  });
+  const tplRows = (esMiniRun.checklist || "").split("\n").filter((l) => /\| Form template → /.test(l));
+  check("existing-section (end to end): the checklist closes the MAIN form-template row (N/A) and keeps the mini page's `BaseMiniPageTemplate` row gated",
+    tplRows.some((l) => /Form template → `PageWithTabsFreedomTemplate`/.test(l) && /N\/A — .*existing-section/.test(l))
+    && tplRows.some((l) => /Form template → `BaseMiniPageTemplate`/.test(l) && /☐ pending/.test(l) && !/N\/A/.test(l)),
+    () => tplRows);
+}
 const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",
@@ -9727,6 +9873,14 @@ check("placement verify: an approved 'pages-only-no-menu' run keeps the section 
 check("placement verify (control): the SAME payload under 'new-app' still leaves the section row OPEN — the drop is the approved mode's doing, not a hole in the gate",
   allEq(marksFor(rcNewApp.markdown, SECTION_RE), "⚠ verify"),
   () => marksFor(rcNewApp.markdown, SECTION_RE));
+// An 'existing-section' run registers nothing either: the section row stays visible but closed, so `--verify` can
+// reach green with no `sectionRegistered` evidence.
+const EXISTING_SECTION_RE = /Navigable section — \*\*already registered\*\*/;
+const rcExisting = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "existing-section" }, { pages: rcPages, reachability: {}, miniPageWired: true });
+check("placement verify: an approved 'existing-section' run keeps the section row VISIBLE but closed (`N/A` with the host-mode reason) — one fewer unverified row than the same payload under 'new-app'",
+  rcExisting.markdown.split("\n").some((l) => EXISTING_SECTION_RE.test(l) && /N\/A — .*existing-section/.test(l))
+  && rcExisting.missing === rcNewApp.missing && rcExisting.unverified === rcNewApp.unverified - 1,
+  () => ({ marks: marksFor(rcExisting.markdown, EXISTING_SECTION_RE), existing: { missing: rcExisting.missing, unverified: rcExisting.unverified }, newApp: { missing: rcNewApp.missing, unverified: rcNewApp.unverified } }));
 // PRECEDENCE, the rule that was asserted only in a comment: the payload carries BOTH, and they disagree.
 const rcConflict = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: false }, miniPageWired: true });
 check("reachability PRECEDENCE: `reachability.miniPageWired = false` is a HARD ❌ MISSING EVEN THOUGH the payload root also carries `miniPageWired: true` — the verifier's considered answer is never overturned by a stale root-level boolean",

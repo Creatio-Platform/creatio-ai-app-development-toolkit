@@ -48,10 +48,14 @@ package. Everything below follows from that one fact.
 | App has **no** primary package at all | `new-app` | Typical of an app created by *installing* a package: the wrapper carries a primary package only when the package shipped an app descriptor. `get-app-info` fails with *"Primary package not found in response."* — that error IS the evidence, not a tool defect. |
 | No app owns the entity's package | `new-app` | `create-app` gives the new app its own editable primary package. |
 | User accepts URL/page-binding reachability only | `pages-only-no-menu` | Legitimate, but it must be an approved decision recorded in `decisions.md` — never a silent fallback after a failed registration. |
+| A Freedom section for the object is already in the menu, and the user chose to extend it | `existing-section` | Nothing is registered and no app is created, so the app's primary package does not matter. The Classic customizations go as extensions of the existing list and form pages into a new package; `sectionHost` names both pages. Only by the user's choice, asked once before the plan. |
+| A Freedom section for the object is already in the menu, and the user chose a parallel one | `new-app` + `planMeta.parallelSection: true` | A second section over the same object, built from the full Classic page; the existing section is not changed. Only by the user's choice, asked once before the plan. |
 
 Record the answers in `manifest.placement` — `targetPackageEditable`, `application`,
 `primaryPackage`, `targetPackageInApplication` and `sectionHost.mode`, each as
 `{ "resolved": true, … }`; `migrate.mjs --plan` refuses to present a plan until they are resolved.
+`existing-section` registers nothing, so it needs only `targetPackageEditable` and `sectionHost`
+(with `listPage` / `formPage`).
 
 **`new-app` is ONE `create-app` call, never `create-app` followed by `create-app-section`.** Pass
 `optional-template-data-json` with BOTH `useExistingEntitySchema: true` and `entitySchemaName: "<Entity>"`
