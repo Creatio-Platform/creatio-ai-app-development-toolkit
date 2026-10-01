@@ -9869,6 +9869,41 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
     () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 200)], startable: startable.map((t) => t.artifact), task: pageTask && [pageTask.id, pageTask.artifact], pageIds, status: started?.status, stderr: started?.stderr, state: recordState(startBase) }));
   fs.rmSync(startBase, { recursive: true, force: true });
 
+  // `--handoff` keeps them current too: the fresh session resumes into a folder whose record files exist.
+  const hoBase = tmp("records-handoff");
+  const hoDir = path.join(hoBase, "mig", "build-tasks");
+  const hoManifest = path.join(hoBase, "scratch", "manifest.json");
+  fs.mkdirSync(path.dirname(hoManifest), { recursive: true });
+  fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
+  const cliHo = (...args) => spawnSync(process.execPath, [MIGRATE, hoManifest, ...args], { encoding: "utf8" });
+  cliHo("--tasks", hoDir);
+  const hoFolder = path.dirname(hoDir);
+  fs.writeFileSync(path.join(hoFolder, "decisions.md"), "# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n"
+    + `- Decision: build the plan\n- Approved by: user\n- Plan version: \`${RUN.planVersion}\`\n`);
+  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n");
+  for (const f of RECORD_FILES) fs.rmSync(path.join(hoFolder, f), { force: true });
+  const handedOff = cliHo("--tasks", hoDir, "--handoff");
+  check("record files: `--handoff` recreates deleted record files with EVERY published id — the fresh session's first builder files into a file that exists",
+    () => handedOff.status === 0 && fs.existsSync(path.join(hoFolder, "resume.md"))
+      && ["evidence.json", "judge.json"].every((f) => PLAN.evidenceIds.every((id) => Object.hasOwn(readJson(hoFolder, f), id)))
+      && PLAN.builderRecorded.every((b) => Object.hasOwn(readJson(hoFolder, "recorded.json"), b.reachabilityKey)),
+    () => ({ status: handedOff.status, stdout: (handedOff.stdout || "").slice(0, 600), stderr: handedOff.stderr, state: recordState(hoFolder) }));
+  fs.rmSync(hoBase, { recursive: true, force: true });
+
+  // A record file that parses as JSON but not as an OBJECT — `[]` or `null` — is as unreadable as broken JSON.
+  for (const [label, text] of [["an array", "[]\n"], ["null", "null\n"]]) {
+    const seededBase = tmp("records-non-object");
+    const seededDir = path.join(seededBase, "build-tasks");
+    fs.mkdirSync(seededBase, { recursive: true });
+    fs.writeFileSync(path.join(seededBase, "evidence.json"), text);
+    const seeded = cliTasks(["--tasks", seededDir], MANIFEST);
+    check(`record files: \`evidence.json\` holding ${label} stays BYTE-IDENTICAL after \`--tasks\`, and the run names it as unreadable`,
+      () => seeded.status === 0 && fs.readFileSync(path.join(seededBase, "evidence.json"), "utf8") === text
+        && /`evidence\.json`[^\n]*could not be read as a JSON object/.test(seeded.stdout || ""),
+      () => ({ status: seeded.status, back: fs.readFileSync(path.join(seededBase, "evidence.json"), "utf8"), stdout: (seeded.stdout || "").slice(-500) }));
+    fs.rmSync(seededBase, { recursive: true, force: true });
+  }
+
   // `--reads` runs the same merge: it adds an id the file lacks and keeps every filed value.
   const filedAgain = readJson(base, "evidence.json");
   filedAgain[ownId] = filed;
