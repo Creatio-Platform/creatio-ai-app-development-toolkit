@@ -10136,8 +10136,8 @@ console.log("\n===== the filed half of a page's quality gate belongs to the page
     () => ({ filedRow: !!filedRow, review: !!review, carried }));
   fs.rmSync(path.dirname(d), { recursive: true, force: true });
 
-  // A RETIRED file still listing the filed row: a task id an earlier cut used and this plan no longer has. Its file
-  // is reported stale and never rewritten, so its mark stays in the folder after the row moved on.
+  // A RETIRED file still listing the filed row: its task id is not in the current plan, so the file is reported
+  // stale and never rewritten, and its mark stays in the folder while another task owns the row.
   const filedAt = (t) => t.rows.findIndex((r) => r.deliverableId === FILED) + 1;
   const retire = (dir, set, task, id, mark) => {
     const file = `task-${id}.md`;
