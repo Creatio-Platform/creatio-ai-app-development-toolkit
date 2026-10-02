@@ -1067,7 +1067,13 @@ console.log("\n===== the split: a cut decided once, validated here, frozen in th
 // step with the plan: a hand-typed row list would start passing for the wrong reason the moment a row changed.
 const allRows = (pageKey) => GROUPS.filter((g) => g.pageKey === pageKey).flatMap((g) => g.rows.map((r) => r.label));
 const splitItem = (id, pageKey, writesTo, rows, extra = {}) => ({ id, title: id, pageKey, writesTo, rows, ...extra });
-const FULL_SPLIT = { planVersion: RUN.planVersion, items: keysOf(SET).map((k) =>
+// One item per page, in the order the engine builds the page BODIES — leaf-first, so `main` comes after the children
+// whose related lists it wires. Read off the engine's own queue rather than re-derived here.
+function bodyOrder(set) {
+  return [...new Set(set.tasks.filter((t) => t.writesTo && t.artifact !== ARTIFACT_SCAFFOLD).map((t) => t.pageKey))];
+}
+const SPLIT_KEYS = bodyOrder(SET);
+const FULL_SPLIT = { planVersion: RUN.planVersion, items: SPLIT_KEYS.map((k) =>
   splitItem(`build-${slugKey(k)}`, k, k === "main" ? "main" : k, allRows(k))) };
 function slugKey(k) { return k.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, ""); }
 
@@ -1094,7 +1100,7 @@ check("split: a complete cut builds a task per ITEM — the seams are the file's
   }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems
     || buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).tasks.map((t) => `${t.order}:${t.id}`));
 // The same cut, with each page's rows claimed by GROUP: a plan that gains a deliverable row stays covered.
-const GROUP_SPLIT = { planVersion: RUN.planVersion, items: keysOf(SET).map((k) =>
+const GROUP_SPLIT = { planVersion: RUN.planVersion, items: SPLIT_KEYS.map((k) =>
   splitItem(`build-${slugKey(k)}`, k, k === "main" ? "main" : k, [...new Set(GROUPS.filter((g) => g.pageKey === k).map((g) => `@${g.baseTitle}`))])) };
 check("split: the item's `id` IS the task's identity — a frozen cut does not move, so the slug someone chose survives any change to the rows inside it (the mechanical slicer had to hash content because it re-decided the cut every run)",
   () => {
@@ -1317,6 +1323,38 @@ check("split: a helper whose CALLER is not in the plan at all is not a chain def
     return r.errors.length === 0;
   });
 
+// A `Child page wiring` row binds a related list to a child page, so the item carrying it goes after every item
+// writing that child page. The row's `vk` names the child page key, so the order is checked, not trusted.
+{
+  const c1Row = GROUPS.find((g) => g.pageKey === "child:C1" && g.baseTitle !== "Child page wiring" && g.rows.length)?.rows[0]?.label;
+  const WIRE_ITEM = { id: "wire-main", title: "w", pageKey: "main", writesTo: "main", rows: ["@Child page wiring"] };
+  const C1_ITEM = { id: "c1-build", title: "c", pageKey: "child:C1", writesTo: "child:C1", rows: [c1Row] };
+  const wiringErrors = (items) => resolveSplit({ items }, GROUPS, new Map()).errors.filter((e) => /wires /.test(e));
+  check("split: an item wiring a related list to `child:C1` may not sit before the item that writes `child:C1` — the list cannot be bound to a page that has not been built",
+    () => {
+      const errs = wiringErrors([WIRE_ITEM, C1_ITEM]);
+      return !!c1Row && errs.length === 1 && /`wire-main` wires `child:C1` but sits BEFORE 1 item\(s\)/.test(errs[0])
+        && errs[0].includes("c1-build") && /Move it after them/.test(errs[0]);
+    }, () => wiringErrors([WIRE_ITEM, C1_ITEM]));
+  check("split: the same two items in the RIGHT order raise no wiring error",
+    () => !!c1Row && wiringErrors([C1_ITEM, WIRE_ITEM]).length === 0,
+    () => wiringErrors([C1_ITEM, WIRE_ITEM]));
+  const MAIN_ITEM = { id: "main-build", title: "m", pageKey: "main", writesTo: "main",
+    rows: [GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Form — Coverage (verified)")?.rows[0]?.label] };
+  check("split: a binding-only item may not sit before the item that writes the page HOLDING the related list either — the list must exist before it is wired",
+    () => {
+      const errs = wiringErrors([C1_ITEM, WIRE_ITEM, MAIN_ITEM]);
+      return errs.length === 1 && /`wire-main` wires `main` but sits BEFORE 1 item\(s\)/.test(errs[0]) && errs[0].includes("main-build")
+        && wiringErrors([C1_ITEM, MAIN_ITEM, WIRE_ITEM]).length === 0;
+    }, () => [wiringErrors([C1_ITEM, WIRE_ITEM, MAIN_ITEM]), wiringErrors([C1_ITEM, MAIN_ITEM, WIRE_ITEM])]);
+  const writesOf = (items, id) => resolveSplit({ items }, GROUPS, new Map()).items.find((it) => it.id === id)?.writesTo;
+  const mainRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Form — Coverage (verified)")?.rows[0]?.label;
+  check("split: an item holding ONLY binding rows writes `wiring:<page>`, the artifact the engine's own cut gives them; one that also holds page rows writes the page",
+    () => writesOf([C1_ITEM, WIRE_ITEM], "wire-main") === "wiring:main"
+      && !!mainRow && writesOf([C1_ITEM, { ...WIRE_ITEM, rows: ["@Child page wiring", mainRow] }], "wire-main") === "page:main",
+    () => [writesOf([C1_ITEM, WIRE_ITEM], "wire-main"), mainRow]);
+}
+
 // Per-type routing binds each Type's form by the Type column, so it cannot run before those forms exist. Like the
 // folded chain, the engine emits the row itself and knows which page keys are typed — so this ordering is checked,
 // not trusted. It is a real mistake: on a 94-item split of a real plan the routing item sat second, ahead of both
@@ -1482,12 +1520,12 @@ console.log("\n===== a review waits for the page it judges, and may not precede 
     }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [REVIEW, ...others, BUILD] }, OPTS).problems);
   check("split: the same two in the right order pass, and the READ-ONLY review still waits on every writer of that page — with no `writesTo` it joins no chain, so without this dependency nothing would make it wait at all",
     () => {
-      const set = mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [BUILD, ...others, REVIEW] }, OPTS), []);
+      const set = mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...others, BUILD, REVIEW] }, OPTS), []);
       const rev = set.tasks.find((t) => t.id === "the-review");
       const at = new Map(set.tasks.map((t) => [t.id, t.step]));
       return !set.refused && rev.writesTo === "" && rev.dependsOn.includes("the-build")
         && set.tasks.every((t) => t.dependsOn.every((d) => !at.has(d) || at.get(d) < t.step));
-    }, () => mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [BUILD, ...others, REVIEW] }, OPTS), [])
+    }, () => mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...others, BUILD, REVIEW] }, OPTS), [])
       .tasks.map((t) => `${t.step}:${t.id}:${t.writesTo || "—"}→${t.dependsOn.join(",")}`));
   check("split: an item that carries NO `Quality gates` row is never treated as a review — the rule reads the rows, not the item's name",
     () => {
@@ -5332,14 +5370,14 @@ console.log("\n===== the startable set — one predicate, two callers =====");
   {
     const d = folderAt(0);
     const a = answerOf(d);
-    check("T1 fixture (anti-vacuity): the fresh folder really holds a dependency CHAIN — exactly one task has no `dependsOn`, and the other nine wait on it directly or transitively, so 'withholds what waits' is not a claim about an empty list",
-      () => SET.tasks.filter((t) => (t.dependsOn || []).length === 0).length === 1 && SET.tasks.length === 10,
+    check("T1 fixture (anti-vacuity): the fresh folder really holds a dependency CHAIN — exactly one task has no `dependsOn`, and the other eleven wait on it directly or transitively, so 'withholds what waits' is not a claim about an empty list",
+      () => SET.tasks.filter((t) => (t.dependsOn || []).length === 0).length === 1 && SET.tasks.length === 12,
       () => SET.tasks.map((t) => ({ id: t.id, dep: t.dependsOn })));
     check("T1 (R1): on a fresh folder the answer names the head of the queue and NOTHING else — the orchestrator asks which task to start instead of reading the `Step` column off a derived index",
       () => a.verdict === NEXT_STARTABLE && idsOf(a.startable).join(",") === HEAD,
       () => ({ verdict: a.verdict, startable: idsOf(a.startable) }));
     check("T1 (R1): every other task is WITHHELD with the cause that holds it — `deps`, naming the open task(s) it waits on, so an empty-looking queue is never unexplained",
-      () => a.withheld.length === 9 && a.withheld.every((w) => w.cause === HOLD_DEPS && w.tasks.length > 0),
+      () => a.withheld.length === SET.tasks.length - 1 && a.withheld.every((w) => w.cause === HOLD_DEPS && w.tasks.length > 0),
       () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
     fs.rmSync(d, { recursive: true, force: true });
   }
@@ -5622,7 +5660,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
   // ---- T5 (R3) — the four empty answers are distinguishable -------------------------------------
   {
     // FINISHED — every task settled, nothing left to hand out.
-    const dFin = folderAt(10);
+    const dFin = folderAt(SET.tasks.length);
     const aFin = startableTasks(syncTaskDir(dFin, RUN, OPTS), dFin);
     check("T5 fixture (anti-vacuity): the finished folder really has every task SETTLED and a dispatch record for each — else `finished` would be indistinguishable from a ledger failure",
       () => {
@@ -7344,13 +7382,23 @@ function cardSplit(prefix, other, { run = CARD_RUN, groups = CARD_GROUPS, waitin
   const rowsOf = (k, keep = () => true) => groups.filter((g) => g.pageKey === k && keep(g))
     .flatMap((g) => g.rows.map((r) => r.label)).filter((l) => l !== waiting);
   const isReview = (g) => g.baseTitle === "Quality gates";
+  // The wiring rows bind `main`'s related lists to the child pages, so they go in an item after every child page;
+  // the rest of `main` keeps its place ahead of them.
+  const isWiring = (g) => g.baseTitle === "Child page wiring";
   const waitPage = groups.find((g) => g.rows.some((r) => r.label === waiting))?.pageKey;
   const waitItem = (k) => (k === waitPage ? [splitItem(other, k, k, [waiting])] : []);
   const itemsOf = (k) => (k === "main"
-    ? [splitItem(`${prefix}-source`, k, k, rowsOf(k, (g) => !isReview(g))), ...waitItem(k),
-      splitItem(`${prefix}-review`, k, k, rowsOf(k, isReview))]
+    ? [splitItem(`${prefix}-source`, k, k, rowsOf(k, (g) => !isReview(g) && !isWiring(g))), ...waitItem(k)]
     : [...waitItem(k), splitItem(`${prefix}-${slugKey(k)}`, k, k, rowsOf(k))]);
-  return { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap(itemsOf) };
+  const wiring = rowsOf("main", isWiring);
+  // `main`'s review judges the finished page, so it follows the wiring item as well.
+  const tail = [...(wiring.length ? [splitItem(`${prefix}-wiring`, "main", "main", wiring)] : []),
+    splitItem(`${prefix}-review`, "main", "main", rowsOf("main", isReview))];
+  // A child page wires its own children's lists too, so the child pages follow the engine's leaf-first queue.
+  const keys = [...new Set(groups.map((g) => g.pageKey))];
+  const children = bodyOrder(buildTaskSet(run, CARD_OPTS, groups)).filter((k) => k.startsWith("child:"));
+  const ordered = [...keys.filter((k) => !k.startsWith("child:")), ...children];
+  return { planVersion: run.planVersion, items: [...ordered.flatMap(itemsOf), ...tail] };
 }
 
 {
@@ -8474,6 +8522,85 @@ check("identity digest guard: rendering the identity condition does NOT move any
     return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
   },
   () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+
+// Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
+// add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
+// LAST task writing the page that holds the list, and nothing that writes the page body waits on it.
+{
+  const wiringTasks = SET.tasks.filter((t) => t.rows.some((r) => r.group === "Child page wiring"));
+  const lastWriterOf = (key) => SET.tasks.filter((t) => t.pageKey === key && t.writesTo?.startsWith("page:"))
+    .sort((a, b) => b.order - a.order)[0];
+  const wiringOf = (holder) => wiringTasks.find((t) => t.pageKey === holder);
+  check("child page wiring: each page holding a related list to a rebuilt child gets ONE wiring task writing `wiring:<page>` — `child:C1` bound from `main`, the grandchild `child:G1` from `child:C1`",
+    () => wiringTasks.length === 2 && wiringOf("main")?.writesTo === "wiring:main"
+      && wiringOf("child:C1")?.writesTo === "wiring:child::C1Page"
+      && wiringOf("main").rows.every((r) => r.group === "Child page wiring") && wiringOf("main").rows.some((r) => r.label.includes("`child:C1`"))
+      && wiringOf("child:C1").rows.some((r) => r.label.includes("`child:G1`")) && wiringOf("main").group === "Child page wiring",
+    () => wiringTasks.map((t) => ({ task: t.id, page: t.pageKey, writes: t.writesTo, group: t.group, rows: t.rows.map((r) => r.label.slice(0, 60)) })));
+  check("child page wiring: the wiring task waits on the LAST writer of the child page it binds and of the page holding the list",
+    () => wiringOf("main").dependsOn.includes(lastWriterOf("child:C1").id) && wiringOf("main").dependsOn.includes(lastWriterOf("main").id)
+      && wiringOf("child:C1").dependsOn.includes(lastWriterOf("child:G1").id) && wiringOf("child:C1").dependsOn.includes(lastWriterOf("child:C1").id),
+    () => wiringTasks.map((t) => ({ task: t.id, deps: t.dependsOn })));
+  check("child page wiring: no task writing a page body, and no review, waits on a wiring task — the page's later work is not held behind the child pages",
+    () => SET.tasks.filter((t) => !t.writesTo?.startsWith("wiring:"))
+      .every((t) => wiringTasks.every((w) => !(t.dependsOn || []).includes(w.id)))
+      && !lastWriterOf("main").dependsOn.includes(lastWriterOf("child:C1").id),
+    () => SET.tasks.map((t) => ({ task: t.id, writes: t.writesTo, deps: t.dependsOn })));
+  // The written folder carries the same dependencies: `--start` refuses a task whose `dependsOn` is open, and that
+  // field is what the folder publishes.
+  const d = tmp("wiring-deps");
+  const folder = syncTaskDir(d, RUN, OPTS);
+  const written = folder.tasks.find((t) => t.id === wiringOf("main").id);
+  check("child page wiring: the synced task folder keeps the wiring task's waits",
+    () => (written?.dependsOn || []).includes(lastWriterOf("child:C1").id) && written?.writesTo === "wiring:main",
+    () => written);
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
+// A split carrying the binding rows in an item of their own gives that item the same waits the budget cut does.
+{
+  const wiringRows = GROUPS.filter((g) => g.pageKey === "main" && g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => r.label));
+  const items = FULL_SPLIT.items.map((it) => (it.pageKey === "main" ? { ...it, rows: it.rows.filter((r) => !wiringRows.includes(r)) } : it));
+  const at = items.findIndex((it) => it.pageKey === "main");
+  items.splice(at + 1, 0, splitItem("main-wiring", "main", "main", wiringRows));
+  const set = buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  const wiring = set.tasks.find((t) => t.id === "main-wiring");
+  const writerOf = (key) => set.tasks.filter((t) => t.writesTo === key).sort((a, b) => b.order - a.order)[0]?.id;
+  check("split: a binding-only item writes `wiring:main` and waits on the last writer of the child page it binds and of `main`",
+    () => !set.refused && wiringRows.length > 0 && wiring?.writesTo === "wiring:main"
+      && wiring.dependsOn.includes(writerOf("page:child::C1Page")) && wiring.dependsOn.includes(writerOf("page:main")),
+    () => ({ refused: set.refused, problems: set.problems, wiring: wiring && { w: wiring.writesTo, deps: wiring.dependsOn } }));
+}
+// A page whose only related list to a rebuilt child is an inline grid binds nothing, so it gets no wiring task: the
+// grid's no-page row stays with the page build.
+{
+  const gridChild = { entity: "C1", seed: SEED, schemas: [{ pkg: "P", body: 'define("C1Page",[],function(){return{entitySchemaName:"C1",methods:{getFilter:function(){return 1;}},diff:[]};});' }] };
+  const m = { ...manifestOf(), childPageSchemas: { C1Page: gridChild } };
+  const set = buildTaskSet(runMigration(m), optsOf(m));
+  const naTask = set.tasks.find((t) => t.rows.some((r) => r.group === "Child page wiring"));
+  check("child page wiring: an inline grid alone makes no `wiring:` task — its no-page row is carried by the page's own build task",
+    () => !set.tasks.some((t) => t.writesTo?.startsWith("wiring:")) && naTask?.writesTo === "page:main"
+      && naTask.rows.filter((r) => r.group === "Child page wiring").every((r) => r.na),
+    () => set.tasks.map((t) => ({ id: t.id, w: t.writesTo, rows: t.rows.filter((r) => r.group === "Child page wiring").map((r) => [r.label.slice(0, 40), r.na]) })));
+}
+// A child page shared by two parents (a diamond) is reached once by the leaf-first walk, so one of its parents can
+// rank ahead of it. That parent's wiring task still has to wait for the shared page.
+{
+  const parentBody = (page, entity) => `define("${page}",[],function(){return{entitySchemaName:"${entity}",details:{S:{schemaName:"SD${entity}",entitySchemaName:"S1",filter:{detailColumn:"p",masterColumn:"Id"}}},diff:[{operation:"insert",name:"ST",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"S",parentName:"ST",values:{itemType:2}},{operation:"insert",name:"${entity}F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${entity}F"}}]};});`;
+  const parent = (page, entity) => ({ entity, seed: SEED, schemas: [{ pkg: "P", body: parentBody(page, entity) }],
+    detailSchemas: { [`SD${entity}`]: { entity: "S1", columns: ["Number"], editPage: "S1Page" } },
+    childPageSchemas: { S1Page: leafBundle("S1", "S1Page") } });
+  const base = manifestOf({ extraChild: true });
+  const m = { ...base, childPageSchemas: { C1Page: parent("C1Page", "C1"), C2Page: parent("C2Page", "C2") } };
+  const set = buildTaskSet(runMigration(m), optsOf(m));
+  const sharedKey = set.tasks.find((t) => t.pageKey.startsWith("child:S1") && t.writesTo?.startsWith("page:"))?.pageKey;
+  const lastShared = set.tasks.filter((t) => t.pageKey === sharedKey && t.writesTo?.startsWith("page:")).sort((a, b) => b.order - a.order)[0];
+  const wiresShared = set.tasks.filter((t) => t.writesTo?.startsWith("wiring:") && t.rows.some((r) => r.label.includes("`" + sharedKey + "`")));
+  check("child page wiring (diamond): BOTH parents of a shared child page wire it, and each wiring task is queued after the shared page and waits on its last writer",
+    () => !!lastShared && wiresShared.length === 2
+      && wiresShared.every((w) => w.order > lastShared.order && w.dependsOn.includes(lastShared.id)),
+    () => ({ sharedKey, last: lastShared?.id, wiring: wiresShared.map((w) => ({ id: w.id, page: w.pageKey, order: w.order, deps: w.dependsOn })) }));
+}
 
 // ============================================================================================================
 // `--decide D<N> --build`: a person's "build it" answer to a needs-decision row reaches the folder through the
@@ -9916,7 +10043,7 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   fs.writeFileSync(startSplit, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
   const cutStart = cliTasks(["--tasks", startDir, "--split", startSplit], MANIFEST);
   // The page's dependencies are dispatched and closed first, so `--start` opens the page task itself.
-  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => (t.artifact || "").startsWith("page:"));
+  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => t.artifact === "page:main");
   check("record files (anti-vacuity): the per-page cut holds a page build task to start",
     () => pageTask != null, () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 300)] }));
   clearDepsOf(startDir, pageTask.id, RUN, checklistOpts(MANIFEST));
@@ -10128,7 +10255,8 @@ console.log("\n===== the filed half of a page's quality gate belongs to the page
   check("filed gate: on every page of the per-artifact cut exactly ONE task owns `quality:ran`, and it is that page's last writer",
     () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
       const owners = SET.tasks.filter((t) => t.rows.some((r) => r.deliverableId === FILED && r.pageKey === k));
-      const writers = SET.tasks.filter((t) => t.writesTo && t.rows.some((r) => r.pageKey === k));
+      // A wiring task writes the child entities' add-ons, not this page, so it is not one of the page's writers.
+      const writers = SET.tasks.filter((t) => t.writesTo && !t.writesTo.startsWith("wiring:") && t.rows.some((r) => r.pageKey === k));
       const last = writers.sort((a, b) => a.order - b.order).at(-1);
       return owners.length === 1 && owners[0] === last;
     }), () => SET.tasks.map((t) => `${t.order}:${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
@@ -10246,8 +10374,9 @@ console.log("\n===== a split must give the filed gate row to the page's last wri
   check("split: the filed row in a writer that a LATER item still writes after is refused, naming that later item as the owner",
     () => early.refused && early.problems.some((p) => /quality:ran/.test(p) && p.includes("first-half") && p.includes("second-half")),
     () => early.problems);
-  const right = refused([splitItem("first-half", "main", "main", rest.slice(0, half)),
-    splitItem("second-half", "main", "main", [...rest.slice(half), filedRow]), ...others,
+  // The child pages come first: `main` carries the rows that wire its related lists to them.
+  const right = refused([...others, splitItem("first-half", "main", "main", rest.slice(0, half)),
+    splitItem("second-half", "main", "main", [...rest.slice(half), filedRow]),
     splitItem("the-review", "main", "", [judgedRow])]);
   check("split: the filed row in the page's last writer and the judged row in a later read-only review is accepted — and the writer is not mistaken for a review",
     () => {

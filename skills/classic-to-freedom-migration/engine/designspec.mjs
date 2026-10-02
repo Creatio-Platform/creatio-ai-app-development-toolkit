@@ -1808,12 +1808,17 @@ function childBodyLines(c, lvl) {
   return arm([`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`]);
 }
 
-function renderChildMappings(childs) {
+function renderChildMappings(childs, pkg) {
   if (!childs.length) return [];
   const P = ["### Child page mappings", ""];
+  const shared = sharedWiringEntities(childs);
   const renderChild = (c, lvl) => {
     const { lines, recurse } = childBodyLines(c, lvl);
-    P.push(...lines);
+    const [head, ...body] = lines;
+    const wiring = childWiringPlanLines(c, pkg, shared.get(c.entity));
+    // A `>` line right after the wiring lines would join them into one quoted paragraph.
+    const gap = wiring.length && String(body[0] ?? "").startsWith(">") ? [">"] : [];
+    P.push(head, ...wiring, ...gap, ...body);
     if (recurse) for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
     P.push("");
   };
@@ -2226,7 +2231,7 @@ function renderPlanWith(result, opts) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  const childMappings = renderChildMappings(childs);
+  const childMappings = renderChildMappings(childs, opts.targetPackage);
   // Rendered after every other section: the list names only the closed deliverables no line above printed.
   const wontDo = renderWontDoList(opts);
   P.push(...childMappings, ...wontDo, "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
@@ -2963,6 +2968,84 @@ export function unresolvedChildGroups(pageKey, c, ctx = {}) {
     evidenceRow(`${pageKey}#childpage`, `Child page \`${esc(c.entity)}\` — evidence of what was actually built. Nothing about this page is derivable from the plan, so the structural row above can only ask whether the key returned ANY component. File the record naming the reference page and the components you built (\`${EVIDENCE_REQUIRES.join("` + `")}\`), and have the judge review it — a page nobody described is not a built page.`, { deliverableId: "page:child-evidence" }),
   ], ctx)];
 }
+
+// ---- child page wiring ----
+// A child page this plan BUILDS opens from nothing until the related list is wired to it: which page a list's
+// Add and open-record use is the child entity's RelatedPage add-on, a config record in the target package, not
+// part of either page body. So every built child owes a wiring row on the page that holds its related list.
+// Three answers, decided once and shared by the plan line and the checklist row so the two cannot disagree:
+//   · "wire" — a Freedom page is built for this child: it was folded, or its Classic page exists and still has to
+//     be folded (that page is built all the same);
+//   · "none" — an inline-editable list: the related list IS the editing UI, there is no form page to open;
+//   · null   — nothing is built here: a reused Freedom form (bound by its own `reuseBindings` row), an approved
+//     section boundary, a cycle, a verified "no page", an empty fold, or a child that publishes no page key.
+function childWiringKind(c) {
+  if (!c?.pageRows || isReusedChild(c) || boundaryChild(c)) return null;
+  if (c.formless === "inline-grid") return "none";
+  if (c.formless) return null;
+  return c.spec || (typeof c.editPage === "string" && c.editPage) ? "wire" : null;
+}
+const CHILD_WIRING_NONE = "no page to wire — an inline-editable related list: its rows are edited in the list itself, so Add and open-record open no separate form page";
+const childWiringId = (c) => `child-page-wiring:${c.via || c.entity}`;
+// The add-on is per object AND per package, so its read is keyed by the child entity: two related lists that open
+// one entity read one add-on.
+const relatedPageEvidenceKey = (entity) => `relatedPage:${entity}`;
+// What the plan can name about the page at plan time. The Freedom schema name is chosen at build time, so the
+// plan names the page by its key, its template and the Classic page it replaces; `--verify` reads the real name
+// off `pages[<key>].schemaName`.
+function childWiringPageText(c) {
+  const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
+  const tpl = CHILD_TEMPLATE_SCHEMA[choice];
+  const classic = c.resolvedFrom || (typeof c.editPage === "string" ? c.editPage : "");
+  const parts = [tpl ? `on \`${esc(tpl)}\`` : "", classic ? `replacing Classic \`${esc(classic)}\`` : ""].filter(Boolean);
+  return `the rebuilt child page \`${esc(c.pageKey)}\`${parts.length ? ` (${parts.join(", ")})` : ""}`;
+}
+const relatedPageQuery = (entity, pkg) =>
+  `\`get-related-page-addon\` (through \`clio-run\`) with \`entity-schema-name\` = \`${esc(entity)}\` and \`package-name\` = ${pkg ? "`" + esc(pkg) + "`" : "the plan's target package"}`;
+function childWiringLabel(c, pkg) {
+  const where = pkg ? `in \`${esc(pkg)}\`` : "in the target package";
+  return `Related list "${esc(c.via)}" opens ${childWiringPageText(c)} on Add and on open-record — the RelatedPage add-on for \`${esc(c.entity)}\` ${where} names that page as its default (and as its add page, when it has a separate one); until then the list opens nothing built here.`;
+}
+function childWiringRow(c, pkg) {
+  const kind = childWiringKind(c);
+  if (kind === "none") return { deliverableId: childWiringId(c), na: CHILD_WIRING_NONE, label: `Related list "${esc(c.via)}" — \`${esc(c.entity)}\`` };
+  if (kind !== "wire") return null;
+  return {
+    deliverableId: childWiringId(c),
+    label: childWiringLabel(c, pkg),
+    vk: { type: "relatedpage", evidence: relatedPageEvidenceKey(c.entity), entity: c.entity, package: pkg || null, childKey: c.pageKey,
+      what: `RelatedPage add-on read for \`${esc(c.entity)}\``, query: relatedPageQuery(c.entity, pkg) },
+  };
+}
+// The rows for THIS page's related lists. Each page renders its own children, so a grandchild's row sits on the
+// child page that holds its list.
+function childWiringRows(childs, opts = {}) {
+  return (childs || []).map((c) => childWiringRow(c, opts.targetPackage)).filter(Boolean);
+}
+// The plan's own statement of the same row, under the child's heading in `### Child page mappings`. `sharers` is
+// every page key of the tree that wires the same entity; more than one means the rows cannot all close.
+function childWiringPlanLines(c, pkg, sharers = []) {
+  const kind = childWiringKind(c);
+  if (kind === "none") return [`> **Wiring:** ${CHILD_WIRING_NONE}.`];
+  if (kind !== "wire") return [];
+  const lines = [`> **Wiring:** ${childWiringLabel(c, pkg)} Closed by \`--verify\` from the stand read ${relatedPageQuery(c.entity, pkg)}.`];
+  if (sharers.length > 1) lines.push(`> ⚠ **Wiring conflict:** ${sharers.length} different pages, rebuilt or reused, are to open for \`${esc(c.entity)}\` (${sharers.map((k) => "`" + esc(k) + "`").join(", ")}), and its RelatedPage add-on names ONE default page — so at most one of their binding rows can close. Decide which page the add-on opens; the other rows stay ❌ until a person records an answer for them.`);
+  return lines;
+}
+// Entity → the distinct pages its add-on is asked to open, over the whole child tree: each rebuilt page by its key,
+// and a reused Freedom form by its name, since its own binding row sets the same add-on. One physical page reached
+// twice (a shared child) counts once.
+function sharedWiringEntities(childs, out = new Map(), seen = new Set()) {
+  for (const c of childs || []) {
+    const id = c?.pageDedupeId || c?.pageKey;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const page = childWiringKind(c) === "wire" ? c.pageKey : (isReusedChild(c) && c.reuseFreedomPage) || null;
+    if (page) out.set(c.entity, [...(out.get(c.entity) || []), page]);
+    sharedWiringEntities(c.childPages, out, seen);
+  }
+  return out;
+}
 // Splice in the rows every sub-page attached at fold time. Child pages RECURSIVELY — a grandchild is a
 // first-class page, and the depth-1 `.map` this replaces gave it no row at all — then typed pages and the mini
 // page. DEDUPE by resolved page identity: the run-global memo hands the SAME `res` to every parent referencing
@@ -3028,8 +3111,19 @@ function assignOnePageKey(node, claimed, byDedupe) {
   setPageKey(node, key);
   return true;
 }
+// A node's rows name its children's page keys (the wiring rows do), and they are rendered when the node's own key
+// is claimed — BEFORE its children claim theirs. A child that then lands on a key other than its base one would
+// leave the parent's rows pointing at a key nobody publishes, so the parent re-renders once its children settle.
+function rerenderIfChildKeyMoved(node) {
+  const moved = (node.childPages || []).some((g) => g?.pageRows && g.pageKeyBase && g.pageKey !== g.pageKeyBase);
+  if (moved && typeof node.pageRowsFor === "function") node.pageRows = node.pageRowsFor(node.pageKey);
+}
 function assignPageKeys(result, claimed = new Map(), byDedupe = new Map()) {
-  for (const c of result.childPages || []) if (assignOnePageKey(c, claimed, byDedupe)) assignPageKeys(c, claimed, byDedupe);
+  for (const c of result.childPages || []) {
+    if (!assignOnePageKey(c, claimed, byDedupe)) continue;
+    assignPageKeys(c, claimed, byDedupe);
+    rerenderIfChildKeyMoved(c);
+  }
   for (const t of result.typedPages || []) assignOnePageKey(t, claimed, byDedupe);
   assignOnePageKey(result.miniPage, claimed, byDedupe);
   return result;
@@ -3232,6 +3326,8 @@ export function checklistGroups(result, opts = {}) {
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
   if (isMain) groups.push(...sectionLogicGroups(result.listChangeSet, sectionLogicKey, ctx));
+  // The related lists on THIS page that open a child page the plan builds — see `childWiringKind`.
+  G("Child page wiring", childWiringRows(childs, opts));
   // Child pages that publish NO page key of their own — a cycle (mapped higher on this branch, and gated there),
   // a child verified to have no separate page / to be view-only (no deliverable to gate), or a malformed child
   // bundle (a PLAN-completeness failure the structure gate already blocks on). They keep an identity row so
@@ -3870,6 +3966,55 @@ function resolveOnstandVk(vk, ctx) {
   if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified", "verifier"];
 }
+// --- child page wiring --------------------------------------------------------------------------------------
+// Closed by the RelatedPage add-on as the STAND reports it — `get-related-page-addon`'s response copied verbatim
+// under `reachability["relatedPage:<Entity>"]` — never by a builder's word. The engine itself matches the entry
+// against the child page that was built: the entry's `pageSchemaUId` against `pages[<childKey>].schemaUId` from that
+// page's own `get-page`, and the schema names when either side carries no UId.
+// The general entries serve the internal audience for every record: no record type, and no role or the
+// `All employees` one. Portal, per-role and per-type entries layer on top and do not decide what the list opens.
+const GENERAL_ROLE = "All employees";
+const generalRelatedPages = (pages) => pages.filter((p) => p && typeof p === "object" && !p.typeColumnValue
+  && (!p.roleName || p.roleName === GENERAL_ROLE));
+const sameUId = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+// Whether an add-on entry opens the built child page: by UId when both sides carry one, by name otherwise.
+const opensChild = (p, child) => (child.uid && p.pageSchemaUId ? sameUId(p.pageSchemaUId, child.uid) : p.pageSchemaName === child.name);
+// The add-on as read, or a ⚠/❌ verdict when the read cannot answer. Own fn for Sonar CC 15.
+function relatedPageRead(vk, v) {
+  const how = vk.query ? ` — run ${vk.query} and copy the response verbatim` : "";
+  if (v === undefined || v === null) return { verdict: ["⚠ verify", `the RelatedPage add-on for \`${esc(vk.entity)}\` was not read${how}`, "unverified", "verifier"] };
+  if (v === false) return { verdict: ["❌ MISSING", `no RelatedPage add-on for \`${esc(vk.entity)}\` (built.reachability.${vk.evidence} = false) — the related list opens nothing built here`, "missing"] };
+  if (typeof v !== "object" || Array.isArray(v) || v.success === false || !Array.isArray(v.pages)) {
+    return { verdict: ["⚠ verify", `the RelatedPage read for \`${esc(vk.entity)}\` is not a \`get-related-page-addon\` response${v?.error ? ` (${esc(String(v.error))})` : ""}${how}`, "unverified", "verifier"] };
+  }
+  const readPkg = typeof v.packageName === "string" ? v.packageName : "";
+  if (vk.package && readPkg && readPkg !== vk.package) {
+    return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
+  }
+  return { pages: generalRelatedPages(v.pages) };
+}
+// The built child page's schema name, or a verdict when the page cannot be named. Own fn for Sonar CC 15.
+function wiredChildSchema(vk, root) {
+  const page = vk.childKey ? pageEntryOf(root, vk.childKey) : undefined;
+  if (page === false) return { verdict: ["❌ MISSING", `the child page \`${esc(vk.childKey)}\` is reported as NOT BUILT, so there is no page to wire`, "missing"] };
+  const name = entryObject(page)?.schemaName;
+  const uid = entryObject(page)?.schemaUId;
+  if (typeof name === "string" && name) return { name, uid: typeof uid === "string" && uid ? uid : undefined };
+  return { verdict: ["⚠ verify", `the built child page \`${esc(vk.childKey || "?")}\` reports no \`schemaName\` — read it with \`get-page\` so the binding can be matched against it`, "unverified", "verifier"] };
+}
+function resolveRelatedPageVk(vk, ctx) {
+  const read = relatedPageRead(vk, reachabilityValue(ctx.root, vk.evidence));
+  if (read.verdict) return read.verdict;
+  const opens = read.pages.find((p) => p.isDefault === true);
+  if (!opens) return ["❌ MISSING", `the RelatedPage add-on for \`${esc(vk.entity)}\` has no default page${vk.package ? ` in \`${esc(vk.package)}\`` : ""} — the related list opens nothing built here`, "missing"];
+  const child = wiredChildSchema(vk, ctx.root);
+  if (child.verdict) return child.verdict;
+  // A separate add entry overrides the default for Add; with none, the default page serves Add too.
+  const adds = read.pages.find((p) => p.isAdd === true) || opens;
+  const wrong = [["open-record", opens], ["Add", adds]].filter(([, p]) => !opensChild(p, child));
+  if (!wrong.length) return ["✅ Done", `Add and open-record open \`${esc(child.name)}\` (RelatedPage add-on for \`${esc(vk.entity)}\`)`, "ok"];
+  return ["❌ MISSING", `${wrong.map(([what, p]) => `${what} opens \`${esc(String(p.pageSchemaName || p.pageSchemaUId || "?"))}\``).join(", ")}, the built child page is \`${esc(child.name)}\``, "missing"];
+}
 // --- per-dashboard verification ----------------------------------------------------------------------------
 // The plan names every dashboard and its destination, so the gate compares against THAT list: one boolean for
 // the whole run lets eleven of twelve close the row and never mentions the twelfth.
@@ -4374,7 +4519,8 @@ export function resolveCardNativeVk(vk, ctx) {
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
-const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk]]);
+const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
+  ["relatedpage", resolveRelatedPageVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);

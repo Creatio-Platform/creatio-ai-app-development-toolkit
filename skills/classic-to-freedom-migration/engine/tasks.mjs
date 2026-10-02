@@ -147,6 +147,8 @@ export const GROUP_PHASE = new Map([
   // After the handlers: an `attribute-dependency` row wires an attribute to the method it triggers, so it needs
   // that method ported first. The worklist's virtual attributes do not wait here — see VIRTUAL_ATTRIBUTE_PHASE.
   ["⚠ Other declared logic worklist", 70],
+  // The related list must exist on the page before it can be wired to the child page it opens.
+  ["Child page wiring", 75],
   // The list page's own imperative work: after the page it attaches to is built, before its review.
   ["List — Custom methods", 87],
   ["List — Other declared logic worklist", 88],
@@ -214,6 +216,13 @@ const WHOLE_REVIEW = "review:whole";
 export const REFS_DIR = "refs";
 const REFS_GROUP = "Reference cache";
 const REVIEW_GROUP = "Quality gates";
+// A page's `Child page wiring` rows write the child entities' RelatedPage add-ons, not the page body, so they are an
+// artifact of their own. Kept off `page:<id>` on purpose: the wiring waits on the child pages, and everything chained
+// behind the page body — its later chunks, its repair rounds — would otherwise wait on them too. A group holding no
+// binding (only an inline grid's no-page row) has nothing to wait for and stays with the page.
+const WIRING_GROUP = "Child page wiring";
+const ARTIFACT_WIRING_PREFIX = "wiring:";
+const bindsChildPage = (group) => (group.rows || []).some((r) => r.vk?.type === "relatedpage");
 // The review pass reads a built page and files a verdict; it writes nothing, so it is its own read-only task
 // rather than the tail of the build that it is supposed to judge.
 //
@@ -225,6 +234,7 @@ const REVIEW_GROUP = "Quality gates";
 const artifactOf = (group, baseTitle, identity) => {
   if (isScaffold(group, baseTitle)) return ARTIFACT_SCAFFOLD;
   const id = identity.get(group.pageKey) || group.pageKey;
+  if (baseTitle === WIRING_GROUP && bindsChildPage(group)) return `${ARTIFACT_WIRING_PREFIX}${id}`;
   return baseTitle === REVIEW_GROUP && !group.filedGate ? `review:${id}` : `page:${id}`;
 };
 // Each `Quality gates` group split into its filed row (marked `filedGate`, a build row of the page) and the rest
@@ -291,6 +301,9 @@ function rowWeight(row, baseTitle, B) {
   // so a page's item rows pack as the one aggregate row did and never cut a page into many small tasks.
   if (row.vk?.item) return 0;
   if (row.vk?.type === "rule") return (Number(row.vk.n) || 1) * B.rule;
+  // The binding is already in the related list's weight (`relatedList` carries its binding and its child page), so
+  // the row that checks it adds none — like the per-item rows above.
+  if (row.vk?.type === "relatedpage") return 0;
   const label = String(row.label || "");
   const fields = /—\s*(\d+)\s+fields?\b/.exec(label);
   if (fields) return Number(fields[1]) * B.field;
@@ -562,7 +575,7 @@ const artifactLabel = (artifact) =>
   ARTIFACT_LABEL.get(artifact) || (artifact.startsWith("review:") ? REVIEW_GROUP : "Page build");
 
 function chunkLabel(artifact, rows, cut) {
-  const base = artifactLabel(artifact);
+  const base = artifact.startsWith(ARTIFACT_WIRING_PREFIX) ? WIRING_GROUP : artifactLabel(artifact);
   if (!cut) return base;
   const head = String(rows[0].label).split("—")[0].replace(/[`*]/g, "").trim();
   return `${base} — from ${head.slice(0, 48)}`;
@@ -613,6 +626,16 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
     b.seen = Math.min(b.seen, i);
     b.groups.push(g);
   });
+  // A wiring bucket sorts after every child page it wires, not only after the page holding the list: a child page
+  // shared by two parents is reached once by the walk, so one of those parents ranks ahead of it, and a wiring task
+  // queued ahead of the child page's writer would find no writer to wait on.
+  buckets.forEach((b) => {
+    if (!b.artifact.startsWith(ARTIFACT_WIRING_PREFIX)) return;
+    const childRanks = b.groups.flatMap((g) => g.rows || []).filter((r) => r.vk?.type === "relatedpage" && r.vk.childKey)
+      .map((r) => pageRank(order, r.vk.childKey));
+    const childRank = Math.max(-Infinity, ...childRanks);
+    if (childRank >= b.rank) b.rank = childRank + 0.5;
+  });
   const ordered = [...buckets.values()].sort((a, b) => (a.rank - b.rank) || (a.seen - b.seen));
   // The cache is fetched before anything is built, so it leads the queue — ahead of the scaffolding, which is the
   // first thing that would otherwise be reading contracts of its own.
@@ -626,7 +649,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   const chunks = small
     ? small.flatMap((b) => chunksOf(b, { ...B, chunk: Infinity }))
     : [refs, ...ordered].flatMap((b) => chunksOf(b, B));
-  const tasks = chunks.map((c, i) => taskOf(c, i + 1));
+  const tasks = chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) }));
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
@@ -717,6 +740,15 @@ function reviewDeps(t, writersSoFar) {
   return writersSoFar.filter((o) => want.includes(o.writesTo)).map((o) => o.id);
 }
 
+// A wiring row binds a related list to the child page it opens, so its task waits for the LAST task that writes
+// that child page and the LAST task that writes the page holding the list. Queue order alone does not hold it
+// there: tasks on different artifacts may be dispatched side by side.
+const wiredArtifacts = (srcRows, identity) => [...new Set((srcRows || [])
+  .filter((r) => r.vk?.type === "relatedpage")
+  .flatMap((r) => [r.vk.childKey, r.pageKey || r.rowPageKey]).filter(Boolean)
+  .map((k) => `page:${identity.get(k) || k}`))];
+const wiringDeps = (t, lastOn) => (t.wiresArtifacts || []).map((a) => lastOn.get(a)).filter(Boolean);
+
 function withDependencies(tasks) {
   // SCAFFOLDING SEEN SO FAR, not all of it. The engine's own slicing puts every scaffold task at the front, but a
   // split may legitimately place one late — per-type routing binds each Type's form and so belongs AFTER the typed
@@ -744,6 +776,7 @@ function withDependencies(tasks) {
     if (prev) deps.push(prev);
     lastOn.set(chainKey, t.id);
     deps.push(...reviewDeps(t, writersSoFar));
+    deps.push(...wiringDeps(t, lastOn));
     if (t.writesTo) writersSoFar.push(t);
     return { ...t, dependsOn: [...new Set(deps)].filter((d) => d !== t.id) };
   });
@@ -931,6 +964,10 @@ const IDENTITY_BY_VK = new Map(Object.entries({
   listfilter: "the filter element carries EXACTLY the name the plan gives it and is a `crt.QuickFilter`",
   element: "the element carries EXACTLY the name the plan gives it and the plan's component type — another"
     + " component of that type under a different name does not count",
+  relatedpage: "the child entity's RelatedPage add-on in the target package names the BUILT child page as its"
+    + " default page (and as its add page, when it has a separate one) — the gate reads the add-on off the stand"
+    + " and matches the entry by schema UId (by schema name when either side has no UId), so a binding to any"
+    + " other page is ❌ MISSING",
 }));
 
 function closedByOf(row) {
@@ -2453,6 +2490,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       // The filed row is the writer's, so it makes no item a review.
       reviewsArtifacts: [...new Set(srcRows.filter((r) => r.groupTitle === REVIEW_GROUP && !isFiledGateRow(r))
         .map((r) => `page:${identity.get(r.rowPageKey) || r.rowPageKey}`))],
+      wiresArtifacts: wiredArtifacts(srcRows, identity),
       order: i + 2,                       // the reference cache keeps position 1
       phase: DEFAULT_PHASE,
       origin: TASK_ORIGIN_ENGINE,

@@ -127,7 +127,8 @@ not carry it.
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
    The engine REFUSES a split that claims a row twice, names a row the plan does not have, places a
    virtual attribute in a later item than a handler recorded as setting it, puts a page's filed
-   `Quality gates` row anywhere but that page's last writer, or leaves a plan row in NO item; it writes nothing at all in that case and **exits `2`** — the same code
+   `Quality gates` row anywhere but that page's last writer, places `Child page wiring` rows before
+   an item writing a page they bind or the page holding the lists, or leaves a plan row in NO item; it writes nothing at all in that case and **exits `2`** — the same code
    every mode that reads the cut answers with, so `--tasks`, `--tasks --next` and `--tasks --route`
    cannot disagree about whether one folder state is approvable. An unclaimed row is work nobody is
    scheduled to do: the refusal names those rows and their pages, with the count still owed, and
@@ -400,6 +401,7 @@ answered on the stand is recorded there and is not repeated in its own file.
 | Reference cache — the run's first task | `group: Reference cache` (read-only, `writesTo:` empty) | `./references/reference-cache-brief.md` | — |
 | Scaffolding — app, package, section, page shells | `group: Scaffolding`, `writesTo: scaffold` | `./references/build-task-execution.md`, `./references/build-scaffolding.md` | — |
 | Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
+| Child page wiring — the RelatedPage bindings for one page's related lists | `group: Child page wiring`, `writesTo: wiring:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` | `./references/classic-to-freedom-mapping.md` |
 | Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when the plan lists dashboards | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
@@ -587,6 +589,7 @@ you, decides the list.
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>", "schemaName": "<page.name — the result report names the page by it>", "handlers": <bundle.handlers — the handler rows are matched against it>, "viewModelConfig": <bundle.viewModelConfig — virtual-attribute rows are matched against its attributes>, "resources": <bundle.resources — a built tab's `#ResourceString(K)#` caption resolves through it> },
              "child:InternalRequest": false },     // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
+  // "reachability" also holds "relatedPage:<Entity>": the get-related-page-addon response, verbatim — never a flag
   "evidence": { "<id>": { "referencePage": "…", "components": ["…"], "findings": ["…"], "findingsRaised": ["…"] } },  // merged from evidence.json — the engine wrote every id as a key; you fill VALUES, never keys
   "judge":    { "<id>": { "convincing": true, "why": "…" } } }              // …and from judge.json, the same way
 ```
@@ -612,8 +615,13 @@ reachability deliverables live in no page body** — `typedFormsBuilt`, `typedRo
 reuses an existing Freedom form — an unbound list opens nothing) and `sectionRegistered` — because
 they are config records the API's page read cannot see; each is `true` only once confirmed on-stand,
 `false` when genuinely absent (`❌ MISSING`), and an OMITTED key is `⚠ verify`, so a
-built-but-unreachable migration cannot pass. **`sectionRegistered` is the exception and takes NO
-bare `true`:** a workplace registration only ADDS, so a flag cannot tell one binding from two —
+built-but-unreachable migration cannot pass. **`relatedPage:<Entity>`** — one per child entity
+whose page the plan rebuilds — is a read of the same kind, but its file holds the
+`get-related-page-addon` response copied WHOLE, never a flag: the engine itself matches the
+add-on's default page (and its add page, when there is one) against the built child page — by
+schema UId, or by `schemaName` when either side has no UId — so a related list bound to any other page is `❌ MISSING`. **`sectionRegistered` is
+the exception and takes NO bare `true`:** a workplace registration only ADDS, so a flag cannot tell
+one binding from two —
 report the count you read on the stand, `{ "workplaces": <n>, "names": [...] }`, and the row closes
 at exactly 1. **A section whose plan lists dashboards adds `built.dashboards` — a LIST, not a
 flag.** The migration is a PROCESS run (`MigrateDashboardsProcess`), so no page read can see it; and
