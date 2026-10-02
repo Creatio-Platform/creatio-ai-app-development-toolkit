@@ -3174,7 +3174,10 @@ export function nativeTabFieldNames(ctx, planTabs) {
   for (const c of ctx.containers || []) {
     const isTabC = TAB_TYPES.includes(c.type) || c.parentType === "crt.TabPanel";
     if (!isTabC || planned.has(c.name)) continue; // a plan-created (client) tab keeps its extras under the gate
-    for (const o of c.fieldOps || []) { if (o.name) names.add(o.name); if (o.bound) names.add(o.bound); }
+    for (const o of c.fieldOps || []) {
+      if (o.name) names.add(o.name);
+      if (o.bound) names.add(o.bound);
+    }
   }
   return names;
 }
