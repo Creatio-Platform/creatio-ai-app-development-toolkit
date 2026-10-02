@@ -7982,9 +7982,8 @@ console.log("\n===== build order: virtual attributes are declared before the han
       syncTaskDir(d2, attrRun, { ...attrOpts, now: AT(nextMin()) });
     };
     const handler2 = ordered2().find((t) => t.id === handlerTask.id);
-    for (const t of ordered2().filter((x) => x.order <= handler2.order)) {
-      dispatch2(t, t.id === handler2.id ? (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built") : "built");
-    }
+    const handlerMark = (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built");
+    for (const t of ordered2().filter((x) => x.order <= handler2.order)) dispatch2(t, t.id === handler2.id ? handlerMark : "built");
     const laterBuilds = ordered2().filter((x) => x.kind !== "repair" && x.writesTo === handler2.writesTo && x.order > handler2.order);
     const round = syncRepairDir(d2, attrRun, {}, attrOpts).written;
     const startableIds = () => startableTasks(syncTaskDir(d2, attrRun, attrOpts), d2).startable.map((t) => t.id);
