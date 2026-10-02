@@ -170,5 +170,6 @@ the supplied chain defines it stays `correctness` and blocks.
   `Caption` in its `resourceStrings` (e.g. `{ "DocumentDetailV2": { "body": "<define(...)>",
   "resourceStrings": { "Caption": { "en-US": "Documents" } } } }`). When none of them is readable, the
   plan asks for the title in ⚠ Confirm. Standard lists (Activities, Emails) are titled the same way.
-- **A field with no entity column behind it** is labelled by the page string of the same name (or
-  `<Field>Caption`), in every culture; a column-bound field auto-labels from the column title.
+- **A field with no entity column behind it** is labelled, in every culture, by the page string its
+  own caption names (`caption`, then `labelConfig.caption`), else the page string of the field's
+  name, else `<Field>Caption`; a column-bound field auto-labels from the column title.

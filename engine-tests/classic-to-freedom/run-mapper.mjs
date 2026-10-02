@@ -11929,6 +11929,27 @@ const n2TreeManifest = (titleA, titleB) => ({
       return !!doc && doc.cultures["fr-FR"] === "Documents contractuels" && doc.source === "DocumentDetailV2 · Caption"
         && row.vk.texts.some((t) => t.key === "InvoiceDetailCaptionOnPage" && t.cultures["fr-FR"] === "Factures du contrat");
     });
+  // A standard list (Activities) is titled through the plan and checked by the form-page row like a rebuilt detail.
+  const stdManifest = () => {
+    const m = coTextsManifest();
+    return { ...m, detailSchemas: { ...m.detailSchemas,
+      ActivityDetailV2: { entity: "Activity", editPage: false, title: "Activity detail schema",
+        resourceStrings: { Caption: { "en-US": "Activities", "fr-FR": "Activités" } } } } };
+  };
+  const stdRun = runMigration(stdManifest(), { baseDir: FIX });
+  check("texts standard list: the Layout row titles Activities with its Classic Caption and names its source",
+    () => layoutRow(stdRun.plan, "Activities").includes("title `Activities_Caption` ← ActivityDetailV2 · Caption"),
+    () => layoutRow(stdRun.plan, "Activities"));
+  check("texts standard list: the form-page row carries the Activities title in every culture",
+    () => formRowData(stdRun, stdManifest())?.vk.texts.some((t) => t.key === "Activities_Caption" && t.cultures["fr-FR"] === "Activités"),
+    () => formRowData(stdRun, stdManifest())?.vk.texts.map((t) => t.key));
+  check("texts standard list: a built Activities title whose fr-FR text differs from Classic fails the form-page row",
+    () => {
+      const row = renderVerify(stdRun, checklistOpts(stdManifest()), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }],
+        resources: { strings: { Activities_Caption: { "en-US": "Activities", "fr-FR": "Tâches" } } } } } })
+        .rows.find((r) => r.pageKey === "main" && r.deliverable.startsWith("Form page"));
+      return row?.outcome === "missing" && row.evidence.includes("Activities_Caption");
+    });
   check("texts T6: neither the plan nor the form-page row label lists the other cultures",
     () => !coTexts.plan.includes("fr-FR") && formRowData(coTexts, coTextsManifest()).label === formRowData(coTextsOld, coTextsManifest({ withCultures: false })).label,
     () => ({ label: formRowData(coTexts, coTextsManifest()).label, fr: coTexts.plan.split("\n").filter((l) => l.includes("fr-FR")).slice(0, 3) }));
@@ -12174,6 +12195,72 @@ const n2TreeManifest = (titleA, titleB) => ({
     () => ({ wrong: typedFormOutcome("Termes"), right: typedFormOutcome("Conditions") }));
 }
 
+// A typed entity whose bind-only type reuses the base form builds that form, so its form-page row carries the base
+// page's texts; with only own-fold types there is no base form and no such row.
+{
+  const BASE_BODY = `define("ContractPageV2", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    diff: [{ "operation": "insert", "name": "GeneralTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.GeneralTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Number", "parentName": "GeneralTab", "propertyName": "items", "values": { "bindTo": "Number" } }]
+  };
+});`;
+  const baseManifest = (typedPages) => ({
+    entity: "Contract",
+    seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", body: BASE_BODY }],
+    resources: { GeneralTabCaption: "General" },
+    resourceStrings: { GeneralTabCaption: { "en-US": "General", "fr-FR": "Général" } },
+    typedPages,
+  });
+  const bindOnlyManifest = baseManifest([{ schema: "ContractTermsPage", type: "Terms", bindOnly: true }]);
+  const bindOnlyRun = runMigration(bindOnlyManifest, { baseDir: FIX });
+  const mainFormRow = (run, manifest) => checklistGroups(run, checklistOpts(manifest))
+    .flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })))
+    .find((r) => r.pageKey === "main" && r.deliverableId === "page:form");
+  check("texts typed base: with a bind-only type, the shared base form's form-page row carries the base page's texts",
+    () => mainFormRow(bindOnlyRun, bindOnlyManifest)?.vk.texts?.some((t) => t.key === "GeneralTabCaption" && t.cultures["fr-FR"] === "Général"),
+    () => mainFormRow(bindOnlyRun, bindOnlyManifest));
+  const baseVerify = (frText) => renderVerify(bindOnlyRun, checklistOpts(bindOnlyManifest), {
+    typedFormsBuilt: true, typedRouting: true,
+    pages: { main: { viewConfig: [{ name: "GeneralTab", type: "crt.TabContainer", caption: "#ResourceString(GeneralTabCaption)#",
+      items: [{ name: "Number", type: "crt.Input", control: "$Number" }] }],
+      resources: { strings: { GeneralTabCaption: { "en-US": "General", "fr-FR": frText } } } } },
+  }).rows.find((r) => r.pageKey === "main" && r.deliverable.startsWith("Form page"));
+  check("texts typed base: a shared base form whose fr-FR text differs from Classic fails its form-page row; a matching one does not",
+    () => baseVerify("Généralités")?.outcome === "missing" && baseVerify("Généralités").evidence.includes("GeneralTabCaption")
+      && baseVerify("Général")?.outcome !== "missing",
+    () => ({ wrong: baseVerify("Généralités"), right: baseVerify("Général") }));
+  const ownFoldManifest = baseManifest([{ schema: "ContractTermsPage", type: "Terms" }]);
+  check("texts typed base: with only own-fold types there is no base form, so no main form-page row",
+    () => !mainFormRow(runMigration(ownFoldManifest, { baseDir: FIX }), ownFoldManifest));
+}
+
+// `captionName` parsed from a Classic body's `details` block titles the related list.
+{
+  const ORDERS_BODY = `define("ContractPageV2", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    details: /**SCHEMA_DETAILS*/{
+      "Orders": { "schemaName": "OrderDetailV2", "entitySchemaName": "Order", "captionName": "OrdersListCaption",
+        "filter": { "masterColumn": "Id", "detailColumn": "Contract" } }
+    }/**SCHEMA_DETAILS*/,
+    diff: [{ "operation": "insert", "name": "OrdersTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.OrdersTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Orders", "parentName": "OrdersTab", "propertyName": "items", "values": { "itemType": 2 } }]
+  };
+});`;
+  const ordersRun = runMigration({ entity: "Contract", seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", body: ORDERS_BODY }],
+    resources: { OrdersTabCaption: "Orders", OrdersListCaption: "Open orders" },
+    detailSchemas: { OrderDetailV2: { entity: "Order", editPage: false, resourceStrings: { Caption: { "en-US": "Orders" } } } } }, { baseDir: FIX });
+  const orders = (ordersRun.changeSet.details || []).find((d) => d.detailSchema === "OrderDetailV2");
+  check("title order: a `captionName` read from the Classic body's `details` block titles the list from that page string",
+    () => orders?.caption === "Open orders" && orders?.captionSource === "page · OrdersListCaption",
+    () => orders);
+}
+
 // The related-list title order, one step at a time, including a `captionName` a higher layer does not restate.
 {
   const titleOf = (details, resources, strings) => mapToFreedom(mergeHierarchy([L("Base", { entity: "X", details: {
@@ -12225,10 +12312,18 @@ const n2TreeManifest = (titleA, titleB) => ({
     () => feature(renamed, "Activities")?.caption === "Contract activities"
       && renamed.resourceCultures?.ActivitiesDetailCaptionOnPage?.["fr-FR"] === "Activités du contrat",
     () => feature(renamed, "Activities"));
-  check("standard list title: a standard list with no readable title has no caption and is a `detail-caption` decision",
-    () => feature(own, "Emails")?.caption === null
-      && own.needsDecision.some((n) => n.kind === "detail-caption" && n.item === "EmailDetailV2"),
+  const captionDecided = (cs, schema) => cs.needsDecision.some((n) => n.kind === "detail-caption" && n.item === schema);
+  check("standard list title: with no strings supplied and no `captionName`, a standard list keeps its standard title and raises no decision",
+    () => feature(own, "Emails")?.caption === null && !captionDecided(own, "EmailDetailV2"),
     () => ({ feature: feature(own, "Emails"), decisions: own.needsDecision.filter((n) => n.kind === "detail-caption") }));
+  const noCaption = featureCs({}, { detailSchemas: { EmailDetailV2: { entity: "Activity", columns: [], strings: { Other: { "en-US": "Other" } } } } });
+  check("standard list title: supplied strings with no `Caption` leave a standard list untitled and raise a `detail-caption` decision",
+    () => feature(noCaption, "Emails")?.caption === null && captionDecided(noCaption, "EmailDetailV2"),
+    () => noCaption.needsDecision.filter((n) => n.kind === "detail-caption"));
+  const unreadable = featureCs({ Emails: { schemaName: "EmailDetailV2", entitySchemaName: "Activity", detailColumn: "Contract", masterColumn: "Id", captionName: "MissingCaption" } }, {});
+  check("standard list title: a `captionName` the page does not have raises a `detail-caption` decision even with no strings supplied",
+    () => feature(unreadable, "Emails")?.caption === null && captionDecided(unreadable, "EmailDetailV2"),
+    () => unreadable.needsDecision.filter((n) => n.kind === "detail-caption"));
 }
 
 // A field with no entity column behind it is labelled by its Classic page string, in every culture; a column-bound
@@ -12261,6 +12356,31 @@ const n2TreeManifest = (titleA, titleB) => ({
     () => unit?.label === "$Resources.Strings.JobTitleCaption" && unit?.labelSource === "page · JobTitleCaption"
       && captionCs.resourceCultures?.JobTitleCaption?.["fr-FR"] === "Poste",
     () => ({ unit, cultures: captionCs.resourceCultures }));
+  const labelOnly = (opts) => mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+    di({ name: "Dept", parentName: "Header", propertyName: "items", bindTo: "Department" }),
+  ] })]), opts).viewConfigDiff.find((o) => o.name === "Department")?.values;
+  const suffixed = labelOnly({ entityColumns: { InternalRequest: { type: "Lookup" } },
+    resources: { DepartmentCaption: "Department" }, resourceStrings: { DepartmentCaption: { "en-US": "Department", "fr-FR": "Service" } } });
+  check("field label: a field with no column and no page string of its name falls back to `<Field>Caption`",
+    () => suffixed?.label === "$Resources.Strings.DepartmentCaption" && suffixed?.labelSource === "page · DepartmentCaption", () => suffixed);
+  const unknownColumns = labelOnly({ resources: { Department: "Department" } });
+  check("field label: with the entity columns unknown, no field writes a page label",
+    () => unknownColumns && unknownColumns.label === undefined, () => unknownColumns);
+  const LABEL_BODY = `define("ContractPageV2", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    diff: [{ "operation": "insert", "name": "Dept", "parentName": "Header", "propertyName": "items", "values": { "bindTo": "Department" } }]
+  };
+});`;
+  const labelManifest = { entity: "Contract", seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", body: LABEL_BODY }], entityColumns: { Number: { type: "Text" } },
+    resources: { Department: "Department" }, resourceStrings: { Department: { "en-US": "Department", "fr-FR": "Service" } } };
+  const labelRun = runMigration(labelManifest, { baseDir: FIX });
+  check("field label: the plan's Layout row names the label's page string, and the form-page row carries it in every culture",
+    () => labelRun.plan.split("\n").some((l) => l.startsWith("| ") && l.includes("label `Department` ← page · Department"))
+      && checklistGroups(labelRun, checklistOpts(labelManifest)).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:form")
+        ?.vk.texts?.some((t) => t.key === "Department" && t.cultures["fr-FR"] === "Service"),
+    () => labelRun.plan.split("\n").filter((l) => l.includes("Department")));
 }
 
 // ===== N1: make --verify trustworthy (business rules gated, component role/analog) ================

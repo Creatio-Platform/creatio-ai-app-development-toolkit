@@ -2488,7 +2488,9 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   const pages = [...listPageRows(pm, opts, fill, isMain), ...entityRows(result), ...placementRows(opts)];
   const cs = result.changeSet || {};
   const texts = classicTexts(cs.resources, cs.resourceCultures, cs.resourceSources);
-  if (!typed.length) pages.push({ deliverableId: "page:form", label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage", ...textsVk(texts) } });
+  // A typed entity builds the base form only when a bind-only type reuses it ("Shared form (base)"); that form is
+  // checked, texts included, like the form page of an untyped entity.
+  if (!typed.length || typed.some((t) => t.bindOnly)) pages.push({ deliverableId: "page:form", label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage", ...textsVk(texts) } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
   for (const t of typed) { const ts = typedTypeSuffix(t); const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ deliverableId: `page:typed:${t.schema}`, label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }

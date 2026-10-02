@@ -1407,13 +1407,14 @@ function mapDetails(ctx, containers, profileRegion) {
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
     });
   };
-  // A list-shaped standard feature is titled like any related list: its Classic title in every culture, or a
-  // `detail-caption` decision when none is readable. Component-shaped features carry no list title.
+  // A list-shaped standard feature is titled like any related list: its Classic title in every culture. No title is
+  // a `detail-caption` decision only when the page names one (`captionName`) or the detail's strings were supplied;
+  // with neither, the list keeps its standard title. Component-shaped features carry no list title.
   const standardListTitle = (d, dinfo, feat) => {
     if ((feat.uiShape || "list") !== "list") return null;
     const title = classicDetailTitle(d, dinfo, pageText);
     if (title) registerText(title.key, title);
-    else needsDecision.push(detailCaptionDecision(d));
+    else if (d.captionName || dinfo?.strings) needsDecision.push(detailCaptionDecision(d));
     return title;
   };
   // Emit ONE deduped placement: a standard feature (A3 analog) or a rebuilt custom detail. Own fn for Sonar CC 15.

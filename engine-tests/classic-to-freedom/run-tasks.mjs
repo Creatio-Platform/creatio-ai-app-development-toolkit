@@ -493,6 +493,27 @@ check("ids: a task whose ROWS changed is the SAME task with a changed deliverabl
     const a = taskAt(SET, "main", DRIFT_GROUP), c = taskAt(SET3, "main", DRIFT_GROUP);
     return a.id === c.id && a.rowsDigest !== c.rowsDigest;
   }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP), c: taskAt(SET3, "main", DRIFT_GROUP) }));
+{
+  const TEXT_BODY = `define("MPage", [], function() {
+  return {
+    entitySchemaName: "M",
+    diff: [{ "operation": "insert", "name": "MainTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.MainTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Number", "parentName": "MainTab", "propertyName": "items", "values": { "bindTo": "Number" } }]
+  };
+});`;
+  const textManifest = (fr) => ({ ...manifestOf(), schemas: [{ pkg: "P", body: TEXT_BODY }],
+    resources: { MainTabCaption: "Main" }, resourceStrings: { MainTabCaption: { "en-US": "Main", "fr-FR": fr } } });
+  const [ma, mb] = [textManifest("Principal"), textManifest("Général")];
+  const [ra, rb] = [runMigration(ma), runMigration(mb)];
+  const formTexts = (run, m) => checklistGroups(run, optsOf(m)).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:form")?.vk.texts;
+  const [sa, sb] = [buildTaskSet(ra, optsOf(ma)), buildTaskSet(rb, optsOf(mb))];
+  check("ids: a Classic text whose other-culture value changed leaves every task's `rowsDigest` as it was — the form-page row's texts are checked against the built page, not built by a task",
+    () => JSON.stringify(formTexts(ra, ma)) !== JSON.stringify(formTexts(rb, mb))
+      && sa.tasks.length === sb.tasks.length
+      && sa.tasks.every((t) => taskAt(sb, t.pageKey, t.group)?.rowsDigest === t.rowsDigest),
+    () => sa.tasks.filter((t) => taskAt(sb, t.pageKey, t.group)?.rowsDigest !== t.rowsDigest).map((t) => `${t.pageKey}·${t.group}`));
+}
 check("ids: an id is unique across the set, and two pages' identically-shaped tasks never collide — every page carries a `Page build` and a `Quality gates` task and they must still be told apart",
   () => new Set(SET.tasks.map((t) => t.id)).size === SET.tasks.length
     && taskAt(SET, "main", "Quality gates").id !== taskAt(SET, "child:C1", "Quality gates").id
