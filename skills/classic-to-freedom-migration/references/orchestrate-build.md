@@ -188,7 +188,7 @@ it costs, and stop until it is answered:
    fewer tokens per build step on a long run).
 2. **Continue here** — nothing to do; the build starts now in this session, but every build step
    carries the whole planning conversation.
-3. **Compress here** — type the line you are given, then "continue"; same window,
+3. **Compress here** — type `/compact`, then the one message you are given; same window,
    a smaller saving than a new session.
 
 Offer option 3 only on a host that has `/compact` (Claude Code, Codex CLI); elsewhere
@@ -196,18 +196,22 @@ ask with options 1 and 2. **Never mention the choice in passing and keep going**
 question. A run within `TASK_BUDGET.run` is not asked: the `Whole migration` task and its review
 continue in this session.
 
-**Per answer:**
+**Per answer — first record it, then act on it.** Write the answer into `worklog.md` as
+`Build session: new | here | compact` (the one chosen) BEFORE anything below: a new or a compacted
+session learns the choice only from that line.
 
 - **New session** — give the user the resume prompt `--handoff` printed, to paste into a new chat,
   and **STOP**: no `--start` and no dispatch in this session.
 - **Continue here** — continue the 7.2 loop in this session with `--next`; `resume.md` stays behind
   as a recovery point should this session be lost.
-- **Compress here** — give the user this line to type, then "continue", and end the turn:
-  `/compact Keep only: migration folder <migration-folder>. Continue the build from <migration-folder>/resume.md.`
-  After the compaction, continue as *Resuming* says.
-- **Record the answer** in `worklog.md` as `Build session: new | here | compact` (the one chosen).
-  Ask once per run: when a step-8 `--verify --tasks` opens repair tasks, that round follows
-  this line without asking again. The user may change it at any time by saying so — update the line.
+- **Compress here** — give the user two steps and end the turn: type `/compact` (where it takes a
+  note, as in Claude Code: `/compact Keep only: migration folder <migration-folder>.`), then send
+  `Continue the build from <migration-folder>/resume.md.` That second message is what brings the
+  build back, whatever the summary kept; after it, continue as *Resuming* says.
+
+Ask once per run: when a step-8 `--verify --tasks` opens repair tasks, that round follows the
+recorded line without asking again. The user
+may change it at any time by saying so — update the line first.
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
@@ -542,11 +546,16 @@ the payload.** Step 7.4's `--reads` named every file; this composes
 
 **When that run opens repair tasks, follow the recorded `Build session:` (7.1b)
 without asking again.** `--verify --tasks` writing a repair round means more build turns are coming, and the verify
-reads that preceded them are the heaviest material this session holds. *new* → run
-`--tasks <migration-folder>/build-tasks --handoff`, give the user the resume prompt, and STOP; the
-new session dispatches the repair tasks through `--next`. *compact* → run `--handoff` and give the
-user the 7.1b `/compact` line. *here* → continue in this session with `--next`. A user who changes
-their mind says so; update the line first.
+reads that preceded them are the heaviest material this session holds.
+- *new* → run `--tasks <migration-folder>/build-tasks --handoff`, give the user the resume prompt,
+  and STOP; the new session dispatches the repair tasks through `--next`.
+- *compact* → run `--handoff`, give the user the two 7.1b compress steps, and end the turn; after
+  the compaction, continue as *Resuming* says.
+- *here* → continue in this session with `--next`.
+- *no `Build session:` line* (the run was within `TASK_BUDGET.run` at 7.1b, so nobody was asked) →
+  continue in this session with `--next`.
+
+A user who changes their mind says so; update the line first.
 
 **`--verify --built <file>` is the REPLAY path** — the same gate against a payload already composed
 (the `built.json` from an earlier run, or a recorded fixture). Use it to re-check a run offline,

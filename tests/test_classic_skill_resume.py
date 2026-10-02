@@ -21,8 +21,8 @@ ENGINE_README = SKILL_DIR / "engine/README.md"
 
 HANDOFF_CMD = "--tasks <migration-folder>/build-tasks --handoff"
 GATE_HEADING = "**7.1b The BUILD SESSION GATE"
-COMPACT_LINE = ("/compact Keep only: migration folder <migration-folder>. "
-                "Continue the build from <migration-folder>/resume.md.")
+COMPACT_NOTE = "`/compact Keep only: migration folder <migration-folder>.`"
+CONTINUE_MESSAGE = "`Continue the build from <migration-folder>/resume.md.`"
 OPTION_LABELS = ("New session (Recommended)", "Continue here", "Compress here")
 WORKLOG_LINE = "`Build session: new | here | compact`"
 SKILL_BYTE_BUDGET = 95_000
@@ -47,6 +47,17 @@ def section(text, start, end):
     return text[begin:stop]
 
 
+def bullet(text, label):
+    """The bullet that opens on `label`, up to the next bullet or the end of its list."""
+    begin = text.find(label)
+    if begin < 0:
+        raise AssertionError(f"anchor not found: {label!r}")
+    rest = text[begin:]
+    ends = [i for i in (rest.find("\n- "), rest.find("\n\n")) if i > 0]
+    return rest[:min(ends)] if ends else rest
+
+
+
 class HandOffPointTests(unittest.TestCase):
     """7.1b runs the hand-off, then asks where the build runs."""
 
@@ -67,7 +78,7 @@ class HandOffPointTests(unittest.TestCase):
 
     def answer(self, label):
         """The per-answer bullet that opens on `label`, up to the next bullet."""
-        return section(self.handoff, f"- **{label}**", "\n-")
+        return bullet(self.handoff, f"- **{label}**")
 
     def test_7_1b_is_a_gate_that_asks_once(self):
         self.assertIn("BUILD SESSION GATE", self.handoff)
@@ -108,10 +119,23 @@ class HandOffPointTests(unittest.TestCase):
         repairs = section(self.text, "**When that run opens repair tasks", "**`--verify --built <file>`")
         self.assertIn("`Build session:`", repairs)
         self.assertIn("without asking again", repairs)
-        self.assertIn(HANDOFF_CMD, repairs)
-        for answer in ("*new*", "*compact*", "*here*"):
-            self.assertIn(answer, repairs, f"step 8 does not say what {answer} does")
-        self.assertIn("--next", repairs)
+
+        def branch(label):
+            return bullet(repairs, f"- {label}")
+
+        new = branch("*new*")
+        self.assertIn(HANDOFF_CMD, new)
+        self.assertIn("STOP", new)
+        compact = branch("*compact*")
+        self.assertIn("compress steps", compact)
+        self.assertIn("end the turn", compact)
+        self.assertIn("*Resuming*", compact)
+        here = branch("*here*")
+        self.assertIn("in this session with `--next`", here)
+        self.assertNotIn("STOP", here)
+        unasked = branch("*no `Build session:` line*")
+        self.assertIn("TASK_BUDGET.run", unasked)
+        self.assertIn("in this session with `--next`", unasked)
 
 
 class BuildSessionAnswerTests(unittest.TestCase):
@@ -121,7 +145,7 @@ class BuildSessionAnswerTests(unittest.TestCase):
         self.handoff = section(read(ORCHESTRATE), GATE_HEADING, "**7.2 ")
 
     def answer(self, label):
-        return section(self.handoff, f"- **{label}**", "\n-")
+        return bullet(self.handoff, f"- **{label}**")
 
     def test_new_session_gives_the_resume_prompt(self):
         self.assertIn("resume prompt", self.answer("New session"))
@@ -133,9 +157,18 @@ class BuildSessionAnswerTests(unittest.TestCase):
 
     def test_compress_here_gives_the_compact_line_and_ends_the_turn(self):
         compact = self.answer("Compress here")
-        self.assertIn(COMPACT_LINE, compact)
+        self.assertIn(COMPACT_NOTE, compact)
+        self.assertIn(CONTINUE_MESSAGE, compact)
         self.assertIn("end the turn", compact)
         self.assertIn("*Resuming*", compact)
+
+    def test_the_answer_is_recorded_before_any_stop(self):
+        # A new or compacted session learns the choice only from worklog.md; a driver that
+        # stops first never writes it.
+        record = self.handoff.index("first record it")
+        self.assertLess(record, self.handoff.index("**STOP**"))
+        self.assertLess(record, self.handoff.index("end the turn"))
+        self.assertIn("BEFORE anything below", self.handoff)
 
     def test_option_3_is_offered_only_on_a_host_with_compact(self):
         self.assertIn("only on a host that has `/compact` (Claude Code, Codex CLI)", self.handoff)
@@ -230,8 +263,7 @@ class SkillRouteTests(unittest.TestCase):
         step7 = section(read(SKILL), "### 7. Implement The Approved Plan", "### 8.")
         line = section(step7, "**7.1b ", "**7.2 ")
         self.assertIn("ASK where the build runs", line)
-        for answer in ("new session", "here", "`/compact`"):
-            self.assertIn(answer, line)
+        self.assertIn("new session, here, or `/compact`", line)
         self.assertNotIn("relay its prompt for a fresh", line)
 
     def test_skill_body_stays_within_its_byte_budget(self):
