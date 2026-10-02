@@ -11,6 +11,10 @@ REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-f
 SURFACE_RESOLUTION = ROOT / "skills/classic-ui-expert/references/01-surface-resolution.md"
 CLASSIC_SKILL = ROOT / "skills/classic-ui-expert/SKILL.md"
 PLATFORM_PATTERNS = ROOT / "skills/classic-ui-expert/references/06-platform-patterns.md"
+# The two build-time reconcile modes.
+RECONCILE_DOC = ROOT / "skills/classic-to-freedom-migration/references/existing-freedom-reconcile.md"
+BUILD_EXEC_DOC = ROOT / "skills/classic-to-freedom-migration/references/build-task-execution.md"
+RECONCILE_MODE_GATE_HEAD = "**Before you cut — on a RECONCILE, choose the reconcile mode."
 
 EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
 GATE_HEAD = "**Gate-toggle safety (shared stand).**"
@@ -449,6 +453,96 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertIn("SysDashboard", discovery)
         dod = read_text(ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md")
         self.assertIn("Classic dashboards: the Dashboards Migrator is installed", dod)
+
+
+class ReconcileModeDocTests(unittest.TestCase):
+    """Pin the two-reconcile-mode contract across SKILL + the two references.
+
+    The mode is a build-time choice that changes HOW a reconcile places elements, never the
+    plan. Each phrase below is load-bearing: drop the "on-page control only" qualifier and a
+    build reads it as licence to delete a column; drop "recommend overlay" and the gate stops
+    protecting the safe default; drop the region-parity clause and classic-layout loses the
+    check that a field sits in its planned region.
+    """
+
+    def test_skill_gate_names_both_modes_the_default_and_the_flag(self):
+        para = paragraph(read_text(MIGRATION_SKILL), RECONCILE_MODE_GATE_HEAD)
+        missing = missing_markers(para, [
+            "planMeta.freedomExists",
+            "`overlay`",
+            "`classic-layout`",
+            "recommend `overlay`",
+            "decisions.md",
+            "--reconcile-mode overlay|classic-layout",
+            "NOT at plan time",
+        ])
+        self.assertFalse(missing, f"the reconcile-mode gate must name the modes, the default, the record and the flag; missing {missing}")
+
+    def test_reconcile_doc_defines_both_modes(self):
+        content = read_text(RECONCILE_DOC)
+        missing = missing_markers(content, [
+            "## Mode 1 — Overlay (default)",
+            "## Mode 2 — Reproduce Classic layout",
+            "Two build-time reconcile modes",
+            "Not described in the plan",
+        ])
+        self.assertFalse(missing, f"the reconcile reference must define both modes; missing {missing}")
+
+    def test_mode2_removal_is_the_layout_control_never_the_column(self):
+        # The safety qualifier: classic-layout removes a base field's on-page control, NOT its
+        # entity column or data. Without it a build could delete customer columns.
+        content = flat(read_text(RECONCILE_DOC))
+        self.assertIn("removes only the on-page control", content)
+        self.assertIn("NOT** the entity column or its data", content)
+
+    def test_mode2_keeps_freedom_only_value_add(self):
+        content = flat(read_text(RECONCILE_DOC))
+        for marker in ["charts", "DCM progress bar", "Feed", "Next steps"]:
+            self.assertIn(marker, content, f"Mode 2 must keep the value-add component: {marker}")
+        self.assertIn("KEEP as-is", read_text(RECONCILE_DOC))
+
+    def test_build_exec_reads_the_mode_and_checks_region_parity(self):
+        content = read_text(BUILD_EXEC_DOC)
+        self.assertIn("apply the `reconcileMode:` in your task's front matter", content)
+        parity = flat(content)
+        self.assertIn("region parity", parity)
+        self.assertIn("region mismatch", parity)
+        # overlay must be explicitly exempted from the parity check.
+        self.assertIn("In `overlay` mode this parity check does not apply", content)
+
+    def test_mode2_removal_is_machine_enforced_not_asserted(self):
+        # A sub-agent can ASSERT "base non-plan elements removed" without emitting any remove op. Both docs must
+        # say FIELD removal is gated by --verify (❌ EXTRA), not a documentation-only claim, so the enforcement stays
+        # machine-checked rather than prose. The gate covers FIELD controls only, so the doc says "machine-checked".
+        reconcile = flat(read_text(RECONCILE_DOC))
+        self.assertIn("machine-checked", reconcile)
+        self.assertIn("EXTRA", reconcile)
+        build = flat(read_text(BUILD_EXEC_DOC))
+        self.assertIn("asserting it is not doing it", build)
+        self.assertIn("EXTRA", build)
+
+    def test_standard_components_kept_not_migrated(self):
+        # Feed / Attachments / Connected to / Timeline are standard Freedom components: a reconcile keeps
+        # them and does NOT migrate their Classic counterpart, in BOTH modes. The counterpart row is closed
+        # with `--decide ... --wont-do`, the closure the engine recognises for an agent; only an ABSENT
+        # component is migrated.
+        reconcile = read_text(RECONCILE_DOC)
+        missing = missing_markers(reconcile, [
+            "Feed", "Attachments", "Connected to", "Timeline",
+            "KEEP it as-is",
+            "Classic counterpart is NOT migrated",
+            "--wont-do",
+            "standard Freedom component kept",
+            "Absent on the Freedom page → migrate",
+            "both `overlay` and `classic-layout`",
+        ])
+        self.assertFalse(missing, f"the standard-component rule must pin these; missing {missing}")
+        # The `n-a` close token is not a closure the engine accepts, so it must not appear as an instruction.
+        self.assertNotIn("n-a — standard Freedom component kept", reconcile)
+        # The build procedure and the mode gate carry the same rule, not just the reference doc.
+        self.assertIn("standard Freedom component", flat(read_text(BUILD_EXEC_DOC)))
+        gate = paragraph(read_text(MIGRATION_SKILL), RECONCILE_MODE_GATE_HEAD)
+        self.assertIn("Feed / Attachments / Connected to / Timeline", flat(gate))
 
 
 if __name__ == "__main__":

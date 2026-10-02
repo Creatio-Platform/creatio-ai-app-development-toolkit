@@ -21,7 +21,9 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
-  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
+  readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
+  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
@@ -4797,6 +4799,355 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     return /left OPEN by a `--verify`/.test(text) && !/recorded as NOT BUILT/.test(text);
   }, () => { const dir = tmp("verify-blockquote-d");
     return fs.readFileSync(path.join(dir, syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written[0].file), "utf8"); });
+/* ================================================================================================
+   The build-time RECONCILE MODE (overlay | classic-layout). It is chosen once with
+   `--reconcile-mode` at the `--tasks` cut, frozen in the folder, read back on every re-slice, and
+   stamped into `index.md` + every engine task's front matter so the ONE sub-agent handed a task file
+   knows how to place elements. It changes HOW a build reconciles, never the plan — so `--plan`/`--spec`
+   reject it, and a rebuild (no `planMeta.freedomExists`) rejects it too. A modeless run is byte-for-byte
+   unchanged, which is why every existing golden above still holds.
+   ================================================================================================ */
+{
+  // ---- the freeze/read primitives (mirror readFrozenSplit/freezeSplit) ----
+  const d0 = tmp("mode_freeze");
+  check("readFrozenMode is null before any freeze", () => readFrozenMode(d0) === null);
+  freezeMode(d0, RECONCILE_MODE_CLASSIC);
+  check("freezeMode → readFrozenMode round-trips", () => readFrozenMode(d0) === RECONCILE_MODE_CLASSIC);
+  check("an unrecognised frozen value reads back as null (strict about values, like a bad status)",
+    () => { fs.writeFileSync(path.join(d0, ".reconcile-mode"), "bogus\n"); return readFrozenMode(d0) === null; });
+
+  // ---- resolveFrozenMode: flag wins, else frozen, else null; freezes when set ----
+  const d1 = tmp("mode_resolve");
+  check("resolveFrozenMode returns null and freezes nothing with no flag and no frozen file",
+    () => resolveFrozenMode(d1, {}) === null && readFrozenMode(d1) === null);
+  check("resolveFrozenMode freezes the flag value and returns it",
+    () => resolveFrozenMode(d1, { reconcileMode: RECONCILE_MODE_CLASSIC }) === RECONCILE_MODE_CLASSIC
+      && readFrozenMode(d1) === RECONCILE_MODE_CLASSIC);
+  check("a re-slice with NO flag reads the frozen mode back (the orchestrator need not re-pass it)",
+    () => resolveFrozenMode(d1, {}) === RECONCILE_MODE_CLASSIC);
+  check("RECONCILE_MODE_DEFAULT is overlay (the implicit, unstamped current behavior)",
+    () => RECONCILE_MODE_DEFAULT === RECONCILE_MODE_OVERLAY);
+
+  // ---- syncTaskDir stamps index + every engine task's front matter, and freezes ----
+  const d2 = tmp("mode_stamp");
+  const setC = syncTaskDir(d2, RUN, { ...checklistOpts(MANIFEST), reconcileMode: RECONCILE_MODE_CLASSIC });
+  check("the built set carries the resolved mode", () => setC.reconcileMode === RECONCILE_MODE_CLASSIC);
+  check("syncTaskDir freezes the mode in the folder", () => readFrozenMode(d2) === RECONCILE_MODE_CLASSIC);
+  const idxC = fs.readFileSync(path.join(d2, TASK_INDEX_FILE), "utf8");
+  check("index.md names the reconcile mode in its headline", () => /Reconcile mode:\*\*\s*`classic-layout`/.test(idxC), () => idxC.split("\n").slice(0, 4));
+  const engFile = setC.tasks.find((t) => t.origin === "engine").file;
+  const tfC = fs.readFileSync(path.join(d2, engFile), "utf8");
+  check("an engine task's front matter carries `reconcileMode: classic-layout`",
+    () => /^reconcileMode: classic-layout$/m.test(tfC), () => tfC.split("\n").slice(0, 16));
+  check("the stamped front matter round-trips through parseTaskFile",
+    () => parseTaskFile(tfC).meta.reconcileMode === RECONCILE_MODE_CLASSIC);
+
+  // ---- a re-slice with NO flag keeps the frozen mode (index + set) ----
+  const setC2 = syncTaskDir(d2, RUN, checklistOpts(MANIFEST));
+  check("a re-slice with no flag keeps the frozen mode on the set", () => setC2.reconcileMode === RECONCILE_MODE_CLASSIC);
+  check("and the index still names it after a modeless re-slice",
+    () => /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(d2, TASK_INDEX_FILE), "utf8")));
+
+  // ---- a MODELESS run is byte-for-byte unchanged (backward compat): no line, no front-matter key ----
+  const dN = tmp("mode_none");
+  const setN = syncTaskDir(dN, RUN, checklistOpts(MANIFEST));
+  check("a modeless run resolves to null on the set (implicit overlay, unstamped)", () => setN.reconcileMode === null);
+  check("a modeless run freezes NO .reconcile-mode file", () => readFrozenMode(dN) === null);
+  check("a modeless index has no Reconcile-mode line", () => !/Reconcile mode:/.test(fs.readFileSync(path.join(dN, TASK_INDEX_FILE), "utf8")));
+  check("a modeless engine task file has no reconcileMode front-matter key",
+    () => !/reconcileMode:/.test(fs.readFileSync(path.join(dN, setN.tasks.find((t) => t.origin === "engine").file), "utf8")));
+
+  // ---- CLI: the flag on a reconcile plan writes the folder, freezes, exits 0; guards on misuse ----
+  const RECON = { ...MANIFEST, planMeta: { ...MANIFEST.planMeta, freedomExists: true } };
+  const bR = tmp("cli_recon"); const dR = path.join(bR, "bt");
+  const okRun = cliTasks(["--tasks", dR, "--reconcile-mode", "classic-layout"], RECON);
+  check("CLI: `--tasks --reconcile-mode classic-layout` on a reconcile plan exits 0 and writes the folder",
+    () => okRun.status === 0 && fs.existsSync(path.join(dR, TASK_INDEX_FILE)), () => ({ status: okRun.status, err: okRun.stderr, out: (okRun.stdout || "").slice(0, 300) }));
+  check("CLI: the folder is frozen in `classic-layout`", () => readFrozenMode(dR) === RECONCILE_MODE_CLASSIC);
+  check("CLI: a re-slice with no flag keeps the frozen mode (index still names it)",
+    () => { const r = cliTasks(["--tasks", dR], RECON); return r.status === 0 && /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(dR, TASK_INDEX_FILE), "utf8")); });
+  check("CLI: re-passing a DIFFERENT mode over a frozen folder is REFUSED (exit 1, names the frozen one)",
+    () => { const r = cliTasks(["--tasks", dR, "--reconcile-mode", "overlay"], RECON); return r.status === 1 && /cut in `classic-layout`/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bR, { recursive: true, force: true });
+
+  check("CLI: an unknown mode value is REFUSED (exit 1, names the allowed set)",
+    () => { const r = cliTasks(["--tasks", tmp("cli_bad"), "--reconcile-mode", "sideways"], RECON);
+      return r.status === 1 && /must be one of/.test(r.stderr || r.stdout || "") && /classic-layout/.test(r.stderr || r.stdout || ""); });
+  check("CLI: `--reconcile-mode` without `--tasks` is REFUSED (`--spec` — it is a task-cut choice)",
+    () => { const r = cliTasks(["--spec", "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /only means something with `--tasks/.test(r.stderr || r.stdout || ""); });
+  check("CLI: `--reconcile-mode` on a REBUILD (no planMeta.freedomExists) is REFUSED (nothing to reconcile onto)",
+    () => { const r = cliTasks(["--tasks", tmp("cli_rebuild"), "--reconcile-mode", "classic-layout"], MANIFEST);
+      return r.status === 1 && /existing-Freedom reconcile/.test(r.stderr || r.stdout || ""); });
+
+  // ---- the mode is chosen on the FIRST cut and frozen: a modeless cut cannot gain one on a re-slice ----
+  const bMl = tmp("cli_modeless"); const dMl = path.join(bMl, "bt");
+  cliTasks(["--tasks", dMl], RECON); // first cut, NO mode
+  check("CLI: a folder cut WITHOUT a mode refuses a later `--reconcile-mode` (first-cut freeze)",
+    () => { const r = cliTasks(["--tasks", dMl, "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /already cut WITHOUT a reconcile mode/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bMl, { recursive: true, force: true });
+  // ---- a corrupted `.reconcile-mode` is refused, not silently overwritten ----
+  const bCorrupt = tmp("cli_corrupt"); const dCorrupt = path.join(bCorrupt, "bt");
+  cliTasks(["--tasks", dCorrupt, "--reconcile-mode", "classic-layout"], RECON);
+  fs.writeFileSync(path.join(dCorrupt, ".reconcile-mode"), "sideways\n");
+  check("CLI: a corrupted `.reconcile-mode` value is REFUSED rather than overwritten",
+    () => { const r = cliTasks(["--tasks", dCorrupt, "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /unrecognised value/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bCorrupt, { recursive: true, force: true });
+
+  // ---- overlay is frozen + stamped exactly like classic-layout, and a later classic-layout is refused (AC7) ----
+  const bOv = tmp("cli_overlay"); const dOv = path.join(bOv, "bt");
+  const ovRun = cliTasks(["--tasks", dOv, "--reconcile-mode", "overlay"], RECON);
+  check("CLI overlay: exits 0, freezes overlay, stamps the index headline",
+    () => ovRun.status === 0 && readFrozenMode(dOv) === RECONCILE_MODE_OVERLAY
+      && /Reconcile mode:\*\*\s*`overlay`/.test(fs.readFileSync(path.join(dOv, TASK_INDEX_FILE), "utf8")),
+    () => ({ status: ovRun.status, frozen: readFrozenMode(dOv) }));
+  check("CLI overlay: an engine task's front matter carries `reconcileMode: overlay`",
+    () => { const set = readTaskDir(dOv); const eng = set.find((t) => t.origin === "engine");
+      return !!eng && /^reconcileMode: overlay$/m.test(fs.readFileSync(path.join(dOv, eng.file), "utf8")); });
+  check("CLI overlay: a later `--reconcile-mode classic-layout` over an overlay folder is REFUSED",
+    () => { const r = cliTasks(["--tasks", dOv, "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /cut in `overlay` mode/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bOv, { recursive: true, force: true });
+
+  // ---- `--reconcile-mode` refuses to combine with the read/query/decision modes (set once at the cut) ----
+  // Each `other` gets its own required args so the flow reaches the reconcile-mode combo guard (not an earlier
+  // arg-shape error), and all of them carry the "set once at the --tasks cut" refusal.
+  const comboBuilt = path.join(tmp("cli_combo_built"), "built.json");
+  fs.writeFileSync(comboBuilt, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", viewConfig: { items: [] } } } }));
+  const combos = { "--verify": ["--verify", "--built", comboBuilt], "--route": ["--route"], "--next": ["--next"],
+    "--decide": ["--decide", "D13", "--wont-do", "--pages", "main"], "--revoke": ["--revoke", "D13"] };
+  for (const [other, extra] of Object.entries(combos)) {
+    const dC = path.join(tmp(`cli_combo${other.replaceAll("-", "_")}`), "bt");
+    check(`CLI: \`--reconcile-mode\` + \`${other}\` is refused (exit 1, set once at the --tasks cut)`,
+      () => { const r = cliTasks(["--tasks", dC, ...extra, "--reconcile-mode", "classic-layout"], RECON);
+        return r.status === 1 && /set once at the .--tasks. cut/.test(r.stderr || r.stdout || ""); },
+      () => { const r = cliTasks(["--tasks", dC, ...extra, "--reconcile-mode", "classic-layout"], RECON); return { status: r.status, err: (r.stderr || r.stdout || "").slice(0, 200) }; });
+  }
+
+  // ---- --decide / --revoke keep the frozen stamp on the task files AND the index headline ----
+  {
+    const dD = path.join(tmp("mode_decide_stamp"), "bt");
+    syncTaskDir(dD, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const dm = new Map([["D13", "descope — test"]]);
+    applyDecision(dD, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    const idxAfterDecide = fs.readFileSync(path.join(dD, TASK_INDEX_FILE), "utf8");
+    check("--decide keeps the `Reconcile mode:` headline on index.md",
+      () => /Reconcile mode:\*\*\s*`classic-layout`/.test(idxAfterDecide), () => idxAfterDecide.split("\n").slice(0, 4));
+    const engD = readTaskDir(dD).find((t) => t.origin === "engine");
+    check("--decide keeps `reconcileMode: classic-layout` in engine task front matter",
+      () => !!engD && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dD, engD.file), "utf8")));
+    revokeDecision(dD, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    check("--revoke keeps the `Reconcile mode:` headline on index.md",
+      () => /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(dD, TASK_INDEX_FILE), "utf8")));
+  }
+  // ---- readMergedTaskDir (feeds the refused-round index refresh) carries the frozen stamp ----
+  {
+    const dR = path.join(tmp("mode_readmerged"), "bt");
+    syncTaskDir(dR, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    check("readMergedTaskDir carries the frozen reconcileMode (so a refused-round index refresh keeps it)",
+      () => readMergedTaskDir(dR, RUN, OPTS).reconcileMode === RECONCILE_MODE_CLASSIC);
+  }
+  // ---- syncRepairDir stamps every repair task file on a frozen folder (AC1: in every build brief) ----
+  {
+    const dRep = path.join(tmp("mode_repair_stamp"), "bt");
+    syncTaskDir(dRep, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const rep = syncRepairDir(dRep, RUN, VERIFY_PAGES, OPTS);
+    const repFile = (rep.written || [])[0];
+    check("syncRepairDir stamps `reconcileMode: classic-layout` on a repair task file and it round-trips",
+      () => {
+        if (!repFile) return false;
+        const txt = fs.readFileSync(path.join(dRep, repFile.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC;
+      },
+      () => ({ repFile: repFile?.file }));
+  }
+  // ---- --verify --built --tasks reads the frozen mode; the applied mode is printed, never silently off ----
+  {
+    const dV = path.join(tmp("mode_verify_cli"), "bt");
+    cliTasks(["--tasks", dV, "--reconcile-mode", "classic-layout"], RECON);
+    const bf = path.join(tmp("mode_verify_built"), "built.json");
+    fs.writeFileSync(bf, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vOn = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
+    check("verify on a classic-layout folder announces the applied mode (EXTRA gate ON), not a silent overlay",
+      () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vOn.stderr || ""), () => vOn.stderr);
+    // end-to-end: a built page carrying a base field NOT in the plan makes --verify flag ❌ EXTRA and exit non-zero.
+    const bfExtra = path.join(tmp("mode_verify_extra_built"), "built.json");
+    fs.writeFileSync(bfExtra, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [{ name: "StrayBase", type: "crt.Input" }] } } } }));
+    const vExtra = cliTasks(["--tasks", dV, "--verify", "--built", bfExtra], RECON);
+    check("verify on a classic-layout folder flags a base field NOT in the plan as ❌ EXTRA and does not pass (exit != 0)",
+      () => vExtra.status !== 0 && /❌ EXTRA/.test(vExtra.stdout || "") && /StrayBase/.test(vExtra.stdout || ""),
+      () => ({ status: vExtra.status, extra: (vExtra.stdout || "").split("\n").filter((l) => /EXTRA/.test(l)) }));
+    const vOff = cliTasks(["--verify", "--built", bf], RECON); // no --tasks → gate not applied
+    check("verify WITHOUT --tasks on a reconcile plan announces the EXTRA gate is NOT applied",
+      () => /EXTRA-field gate NOT applied/.test(vOff.stderr || ""), () => vOff.stderr);
+    // A corrupted .reconcile-mode on --verify must NOT silently verify a classic-layout folder as overlay.
+    fs.writeFileSync(path.join(dV, ".reconcile-mode"), "sideways\n");
+    const vCorrupt = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
+    check("verify REFUSES a corrupted .reconcile-mode rather than silently skipping the classic-layout gate",
+      () => vCorrupt.status === 1 && /unrecognised value/.test(vCorrupt.stderr || vCorrupt.stdout || ""), () => vCorrupt.stderr);
+  }
+  // ---- a DROPPED `.reconcile-mode` (dotfile gone, task files still stamped) is a lost dotfile, not a mode reset ----
+  // A mutation op (--decide/--revoke) or a repair round must NOT strip the stamp off every rewritten task file and
+  // silently revert the folder to overlay; and --verify must restore the mode from the stamp, keeping the gate ON.
+  {
+    const engStamped = (dir) => { const eng = readTaskDir(dir).find((t) => t.origin === "engine");
+      return !!eng && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dir, eng.file), "utf8")); };
+    const dropDotfile = (dir) => fs.rmSync(path.join(dir, ".reconcile-mode"), { force: true });
+    const dm = new Map([["D13", "descope — test"]]);
+    // --decide with the dotfile gone keeps the stamp on the rewritten task files (restored from the stamp).
+    const dDec = path.join(tmp("mode_lost_decide"), "bt");
+    syncTaskDir(dDec, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dDec);
+    applyDecision(dDec, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    check("--decide with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files (restored from the stamp, not reset to overlay)",
+      () => engStamped(dDec), () => ({ eng: readTaskDir(dDec).find((t) => t.origin === "engine")?.file }));
+    // --revoke with the dotfile gone likewise keeps the stamp.
+    const dRevL = path.join(tmp("mode_lost_revoke"), "bt");
+    syncTaskDir(dRevL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    applyDecision(dRevL, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    dropDotfile(dRevL);
+    revokeDecision(dRevL, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    check("--revoke with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files",
+      () => engStamped(dRevL));
+    // a repair round with the dotfile gone stamps the repair file from the task-file stamp, not overlay.
+    const dRepL = path.join(tmp("mode_lost_repair"), "bt");
+    syncTaskDir(dRepL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dRepL);
+    const repL = syncRepairDir(dRepL, RUN, VERIFY_PAGES, OPTS);
+    const repLFile = (repL.written || [])[0];
+    check("a repair round with a DROPPED .reconcile-mode still stamps `reconcileMode: classic-layout` on the repair task",
+      () => !!repLFile && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dRepL, repLFile.file), "utf8")),
+      () => ({ repFile: repLFile?.file }));
+    // --verify --tasks with the dotfile gone restores the mode from the stamp and keeps the EXTRA gate ON.
+    const dVerL = path.join(tmp("mode_lost_verify"), "bt");
+    cliTasks(["--tasks", dVerL, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dVerL);
+    const bfL = path.join(tmp("mode_lost_verify_built"), "built.json");
+    fs.writeFileSync(bfL, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vLost = cliTasks(["--tasks", dVerL, "--verify", "--built", bfL], RECON);
+    check("verify with a DROPPED .reconcile-mode restores classic-layout from the stamp — EXTRA gate stays ON, not silently overlay",
+      () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vLost.stderr || ""), () => vLost.stderr);
+    // the CUT path (syncTaskDir/resolveFrozenMode) restores AND re-freezes the dotfile from the stamp on a no-flag re-slice.
+    const dReslice = path.join(tmp("mode_lost_reslice"), "bt");
+    syncTaskDir(dReslice, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dReslice);
+    const reSet = syncTaskDir(dReslice, RUN, checklistOpts(MANIFEST)); // NO flag
+    check("a no-flag re-slice with a DROPPED .reconcile-mode restores classic-layout from the stamp (set + front matter) AND re-freezes the dotfile",
+      () => reSet.reconcileMode === RECONCILE_MODE_CLASSIC && engStamped(dReslice) && readFrozenMode(dReslice) === RECONCILE_MODE_CLASSIC,
+      () => ({ set: reSet.reconcileMode, dotfile: readFrozenMode(dReslice) }));
+    // MIXED stamps (task files disagree) are ambiguous — treated like a corrupted dotfile, not first-wins.
+    const dMixed = path.join(tmp("mode_lost_mixed"), "bt");
+    const mixedSet = syncTaskDir(dMixed, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dMixed);
+    const engMix = mixedSet.tasks.find((t) => t.origin === "engine").file; // flip ONE task file's stamp to overlay
+    fs.writeFileSync(path.join(dMixed, engMix), fs.readFileSync(path.join(dMixed, engMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    check("a folder with DISAGREEING task-file stamps resolves to null (ambiguous, not first-wins) so the mode is not silently trusted",
+      () => effectiveFrozenMode(dMixed) === null, () => ({ resolved: effectiveFrozenMode(dMixed) }));
+    // CLI: re-passing the SAME mode on a dropped-dotfile folder is accepted (not a false "cut WITHOUT a mode" refusal).
+    const dCliSame = path.join(tmp("mode_lost_cli_same"), "bt");
+    cliTasks(["--tasks", dCliSame, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliSame);
+    const rSame = cliTasks(["--tasks", dCliSame, "--reconcile-mode", "classic-layout"], RECON);
+    check("CLI: re-passing the SAME mode on a dropped-dotfile folder is accepted and re-freezes it (no false 'cut WITHOUT a mode')",
+      () => rSame.status === 0 && readFrozenMode(dCliSame) === RECONCILE_MODE_CLASSIC, () => ({ status: rSame.status, err: rSame.stderr }));
+    // CLI: re-passing a DIFFERENT mode on a dropped-dotfile folder is refused and names the mode restored from the stamps.
+    const dCliDiff = path.join(tmp("mode_lost_cli_diff"), "bt");
+    cliTasks(["--tasks", dCliDiff, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliDiff);
+    const rDiff = cliTasks(["--tasks", dCliDiff, "--reconcile-mode", "overlay"], RECON);
+    check("CLI: re-passing a DIFFERENT mode on a dropped-dotfile folder is refused, naming the mode restored from the stamps",
+      () => rDiff.status === 1 && /cut in `classic-layout`/.test(rDiff.stderr || rDiff.stdout || ""), () => rDiff.stderr);
+    // CLI: a dropped-dotfile folder with DISAGREEING task stamps is refused on a no-flag re-slice (not silently overlaid).
+    const dCliMix = path.join(tmp("mode_lost_cli_mixed"), "bt");
+    cliTasks(["--tasks", dCliMix, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliMix);
+    const engCliMix = readTaskDir(dCliMix).find((t) => t.origin === "engine");
+    fs.writeFileSync(path.join(dCliMix, engCliMix.file), fs.readFileSync(path.join(dCliMix, engCliMix.file), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    const rMix = cliTasks(["--tasks", dCliMix], RECON);
+    check("CLI: a dropped-dotfile folder with DISAGREEING task stamps is refused on re-slice (not silently overlaid)",
+      () => rMix.status === 1 && /DISAGREEING/.test(rMix.stderr || rMix.stdout || ""), () => rMix.stderr);
+    // verify on that mixed folder is refused too — the EXTRA gate is never silently turned off by an ambiguous folder.
+    const bfMix = path.join(tmp("mode_lost_cli_mixed_built"), "built.json");
+    fs.writeFileSync(bfMix, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vMix = cliTasks(["--tasks", dCliMix, "--verify", "--built", bfMix], RECON);
+    check("verify on a dropped-dotfile folder with DISAGREEING stamps is refused (EXTRA gate not silently overlaid)",
+      () => vMix.status === 1 && /DISAGREEING/.test(vMix.stderr || vMix.stdout || ""), () => vMix.stderr);
+    // BOTH index.md AND .reconcile-mode gone, task files still stamped: the guard keys off the task files (not the
+    // regenerable index), so a no-flag re-slice restores the mode from the stamp rather than slipping through as a fresh cut.
+    const dCliNoIdx = path.join(tmp("mode_lost_cli_noindex"), "bt");
+    cliTasks(["--tasks", dCliNoIdx, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliNoIdx);
+    fs.rmSync(path.join(dCliNoIdx, TASK_INDEX_FILE), { force: true });
+    const rNoIdx = cliTasks(["--tasks", dCliNoIdx], RECON);
+    check("CLI: a no-flag re-slice with BOTH index.md and .reconcile-mode gone restores classic-layout from the task stamps (not a silent fresh-cut overlay)",
+      () => rNoIdx.status === 0 && readFrozenMode(dCliNoIdx) === RECONCILE_MODE_CLASSIC, () => ({ status: rNoIdx.status, frozen: readFrozenMode(dCliNoIdx), err: rNoIdx.stderr }));
+    // An UNRECOGNISED stamp with the dotfile dropped is refused the same way a corrupted dotfile is (not read as overlay).
+    const dCliBad = path.join(tmp("mode_lost_cli_badstamp"), "bt");
+    cliTasks(["--tasks", dCliBad, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliBad);
+    for (const t of readTaskDir(dCliBad)) {
+      const p = path.join(dCliBad, t.file);
+      fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: Classic-Layout"));
+    }
+    const rBad = cliTasks(["--tasks", dCliBad], RECON);
+    check("CLI: a dropped-dotfile folder whose task stamps hold an UNRECOGNISED value is refused (not read as overlay)",
+      () => rBad.status === 1 && /UNRECOGNISED/.test(rBad.stderr || rBad.stdout || ""), () => rBad.stderr);
+    // --decide on a mixed-stamp dropped-dotfile folder is refused too (the guard runs on every --tasks entry path).
+    const dCliDecMix = path.join(tmp("mode_lost_cli_decide_mixed"), "bt");
+    cliTasks(["--tasks", dCliDecMix, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliDecMix);
+    const engDecMix = readTaskDir(dCliDecMix).find((t) => t.origin === "engine");
+    fs.writeFileSync(path.join(dCliDecMix, engDecMix.file), fs.readFileSync(path.join(dCliDecMix, engDecMix.file), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    const rDecMix = cliTasks(["--tasks", dCliDecMix, "--decide", "D13", "--wont-do", "--pages", "main"], RECON);
+    check("CLI: --decide on a dropped-dotfile folder with DISAGREEING stamps is refused (guard runs on the --decide entry path)",
+      () => rDecMix.status === 1 && /DISAGREEING/.test(rDecMix.stderr || rDecMix.stdout || ""), () => rDecMix.stderr);
+    // LIBRARY-level: syncTaskDir (via resolveFrozenMode) THROWS on ambiguous stamps with a dropped dotfile, so a direct
+    // caller that never passes through the CLI guard fails closed rather than silently re-slicing the folder to overlay.
+    const dLibMix = path.join(tmp("mode_lib_mixed"), "bt");
+    const libSet = syncTaskDir(dLibMix, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dLibMix);
+    const engLibMix = libSet.tasks.find((t) => t.origin === "engine").file;
+    fs.writeFileSync(path.join(dLibMix, engLibMix), fs.readFileSync(path.join(dLibMix, engLibMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    check("syncTaskDir THROWS on DISAGREEING task stamps with a dropped dotfile (library fail-closed, not a silent overlay re-slice)",
+      () => { try { syncTaskDir(dLibMix, RUN, checklistOpts(MANIFEST)); return false; } catch (e) { return /disagreeing/i.test(e.message); } });
+    const dLibBad = path.join(tmp("mode_lib_badstamp"), "bt");
+    const libBadSet = syncTaskDir(dLibBad, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dLibBad);
+    for (const t of libBadSet.tasks) {
+      const p = path.join(dLibBad, t.file);
+      if (fs.existsSync(p)) fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: Classic-Layout"));
+    }
+    check("syncTaskDir THROWS on an UNRECOGNISED task stamp with a dropped dotfile (library fail-closed)",
+      () => { try { syncTaskDir(dLibBad, RUN, checklistOpts(MANIFEST)); return false; } catch (e) { return /unrecognised/i.test(e.message); } });
+  }
+  // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
+  {
+    const dAdd = path.join(tmp("mode_addtasks_stamp"), "bt");
+    syncTaskDir(dAdd, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    addTasks(dAdd, RUN, { ...DECL }, OPTS);
+    const minted = readTaskDir(dAdd).find((t) => t.id === DECL.id);
+    check("addTasks stamps `reconcileMode: classic-layout` on the task it mints on a frozen folder",
+      () => {
+        if (!minted) return false;
+        const txt = fs.readFileSync(path.join(dAdd, minted.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC;
+      },
+      () => ({ minted: minted?.file }));
+  }
+  // ---- --revoke keeps the stamp on the rewritten TASK FRONT MATTER, not only the index headline ----
+  {
+    const dRv = path.join(tmp("mode_revoke_frontmatter"), "bt");
+    syncTaskDir(dRv, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const dm = new Map([["D13", "descope — test"]]);
+    applyDecision(dRv, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    revokeDecision(dRv, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    const engRv = readTaskDir(dRv).find((t) => t.origin === "engine");
+    check("--revoke keeps `reconcileMode: classic-layout` in the rewritten engine task front matter",
+      () => !!engRv && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dRv, engRv.file), "utf8")));
+  }
+}
 /* ================================================================================================
    THE MIGRATION RESULT REPORT. An orchestrated run must not end on two files that disagree: the
    `--verify` table ("2 machine row(s) not confirmed") and `build-tasks/index.md` (5 open, 3 partial, three handlers

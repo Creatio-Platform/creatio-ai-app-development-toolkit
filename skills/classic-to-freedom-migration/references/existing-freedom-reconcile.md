@@ -9,6 +9,31 @@ anything on Freedom that does not belong.
 
 Do not create a duplicate Freedom section. One entity → one Freedom section.
 
+**Placement on a reconcile: the section is already registered.** Because the Freedom section already exists in the
+app menu, set `manifest.placement.sectionHost.mode = "existing-section"` — reconcile the pages and register nothing
+(the menu entry and its workplace bindings already exist and are left untouched). Unlike `pages-only-no-menu`, this
+keeps the **list page a real deliverable** (its section-level client delta — a list row-action, a quick filter — is
+reconciled, not dropped); unlike `existing-app` it needs no owning app, because nothing is registered.
+
+## Two build-time reconcile modes
+
+A reconcile has TWO modes, and they produce different pages from the SAME plan. The developer picks one
+at the **start of implementation** — `migrate.mjs … --tasks <dir> --reconcile-mode <overlay|classic-layout>`
+on the first cut, **not** at plan time. The choice is frozen in the task folder, read back on every
+re-slice (you need not re-pass it), and stamped as **`reconcileMode:`** in each task's front matter and
+in the index headline — so the ONE sub-agent handed a task knows which placement rule to apply. The mode
+changes **how** you place elements, never the plan: `--plan` / `--spec` are byte-identical for both, and
+`--reconcile-mode` is rejected on `--plan`/`--spec` and on a rebuild (no `planMeta.freedomExists`).
+
+- **`overlay` (default)** — keep the existing Freedom layout; add the client's Classic delta into it.
+  Base positions and base "extra" elements stay. This is **Mode 1** below (Steps 1–5).
+- **`classic-layout`** — re-lay the Freedom page so its FIELDS and DETAILS sit exactly where they were
+  in Classic. This is **Mode 2** below.
+
+**Governing principle (BOTH modes):** the plan is the complete authority for fields and details — each
+field, its status (read-only / hidden), and its exact Freedom-grid cell (the Layout table's **`Position`**
+column, `r{row} · c{column} · w{colSpan}`) are in the plan. *Not described in the plan → not on the page.*
+
 ## The mental model
 
 ```
@@ -20,9 +45,10 @@ You have two inputs and one output:
   their own (editable/custom) packages, on top of the base platform.
 - **B — the current Freedom section:** what the existing Freedom page has right now.
 - **Output:** the Freedom section reconciled so it reflects A — missing customizations added, and
-  elements that contradict A removed.
+  elements that contradict A removed (Mode 1), or the field/detail structure re-laid to match Classic
+  exactly (Mode 2).
 
-## Step 1 — Isolate the client's Classic delta (input A)
+## Step 1 — Isolate the client's Classic delta (input A) — BOTH modes
 
 - Identify the client's **editable/custom packages**; exclude base/vendor/locked packages unless the
   client owns them. Only changes the client authored count as the delta.
@@ -34,19 +60,48 @@ You have two inputs and one output:
   - **removed / hidden / moved** — `remove`, `move`, or a `merge` that hides a base element.
 - Also capture entity-level additions (custom columns) and any business rules / methods the client
   added.
-- Keep the delta separate from base behavior: shared base layout is already represented by the
-  existing Freedom page, so it is not part of the work.
 
-## Step 2 — Read the current Freedom section (input B)
+## Step 2 — Read the current Freedom section (input B) — BOTH modes
 
 - `get-page` the existing Freedom page and read `bundle.json` (the merged view) for its fields,
   containers, tabs, details, business rules, and handlers.
-- Map each Freedom element to its entity column / concept so it can be compared with the Classic
-  delta by meaning, not by control name.
+- Map each Freedom element to its entity column / concept so it can be compared with the plan
+  by meaning, not by control name — and note **where** each already sits (its container), because a
+  base element being "present" is not the same as being present in the RIGHT place (Mode 2).
 
-## Step 3 — Build the reconciliation diff
+## Standard Freedom components — keep them, do NOT migrate their Classic counterpart (BOTH modes)
 
-Classify every item on both sides:
+Some Classic details/tabs have a **standard Freedom component** the Freedom page already ships. These
+are NOT client customizations and NOT plain related lists — the platform owns them:
+
+| Standard Freedom component | Classic counterpart (do NOT migrate) |
+| --- | --- |
+| **Feed** (`crt.Feed` + its tab/panel) | ESN / Feed tab (`ESNTab`, the `ESNFeedContainer`) |
+| **Attachments** (`crt.FileList` + its expansion panel / toolbar) | files detail (`FileDetailV2`, "Attachments and notes") |
+| **Connected to** (the connection group the Freedom page ships) | connections detail (`EntityConnectionsDetailV2`, «Связи объекта» / "Connected to") |
+| **Timeline** (`crt.Timeline` + its tab/panel) | Timeline tab (`TimelineTab`) |
+
+The rule, **in both `overlay` and `classic-layout`**:
+
+- **Present on the existing Freedom page → KEEP it as-is.** Same container, tab, position, order and
+  settings. Do NOT move, re-insert, reorder, restyle or remove it. `classic-layout` does NOT re-lay it
+  to its Classic slot — it is a standard component, not a plan field/detail.
+- **Its Classic counterpart is NOT migrated.** No insert, no related list, no tab and no tab-order
+  entry taken from the Classic element. Close the plan/task row for it with `--decide <rowKey> --wont-do`
+  (reason: `standard Freedom component kept — counterpart not migrated`) — the engine records the
+  decision and `--verify --tasks` reads it back. Nothing is rebuilt beside the kept component.
+- **Absent on the Freedom page → migrate the Classic element as usual**, placed per the mode.
+- **Contents stay with the component.** A plan field the kept component already renders (e.g. Account /
+  Contact inside Connected to) is NOT inserted a second time elsewhere; it becomes a `decisions.md`
+  item ONLY when the client's Classic delta explicitly moved that field somewhere else (e.g. into the
+  header).
+- **Ordinary fields that shared the Classic tab are still migrated** per the mode — e.g. the Notes
+  field on the Classic "Attachments and notes" tab. Only the standard component itself is left to the
+  Freedom page.
+
+## Mode 1 — Overlay (default)
+
+### Step 3 — Build the reconciliation diff
 
 | In the client's Classic delta | On Freedom now | Action on Freedom |
 | --- | --- | --- |
@@ -57,7 +112,7 @@ Classify every item on both sides:
 | Not in the delta (base-only element) | present | **KEEP** — do not remove; flag if intent is unclear |
 | Not in the delta | absent | ignore |
 
-## Step 4 — Apply to the existing Freedom page
+### Step 4 — Apply to the existing Freedom page
 
 - Additions and modifications: apply as Freedom deltas on the existing page (view diff items with
   stable names, business rules, handlers, related lists) per `references/classic-to-freedom-mapping.md`.
@@ -67,22 +122,93 @@ Classify every item on both sides:
   **hide** over hard delete when the element holds data or is referenced elsewhere. `validate-page`
   before saving.
 
-## Step 5 — Verify the reconciliation (both directions)
+## Mode 2 — Reproduce Classic layout
 
-- Re-read the Freedom page and confirm:
-  - every client-added element from input A is now present and configured as the client had it,
-  - every client-removed element is gone (or hidden) on Freedom,
-  - no base/standard Freedom element was removed without a matching Classic removal.
-- Record each removal with its Classic evidence in `worklog.md`. List any ambiguous removal as a
-  manual decision in `decisions.md` rather than acting on it silently.
+The page's **fields and details** end up exactly the plan's set, each at its **Classic position**;
+Freedom-only value-add stays. Steps 1–2 above are unchanged; then:
 
-## Safety rules
+### Step 3 (M2) — Place every field/detail at its plan `Position`
 
-- **Absence in the delta is not intent to remove.** Never delete a base/standard Freedom element just
-  because the client did not add it in Classic. Remove only when the client actively removed or hid
-  the analogous element in Classic — otherwise keep it, and confirm with the user if unsure.
-- **Prefer hide to delete** for anything carrying data or referenced by other logic.
-- **No duplicates.** Always target the existing Freedom section; never fork a second section for the
-  same entity.
-- **Evidence before removal.** Every removal must trace to a specific Classic delta operation; if you
-  cannot show that evidence, treat it as a manual decision.
+Read the plan's Layout table — its `Region` (tab / group / island) and `Position` (`r{row} · c{column}
+· w{colSpan}`, the converted Freedom-grid cell) are the placement target. For each field/detail:
+
+- **in the plan, absent on Freedom** → **insert** it at its `Region` + `Position`, with the plan's
+  status (read-only / hidden).
+- **in the plan, present on Freedom but in a DIFFERENT place** → **`move`** it (or `remove` + re-`insert`)
+  to the plan's `Region` + `Position`. This is the case a location-blind reconcile misses: a base field
+  the plan puts in the side island but the base page renders in the Overview content is MOVED, not
+  skipped as "already native".
+- **in the plan, present and already correct** → keep (no-op).
+- **a loose base FIELD control NOT in the plan**, sitting in a region the plan manages (Overview, the side
+  profile, a plan group) → **`remove`** it. This removes only the on-page control, **NOT** the entity column
+  or its data — so it is safe. ("Not described → not on the page.") This is the ONLY automatic removal.
+- **a native Freedom TAB and everything inside it** (Products, Opportunity Insights, History, …) → **KEEP
+  as-is.** A native tab is standard functionality the user relied on in Classic — often a REIMAGINED analog
+  of a Classic tab, so its name will NOT match (Classic "Tactic & competitors" → Freedom "Opportunity
+  Insights"). `classic-layout` never auto-removes a native tab or its fields. Removing one is a deliberate
+  user decision only (`--decide <rowKey> --wont-do`), never an automatic strip — see the confirmation step below.
+- **a Freedom-only NON-field value-add component with no Classic analog** (charts, DCM progress bar,
+  Account/Contact compact profile cards, Next steps, …) → **KEEP as-is.** Mode 2 transfers the
+  field/detail structure, not these widgets.
+- **a standard Freedom component (Feed, Attachments, Connected to, Timeline)** → **KEEP as-is** and do
+  NOT migrate its Classic counterpart — see "Standard Freedom components" above. The rule is the same in
+  both modes; `classic-layout` does NOT re-lay it to a Classic slot.
+- field STATUS where Classic and Freedom differ → **Classic wins** (the plan's `Rule` cell).
+
+**Native tabs — enumerate and confirm (do NOT guess).** Because a native Freedom tab can be a reimagined
+analog of a Classic tab (the names do not match), you cannot tell on your own which tabs correspond to what
+the client had. So in `classic-layout`: `get-page` the Freedom page, **list EVERY native tab it ships**, keep
+them all by default, and **present the full list to the user** for confirmation — remove a tab ONLY if the
+user explicitly decides to (`--decide <rowKey> --wont-do`), and record that in `decisions.md`. A plan field
+or detail that belongs inside a native tab stays in that tab (the tab is its `Region`); it is not pulled out
+to Overview, and it is not inserted a second time if the tab already renders it.
+
+### Step 4 (M2) — Conflicts
+
+A Classic field/detail whose `Position` is held by a KEPT Freedom-only element → keep the Freedom
+element, place the field/detail in the nearest suitable container, and record the call in `decisions.md`.
+Never drop the field/detail, and never remove the value-add element to make room.
+
+### Step 5 (M2) — Logic
+
+Handlers, business rules, and auto-fills are ported **exactly as in a normal migration** — mode-independent.
+
+## Step 6 — Verify the reconciliation (BOTH modes)
+
+- Re-read the Freedom page and confirm, per mode:
+  - **Mode 1:** every client-added element is present and configured as the client had it; every
+    client-removed element is gone (or hidden); no base/standard element was removed without a matching
+    Classic removal.
+  - **Mode 2:** every plan field/detail is present at its `Position` with its status; every base layout
+    element NOT in the plan is gone; every kept Freedom-only value-add component is still present. The FIELD
+    part of this is machine-checked: `migrate.mjs --verify --built <file> --tasks <dir>` (the folder carries
+    the frozen `classic-layout` mode) flags any FIELD control on the built page that is not in the plan as
+    **❌ EXTRA** and blocks completion — so a field removal has to actually happen, it cannot be merely
+    asserted. Detail/related-list and value-add placement are NOT covered by that gate — the UI-guidelines
+    region-parity review confirms them.
+- Record each removal with its evidence in `worklog.md`. List any ambiguous removal as a manual
+  decision in `decisions.md` rather than acting on it silently.
+
+## Safety rules (mode-aware)
+
+- **Mode 1 — absence in the delta is not intent to remove.** Never delete a base/standard Freedom element
+  just because the client did not add it in Classic; prefer **hide** to delete for anything carrying
+  data or referenced by other logic.
+- **Mode 2 — the plan IS the field/detail set, inside the regions it manages.** A loose base FIELD control
+  not in the plan, in a region the plan manages (Overview / side profile / a plan group), is **removed**
+  (the on-page control only, never the entity column or its data). A Freedom-only value-add component, and
+  **every native Freedom TAB with its content**, are always **kept** — never auto-removed. A removal you
+  cannot tie to the plan is a decision, not a silent act.
+- **Both — keep native Freedom tabs; confirm them with the user.** Native tabs (Products, Opportunity
+  Insights, History, …) are standard functionality users relied on; a Freedom tab may be a reimagined analog
+  of a Classic tab with a different name, so enumerate EVERY native tab from `get-page`, keep them all, and
+  put the list to the user. Remove a tab only on an explicit `--decide <rowKey> --wont-do`.
+- **Both — keep the standard Freedom components.** Feed, Attachments, Connected to and Timeline the page
+  already ships are kept as-is, and their Classic counterparts (`ESNTab` / `FileDetailV2` /
+  `EntityConnectionsDetailV2` / `TimelineTab`) are NOT migrated; close that row with `--decide <rowKey>
+  --wont-do` (reason: `standard Freedom component kept — counterpart not migrated`). Only when the
+  component is ABSENT on the Freedom page is the Classic element migrated.
+- **Both — no duplicates.** Always target the existing Freedom section; never fork a second section for
+  the same entity. `validate-page` before saving. Every removal must trace to evidence (a Classic delta
+  op in Mode 1, the plan's field/detail set in Mode 2); if you cannot show it, treat it as a manual
+  decision.

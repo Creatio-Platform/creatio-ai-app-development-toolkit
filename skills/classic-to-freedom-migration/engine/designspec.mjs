@@ -16,6 +16,7 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
+import { RECONCILE_MODE_CLASSIC } from "./reconcile-modes.mjs";
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
@@ -160,15 +161,28 @@ function rowsForFields(fields, regionOf) {
     const col = strip(f.values.control);
     const v = f.values || {};
     const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
-    const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
+    // Intrinsic field state only; business rules (required/visibility conditions) live in the Logic table. The Rule
+    // cell carries `hidden` (a client `visible:false`) beside `read-only` so the `classic-layout` mode reproduces the Classic
+    // status, not just the position. `required` is deliberately absent — it is a rule, never a field-intrinsic value.
+    const rule = [v.readOnly ? "read-only" : null, v.visible === false ? "hidden" : null].filter(Boolean).join(" · ") || DASH;
     // COMPACT per-field marker — the full cross-datasource recipe is printed ONCE under the Layout table (see
     // `linkedFieldsNote`), not repeated verbatim on every linked field (it was ~5× the same paragraph on a page).
     const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
     const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
-    return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
+    return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional], position: posCell(v) };
   });
+}
+// The field's CONVERTED Freedom-grid position (`values.layoutConfig`, computed by the mapper from the
+// Classic coordinates: left island = 1 col, tab/group = 2 cols, wide header = 24). The `classic-layout` reconcile
+// mode places each field at exactly this cell, so the spec must SHOW it; `overlay` ignores it. Read-only cell, so
+// it is inert data in the plan the user presents. `r`ow · `c`olumn · `w`idth(colSpan, only when it spans >1).
+export function posCell(v) {
+  const lc = v?.layoutConfig;
+  if (lc?.row == null || lc?.column == null) return DASH;
+  const width = lc.colSpan > 1 ? ` · w${lc.colSpan}` : "";
+  return `r${lc.row} · c${lc.column}${width}`;
 }
 function rowsForDetails(details, tabRegion) {
   return (details || []).map((d) => {
@@ -1037,12 +1051,14 @@ function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
   const out = [
     opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
     "#### Layout",
-    "| Region | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- |",
+    // `Position` = the converted Freedom-grid cell the `classic-layout` mode places the field at
+    // (`overlay` ignores it). Last column so the plan reads unchanged up to it and prefix-matching stays valid.
+    "| Region | Element | Type | Source | Rule | Additional | Position |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const region of order) {
     const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-    for (const it of items) out.push(`| ${region} | ${it.cells.join(" | ")} |`);
+    for (const it of items) out.push(`| ${region} | ${it.cells.join(" | ")} | ${it.position || DASH} |`);
   }
   out.push("");
   if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
@@ -2229,7 +2245,7 @@ function templateNameNote(name) {
 
 function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   const cover = [];
-  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate } });
+  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate, reconcile: !!pm.freedomExists } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expFields = fieldOps.length;
   const expTabs = new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name)).size;
@@ -2242,6 +2258,17 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   // Set below and the gate could never reach ✅ for such a page. `o.name` is `col` / `col_2` — distinct and
   // identical to the built element names.
   if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
+  // classic-layout removal check as its OWN row (reconcile plans only), so a base extra can be decided independently
+  // without the Fields presence row hiding real MISSING fields. It no-ops (✅) unless the folder is frozen classic-layout.
+  // `tabs` are the plan's OWN (client-created) tab names: a built tab NOT among them is native Freedom structure the mode
+  // keeps, so the fields it holds are exempt from removal (see nativeTabFieldNames).
+  const planTabNames = [...new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name))];
+  if (expFields && pm.freedomExists) cover.push({ label: "No base field controls outside the plan (classic-layout removal)", vk: { type: "classic-extras", names: fieldOps.map((o) => o.name), tabs: planTabNames } });
+  // Native Freedom tabs are KEPT in both modes (never auto-removed); a Freedom tab can be a reimagined analog of a Classic
+  // tab the user relied on, and the names do not match, so the agent cannot tell which to drop on its own. This confirm
+  // deliverable has the build agent enumerate EVERY native tab from get-page and confirm keep/remove with the user —
+  // removal of any is an explicit `--decide`, never automatic. Reconcile plans only (nothing native to keep on a rebuild).
+  if (pm.freedomExists) cover.push({ label: "Native Freedom tabs kept — enumerate every native tab (get-page) and confirm keep/remove with the user; remove any only via `--decide`", vk: null });
   // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
   // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
@@ -2362,14 +2389,22 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // dropped silently: the reader must still see that the section is unreachable from the menu, and that this
   // was chosen. Any other mode (including a plan that recorded no placement at all) keeps the gated row.
   if (pm.sectionSchema || result.section) {
-    pages.push(opts.sectionHostMode === "pages-only-no-menu"
-      ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
-      : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
+    // An `existing-section` reconcile registers NOTHING — the section and its workplace bindings already exist and
+    // are left untouched — so this is an informational row, not a machine-gated one. It is NOT the exactly-ONE
+    // onstand check the fresh-registration branch runs: an already-registered section can be bound to several
+    // workplaces, and demanding exactly one would be a false red on a section that is correctly in place.
+    if (opts.sectionHostMode === "pages-only-no-menu") {
+      pages.push({ label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" });
+    } else if (opts.sectionHostMode === "existing-section") {
+      pages.push({ label: "Navigable section already registered — **reconcile registers nothing** (`placement.sectionHost.mode = existing-section`): the Freedom section is already in the app menu; this run reconciles its pages and leaves the registration and its workplace bindings untouched" });
+    } else {
+      pages.push({ label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
         // The QUERY, not just the question. The bindings live in `SysModuleInWorkplace` and that is the only read
         // that counts them: `find-app` reports the app's own schemas and is blind to a section registered over a
         // BORROWED entity, which it then reports as absent.
         query: WORKPLACE_HOWTO,
         miss: "the section is not in the menu — its pages are unreachable" } });
+    }
   }
   return pages;
 }
@@ -3008,6 +3043,13 @@ function resolveTemplateVk(vk, ctx) {
   const gap = primaryDataSourceGap(ctx);
   if (gap) return ["❌ MISSING", gap, "missing"];
   if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
+  // A reconcile saves a REPLACING schema whose parent is the page ITSELF; the real template sits at the chain root
+  // and a reconcile never swaps it. So the one parent that confirms the template is unchanged is the page's own
+  // schema name — closed ✅. Any other parent is NOT evidence the template held (it could be a different chain),
+  // so it stays ⚠ rather than a blanket pass.
+  const own = entryObject(ctx.page)?.schemaName;
+  if (vk.reconcile && own && tpl === own) return ["✅ Done", `reconcile onto the existing page — its template \`${esc(vk.exp)}\` is unchanged (the replacing schema's parent is the page itself, \`${esc(tpl)}\`)`, "ok"];
+  if (vk.reconcile) return ["⚠ verify", `reconcile: the built parent is \`${esc(tpl)}\`, not the expected template \`${esc(vk.exp)}\` nor the page's own schema — confirm the page kept its template`, "unverified"];
   return ["⚠ verify", `built on \`${esc(tpl)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
 }
 // THE MINI PAGE, resolved like every other page: from `--built.pages["mini:<Schema>"]`, the key the engine itself
@@ -3071,7 +3113,8 @@ function fieldMatches(o, n) {
 // MAXIMUM bipartite matching (Kuhn's augmenting paths): assign each expected name to a DISTINCT built op it matches,
 // maximising the number matched. Greedy first-match-wins could strand a name whose only op was already
 // claimed by another name that had alternatives, reporting a present field as missing (a false red). Returns the set
-// of matched name indices.
+// of matched name indices AND the op→name assignment (`opToName[oi] < 0` ⇒ that built op matched no expected name —
+// what the classic-layout EXTRA check reads to find a base field the plan does not list).
 function maxFieldMatch(names, ops) {
   const opToName = new Array(ops.length).fill(-1);
   const augment = (ni, seen) => {
@@ -3085,15 +3128,98 @@ function maxFieldMatch(names, ops) {
   };
   const matched = new Set();
   for (let ni = 0; ni < names.length; ni++) if (augment(ni, new Set())) matched.add(ni);
-  return matched;
+  return { matched, opToName };
 }
-function resolveFieldsByIdentity(vk, names, ops) {
+// The field controls that belong to a KEPT "Connected to" connection group — the only standard Freedom component
+// that holds field-typed controls (its connection lookups); Feed / Attachments / Timeline hold none. classic-layout
+// keeps the group, so its lookups are not EXTRA controls to remove. THREE guards keep this from disabling the gate
+// for unrelated fields: (1) the container must NAME the connection group; (2) it must be a LEAF — a container that
+// wraps another named container is an ancestor tab, not the group (`hasNestedContainer`); (3) only LOOKUPS
+// (`crt.ComboBox`) inside it are exempt — a base Input / date / checkbox / rich-text placed in a connections-named
+// group is still flagged EXTRA. A base lookup dropped directly into the group is the one irreducible case (its
+// column identity is not in the plan and cannot be told from a real connection lookup without semantic data).
+// The name test is deliberately broad (English + the ru stems `связ`/`подключ`) so it recognises a localized
+// connection group; the tradeoff is that a base `crt.ComboBox` inside a CUSTOM leaf merely named like one (e.g.
+// «Связанные документы» / "Connections") is exempted too. That widens the same irreducible case above, not a new
+// one — the escape stays `--decide` on the row. Narrowing the tokens would instead MISS real localized groups.
+const CONNECTED_TO_RE = /connected[\s_-]*to|entityconnection|connections?\b|связ|подключ/i;
+const CONNECTION_LOOKUP_TYPE = "crt.ComboBox";
+// A container is the connection group's own LEAF when it NAMES the group and wraps no other container (an ancestor
+// tab that holds another named container is not the group itself — `hasNestedContainer`).
+const isConnectionGroupLeaf = (c) =>
+  CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`) && !c.hasNestedContainer;
+// Add the element name + bound column of every connection LOOKUP directly in a kept leaf; base non-lookups are not kept.
+function addConnectionLookupIds(container, names) {
+  for (const o of container.fieldOps || []) {
+    if (o?.type !== CONNECTION_LOOKUP_TYPE) continue;
+    if (o.name) names.add(o.name);
+    if (o.bound) names.add(o.bound);
+  }
+}
+function keptConnectionFieldNames(ctx) {
+  const names = new Set();
+  for (const c of (ctx.containers || []).filter(isConnectionGroupLeaf)) addConnectionLookupIds(c, names);
+  return names;
+}
+// The field CONTROL names that live inside a NATIVE Freedom tab — a built tab container the PLAN did not create. The plan
+// carries only the client's customizations, so a tab on the built page whose name is not among the plan's tabs is native
+// Freedom structure (e.g. Products, Opportunity Insights) that users relied on in Classic; classic-layout KEEPS it as-is,
+// so the fields it holds are never EXTRA to remove. A tab the plan DOES create (a client-added tab) is still policed. A
+// native tab a client genuinely wants gone is removed only by an explicit `--decide`, never by the automatic gate — the
+// build brief has the sub-agent enumerate every native tab and confirm with the user, because a Freedom tab can be a
+// REIMAGINED analog of a Classic tab (the names do not match, e.g. Classic "Tactic & competitors" -> Freedom "Insights").
+export function nativeTabFieldNames(ctx, planTabs) {
+  const names = new Set();
+  const planned = new Set(planTabs || []);
+  for (const c of ctx.containers || []) {
+    const isTabC = TAB_TYPES.includes(c.type) || c.parentType === "crt.TabPanel";
+    if (!isTabC || planned.has(c.name)) continue; // a plan-created (client) tab keeps its extras under the gate
+    for (const o of c.fieldOps || []) {
+      if (o.name) names.add(o.name);
+      if (o.bound) names.add(o.bound);
+    }
+  }
+  return names;
+}
+// The `classic-extras` row — ❌ EXTRA listing base field controls to remove, or ✅ when there are none. A field CONTROL
+// the maximum matching could not assign to any expected name (`opToName[oi] < 0`) is a base field the mode was supposed
+// to REMOVE — unless it is a lookup inside a KEPT "Connected to" group (exempt by element name OR bound column), or it
+// lives inside a NATIVE Freedom tab the plan did not create (`nativeTabFieldNames` — native tabs are kept, not stripped).
+// `crt.ImageInput` is NOT in this removal set: a plan image binds through `values.value` (not the `control` the Fields
+// row keys on), so its name is never in `vk.names` here — flagging it would report a correctly built plan image as EXTRA.
+// Image presence is gated by the separate image row; this row is text/lookup/date/checkbox/number controls only.
+const EXTRA_EXEMPT_TYPE = "crt.ImageInput";
+function classicLayoutExtraRow(identified, opToName, ctx, planTabs) {
+  const kept = keptConnectionFieldNames(ctx);
+  const nativeTab = nativeTabFieldNames(ctx, planTabs);
+  const isKept = (o) => kept.has(o.name) || (o.bound && kept.has(o.bound))
+    || nativeTab.has(o.name) || (o.bound && nativeTab.has(o.bound));
+  const extras = identified.filter((o, oi) => opToName[oi] < 0 && LAYOUT_FIELD_RE.test(o.type || "")
+    && o.type !== EXTRA_EXEMPT_TYPE && !isKept(o)).map((o) => o.name || o.bound);
+  if (!extras.length) return ["✅ Done", "no base field control outside the plan", "ok"];
+  const ov = extras.length > 8 ? "…" : "";
+  return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}`, "missing"];
+}
+// The `classic-extras` deliverable: only a frozen `classic-layout` reconcile enforces it; every other mode no-ops.
+// Its OWN row (not folded into Fields) so a base extra can be decided independently without hiding real MISSING.
+function resolveClassicExtrasVk(vk, ctx) {
+  if (ctx.reconcileMode !== RECONCILE_MODE_CLASSIC) return ["✅ Done", "not applicable — base extras are kept outside classic-layout", "ok"];
+  if (ctx.entryAbsent) return ["⚠ verify", "the page was not read — cannot check for base field controls outside the plan", "unverified"];
+  const names = [...new Set(vk.names || [])];
+  const identified = ctx.ops.filter((o) => o.name || o.bound);
+  const { opToName } = maxFieldMatch(names, identified);
+  return classicLayoutExtraRow(identified, opToName, ctx, vk.tabs);
+}
+function resolveFieldsByIdentity(vk, names, ctx) {
+  const ops = ctx.ops;
   const identified = ops.filter((o) => o.name || o.bound);
   if (ops.length && !identified.length) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
-  const matched = maxFieldMatch(names, identified);
+  const { matched } = maxFieldMatch(names, identified);
   const missing = names.filter((_, ni) => !matched.has(ni));
   const b = names.length - missing.length;
+  // The classic-layout removal check is its OWN row (`classic-extras`), not folded here — this row is presence only,
+  // so a base extra never hides a real MISSING field and each can be decided independently.
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page (element name, \`<Name>Field\`, or the bound column)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
@@ -3108,7 +3234,7 @@ function resolveFieldsByIdentity(vk, names, ops) {
 function resolveFieldsVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.n} expected field(s)`);
   const names = [...new Set(vk.names || [])];
-  if (names.length) return resolveFieldsByIdentity(vk, names, ctx.ops);
+  if (names.length) return resolveFieldsByIdentity(vk, names, ctx);
   const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present by TYPE — this deliverable published no expected field names, so identity was not checkable`, "ok"];
   return ["⚠ verify", `${b}/${vk.n} components of a field type present — this deliverable published no expected field names, so identity was not checkable`, "unverified"];
@@ -3149,6 +3275,7 @@ function resolveElementVk(vk, ctx) {
 }
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") return resolveFieldsVk(vk, ctx);
+  if (vk.type === "classic-extras") return resolveClassicExtrasVk(vk, ctx);
   if (vk.type === "image") return resolveImageVk(vk, ctx);
   if (vk.type === "element") return resolveElementVk(vk, ctx);
   const accepted = BUILT_TYPES[vk.type === "tabs" ? "tabs" : "details"];
@@ -3324,7 +3451,7 @@ export function resolveRuleVk(vk, ctx) {
   return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) on the built page)${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
-const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element"]);
+const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element", "classic-extras"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
 const VK_RULE = new Set(["rule"]);
 // A REACHABILITY / wiring deliverable (per-type routing, mini-page "+ New" binding, section registration, typed-form
@@ -3777,7 +3904,7 @@ function holdsAllFields(container, names) {
   const isTab = container.type === "crt.TabContainer" || container.parentType === "crt.TabPanel";
   const ops = container.fieldOps || [];
   if (!want.length || !isTab || ops.length !== want.length) return 0;
-  return maxFieldMatch(want, ops).size === want.length ? TAB_BY_FIELDS : 0;
+  return maxFieldMatch(want, ops).matched.size === want.length ? TAB_BY_FIELDS : 0;
 }
 // A region judged against a built container's contents — extracted so resolveLayoutVk stays under Sonar's ceiling.
 function judgeRegion(c, where, vk, want) {
@@ -3929,7 +4056,12 @@ export function boundAttributeOf(node) {
   if (!b) return null;
   const attr = b.slice(1);
   const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
-  return m ? m[1] : attr;
+  if (m) return m[1];
+  // A build that binds to a plainly-named primary-data-source attribute (`$PDS_<Column>`, no Designer hash) means
+  // the same column — unwrap the `PDS_` prefix so it matches the plan's bare column name, exactly as the hashed
+  // Designer form does.
+  if (/^PDS_./i.test(attr)) return attr.slice(4);
+  return attr;
 }
 // One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
 // component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
@@ -4052,7 +4184,7 @@ function collectLayout(node, acc) {
   const t = String(node.type || "");
   if (LAYOUT_FIELD_RE.test(t)) {
     acc.fields.push(node.name);
-    if (acc.fieldOps) { const attr = boundAttributeOf(node); acc.fieldOps.push({ name: node.name, ...(attr ? { bound: attr } : {}) }); }
+    if (acc.fieldOps) { const attr = boundAttributeOf(node); acc.fieldOps.push({ name: node.name, type: t, ...(attr ? { bound: attr } : {}) }); }
   }
   else if (t === "crt.DataGrid") acc.lists.push(node.name);
   else if (LAYOUT_WIDGETS.has(t)) acc.widgets.push(t);
@@ -4076,6 +4208,17 @@ function builtCaption(raw, resources) {
   const hit = resourceText(resources, captionKeyOf(text));
   return hit?.trim() ? hit : text;
 }
+// True when a node's subtree holds ANOTHER named container — read off the real tree, so an ancestor tab can be told
+// from the group's own leaf container without inferring nesting from field-set overlap.
+function isContainerNode(node) {
+  return !!(node && typeof node === "object" && node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || "")));
+}
+function subtreeHasContainer(node) {
+  if (Array.isArray(node)) return node.some(subtreeHasContainer);
+  if (!node || typeof node !== "object") return false;
+  if (isContainerNode(node)) return true;
+  return subtreeHasContainer(node.items);
+}
 function pageContainersOf(entry) {
   const e = entryObject(entry);
   const out = [];
@@ -4083,10 +4226,11 @@ function pageContainersOf(entry) {
   const walk = (node, parentType) => {
     if (Array.isArray(node)) { for (const n of node) { walk(n, parentType); } return; }
     if (!node || typeof node !== "object") return;
-    if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
+    if (isContainerNode(node)) {
       // `caption` is the resolved text; `rawCaption` keeps the binding, whose key words still identify the tab.
+      // `hasNestedContainer` is the real-tree nesting flag — an ancestor tab has one, the group's own leaf does not.
       out.push({ name: String(node.name), type: String(node.type || ""), parentType, caption: builtCaption(node.caption, e.resources),
-        rawCaption: String(node.caption ?? ""),
+        rawCaption: String(node.caption ?? ""), hasNestedContainer: (node.items || []).some(subtreeHasContainer),
         ...collectLayout(node.items, { fields: [], fieldOps: [], lists: [], widgets: [] }) });
     }
     walk(node.items, String(node.type || ""));
@@ -4094,7 +4238,7 @@ function pageContainersOf(entry) {
   walk(e.viewConfig, "");
   return out;
 }
-export function verifyCtx(root, pageKey) {
+export function verifyCtx(root, pageKey, reconcileMode = null) {
   const page = pageEntryOf(root, pageKey);
   const ops = pageOpsOf(page);
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
@@ -4107,6 +4251,10 @@ export function verifyCtx(root, pageKey) {
   return {
     pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
     containers: pageContainersOf(page),
+    // the frozen reconcile mode (from the task folder, or null). Only `classic-layout` turns on the EXTRA-field
+    // check in resolveFieldsByIdentity: a field CONTROL on the built page that is not in the plan is a base field
+    // the mode was supposed to REMOVE. null (overlay / no reconcile / verify without --tasks) skips it.
+    reconcileMode,
     // The built page's GRID COLUMN codes — read once per page, like `ops`, so the list-column resolver measures the
     // page instead of trusting a report about it. `.anchored` says whether they came from the grid node itself.
     gridColumns: pageGridColumnsOf(page),
@@ -4119,10 +4267,10 @@ export function verifyCtx(root, pageKey) {
     parentTpl: entryObject(page)?.parentSchemaName || "",
   };
 }
-function verifyCtxFactory(root) {
+function verifyCtxFactory(root, reconcileMode = null) {
   const cache = new Map();
   return (pageKey) => {
-    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey));
+    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey, reconcileMode));
     return cache.get(pageKey);
   };
 }
@@ -4248,7 +4396,7 @@ function orphanBanner(orphans) {
 }
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
-  const ctxFor = verifyCtxFactory(root);
+  const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null);
   const tally = verifyTally();
   // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
   // of the run, the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
