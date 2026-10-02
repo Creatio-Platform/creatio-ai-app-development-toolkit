@@ -10053,9 +10053,63 @@ console.log("\n===== the filed half of a page's quality gate belongs to the page
     carried = after?.rows.find((r) => r.label === filedRow.label);
   }
   check("filed gate: re-slicing a folder whose REVIEW task recorded an Outcome on the filed row carries that Outcome to the build task that now owns the row",
-    () => carried && /built/.test(carried.outcome),
+    () => carried?.outcomeKind === "built",
     () => ({ filedRow: !!filedRow, review: !!review, carried }));
   fs.rmSync(path.dirname(d), { recursive: true, force: true });
+
+  // A RETIRED file still listing the filed row: a task id an earlier cut used and this plan no longer has. Its file
+  // is reported stale and never rewritten, so its mark stays in the folder after the row moved on.
+  const filedAt = (t) => t.rows.findIndex((r) => r.deliverableId === FILED) + 1;
+  const retire = (dir, set, task, id, mark) => {
+    const file = `task-${id}.md`;
+    fs.writeFileSync(path.join(dir, file), setOutcome(renderTaskFile({ ...task, id, file }, set), filedAt(task), mark));
+  };
+  const filedOf = (dir, id) => readTaskDir(dir).find((t) => t.id === id)?.rows.find((r) => r.deliverableId === FILED || r.label === filedRow?.label);
+  const editOwn = (dir, task, mark) => {
+    const f = path.join(dir, readTaskDir(dir).find((t) => t.id === task.id).file);
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), filedAt(task), mark));
+  };
+
+  // The owner's Outcome cleared by hand stays cleared: the owner's own file lists the row, so nothing is carried in.
+  const dc = path.join(tmp("filed-cleared"), "build-tasks");
+  const setC = syncTaskDir(dc, RUN5, OPTS5);
+  const ownerC = writersOf(setC, "page:main").at(-1);
+  retire(dc, setC, ownerC, "retiredfiled01", "built");
+  editOwn(dc, ownerC, "built");
+  syncTaskDir(dc, RUN5, OPTS5);
+  editOwn(dc, ownerC, "");
+  syncTaskDir(dc, RUN5, OPTS5);
+  const clearedOnce = filedOf(dc, ownerC.id);
+  syncTaskDir(dc, RUN5, OPTS5);
+  const clearedTwice = filedOf(dc, ownerC.id);
+  check("filed gate: an Outcome CLEARED on the row's current owner stays cleared across two syncs — a retired file that still lists the row with a mark is not carried back in",
+    () => clearedOnce && clearedTwice && !clearedOnce.outcomeKind && !clearedTwice.outcomeKind,
+    () => ({ once: clearedOnce?.outcome, twice: clearedTwice?.outcome }));
+
+  // The owner's own mark wins over a retired file's.
+  editOwn(dc, ownerC, NOT_BUILT_BLOCKED);
+  syncTaskDir(dc, RUN5, OPTS5);
+  check("filed gate: the owner's OWN mark on the filed row wins over a retired file's mark for the same row",
+    () => filedOf(dc, ownerC.id)?.outcomeKind === "not-built", () => filedOf(dc, ownerC.id));
+  fs.rmSync(path.dirname(dc), { recursive: true, force: true });
+
+  // The row moved into a task with no file yet (a new task id after a re-slice): the previous owner is the retired
+  // file, and its outcome and reason carry over, onto the filed row only.
+  const dn = path.join(tmp("filed-new-id"), "build-tasks");
+  const setN = syncTaskDir(dn, RUN5, OPTS5);
+  const ownerN = writersOf(setN, "page:main").at(-1);
+  retire(dn, setN, ownerN, "retiredfiled02", NOT_BUILT_BLOCKED);
+  fs.rmSync(path.join(dn, ownerN.file));
+  syncTaskDir(dn, RUN5, OPTS5);
+  const fresh = readTaskDir(dn).find((t) => t.id === ownerN.id);
+  const carriedNew = fresh?.rows.find((r) => r.label === ownerN.rows[filedAt(ownerN) - 1].label);
+  const freshText = fresh ? fs.readFileSync(path.join(dn, fresh.file), "utf8") : "";
+  check("filed gate: a filed row that moved into a NEW task id carries its previous owner's outcome and reason, on that row only and listed once",
+    () => carriedNew?.outcomeKind === "not-built" && carriedNew.outcome === NOT_BUILT_BLOCKED
+      && fresh.rows.filter((r) => r.outcome === NOT_BUILT_BLOCKED).length === 1
+      && freshText.split(carriedNew.label).length === 2,
+    () => ({ carried: carriedNew, marked: fresh?.rows.filter((r) => r.outcome).map((r) => [r.label.slice(0, 40), r.outcome]) }));
+  fs.rmSync(path.dirname(dn), { recursive: true, force: true });
 }
 
 console.log("\n===== a split must give the filed gate row to the page's last writer =====");

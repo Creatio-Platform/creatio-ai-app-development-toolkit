@@ -2074,7 +2074,8 @@ export function mergeTaskSet(fresh, existing = []) {
   const byId = new Map();
   for (const e of usable) byId.set(e.meta.id, e);
   const sources = usable.filter((e) => e.meta.origin !== TASK_ORIGIN_ORCHESTRATOR && e.meta.kind !== REPAIR_KIND);
-  const tasks = fresh.tasks.map((t) => carryWithMovedFiledMarks(t, matchFor(byId, t), sources));
+  const live = new Set(fresh.tasks.map((t) => t.id));
+  const tasks = fresh.tasks.map((t) => carryWithMovedFiledMarks(t, matchFor(byId, t), sources, live));
   const claimed = new Set(fresh.tasks.map((t) => t.id));
   // An orchestrator file whose `id` an engine task also claims cannot become that task's record (`matchFor`), and
   // it is not `extra` either — so without this it falls out of the index entirely: no queue row, no `## Attention` line.
@@ -2258,20 +2259,39 @@ function rekeyDecisions(map, oldTable, newKeys) {
 const withMark = (r, m) => ({ ...r, outcome: m.text, outcomeKind: m.outcome, outcomeCause: m.cause,
   outcomeReason: m.reason || "", naNoReason: !!m.naNoReason });
 
-// A FILED GATE ROW KEEPS ITS OUTCOME WHEN IT CHANGES TASKS. Outcomes are carried per task, and the filed row is the
+/// A FILED GATE ROW KEEPS ITS OUTCOME WHEN IT CHANGES TASKS. Outcomes are carried per task, and the filed row is the
 // one row a re-slice can move between engine tasks of one page: into the page's last build task from a review
-// task that held it, or between chunks when the page's cut moves. Its label names its page's evidence id, so it is
-// unique in the folder, and the mark another engine file recorded against it is the one to carry. The task's own
-// file still wins when it has a mark of its own.
-function carryWithMovedFiledMarks(task, prev, sources) {
+// task that held it, or between chunks when the page's cut moves. A mark is carried only when the row MOVED: the
+// receiving task's own file does not list the row (when it does, its cell is the record, and a blank cell there
+// is a cleared Outcome that stays blank), and the mark comes from a previous owner, an engine file whose table
+// lists that exact label with a mark. The label names its page's evidence id, so it is unique to its page.
+// Several previous owners are ranked by `previousOwnerRank`.
+const sameLabel = (a, b) => String(a || "").trim().replace(/\s+/g, " ") === String(b || "").trim().replace(/\s+/g, " ");
+const listsRow = (e, label) => (e?.table || []).some((r) => sameLabel(r.label, label));
+const markFor = (e, label) => (e.table || []).find((r) => sameLabel(r.label, label) && r.mark)?.mark || null;
+// A file whose task is still in the plan before a retired one: a live file is rewritten on every sync and a
+// retired one never is, so the live file is the more recent record. Then the higher recorded `order`, then the
+// file name, so the choice never depends on the order the folder lists its files in.
+function previousOwnerRank(a, b, live) {
+  const byLive = Number(live.has(b.meta.id)) - Number(live.has(a.meta.id));
+  if (byLive) return byLive;
+  const byOrder = (Number(b.meta.order) || 0) - (Number(a.meta.order) || 0);
+  return byOrder || String(a.file).localeCompare(String(b.file));
+}
+function movedMarkFor(label, prev, sources, live) {
+  const owners = sources.filter((e) => e !== prev && markFor(e, label));
+  if (!owners.length) return null;
+  return markFor(owners.sort((a, b) => previousOwnerRank(a, b, live))[0], label);
+}
+function carryWithMovedFiledMarks(task, prev, sources, live) {
   const own = prev?.outcomes instanceof Map ? prev.outcomes : new Map();
   const rows = task.rows || [];
   const keys = rowKeys(rows.map((r) => r.label));
   const moved = new Map();
   rows.forEach((r, i) => {
-    if (!isFiledGateRow(r) || own.has(keys[i])) return;
-    const from = sources.find((e) => e !== prev && e.outcomes instanceof Map && e.outcomes.has(keys[i]));
-    if (from) moved.set(keys[i], from.outcomes.get(keys[i]));
+    if (!isFiledGateRow(r) || listsRow(prev, r.label)) return;
+    const mark = movedMarkFor(r.label, prev, sources, live);
+    if (mark) moved.set(keys[i], mark);
   });
   if (!moved.size) return carryOver(task, prev);
   if (prev) return carryOver(task, { ...prev, outcomes: new Map([...own, ...moved]) });
