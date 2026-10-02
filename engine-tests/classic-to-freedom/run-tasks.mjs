@@ -7967,6 +7967,34 @@ console.log("\n===== build order: virtual attributes are declared before the han
         && again.written.every((t) => t.repairRound === 2),
       () => ({ handlerLabels, round1: round1.map((t) => t.file), held: labels(held.stalled), stalled: labels(again.stalled), round2 }));
     fs.rmSync(d, { recursive: true, force: true });
+
+    // The repair round of that handler row is routed while a LATER build task of the same page is still open. The
+    // round writes the page too, so it is not startable until that build task is done, and is startable after.
+    const d2 = tmp("vmattr-stalled-handler-order");
+    const ordered2 = () => [...syncTaskDir(d2, attrRun, attrOpts).tasks].sort((x, y) => x.order - y.order);
+    const dispatch2 = (t, mark) => {
+      const tok = `tok-${t.id}`;
+      startTask(d2, t.id, attrRun, { ...attrOpts, dispatchToken: tok }, null, AT(nextMin()));
+      const f = taskFilePath(d2, t.id);
+      let text = fs.readFileSync(f, "utf8");
+      for (let i = 1; i <= rowCount(text); i++) text = setOutcome(text, i, typeof mark === "function" ? mark(i) : mark);
+      fs.writeFileSync(f, text.replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
+      syncTaskDir(d2, attrRun, { ...attrOpts, now: AT(nextMin()) });
+    };
+    const handler2 = ordered2().find((t) => t.id === handlerTask.id);
+    for (const t of ordered2().filter((x) => x.order <= handler2.order)) {
+      dispatch2(t, t.id === handler2.id ? (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built") : "built");
+    }
+    const laterBuilds = ordered2().filter((x) => x.kind !== "repair" && x.writesTo === handler2.writesTo && x.order > handler2.order);
+    const round = syncRepairDir(d2, attrRun, {}, attrOpts).written;
+    const startableIds = () => startableTasks(syncTaskDir(d2, attrRun, attrOpts), d2).startable.map((t) => t.id);
+    const before = startableIds();
+    for (const t of laterBuilds) dispatch2(t, "built");
+    const after = startableIds();
+    check("build order + repair: the handler's repair round is NOT startable while a later build task of its page is open, and IS startable once that task is done",
+      () => laterBuilds.length > 0 && round.length === 1 && !before.includes(round[0].id) && after.includes(round[0].id),
+      () => ({ laterBuilds: laterBuilds.map((t) => t.id), round: round.map((t) => t.id), before, after }));
+    fs.rmSync(d2, { recursive: true, force: true });
   }
 }
 
