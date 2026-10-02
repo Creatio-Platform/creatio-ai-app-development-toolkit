@@ -12250,6 +12250,17 @@ const n2TreeManifest = (titleA, titleB) => ({
   check("field label: a column-bound field writes no label",
     () => valuesOf("InternalRequest") && valuesOf("InternalRequest").label === undefined,
     () => valuesOf("InternalRequest"));
+  const captionCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+    di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
+    di({ name: "Unit", parentName: "Header", propertyName: "items", bindTo: "StaffUnit", caption: "Resources.Strings.JobTitleCaption" }),
+  ] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } },
+    resources: { JobTitleCaption: "Job title", StaffUnit: "Staff unit" },
+    resourceStrings: { JobTitleCaption: { "en-US": "Job title", "fr-FR": "Poste" }, StaffUnit: { "en-US": "Staff unit" } } });
+  const unit = captionCs.viewConfigDiff.find((o) => o.name === "StaffUnit")?.values;
+  check("field label: a field with no column is labelled by the page string its own caption names, ahead of the one named after the field",
+    () => unit?.label === "$Resources.Strings.JobTitleCaption" && unit?.labelSource === "page · JobTitleCaption"
+      && captionCs.resourceCultures?.JobTitleCaption?.["fr-FR"] === "Poste",
+    () => ({ unit, cultures: captionCs.resourceCultures }));
 }
 
 // ===== N1: make --verify trustworthy (business rules gated, component role/analog) ================

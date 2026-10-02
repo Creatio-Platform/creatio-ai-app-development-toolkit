@@ -484,10 +484,11 @@ export function mapToFreedom(eff, opts = {}) {
   const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
   const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
   // A field with no entity column behind it has no column title to auto-label from: its label is the Classic page
-  // string, in every culture. Null for a column-bound field, and when the entity columns are not known.
-  const pageLabelFor = (col) => {
+  // string, in every culture — the one its own caption names (`config.caption`, then `labelConfig.caption`), else
+  // the one named after the field. Null for a column-bound field, and when the entity columns are not known.
+  const pageLabelFor = (col, caption) => {
     if (!Object.keys(cols).length || cols[col] != null || columnTitles[col] != null) return null;
-    return pageText(col) ?? pageText(col + "Caption");
+    return pageText(caption) ?? pageText(col) ?? pageText(col + "Caption");
   };
   // Name-bound field inserts → fields. Here, not in `mergeHierarchy`: that never receives `entityColumns`.
   eff = promoteNameBoundFields(eff, cols);
@@ -960,7 +961,7 @@ function mapFields(ctx, containers) {
     // an inline label/caption (clio rejects hardcoded page text). A field with no column binds its label to the
     // Classic page string. `titleText`/`typeLabel`/`labelKey`/`labelSource` are PLAN-only metadata.
     if (lbl != null) values.titleText = lbl;
-    const pageLabel = pageLabelFor(col);
+    const pageLabel = pageLabelFor(col, index.get(f.name)?.caption);
     if (pageLabel) {
       registerText(pageLabel.key, pageLabel);
       values.label = "$Resources.Strings." + pageLabel.key;
