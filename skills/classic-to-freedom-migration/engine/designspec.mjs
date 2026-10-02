@@ -3998,7 +3998,12 @@ function relatedPageRead(vk, v) {
     return { verdict: ["⚠ verify", `the RelatedPage read for \`${esc(vk.entity)}\` is not a \`get-related-page-addon\` response${error}${how}`, "unverified", "verifier"] };
   }
   const readPkg = typeof v.packageName === "string" ? v.packageName : "";
-  if (vk.package && readPkg && readPkg !== vk.package) {
+  // `get-related-page-addon` always echoes the package it read, so a read with no `packageName` cannot prove the
+  // add-on sits in the target package: it stays unverified instead of closing on the page match alone.
+  if (vk.package && !readPkg) {
+    return { verdict: ["⚠ verify", `the add-on read carries no \`packageName\`, so it cannot confirm the add-on is in \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
+  }
+  if (vk.package && readPkg !== vk.package) {
     return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
   }
   return { pages: generalRelatedPages(v.pages) };

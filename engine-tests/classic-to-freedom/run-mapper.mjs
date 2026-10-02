@@ -3991,8 +3991,10 @@ check("child page wiring: the plan states the same wiring under each built child
     /⚠ verify \| the RelatedPage add-on for `WAE` was not read/.test(wireMark({}))
     && /⚠ verify \| the RelatedPage read for `WAE` is not a `get-related-page-addon` response \(boom\)/.test(wireMark({ "relatedPage:WAE": { success: false, error: "boom" } }))
     && /⚠ verify/.test(wireMark({ "relatedPage:WAE": true }))
-    && /⚠ verify \| the add-on was read from `Custom`, the plan targets `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "Custom" }) })),
-    () => [wireMark({}), wireMark({ "relatedPage:WAE": true })]);
+    && /⚠ verify \| the add-on was read from `Custom`, the plan targets `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "Custom" }) }))
+    && /⚠ verify \| the add-on read carries no `packageName`, so it cannot confirm the add-on is in `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: undefined }) }))
+    && /⚠ verify \| the add-on read carries no `packageName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "" }) })),
+    () => [wireMark({}), wireMark({ "relatedPage:WAE": true }), wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: undefined }) })]);
   check("child page wiring: a child page reported NOT BUILT is ❌ MISSING, and one that reports no schemaName is ⚠ verify — the binding is matched against the built page, not assumed",
     /❌ MISSING \| the child page `child:WAE` is reported as NOT BUILT/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": false }))
     && /⚠ verify \| the built child page `child:WAE` reports no `schemaName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": { viewConfig: { items: [] } } })));

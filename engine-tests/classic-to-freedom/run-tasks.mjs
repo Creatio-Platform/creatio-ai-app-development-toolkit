@@ -8592,6 +8592,43 @@ check("identity digest guard: rendering the identity condition does NOT move any
       && wiring.dependsOn.includes(writerOf("page:child::C1Page")) && wiring.dependsOn.includes(writerOf("page:main")),
     () => ({ refused: set.refused, problems: set.problems, wiring: wiring && { w: wiring.writesTo, deps: wiring.dependsOn } }));
 }
+// The split's waits come from queue order (the last writer seen so far), so they must hold whichever of the two
+// pages the binding rows join is written last: `main`'s writers before `child:C1`'s, or after them.
+{
+  const wiringRows = GROUPS.filter((g) => g.pageKey === "main" && g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => r.label));
+  const base = FULL_SPLIT.items.map((it) => (it.pageKey === "main" ? { ...it, rows: it.rows.filter((r) => !wiringRows.includes(r)) } : it));
+  const isMainWriter = (it) => it.pageKey === "main" && it.writesTo === "main";
+  const isC1Writer = (it) => it.pageKey === "child:C1" && it.writesTo === "child:C1";
+  // Moves every `main` writer to just before (or just after) the `child:C1` writers; the wiring item goes after both.
+  const ordered = (mainFirst) => {
+    const mains = base.filter(isMainWriter);
+    const rest = base.filter((it) => !isMainWriter(it));
+    const at = mainFirst ? rest.findIndex(isC1Writer) : rest.findLastIndex(isC1Writer) + 1;
+    const items = [...rest.slice(0, at), ...mains, ...rest.slice(at)];
+    const last = Math.max(items.findLastIndex(isMainWriter), items.findLastIndex(isC1Writer));
+    items.splice(last + 1, 0, splitItem("main-wiring", "main", "main", wiringRows));
+    return buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  };
+  const waits = (set) => {
+    const wiring = set.tasks.find((t) => t.id === "main-wiring");
+    const writerOf = (key) => set.tasks.filter((t) => t.writesTo === key).sort((a, b) => b.order - a.order)[0];
+    const c1 = writerOf("page:child::C1Page");
+    const main = writerOf("page:main");
+    return { refused: set.refused, problems: set.problems, wiring: wiring && { order: wiring.order, deps: wiring.dependsOn },
+      c1: c1 && { id: c1.id, order: c1.order }, main: main && { id: main.id, order: main.order } };
+  };
+  const holds = (w) => !w.refused && !!w.wiring && !!w.c1 && !!w.main
+    && w.wiring.deps.includes(w.c1.id) && w.wiring.deps.includes(w.main.id)
+    && w.wiring.order > w.c1.order && w.wiring.order > w.main.order;
+  check("split: the binding-only item waits on BOTH last writers and ranks after both, whether `main` is written before `child:C1` or after it",
+    () => {
+      const before = waits(ordered(true));
+      const after = waits(ordered(false));
+      return wiringRows.length > 0 && holds(before) && holds(after)
+        && before.main.order < before.c1.order && after.main.order > after.c1.order;
+    },
+    () => ({ mainFirst: waits(ordered(true)), mainLast: waits(ordered(false)) }));
+}
 // A page whose only related list to a rebuilt child is an inline grid binds nothing, so it gets no wiring task: the
 // grid's no-page row stays with the page build.
 {
