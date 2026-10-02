@@ -13,8 +13,9 @@
 //     "schemas": [ { "pkg": "Case", "body": "<define(...) source>" } | { "pkg": "Case", "file": "..." }, … ],
 //     "seed":   [ { "pkg": "BaseModulePageV2/CrtUIPlatform7x", "body"|"file": … }, … ],  // parent template chain
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
+//     "resourceStrings": { "SomeTabCaption": { "en-US": "…", "fr-FR": "…" }, … }, // optional; the same strings in every Classic culture (get-classic-page-sources)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
-//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity", "resourceStrings" }, … }, // optional; detail body → entity + list columns; resourceStrings → the detail's own strings in every culture (its Caption titles the related list); title = the schema's internal caption, never a display title (#11ii)
 //        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
 //        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
 //        // + optional `"ownSection": "<Section>"` (the child entity owns ANOTHER SECTION: its Classic card stays
@@ -23,10 +24,13 @@
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
+//     "runDiagnostics": { skillVersion, git, clioVersion, gateVersion, environment, uri, stand }, // optional; the `diagnostics.mjs --json` object — `--plan` prints it as the plan's `### Run diagnostics` block (`unknown (not supplied)` when absent). Not part of the plan version.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
+//     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
+//     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry or this list
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
 // THE PLAN VERSION: `--plan` prints `**Plan version:** \`plan-<hash>\`` in its Overview — a deterministic hash over
@@ -48,22 +52,25 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView,
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView, defaultCultureText,
   SECTION_VIEW_METHODS } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  reconcilesExisting, EXISTING_SECTION_MODE,
+  freedomRowActionsToDrop } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
-import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
+import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
 
@@ -147,7 +154,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // signal-driven row — the DCM widget gate, and the on-save duplicate check — would silently vanish
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -210,6 +217,7 @@ function applyWarningDispositions(warnings, manifest) {
   const declared = plainObject(manifest?.warningDispositions);
   if (!Object.keys(declared).length) return (warnings || []).map((w) => ({ ...w }));
   return (warnings || []).map((w) => {
+    if (w.fromTemplate) return { ...w }; // closed by the engine already — an operator answer must not overwrite it
     const dec = plainObject(warningKeys(w).map((k) => declared[k]).find((v) => v != null));
     const valid = dec.resolved === true && WARNING_DISPOSITIONS.has(dec.disposition);
     if (!valid) return { ...w };
@@ -274,11 +282,9 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
 // So the answer is scoped, not moved: this gate blocks the LIST deliverable and leaves `gate.blocked` alone. The
 // form-page plan stays approvable, the list page says it is not, and neither statement is made on the other's
 // evidence. `blocked: false` with no section at all is the normal case for a mini/child fold.
-function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff }) {
+function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff, sectionLayerCount }) {
   const reasons = [];
-  if (sectionParseErrors.length) {
-    reasons.push(`the section schema body failed to parse (${sectionParseErrors.map((e) => e.pkg).join(", ")}) — every element the section declares in its view \`diff\` is unreadable, so the list page below is built from the method-body signals alone. Fix the body (or re-collect the section bundle) and re-run`);
-  }
+  if (sectionParseErrors.length) reasons.push(sectionParseReason(sectionParseErrors, sectionLayerCount));
   const sectionStruct = parseDiagnostics.filter((d) => d.role === "section" && isStructuralDiag(d));
   if (sectionStruct.length) {
     const fields = [...new Set(sectionStruct.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
@@ -295,6 +301,17 @@ function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff }) {
     reasons.push(`the section fold could not resolve parent(s): ${sectionEff.unresolvedParents.join(", ")} — supply the section's own template chain as \`section.seed\` (a second \`get-classic-page-sources\` rooted at the *Section schema), or its elements cannot be placed on a list region`);
   }
   return { blocked: reasons.length > 0, reasons };
+}
+
+// The list-gate reason for section layers that will not parse. Scoped to the failed layers: the other layers'
+// `diff` is still folded, so their elements are still in the plan.
+function sectionParseReason(sectionParseErrors, sectionLayerCount) {
+  const pkgs = sectionParseErrors.map((e) => e.pkg).join(", ");
+  const fix = "Fix the body (or re-collect the section bundle) and re-run";
+  if (sectionParseErrors.length >= sectionLayerCount) {
+    return `the section schema body failed to parse in every layer (${pkgs}) — no element the section declares in its view \`diff\` is readable, so the list page below is built from the method-body signals alone. ${fix}`;
+  }
+  return `${sectionParseErrors.length} of ${sectionLayerCount} section layer(s) failed to parse (${pkgs}) — elements THOSE layers declare in their view \`diff\` may be missing below; elements from the other layers are still read. ${fix}`;
 }
 
 // The structure issue a single TYPED page contributes (folded / bindOnly / cycle / empty-layout / unread-rules /
@@ -386,7 +403,8 @@ function miniPageIssue(miniPage, miniPageVerified) {
 // hard BLOCK. TOP-LEVEL only (visited.size===0); nested folds have their own 0-field handling. Reconcile exempt.
 // Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
 function hollowFormIssue(changeSet, typedPages, manifest, visited) {
-  if (typedPages.length || visited.size !== 0 || manifest.planMeta?.freedomExists) return null;
+  // Only a reconcile is exempt: it extends a page that already has a body. A parallel section is a Rebuild.
+  if (typedPages.length || visited.size !== 0 || reconcilesExisting(manifest.planMeta)) return null;
   const mainFields = countFormFields(changeSet.viewConfigDiff);
   if (mainFields !== 0) return null;
   return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
@@ -521,9 +539,11 @@ function sectionCodeForList(sectionChangeSet) {
 }
 function sectionChangeSetOf(manifest, opts, sectionEff) {
   if (opts.scopeSchema || !sectionEff) return null;
+  const strings = pageStringsOf(manifest);
   return mapToFreedom(sectionEff, {
     entityColumns: manifest.entityColumns || {},
-    resources: manifest.resources || {},
+    resources: strings.resources,
+    resourceStrings: strings.resourceStrings,
   });
 }
 // ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
@@ -788,6 +808,66 @@ function unmatchedIndexKeys(index, stubIndex) {
 // through the repair round. They are separate functions on purpose — the workflow script is evaluated as a
 // function body and may not `import`, which is pinned by the `workflow sandbox: … imports nothing` test — so a
 // change to the membership or the strength of either leg has to be applied to both by hand.
+// Every `manifest.deliverableStatus` entry that cannot stand, as `{ key, kind, problem, valid }` (`kind` from STATUS_ISSUE): an address that names
+// no deliverable (with the page's valid ids), a status other than wont-do / build, a wont-do without a D<N> that
+// decisions.md holds, an entry on a deliverable the engine already closed, and a wont-do whose subject (behaviour
+// card, confirm item, fold chain) other deliverables share without a status of their own. Nothing is closed on a
+// related deliverable's behalf.
+function deliverableStatusIssues(groups, opts) {
+  const entries = Object.entries(plainObject(opts.deliverableStatus));
+  if (!entries.length) return [];
+  const rows = (groups || []).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, groupTitle: g.baseTitle })));
+  const byKey = new Map(rows.filter((r) => r.deliverableId).map((r) => [statusKey(r.pageKey, r.deliverableId), r]));
+  const own = entries.flatMap(([key, entry]) => entryProblems(key, entry, byKey, rows, opts));
+  return own.length ? own : relatedStatusIssues(rows, opts.deliverableStatus);
+}
+// Every `manifest.decisionsWithoutDeliverable` item that cannot stand, as `{ key, problem }`: a value that is not
+// a list, an item not shaped D<N>, one decisions.md does not hold, and one a `wont-do` status also cites.
+function noDeliverableIssues(list, opts) {
+  if (list === undefined) return [];
+  if (!Array.isArray(list)) return [{ key: "decisionsWithoutDeliverable", problem: "must be a list of D<N>" }];
+  const wontDo = new Set(Object.values(plainObject(opts.deliverableStatus)).filter((e) => e?.status === STATUS_WONT_DO).map((e) => e.decision));
+  return list.flatMap((d) => noDeliverableProblems(d, wontDo, opts));
+}
+function noDeliverableProblems(d, wontDo, { decisions, decisionsOptional }) {
+  if (typeof d !== "string" || !/^D\d+$/.test(d)) return [{ key: String(d), problem: "is not a D<N>" }];
+  if (wontDo.has(d)) return [{ key: d, problem: `is also cited by a \`${STATUS_WONT_DO}\` status in \`manifest.deliverableStatus\` — a decision that drops a deliverable is not listed here` }];
+  if (!decisions && decisionsOptional) return [];
+  if (!decisions) return [{ key: d, problem: "cannot be resolved: no decisions.md was read — plan with `--out` into the migration folder that holds decisions.md" }];
+  if (!decisions.has(d)) return [{ key: d, problem: "does not resolve to an entry in decisions.md" }];
+  return [];
+}
+function validIdsOf(page, rows) {
+  const ids = rows.filter((r) => r.pageKey === page && r.deliverableId).map((r) => statusKey(page, r.deliverableId));
+  return ids.length ? ids : [...new Set(rows.map((r) => r.pageKey))].map((k) => `${k}#…`);
+}
+function entryProblems(key, entry, byKey, rows, opts) {
+  const e = entry && typeof entry === "object" ? entry : {};
+  const row = byKey.get(key);
+  const page = key.includes("#") ? key.slice(0, key.indexOf("#")) : "";
+  if (!row) return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no deliverable of this plan", valid: validIdsOf(page, rows) }];
+  if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, kind: STATUS_ISSUE.status, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
+  const closedBy = row.na || engineStatusReason(row, opts);
+  if (closedBy) return [{ key, kind: STATUS_ISSUE.engineClosed, problem: `is already closed by the engine: ${closedBy}`, valid: [] }];
+  if (e.status === STATUS_BUILD) return [];
+  return decisionProblems(key, e.decision, opts);
+}
+function decisionProblems(key, decision, { decisions, decisionsOptional }) {
+  if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${STATUS_WONT_DO}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
+  if (!decisions && decisionsOptional) return [];
+  if (!decisions) return [{ key, kind: STATUS_ISSUE.decision, problem: `no decisions.md was read, so \`${decision}\` cannot be resolved — plan with \`--out\` into the migration folder that holds decisions.md`, valid: [] }];
+  if (!decisions.has(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${decision}\` does not resolve to an entry in decisions.md — add it there first`, valid: [] }];
+  return [];
+}
+function relatedStatusIssues(rows, map) {
+  const subjects = rowSubjects(rows);
+  const hasStatus = (r) => !!r.na || Object.hasOwn(map, statusKey(r.pageKey, r.deliverableId));
+  return rows.flatMap((r, i) => {
+    if (!subjects[i] || map[statusKey(r.pageKey, r.deliverableId)]?.status !== STATUS_WONT_DO) return [];
+    const open = rows.filter((o, j) => j !== i && subjects[j] === subjects[i] && o.deliverableId && !hasStatus(o));
+    return open.length ? [{ key: statusKey(r.pageKey, r.deliverableId), kind: STATUS_ISSUE.related, problem: `shares its subject \`${subjects[i]}\` with deliverables that have no status — give each its own (\`${STATUS_WONT_DO}\` with a D<N>, or \`${STATUS_BUILD}\`)`, valid: open.map((o) => statusKey(o.pageKey, o.deliverableId)) }] : [];
+  });
+}
 function wiringOnlyKeys(index, stubIndex) {
   const map = plainObject(index);
   if (!Object.keys(map).length) return [];
@@ -870,21 +950,24 @@ function signalUnresolved(k, signals) {
 //     "application":               { "resolved": true, "code": "UsrTasksApp" | null },
 //     "primaryPackage":            { "resolved": true, "name": "UsrTasks" | null, "editable": true },
 //     "targetPackageInApplication":{ "resolved": true, "value": true },
-//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" } }
+//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" | "existing-section",
+//                                    "listPage": "Contracts_ListPage", "formPage": "Contracts_FormPage" } } // the two page names: existing-section only
 const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage", "targetPackageInApplication", "sectionHost"];
 // `existing-app` — register into the app that already owns the entity (the only mode that needs the primary ==
 // target match). `new-app` — the build creates its own Freedom app first (the answer when the owning app is a
 // vendor/install wrapper). `pages-only-no-menu` — pages ship, the section is deliberately NOT registered; a
 // legitimate outcome, but an APPROVED one, never a silent fallback: the whole point of this gate is that the
-// missing menu entry is a plan decision, not a surprise found two hours into a build.
-const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu"];
+// missing menu entry is a plan decision, not a surprise found two hours into a build. `existing-section` — a
+// Freedom section for this object is already in the menu and the user chose to extend it: nothing is registered,
+// the Classic customizations land as extensions of that section's own list and form pages in the target package.
+const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXISTING_SECTION_MODE];
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
 export function placementIssues(manifest) {
-  const p = manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
-  const has = (k) => p[k] && typeof p[k] === "object" && p[k].resolved === true;
-  const unresolved = PLACEMENT_KEYS.filter((k) => !has(k));
+  const p = placementOf(manifest);
+  const has = (k) => isResolvedFact(p, k);
+  const unresolved = requiredPlacementKeys(p).filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -902,6 +985,46 @@ export function placementIssues(manifest) {
   }
   // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs.
   if (mode === "existing-app") issues.push(...existingAppIssues(p, target));
+  if (mode === EXISTING_SECTION_MODE) issues.push(...existingSectionIssues(p.sectionHost, manifest.planMeta));
+  issues.push(...parallelSectionIssues(manifest.planMeta, mode));
+  return issues;
+}
+const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
+// `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
+// target package and the host decision are required. The ONE source for both the gate above and the keys the
+// plan's placement banner asks for — a banner listing keys the gate does not need sends the agent after answers
+// nobody reads.
+const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
+function requiredPlacementKeys(p) {
+  return isResolvedFact(p, "sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
+}
+// The `parallelSection` contract. A parallel section is a NEW app and section built next to an EXISTING Freedom
+// section, so it needs both the 'new-app' host and `freedomExists`. Without `freedomExists` the flag is dropped by
+// `isParallelSection` and the plan quietly renders as a plain Rebuild with no parallel-section banner — so it is a
+// blocker, not a no-op.
+function parallelSectionIssues(planMeta, mode) {
+  if (planMeta?.parallelSection !== true) return [];
+  const issues = [];
+  if (mode !== "new-app") {
+    issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
+  }
+  if (planMeta.freedomExists !== true) {
+    issues.push("planMeta.parallelSection is true but planMeta.freedomExists is not true — a parallel section is built next to an EXISTING Freedom section; without one the plan would be a plain Rebuild. Set planMeta.freedomExists: true, or drop parallelSection when no Freedom section exists.");
+  }
+  return issues;
+}
+// The `existing-section` contract. The plan targets two pages that already exist, so it must name them, and the
+// main-scope Call must be a reconcile: an extension of an existing page is never a rebuild.
+function existingSectionIssues(host, planMeta) {
+  const issues = [];
+  const blank = (v) => typeof v !== "string" || v.trim() === "";
+  if (blank(host.listPage) || blank(host.formPage)) {
+    issues.push("placement.sectionHost.mode is 'existing-section' but sectionHost.listPage / sectionHost.formPage are not both named — record the existing section's list and form page schema names (from list-pages / list-entity-client-schemas), the pages this plan extends.");
+  }
+  if (planMeta?.freedomExists !== true) {
+    issues.push("placement.sectionHost.mode is 'existing-section' but planMeta.freedomExists is not true — extending an existing section is a reconcile of its pages; set planMeta.freedomExists: true.");
+  }
   return issues;
 }
 // The `existing-app` half of `placementIssues`, extracted so that function stays under Sonar's
@@ -909,7 +1032,7 @@ export function placementIssues(manifest) {
 // a dead end — it is the fork.
 function existingAppIssues(p, target) {
   const issues = [];
-  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
+  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), to 'pages-only-no-menu' (ship the pages without a menu entry), or — when a Freedom section for this object is already in the menu — to 'existing-section' (extend that section's pages, register nothing); or fix the app's package composition on-stand FIRST and re-record these facts.";
   if (!p.application.code) {
     issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
   }
@@ -941,17 +1064,27 @@ export function checklistOpts(manifest, opts = {}) {
   // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
   const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   return {
+    // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
+    deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
+    decisions: opts.decisions instanceof Map ? opts.decisions : null,
+    decisionsOptional: opts.decisionsOptional === true,
+    // Root-only, like the plan's `### Won't do` list it is printed in.
+    decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
-    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
+    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? formTemplateMissing(pm, manifest) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
+    // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
+    placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
     sectionHostMode: manifest.placement?.sectionHost?.mode ?? null,
+    // The existing section's pages an `existing-section` plan extends; null in every other mode.
+    existingSection: existingSectionPages(manifest.placement?.sectionHost),
     // The app the section is registered INTO, published so the build side never has to guess one. In the run this
     // exists for, the agent doing the registration had no application code in front of it and invented one off the
     // stand — against an app that could not host a section at all.
@@ -959,6 +1092,15 @@ export function checklistOpts(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
   };
+}
+// An `existing-section` form page keeps its own template, so there is no template to choose.
+function formTemplateMissing(pm, manifest) {
+  const blank = (v) => v == null || String(v).trim() === "";
+  return manifest.placement?.sectionHost?.mode !== EXISTING_SECTION_MODE && blank(pm.formTemplate) && blank(manifest.template);
+}
+function existingSectionPages(host) {
+  if (host?.mode !== EXISTING_SECTION_MODE) return null;
+  return { listPage: host.listPage ?? null, formPage: host.formPage ?? null };
 }
 // A SUB-page's checklist opts. Deliberately NOT the parent's threaded through: with the parent's planMeta the
 // child's `Form template` row expects the PARENT's template (a mismatch nobody can ever fix), and a truthy
@@ -1018,15 +1160,15 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
 // and one whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at
 // all and keep only the parent's identity row — a gated row there would be a permanent false red, and the last two
 // are PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
-function publishUnfoldedChild(c, pageKey) {
+function publishUnfoldedChild(c, pageKey, foldCtx) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-    publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c));
+    publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c, foldCtx.checklistOpts));
     return;
   }
   if (!childPageIssue(c)) return;
   // Nothing was folded, so the only physical identity available is the base key itself — two unresolved children
   // that reach the SAME base key stay one entry, exactly as before. The disambiguator is the detail it opens from.
-  publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
+  publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c, foldCtx.checklistOpts));
 }
 // The needsDecision kinds that represent REAL ported logic (as opposed to widget / registry / cosmetic / placement
 // advisories) — tells a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
@@ -1034,7 +1176,7 @@ const LOGIC_BEARING_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-depe
 function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
   // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
-  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey, foldCtx);
   // THE SECTION BOUNDARY, and the reason this ticket exists: the child's page is NOT FOLDED. No recursive
   // sub-migration, so no sub-run gate, so no `c.childBlocked` — and `migrate.mjs`'s `filter(c => c.childBlocked)`
   // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card would otherwise be mandatory, and
@@ -1044,14 +1186,15 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Routed through `publishUnfoldedChild`, which publishes NOTHING here — `childPageIssue` resolves the boundary, so
   // it falls out with no page key, exactly like a verified `editPage: false`. No units, no checklist gate, no verify
   // row: nothing about this child can be reported MISSING, because nothing about it is a deliverable.
-  if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey);
+  if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey, foldCtx);
   const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
-  if (!key) return publishUnfoldedChild(c, pageKey);
+  if (!key) return publishUnfoldedChild(c, pageKey, foldCtx);
   const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
   if (f.status === "cycle") { c.cyclic = true; return; }   // mapped higher on this branch
   if (f.status === "error") { c.specError = f.error; return; } // malformed child manifest — keep the listed row
   const res = f.res;
   c.spec = res.designSpec;
+  c.changeSet = pageTextsOf(res.changeSet);
   c.mappedEntity = res.entity;
   c.resolvedFrom = key;
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
@@ -1119,6 +1262,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
     t.ruleCount = (res.changeSet?.pageBusinessRules || []).length + (res.changeSet?.entityBusinessRules || []).length;
     t.ruleSources = res.changeSet?.ruleSourceCount || 0;
+    t.changeSet = pageTextsOf(res.changeSet);
     // A typed page is a FIRST-CLASS scope of the surface (step 5.1: "every record page including typed variants"): it
     // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
     t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
@@ -1151,7 +1295,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
   else if (f.status === "error") miniPage.specError = f.error;
   else {
     const res = f.res;
-    miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
+    miniPage.spec = res.designSpec; miniPage.changeSet = pageTextsOf(res.changeSet); miniPage.blocked = !!res.gate?.blocked;
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
@@ -1191,8 +1335,14 @@ function describeAddMode(am) {
 // disables add-new (the stage-history shape) the override is not the thing to build. ONE predicate for the
 // description and the guidance — split across two conditions they drift, and the guidance then cites a mode the
 // description suppressed while telling the reader to build an add flow the same row forbids.
-const openCardIsTheWholeStory = (am) => !!am.openCardOverridden
-  && !(am.addDisabled || am.customAction || am.lookup || am.service || am.editableGrid || am.fixedFilters);
+const openCardIsTheWholeStory = (am) => !!am.openCardOverridden && !anyAddSignal(am, "openCardOverridden");
+
+// The add-mechanism signals of a detail's add mode, in ONE place: every predicate over "which add modes are set"
+// reads this list, so a new signal cannot be counted by one of them and missed by another.
+const ADD_SIGNALS = ["lookup", "service", "editableGrid", "openCardOverridden", "addDisabled", "customAction", "fixedFilters"];
+const anyAddSignal = (am, ...except) => ADD_SIGNALS.some((k) => !except.includes(k) && am[k]);
+const hasAddMechanism = (am) => anyAddSignal(am);
+const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length);
 
 // What to BUILD for this add mode, as opposed to what it IS (`describeAddMode`). Conditional: one unconditional
 // instruction contradicts the modes it does not fit — "build a CUSTOM add request-handler" on a detail whose own
@@ -1227,17 +1377,67 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
-    const parts = describeAddMode(am);
-    const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    // an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
-    // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
-    // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
-    // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
-    const editableGridOnly = !!am.editableGrid && !(am.lookup || am.service || am.customAction || am.addDisabled || am.fixedFilters || openCardIsTheWholeStory(am));
-    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label, editableGridOnly,
-      reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` });
+    // Two independent signals, two plan lines: the add flow, and what the rows of existing records may do. A detail
+    // that only removes row actions has no add mechanism, so it gets no add-mechanism row (that row would call a
+    // plain add flow "NOT a plain related list" with nothing after it).
+    if (hasAddMechanism(am)) changeSet.needsDecision.push(addMechanismDecision(am, label));
+    if (hasRowActionSignal(am)) changeSet.needsDecision.push(rowActionsDecision(am, label));
   }
+}
+
+function addMechanismDecision(am, label) {
+  const parts = describeAddMode(am);
+  const guidance = addModeGuidance(am);
+  // an INLINE-EDITABLE grid is ALL this detail's add mechanism (no lookup/service/custom-action/add-disabled/
+  // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
+  // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
+  // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays. Removed
+  // row actions do not clear the flag: they raise their own `detail-row-actions` row, which the flag never drops.
+  // An open-card override is a fallback that `openCardIsTheWholeStory` never reports beside an editable grid, so it
+  // does not count against the flag either.
+  const editableGridOnly = !!am.editableGrid && !anyAddSignal(am, "editableGrid", "openCardOverridden");
+  return { kind: "detail-add-mechanism", item: label, editableGridOnly,
+    reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` };
+}
+
+// What the Freedom list rows must LOSE. A Classic Edit row action has no Freedom counterpart — a Freedom related-list
+// row opens its record on click — so a removed Edit is never an instruction to stop records opening; the build keeps
+// open-on-click either way. HOW the rows lose an action (the list's row-toolbar property) is builder mechanics,
+// resolved on the target version, not plan content.
+// An override the scan cannot read (a reference to another function, an over-long body) still gets the row: its
+// effect on the rows is unknown, so the builder reads that Classic member instead of the plan guessing either way.
+function rowActionsDecision(am, label) {
+  const removed = am.rowActionsRemoved || [];
+  const unreadable = am.rowActionsUnreadable || [];
+  const parts = [...removedActionsSentences(removed), ...unreadableOverrideSentences(unreadable, removed.length > 0)];
+  return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
+    reason: `Detail '${label}' ${parts.join(" ")}` };
+}
+
+const plural = (n) => (n > 1 ? "s" : "");
+
+// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing was removed.
+function removedActionsSentences(removed) {
+  if (!removed.length) return [];
+  const drop = freedomRowActionsToDrop(removed);
+  const build = drop.length
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
+    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
+  const edit = removed.includes("Edit")
+    ? ["Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."]
+    : [];
+  return [`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`, build, ...edit];
+}
+
+// The manual-read request for overrides the scan could not read; [] when every override was read.
+function unreadableOverrideSentences(unreadable, afterRemoved) {
+  if (!unreadable.length) return [];
+  const lead = afterRemoved ? "It also overrides" : "overrides";
+  const members = unreadable.map((m) => "`" + m + "`").join(", ");
+  const subject = unreadable.length > 1 ? "they remove" : "it removes";
+  return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
+    "Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click)."];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -1745,6 +1945,175 @@ function resolveDetailBody(name, e, bodyOf) {
   return { body, scanText, p };
 }
 
+// REMOVED ROW ACTIONS — the Classic grid detail builds its row menu in `addRecordOperationsMenuItems` from three item
+// getters, one per standard action. A layer that overrides that method WITHOUT `callParent` keeps only the getters
+// it re-adds; a getter overridden to return nothing drops its own action. Both are about what can be done to EXISTING
+// rows, which is why they are a signal of their own and not part of add-new DISABLED.
+// Linear by construction: one `\b<name>\s*:` global match per member name, a brace walk capped at
+// MAX_MEMBER_SCAN per override read, and at most MAX_OVERRIDE_LAYERS overrides followed through `callParent` — no
+// regex runs over a method body except bounded ones, so the ReDoS goldens on detectAddMode hold here too.
+const ROW_ACTION_GETTERS = [["Copy", "getCopyRecordMenuItem"], ["Edit", "getEditRecordMenuItem"], ["Delete", "getDeleteRecordMenuItem"]];
+const MAX_MEMBER_SCAN = 20000;
+const MAX_OVERRIDE_LAYERS = 8;
+
+// Where each member definition's value starts, in text order: `<name>: …` (value after the colon) or the ES6 method
+// shorthand `<name>(…) {` (value AT the parameter list). The scan text is the layer union base→top, so the LAST
+// definition is the most-derived override. A match that starts inside a comment or a string literal (a commented-out
+// override) is not a definition; a quoted key starts AT its opening quote, so it still counts. A name right after `.`
+// or an identifier character is a call or a longer name (`this.getCopyRecordMenuItem()`), never a definition.
+function memberValueStarts(body, name, spans = literalSpans(body)) {
+  const re = new RegExp(String.raw`(?<![.\w$])(["']?)\b${name}\1\s*(?::\s*|(?=\([^()]{0,200}\)\s{0,20}\{))`, "g");
+  return [...body.matchAll(re)].filter((m) => !insideSpan(spans, m.index)).map((m) => m.index + m[0].length);
+}
+
+// Every comment and quoted literal in the text as [open, close] offsets, in text order — one linear walk.
+function literalSpans(text) {
+  const spans = [];
+  let i = 0;
+  while (i < text.length) {
+    const j = skipLiteral(text, i, text.length);
+    if (j !== i) spans.push([i, j]);
+    i = j + 1;
+  }
+  return spans;
+}
+
+// The text with every comment and quoted literal replaced by one space, so a getter or `callParent` named only in a
+// comment or a string is not read as code.
+function codeOnly(text) {
+  let out = "", from = 0;
+  for (const [open, close] of literalSpans(text)) { out += text.slice(from, open) + " "; from = close + 1; }
+  return out + text.slice(from);
+}
+
+// True when `idx` lies past the opener of one of the sorted, disjoint spans (binary search).
+function insideSpan(spans, idx) {
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [open, close] = spans[mid];
+    if (idx <= open) hi = mid - 1;
+    else if (idx > close) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+// Index of the character that closes the quoted literal or comment opening at `i`, else `i` (not an opener).
+// Keeps a `}` inside a string or comment from ending the method body early. A `'` / `"` string cannot span lines, so
+// an unterminated one ends at the line break: a lone quote the walk misreads as an opener (inside a regex literal such
+// as `/"/g`) then swallows one line, not every definition after it.
+function skipLiteral(text, i, end) {
+  const c = text[i];
+  if (c === '"' || c === "'" || c === "`") return stringEnd(text, i, end);
+  if (c !== "/") return i;
+  if (text[i + 1] === "/") { const e = text.indexOf("\n", i); return e < 0 || e > end ? end : e; }
+  if (text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); return e < 0 || e > end ? end : e + 1; }
+  return i;
+}
+
+// Index of the quote closing the string that opens at `i` (a `\` escapes the next character); a `'` / `"` string also
+// ends at a line break. `end` when the string does not close before it.
+function stringEnd(text, i, end) {
+  const quote = text[i];
+  const stopAtNewline = quote !== "`";
+  let j = i + 1;
+  while (j < end) {
+    const ch = text[j];
+    if (ch === quote || (stopAtNewline && ch === "\n")) return j;
+    j += ch === "\\" ? 2 : 1;
+  }
+  return end;
+}
+
+// The body between the `{` at `open` and its matching `}`, or null when it does not close within the scan cap.
+function braceBody(text, open) {
+  const end = Math.min(text.length, open + MAX_MEMBER_SCAN);
+  let depth = 0, i = open;
+  while (i < end) {
+    i = skipLiteral(text, i, end);
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return text.slice(open + 1, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+// A member's value as `{ empty, code }`: `emptyFn` is an empty body; a `function (…) { … }` or a shorthand `(…) { … }`
+// yields its body with comments and literals blanked (`codeOnly`). Anything else (a reference to another function, an
+// unterminated or over-cap body) is null — UNREADABLE: the callers report it as such rather than read it as either
+// "removes all" or "removes nothing".
+function memberValue(body, start) {
+  const head = body.slice(start, start + 400);
+  if (/^(?:this\.)?(?:Terrasoft\.)?emptyFn\b/.test(head)) return { empty: true, code: "" };
+  const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(head);
+  if (!fm) return null;
+  const text = braceBody(body, start + fm[0].length - 1);
+  return text == null ? null : { empty: false, code: codeOnly(text) };
+}
+
+const ALL_ROW_ACTIONS = ROW_ACTION_GETTERS.map(([a]) => a);
+// A getter re-added by name, as a whole identifier: `getDeleteRecordMenuItemWithConfirm` is a different item.
+const GETTER_REF = new Map(ROW_ACTION_GETTERS.map(([, g]) => [g, new RegExp(String.raw`\b${g}\b`)]));
+// An override that keeps the stock menu (`callParent`) and then edits it — removes, clears or filters its items —
+// changes which actions survive in a way the scan does not follow.
+const MENU_EDIT = /\.(?:remove\w{0,20}|clear|splice|filter)\s{0,20}\(|\bgetItems\s{0,20}\(/;
+
+// What the most-derived `addRecordOperationsMenuItems` override leaves out, as `{ removed, unreadable }`. An override
+// calling `callParent` delegates to the layer below it (so the next definition up the text decides); the stock menu
+// below the lowest override removes nothing. An override in that chain the scan cannot read, or one that edits the
+// inherited menu after `callParent`, makes the answer unknown.
+function menuRemovedActions(body, spans) {
+  const starts = memberValueStarts(body, "addRecordOperationsMenuItems", spans);
+  const readded = new Set();
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k]);
+    if (!v) return { removed: [], unreadable: true };
+    for (const [action, getter] of ROW_ACTION_GETTERS) if (GETTER_REF.get(getter).test(v.code)) readded.add(action);
+    if (!/\bcallParent\b/.test(v.code)) return { removed: ALL_ROW_ACTIONS.filter((a) => !readded.has(a)), unreadable: false };
+    if (MENU_EDIT.test(v.code)) return { removed: [], unreadable: true };
+  }
+  return { removed: [], unreadable: false };
+}
+
+// Whether the most-derived override of a menu-item getter returns nothing: `emptyFn`, an empty body, or a body that
+// is only `return;` / `return null;` / `return undefined;` (comments aside). An override calling `callParent` returns
+// what the layer below returns, so the next definition up the text decides. `false` with no override (or a stock
+// getter at the bottom of the chain); `null` when an override in the chain cannot be read.
+function getterReturnsNothing(body, getter, spans) {
+  const starts = memberValueStarts(body, getter, spans);
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k]);
+    if (!v) return null;
+    const code = v.code.replace(/\s/g, "");
+    if (v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(code)) return true;
+    if (!/\bcallParent\b/.test(code)) return false;
+  }
+  return false;
+}
+
+// The row-action overrides of a detail body: `removed` — the standard row actions it removes, in menu order (Copy,
+// Edit, Delete); `unreadable` — the overridden members whose value the scan cannot read, so what they remove is unknown.
+export function scanRowActions(body) {
+  const spans = literalSpans(body);
+  const menu = menuRemovedActions(body, spans);
+  const removed = new Set(menu.removed);
+  const unreadable = menu.unreadable ? ["addRecordOperationsMenuItems"] : [];
+  for (const [action, getter] of ROW_ACTION_GETTERS) {
+    const nothing = getterReturnsNothing(body, getter, spans);
+    if (nothing) removed.add(action);
+    else if (nothing === null) unreadable.push(getter);
+  }
+  return { removed: ALL_ROW_ACTIONS.filter((a) => removed.has(a)), unreadable };
+}
+// Every function of the row-action scan, for the structural ReDoS golden (a `toString` of detectAddMode does not
+// include the helpers it calls).
+export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, stringEnd, braceBody,
+  memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions];
+
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
 // rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
@@ -1759,19 +2128,20 @@ function resolveDetailBody(name, e, bodyOf) {
 export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
-  const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b/.test(body);
+  const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b|\bopenLookupWithMultiSelect\b|\bopenProductLookupToLink\b/.test(body);
   const editableGrid = /\bConfigurationGrid\b|ConfigurationGridUtilities|getEditableGridRowViewModelClassName|getCellControlsConfig/.test(body);
   const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
   const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
   const openCardOverridden = /openCardByMode\s*:/.test(body);
   // Add-new DISABLED — a read-only / attach-only related list. Classic idioms: the add button forced invisible
   // (`getAddRecordButtonVisible … return false` / `addRecordButtonVisible: false` — the system-maintained
-  // stage-history pattern, declared in the BASE replacing layer), the add-record menu emptied
-  // (`addRecordOperationsMenuItems: Terrasoft.emptyFn`), or the add button removed in the diff (`remove … AddTypedRecordButton`).
+  // stage-history pattern, declared in the BASE replacing layer), or the add button removed in the diff
+  // (`remove … AddTypedRecordButton`). An emptied `addRecordOperationsMenuItems` is NOT one of them: that menu holds
+  // the ROW actions (Copy / Edit / Delete on existing records), read separately as `rowActionsRemoved`.
   const addDisabled = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body)
     || /["']?addRecordButtonVisible["']?\s*:\s*false/.test(body)
-    || /addRecordOperationsMenuItems\s*:\s*(?:Terrasoft\.)?emptyFn/.test(body)
     || /["']operation["']\s*:\s*["']remove["'][\s\S]{0,120}?AddTypedRecordButton/.test(body);
+  const rowScan = scanRowActions(body);
   // A CUSTOM grid action (e.g. "attach existing") added via addGridOperationsMenuItems → getButtonMenuItem. Capture
   // the Click handler name — that's the custom add/attach flow the Freedom rebuild must reproduce.
   const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
@@ -1783,9 +2153,10 @@ export function detectAddMode(body) {
     ...[...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
     ...[...body.matchAll(/createColumnInFilterWithParameters\s*\(\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
   ])] : [];
-  if (!(lookup || svcM || editableGrid || openCardOverridden || addDisabled || customAction || fixedFilters)) return null;
-  return { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
-    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols };
+  const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
+    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
+    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };
+  return hasAddMechanism(am) || hasRowActionSignal(am) ? am : null;
 }
 
 // What the detail's own BODY yields. Scan the UNION of layers: a declaration may live in a base replacing layer,
@@ -1822,7 +2193,11 @@ function detailSchemaRecord(e, scanText, p) {
   return {
     entity: eObj.entity || body.entity,
     columns: body.columns,
-    title: eObj.title || null, // human detail title (from its resources)
+    title: eObj.title || null, // the detail schema's internal caption — never a related-list title
+    // the detail's own strings in every culture (`{ Key: { culture: text } }`), null when the manifest carries none
+    strings: cultureMapOf(eObj.resourceStrings),
+    // the strings the detail body shows (`Resources.Strings.<Key>`), across all layers
+    textKeys: referencedStringKeys(scanText),
     editPage: ("editPage" in eObj) ? eObj.editPage : body.editPage,
     editable: ("editable" in eObj) ? eObj.editable : body.editable, // tags view/attach-only; never a gate answer
     // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
@@ -1841,6 +2216,41 @@ function detailSchemaRecord(e, scanText, p) {
     error: p.error || null,
     astDiagnostics: p.astDiagnostics || [],
   };
+}
+
+// A `{ key: { culture: text } }` map (get-page's `bundle.resources.strings` shape), or null when `v` is not an object.
+// Non-string and empty texts are dropped, and a key left with no culture is dropped.
+function cultureMapOf(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out = {};
+  for (const [key, byCulture] of Object.entries(v)) {
+    if (!byCulture || typeof byCulture !== "object" || Array.isArray(byCulture)) continue;
+    const cultures = Object.fromEntries(Object.entries(byCulture).filter(([c, t]) => c && typeof t === "string" && t !== ""));
+    if (Object.keys(cultures).length) out[key] = cultures;
+  }
+  return out;
+}
+// The page strings the mapper reads: `resources` (key → en-US text) and `resourceStrings` (key → every culture, or
+// null). A key `resourceStrings` carries takes its en-US text from them, so the text and its cultures share one source.
+export function pageStringsOf(manifest) {
+  const resourceStrings = cultureMapOf(manifest?.resourceStrings);
+  const derived = Object.fromEntries(Object.entries(resourceStrings || {}).map(([k, c]) => [k, defaultCultureText(c)]));
+  return { resources: { ...plainObject(manifest?.resources), ...derived }, resourceStrings };
+}
+// A sub-page's texts in the root result: the ChangeSet's `resources`, `resourceCultures` and `resourceSources`.
+function pageTextsOf(cs) {
+  return { resources: cs?.resources || {}, resourceCultures: cs?.resourceCultures || {}, resourceSources: cs?.resourceSources || {} };
+}
+// Translations are not migrated when the manifest has page strings in en-US only: `resources` without
+// `resourceStrings` is what a clio that predates `resourceStrings` writes.
+export const translationsMissing = (manifest) =>
+  !!manifest && manifest.resources != null && manifest.resourceStrings == null;
+const STRING_REF_RE = /Resources\.Strings\.([A-Za-z_$][\w$]*)/g;
+// Distinct `Resources.Strings.<Key>` references in a body, in first-seen order.
+function referencedStringKeys(text) {
+  const keys = new Set();
+  for (const m of String(text || "").matchAll(STRING_REF_RE)) keys.add(m[1]);
+  return [...keys];
 }
 
 // Parse each supplied detail-schema body (#11(ii)/B2) → { entity, columns, title, editPage, editable, addMode … }
@@ -2190,9 +2600,13 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // signals OUTSIDE it: the unit set could change materially (a detail marked `editPage:false` drops a whole child
 // page) while the approved version stayed identical, so the approval gate authorised a plan nobody approved.
 // Everything the manifest carries is covered here rather than an allowlist — the allowlist is what went stale.
+// The one key left out is `runDiagnostics`: it records the machine the plan was produced on (skill build, clio,
+// stand), not what the plan says, so a plugin or clio update between plan and build does not ask for re-approval.
+const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics"]);
 function computePlanVersion(manifest, readBody) {
   const h = createHash("sha256");
-  feedPlanVersion(h, manifest, null, readBody, { nodes: 0 }, 0);
+  const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
+  feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
@@ -2359,7 +2773,7 @@ function resolveRunEntity(manifest, eff) {
 // isChildPage/isMiniPage but NOT formOnly). A record page (none of these) renders with the plain specOpts. Module-
 // level so its branching does not count against runMigration's cognitive complexity (Sonar S3776 — review Rita).
 function subPageSpecOpts(specOpts, opts) {
-  if (!(opts.isChildPage || opts.isMiniPage || opts.formOnly)) return specOpts;
+  if (!isNestedFold(opts)) return specOpts;
   return { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) };
 }
 // Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
@@ -2390,7 +2804,13 @@ export function runMigration(manifest, opts = {}) {
   const seedTemplate = parse(manifest.seed);
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
-  const sectionData = sectionInput(manifest.section, manifest);
+  // A NESTED fold (mini page, per-type typed form, child edit page — the three `foldSubPage` call
+  // sites, flagged `isMiniPage` / `formOnly` / `isChildPage`) is NEVER a section scope: the ROOT run owns the section
+  // and its list page. `get-classic-page-sources --schema-name <X>` still writes the module's `section` into the
+  // sub-bundle, and reading it here would make the nested run demand an add-record mini page OF the sub-page — "its OWN
+  // structure is incomplete" (mini) / "typed page 'X': its OWN structure is incomplete" (typed), with nothing the
+  // operator could supply to clear it short of `addRecordMiniPage: false` in every sub-bundle.
+  const sectionData = sectionInput(isNestedFold(opts) ? undefined : manifest.section, manifest);
   const sectionSchemas = parse(sectionData.schemas);
   // the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
   // digest below and the list-page mapping further down. See `foldSectionView`.
@@ -2400,7 +2820,7 @@ export function runMigration(manifest, opts = {}) {
   // guard, the never-null schema label, and why it is a function rather than inline here.
   const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
   const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
-  const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
+  const eff = mergeHierarchy(schemas, { seedTemplate, noParentTemplate: manifest.noParentTemplate === true }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // the embedded profile schemas a profile card renders (profiled entity + displayed columns).
@@ -2408,9 +2828,11 @@ export function runMigration(manifest, opts = {}) {
   // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  const pageStrings = pageStringsOf(manifest);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
-    resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
+    resources: pageStrings.resources,        // #5/#13 — localizable strings for tab/group/detail captions
+    resourceStrings: pageStrings.resourceStrings, // the same strings in every Classic culture, or null
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
     profileSchemas,                           // parsed embedded-profile bodies (entity + displayed columns)
@@ -2577,7 +2999,7 @@ export function runMigration(manifest, opts = {}) {
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
   // …and the LIST page's own verdict, on the section's evidence alone. Separate from `gate` on purpose:
   // see `computeListGate` for why a section-side gap must stop the list deliverable without stopping the form one.
-  const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff });
+  const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff, sectionLayerCount: sectionSchemas.length });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
   // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
   // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
@@ -2666,16 +3088,29 @@ export function runMigration(manifest, opts = {}) {
   // PLACEMENT completeness — the app-hosting facts. Mirrored here for the same reason as the two above: the CLI
   // gate reads the result, not the manifest.
   out.placement = manifest.placement || null;
+  // `existing-section` names ONE form page; a typed entity has a form page per record type, which this mode
+  // cannot target, so its plan is refused rather than half-planned as per-type rebuilds.
+  if (specOpts.existingSection && (out.typedPages || []).length) {
+    specOpts.placementBlockers = [...specOpts.placementBlockers, `placement.sectionHost.mode is 'existing-section' but '${out.entity}' has ${out.typedPages.length} typed form pages — this mode extends one list page and one form page only. Record the case in decisions.md and plan it with the user as a reconcile of each form page outside this mode.`];
+  }
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
+  out.translationsMissing = translationsMissing(manifest);
+  // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
+  // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
+  const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
+  if (!opts.scopeSchema) {
+    out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
+    out.noDeliverableIssues = noDeliverableIssues(manifest.decisionsWithoutDeliverable, specOpts);
+  }
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, specOpts);
+  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
@@ -2687,7 +3122,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at the checklist's page keys because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep>, "schemaName": "<page.name — the result report names the page by it>", "handlers": <get-page bundle.handlers — OPTIONAL; handler rows are matched against it>, "viewModelConfig": <get-page bundle.viewModelConfig — OPTIONAL; virtual-attribute rows are matched against its attributes>, "resources": <get-page bundle.resources — OPTIONAL; a built tab caption `#ResourceString(K)#` resolves through it> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep>, "schemaName": "<page.name — the result report names the page by it>", "handlers": <get-page bundle.handlers — OPTIONAL; handler rows are matched against it>, "viewModelConfig": <get-page bundle.viewModelConfig — OPTIONAL; virtual-attribute rows are matched against its attributes>, "resources": <get-page bundle.resources — OPTIONAL; a built tab caption `#ResourceString(K)#` resolves through it> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, "relatedPage:<Entity>": <get-related-page-addon response, verbatim>, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
@@ -2758,6 +3193,8 @@ const ROUTE_FLAG = "--route";
 // `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
+// `--handoff`: WRITE `<migration-folder>/resume.md` — the build loop handed to a fresh session. Takes no value.
+const HANDOFF_FLAG = "--handoff";
 // `--decide D<N>` / `--revoke D<N>`: the ONE path a PERSON's scope decision reaches the ledger.
 // See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` to a heading in
 // `<migration-folder>/decisions.md`, and refuse when it does not.
@@ -2765,6 +3202,7 @@ const DECIDE_FLAG = "--decide";
 const REVOKE_FLAG = "--revoke";
 const WONT_DO_FLAG = "--wont-do";
 const POSTPONED_FLAG = "--postponed";
+const BUILD_FLAG = "--build";
 const TO_FLAG = "--to";
 const PAGES_FLAG = "--pages";
 const TASK_FLAG = "--task";
@@ -2793,8 +3231,8 @@ const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_F
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
 // for, so the flag that produced them has to be the thing that fails.
-const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG,
-  WONT_DO_FLAG, POSTPONED_FLAG, ...VALUE_FLAGS]);
+const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG, HANDOFF_FLAG,
+  WONT_DO_FLAG, POSTPONED_FLAG, BUILD_FLAG, ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -2879,7 +3317,7 @@ const unroutedNotBuilt = (tasks) => notBuiltOpenItems(tasks).filter((it) => !it.
 
 const REMEDY = {
   "blocked": "the stand or a service was unreachable — a repair round may clear it",
-  "needs-decision": "a scope question — a repair round gives it to a fresh agent holding the evidence",
+  "needs-decision": "a scope question — no repair round is written for it; answer it with `--decide D<N>` (`--build` to build it)",
 };
 function notBuiltFailureText(items) {
   const L = [];
@@ -2938,6 +3376,10 @@ let routeRefusalFailure = false;
 // for the WHOLE refusal set rather than per reason — some of the reasons (an unreadable file, an id the folder
 // does not hold) carry no dispatch verdict of their own, so only a set-wide flag makes every one of them non-zero.
 let startRefusalFailure = false;
+// ⛔ `--handoff` WROTE NO RESUME — the plan is not approved at this version, not sliced, the run has no route, or
+// `--next` would refuse the folder. A hand-off the fresh session cannot resume from is a refusal, and it exits like
+// one.
+let handoffRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -2984,9 +3426,8 @@ function startRefusalText(set, startId, dir) {
     dispatchGateFailure = { startRefusal: true, dir };
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on an open decision on a subject another task shares:\n`
       + decisionSourceLines(set.blockedByDecision.rows).join("\n")
-      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, or, if the answer is to"
-      + " build that row, re-open it: clear its `Outcome` cell and set its task back to `status: todo`. Then start"
-      + " this task.\n";
+      + `\nRecord the decision on the row named above: \`${DECIDE_FLAG} D<N> ${WONT_DO_FLAG} --row <task>:<n>\`, or, if the answer is`
+      + ` to build that row, \`${DECIDE_FLAG} D<N> ${BUILD_FLAG} --row <task>:<n>\` — the engine re-opens it. Then start this task.\n`;
   }
   if (set.blockedByOverlap) {
     dispatchGateFailure = { startRefusal: true, dir };
@@ -3015,6 +3456,14 @@ function splitDriftLines(set) {
 // A PLAN-LEVEL GAP TOUCHES NOTHING. `gate` / `structure` / `coverage` describe the PLAN and no build round closes
 // one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
 // refusal are two chances for one of them to soften.
+// The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
+// migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
+// require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
+function planDecisions(outFile, tasksDir) {
+  if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
+  if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
+  return null;
+}
 function planGapRefusal(result) {
   const gaps = planGaps(result);
   if (!gaps.length) return null;
@@ -3033,7 +3482,10 @@ function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
   if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
+  if (set.refusal === REFUSED_RETIRED) return `recorded cells in ${dir} sit on an aggregate coverage row, and this plan has one row per item`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
+  if (set.refusal === REFUSED_STATUS) return "a deliverable status in `manifest.deliverableStatus` does not resolve against decisions.md";
+  if (set.refusal === REFUSED_DECISIONS) return `nothing has been dispatched from ${dir} yet, and decisions.md holds decision(s) no deliverable accounts for`;
   if (set.refusal === REFUSED_COVERAGE) {
     return handedIn(set)
       ? `the split passed with ${SPLIT_FLAG} does not cover this plan`
@@ -3042,11 +3494,19 @@ function refusalCause(set, dir) {
   return "the cut does not resolve against this plan";
 }
 
+// Remedies that do not depend on the refused set.
+const FIXED_REMEDIES = {
+  [REFUSED_STATUS]: " Add the decision to decisions.md, or correct the entry, then re-run.",
+  [REFUSED_RETIRED]: " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
+    + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row."
+    + " Before the first dispatch, record the decision as a `manifest.deliverableStatus` entry for each related list instead.",
+  [REFUSED_CUT]: " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
+    + " produced it.",
+};
+
 function refusalRemedy(set) {
-  if (set.refusal === REFUSED_CUT) {
-    return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
-      + " produced it.";
-  }
+  if (Object.hasOwn(FIXED_REMEDIES, set.refusal)) return FIXED_REMEDIES[set.refusal];
+  if (set.refusal === REFUSED_DECISIONS) return decisionsRemedy(set);
   if (set.refusal === REFUSED_COVERAGE) {
     // The engine picks no owner: which item a row belongs to is the judgement the split records. What FALLING
     // BACK reaches depends on what is still in play — dropping a handed-in flag reads the folder's own frozen
@@ -3071,6 +3531,15 @@ function refusalRemedy(set) {
   return ` Fix or remove ${SPLIT_FILE}.`;
 }
 
+// Each decision either drops deliverables, recorded one status per deliverable, or drops none, recorded in the
+// marker list. The open deliverable ids are listed per page.
+function decisionsRemedy(set) {
+  return " For each decision: if it drops a deliverable, add `\"<page>#<id>\": { \"status\": \"wont-do\", \"decision\": \"D<N>\" }`"
+    + " to `manifest.deliverableStatus` for each deliverable it drops; if it drops none, add it to"
+    + " `manifest.decisionsWithoutDeliverable`: `[\"D<N>\"]`. Re-run `--plan`, present the plan for approval, then re-run this command."
+    + " Open deliverable ids:\n" + (set.openDeliverables || []).map((p) => `  · ${p.page}: ${p.keys.join(", ")}`).join("\n");
+}
+
 // A cut that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
 // half-applied cut can never schedule part of a plan and drop the rest.
 function splitRefusalText(set, dir) {
@@ -3083,6 +3552,35 @@ function splitRefusalText(set, dir) {
     + `\n${refusalRemedy(set).trim()}${shape}\n`;
 }
 
+// THE RECORD FILES, kept current by every mode that reads the cut. A builder files its evidence record during the
+// build, so `evidence.json` / `judge.json` / `recorded.json` have to exist from the first slice on, in the MIGRATION
+// folder — the parent of the task folder, the same folder `--reads` writes into. The merge only ever adds an id the
+// plan publishes; a value already filed is never changed or dropped. Keeping them current is a side duty of the
+// mode, so a failure here (a plan shape `readPlan` cannot read, a folder the process cannot write) becomes a
+// warning line and the mode still gives its own answer.
+function keepRecordFiles(result, tasksDir, opts) {
+  const folder = path.dirname(path.resolve(tasksDir));
+  try {
+    const records = ensureRecordFiles(folder, readPlan(result, opts));
+    return { folder, ...records, warning: recordFilesWarning(folder, records) };
+  } catch (e) {
+    return { folder, written: [], unreadable: [], contended: [], warning: recordFailureLine(folder, e) };
+  }
+}
+const recordFailureLine = (folder, e) => `⚠ The record files in ${folder} were NOT brought up to date (${folder}: ${e.message}).`
+  + " The rest of this mode's answer is unaffected. Fix the cause and re-run it, so every published id has a key for"
+  + " the builders to file under.";
+// What a mode prints about the record files: the files it wrote, then any warning.
+function recordFileLines(records) {
+  const lines = [];
+  if (records.written.length) {
+    lines.push(`Record files ${records.written.map((f) => "`" + f + "`").join(", ")} written in ${records.folder} with every`
+      + " published id as a key — builders file their evidence records into them during the build.");
+  }
+  if (records.warning) lines.push(records.warning);
+  return lines;
+}
+
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
@@ -3091,12 +3589,14 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
-  const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
+  const checked = { ...opts, refuseUnaccounted: true };
+  const set = startId ? startTask(dir, startId, result, checked, split) : syncTaskDir(dir, result, checked, split);
   if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
     if (refusal) { startRefusalFailure = true; return refusal; }
   }
+  const records = keepRecordFiles(result, dir, opts);
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = attentionSummary(set);
   // FROZEN ONLY ONCE IT RESOLVED. Copying the file in before validation would leave a folder whose frozen cut is
@@ -3110,6 +3610,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
     // `--next` exists to replace, and a contradiction the engine would be printing against itself. The index
     // is what a human reads; it is not what anyone picks from.
     `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Do NOT pick the next task off that index: ask the engine with \`${TASKS_FLAG} ${dir} ${NEXT_FLAG}\`, which answers with every task startable right now and the exact \`${START_FLAG}\` command for each. Hand each named task to its OWN sub-agent, and re-run this mode after every status change.`,
+    ...recordFileLines(records),
   ];
   const refused = set.blocked?.length || 0;
   if (refused) {
@@ -3136,21 +3637,8 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // round), or parked after its rounds. The gate reads the same folder state in either mode.
   const notBuilt = unroutedNotBuilt(set.tasks);
   if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
-  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set),
-    ...unappliedDecisionLines(set, dir, startId));
+  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set));
   return lines.join("\n") + "\n";
-}
-
-// Before the first dispatch only: the decisions.md entries no row cites. Printed, never written, and no gate.
-function unappliedDecisionLines(set, dir, startedId = null) {
-  if (!firstDispatchPending(dir, startedId, set.tasks)) return [];
-  const open = unappliedDecisions(set.tasks, readDecisions(path.join(dir, "..")));
-  if (!open.length) return [];
-  return ["", `${open.length} decision(s) in decisions.md are applied to no row — no task's \`decisions:\` line cites them:`,
-    ...open.map((d) => `  · ${d.id} — ${d.title}`),
-    `If one drops or postpones a deliverable, record it with \`${TASKS_FLAG} ${shellArg(dir)} ${DECIDE_FLAG} D<N>`
-      + ` ${WONT_DO_FLAG} | ${POSTPONED_FLAG} ${TO_FLAG} <destination>\`, addressed by \`${PAGES_FLAG} <keys>\`,`
-      + ` \`${TASK_FLAG} <task-id>\` or \`${ROW_FLAG} <task-id>:<n>\`, before dispatch.`];
 }
 
 // `--tasks <dir> --next` — WHICH TASKS ARE STARTABLE RIGHT NOW, answered by the engine.
@@ -3170,7 +3658,7 @@ const withheldLine = (w) => {
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
   if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
   if (w.cause === HOLD_DECISION) {
-    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row, or re-opening it to build it, releases it:`,
+    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row (\`${DECIDE_FLAG} D<N> ${BUILD_FLAG}\` to build it) releases it:`,
       ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
   }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
@@ -3261,12 +3749,97 @@ function runNextMode(result, dir, opts, cmdFor) {
   if (gapRefusal) { nextRefusalFailure = true; return gapRefusal; }
   const noFolder = nextFolderRefusal(dir);
   if (noFolder) { nextRefusalFailure = true; return noFolder; }
-  const set = syncTaskDir(dir, result, opts);
+  const set = syncTaskDir(dir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
+  const records = recordFileLines(keepRecordFiles(result, dir, opts));
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return [...nextAnswerLines(answer, dir, cmdFor), ...unappliedDecisionLines(set, dir)].join("\n") + "\n";
+  return [...nextAnswerLines(answer, dir, cmdFor), ...records].join("\n") + "\n";
+}
+
+// `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
+//
+// It writes `<migration-folder>/resume.md` and the manifest copy it names (`resume-manifest.json`), and nothing
+// else of its own; the folder refresh is the one `--next` runs, so the next task it names is the one `--next` would
+// name. A fresh session can only resume what the folder records, so every precondition that session would otherwise
+// discover mid-build is refused HERE, before anything of the hand-off is written. The causes are checked in
+// stages, and each stage reports every cause it finds before the next one runs: the plan's own gaps; the manifest
+// path (the CLI, before parsing); the cut folder, the approval of THIS plan version and the dispatch route, together;
+// the folder refresh `--next` would refuse (an uncited decision); and a `--next` answer that exits 2 (a broken
+// dispatch ledger, or a run that cannot move).
+const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
+// The folder-level preconditions, with the values they read — the renderer reuses them rather than reading again.
+function handoffCauses(result, dir, folder) {
+  const causes = [];
+  if (!fs.existsSync(path.join(dir, TASK_INDEX_FILE))) {
+    causes.push(`the plan is not sliced — there is no task folder at ${dir} (no ${TASK_INDEX_FILE}). Slice it first`
+      + ` (orchestrate-build.md 7.1): \`${TASKS_FLAG} ${shellArg(dir)} ${SPLIT_FLAG} split.json\`, then hand off.`);
+  }
+  const approvalLine = planApprovalLine(readTextOr(path.join(folder, "decisions.md")), result.planVersion);
+  if (!approvalLine) {
+    causes.push(`decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\` (no \`## \``
+      + ` entry holds both a \`Plan version: ${result.planVersion}\` field and a non-empty \`Approved by:\` field). Record`
+      + " the approval naming that version and who approved it (orchestrate-build.md 7.1 step 1), then hand off — a"
+      + " fresh session builds only the plan an approval names.");
+  }
+  const route = worklogRoute(readTextOr(path.join(folder, "worklog.md")));
+  if (!route) {
+    causes.push(`worklog.md in ${folder} has no \`Route:\` line naming one of ${DISPATCH_ROUTES.join(" · ")} (the last`
+      + " `Route:` line is the one read). Resolve the dispatch route first (orchestrate-build.md 7.0) and write it"
+      + " there, so the fresh session dispatches every task the same way.");
+  }
+  return { causes, approvalLine, route };
+}
+const handoffRefusalHeader = (tasksDir) =>
+  `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:`;
+function runHandoffMode(result, dir, opts, ctx) {
+  const gapRefusal = planGapRefusal(result);
+  if (gapRefusal) { handoffRefusalFailure = true; return gapRefusal; }
+  const tasksDir = path.resolve(dir);
+  const folder = path.dirname(tasksDir);
+  const { causes, approvalLine, route } = handoffCauses(result, tasksDir, folder);
+  if (causes.length) {
+    handoffRefusalFailure = true;
+    return handoffRefusalHeader(tasksDir) + "\n" + causes.map((c) => `  — ${c}`).join("\n") + "\n";
+  }
+  const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
+  if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
+  const records = recordFileLines(keepRecordFiles(result, tasksDir, opts));
+  const answer = startableTasks(set, tasksDir);
+  // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
+  // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
+  // `--next` names.
+  if (answer.verdict === NEXT_LEDGER || answer.verdict === NEXT_STUCK) {
+    handoffRefusalFailure = true;
+    if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir: tasksDir, started: true };
+    else startableGateFailure = { dir: tasksDir, answer };
+    return [`${handoffRefusalHeader(tasksDir)} \`--next\` answers \`${answer.verdict}\` and exits 2, so a fresh`
+      + " session would open on a refusal. Fix what it names below, then hand off:",
+    ...nextAnswerLines(answer, tasksDir, ctx.startCommand(tasksDir))].join("\n") + "\n";
+  }
+  // THE MANIFEST TRAVELS WITH THE FOLDER. The fresh session re-opens it on every command, so it must not depend on
+  // the planning session's temporary input folder. A hand-off re-run from the copy itself leaves it as it is.
+  const manifestCopy = path.join(folder, RESUME_MANIFEST_FILE);
+  if (path.resolve(ctx.manifestPath) !== manifestCopy) fs.copyFileSync(ctx.manifestPath, manifestCopy);
+  const resumeFile = path.join(folder, RESUME_FILE);
+  const { text, prompt } = renderResume({
+    migrationDir: folder, tasksDir, manifestPath: manifestCopy, environment: ctx.environment,
+    planVersion: result.planVersion, approvalLine, route,
+    progress: renderProgress(set, tasksDir), next: answer.startable[0] || null, verdict: answer.verdict,
+    nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
+  });
+  fs.writeFileSync(resumeFile, text);
+  // THE NOTE DOES NOT DECIDE WHERE THE BUILD RUNS — the user does, through the orchestrate-build.md 7.1b question.
+  // It names the three answers so the tool output and 7.1b say the same thing; the golden ties the two together.
+  return [`migrate.mjs: wrote ${resumeFile} and the manifest copy ${manifestCopy}.`,
+    "Where the build runs is the user's choice (orchestrate-build.md 7.1b). If worklog.md has no `Build session:`",
+    "line yet, ask it now, record the answer as that line, then act on it:",
+    "- New session: give the user the prompt below to paste into a fresh session; no `--start` or dispatch here.",
+    "- Continue here: continue the 7.2 loop with `--next`; resume.md stays behind as a recovery point.",
+    `- Compress here: the user types /compact, then sends \`Continue the build from ${resumeFile}.\``,
+    "The fresh or compacted session reads resume.md and orchestrate-build.md → Resuming.",
+    ...(records.length ? ["", ...records] : []), "", prompt, ""].join("\n");
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -3314,6 +3887,25 @@ const ROUND_EMPTY = {
     + " recorded as NOT BUILT already has a repair task (or its cause is parked).",
 };
 
+// The rows only a person's answer moves. Named instead of ROUND_EMPTY.route when nothing else applies, because
+// "nothing is waiting" would be false and no repair task exists for them.
+function awaitingDecisionLines(awaiting, awaitingClose, dir) {
+  const rowLine = (it) => `  · ${it.task.file} row ${it.n} (${it.task.id}:${it.n}) — ${it.row.label}`;
+  const lines = [];
+  if (awaiting.length) {
+    lines.push(`migrate.mjs: no repair task written to ${dir} — ${awaiting.length} row(s) wait on a decision, not on a repair round:`,
+      ...awaiting.map(rowLine),
+      `Answer each with \`${DECIDE_FLAG} D<N> ${WONT_DO_FLAG}\` / \`${POSTPONED_FLAG} ${TO_FLAG} <destination>\` to drop it, or`
+        + ` \`${DECIDE_FLAG} D<N> ${BUILD_FLAG} ${ROW_FLAG} <task>:<n>\` to build it — the engine re-opens the row; no task file is edited.`);
+  }
+  if (awaitingClose.length) {
+    lines.push(`migrate.mjs: no repair task written to ${dir} — ${awaitingClose.length} row(s) record a decision question on a task`
+      + " that has not closed yet; no repair task exists for them and none is routed. Answer them once the task closes:",
+    ...awaitingClose.map((it) => `${rowLine(it)} (task ${it.task.status})`));
+  }
+  return lines;
+}
+
 // `deliverable` (page) on file, per held-back row.
 const heldRows = (held) => held.map((h) => `\`${h.row.deliverable}\` (${h.pageKey}) on ${h.task.file}`).join(" | ");
 
@@ -3360,7 +3952,10 @@ export function repairRoundLines(res, dir, kind) {
       + ` manufacture one (and would otherwise burn the ${REPAIR_ROUND_CAP}-round cap with nobody having run).`);
   }
   if (!res.written.length && !res.parked.length && !res.pending.length
-    && !res.disputed?.length && !res.stalled?.length) lines.push(`migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+    && !res.disputed?.length && !res.stalled?.length) {
+    const awaiting = res.awaiting || [], awaitingClose = res.awaitingClose || [];
+    lines.push(awaiting.length || awaitingClose.length ? awaitingDecisionLines(awaiting, awaitingClose, dir).join("\n") : `migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+  }
   if (res.parked.length) {
     const what = res.parked.map((p) => `${p.pageKey}: ${p.cause} (${p.rows} row(s))`).join(" | ");
     lines.push(`migrate.mjs: ⛔ ${res.parked.length} cause(s) PARKED after ${REPAIR_ROUND_CAP} rounds — ${what}.`
@@ -3396,7 +3991,9 @@ function runRouteMode(result, dir, opts) {
   partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
   // This mode's whole stdout, so it carries the block the orchestrator pastes — `--verify`'s repair note is
   // appended to a table that already has one.
-  const lines = [...repairRoundLines(res, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
+  const awaiting = decisionWaitingRows(res.set.tasks);
+  const awaitingClose = decisionPendingRows(res.set.tasks);
+  const lines = [...repairRoundLines({ ...res, awaiting, awaitingClose }, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
   return lines.join("\n") + "\n";
 }
 
@@ -3454,7 +4051,18 @@ function decideTargetLabel(opts) {
   return `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
 }
 const decidedRowLine = (x) => `  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`;
+function buildTouchedLines(res, opts) {
+  const lines = [`migrate.mjs: reopened ${res.touched.length} row(s) to build under ${opts.decision} — ${decideTargetLabel(opts)}.`,
+    ...res.touched.map(decidedRowLine),
+    ...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`)];
+  if (res.clearedHalts?.length) lines.push(`  · retired the \`declared: blocked\` of ${res.clearedHalts.join(", ")} — no row of it is recorded blocked, so the halt is cleared; it may have named another cause, check the task's \`## Notes\`.`);
+  if (res.keptHalts?.length) lines.push(`  · kept the \`declared: blocked\` of ${res.keptHalts.join(", ")} — another row is still recorded blocked, so the task stays blocked.`);
+  for (const w of res.clearedWarnings || []) lines.push(`  · cleared ${w} — a re-opened task is measured against its current rows.`);
+  lines.push("", `Each task without a kept halt is \`todo\` again: \`${TASKS_FLAG} <dir> ${NEXT_FLAG}\` offers it, and \`${START_FLAG}\` dispatches it. No task file was edited.`);
+  return lines;
+}
 function decideTouchedLines(res, opts) {
+  if (opts.mode === BUILD_MODE) return buildTouchedLines(res, opts);
   const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${decideTargetLabel(opts)}.`];
   if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
   lines.push(...res.touched.map(decidedRowLine));
@@ -3465,24 +4073,21 @@ function decideTouchedLines(res, opts) {
   lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
   return lines;
 }
-// The open rows, in any task, that share a subject with a decided row, each with the command that applies the
-// same answer to it. Listed only: each row is closed by the person running its command.
-function decideSiblingLines(res, cmdFor) {
-  if (!res.siblings?.length) return [];
-  return ["", `${res.siblings.length} open row(s) share a subject with the decided row(s) and were NOT`
-    + " touched. To apply the same answer to them, run:",
-    ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
-}
-function runDecideMode(result, dir, opts, cmdFor = () => "") {
+const decideModeOf = (wontDoFlag, buildFlag) => {
+  if (buildFlag) return BUILD_MODE;
+  return wontDoFlag ? "wont-do" : "postponed";
+};
+function runDecideMode(result, dir, opts) {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
-  // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
-  // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
+  // the migration folder, one level up. `opts.decisions` is that decisions.md, read by the same reader the final
+  // report uses, so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
   const migrationDir = path.join(dir, "..");
-  const decisions = readDecisions(migrationDir);
-  const res = applyDecision(dir, result, { ...opts, decisions });
+  const res = applyDecision(dir, result, opts);
   if (res.refused) {
+    // The rows skipped for a reason are named too: a refusal that says only that nothing was touched hides why.
+    const skippedLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
     return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems,
-      decideRefusalHelp(res, opts, migrationDir)), ok: false };
+      [...decideRefusalHelp(res, opts, migrationDir), ...skippedLines]), ok: false };
   }
   const lines = decideTouchedLines(res, opts);
   // A cell the in-place writer could not place is reported as a FAILURE, not folded into the success line. Its
@@ -3494,8 +4099,7 @@ function runDecideMode(result, dir, opts, cmdFor = () => "") {
       ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
     return { note: lines.join("\n") + "\n", ok: false };
   }
-  lines.push(...decideSiblingLines(res, cmdFor),
-    "", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
+  if (opts.mode !== BUILD_MODE) lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 function runRevokeMode(result, dir, opts) {
@@ -3503,14 +4107,29 @@ function runRevokeMode(result, dir, opts) {
   if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
   // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
-  const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  // A withdrawn build-it entry left the folder as asked; a skipped cell is a decision still in force. They are
+  // reported apart. Exit status: a run that cleared at least one cell succeeds even with skipped cells, because a
+  // skipped cascade cell is the expected result of revoking a cascaded decision (§3 — the repair task stays closed);
+  // a run that cleared nothing fails when any skipped cell stays in force.
+  const skipped = res.skipped || [];
+  const withdrawnLines = skipped.filter((s) => s.withdrawn).map((s) => `  · withdrawn ${s.task.file} row ${s.n}: ${s.why}`);
+  const inForceLines = skipped.filter((s) => !s.withdrawn).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  // The head line of a run that withdrew build-it entries says so, so it cannot read as a no-op.
+  const entryWord = withdrawnLines.length === 1 ? "entry" : "entries";
+  const withdrewHead = `withdrew ${withdrawnLines.length} build-it ${entryWord} under ${opts.decision}`;
   if (!res.cleared.length) {
-    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
-    return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
+    if (!withdrawnLines.length && !inForceLines.length) return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
+    if (!inForceLines.length) {
+      return { note: [`migrate.mjs: ${withdrewHead}; no other cell was written under ${opts.decision}.`, ...withdrawnLines].join("\n") + "\n", ok: true };
+    }
+    // Every other cell written under the decision was skipped and stays in force: a failure, whatever was withdrawn.
+    const skippedHead = `every other cell in ${dir} written under ${opts.decision} was skipped and stays in force:`;
+    const head = withdrawnLines.length ? `migrate.mjs: ${withdrewHead}; ${skippedHead}` : `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`;
+    return { note: [head, ...inForceLines, ...withdrawnLines].join("\n") + "\n", ok: false };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
-  lines.push(...skipLines, "", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
+  lines.push(...withdrawnLines, ...inForceLines, "", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 
@@ -3530,6 +4149,29 @@ function outFileNote(label, outFile, notReady, verifyMode) {
     return `migrate.mjs: wrote ${label} to ${outFile} — this run is INCOMPLETE, and that is what the table reports: PRESENT IT VERBATIM (it names every ❌ MISSING and ⚠ unverified row). Do not hand-write a status summary of your own, and do not treat the file as an approvable plan — read the ⛔ stderr line(s) below to tell a repairable build gap from a PLAN-level one.\n`;
   }
   return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
+}
+
+// Reading `process.stdin.isTTY` (the guard above the manifest read) puts fd 0 into non-blocking mode, so on
+// macOS `fs.readFileSync(0)` throws EAGAIN whenever the pipe holds less than the whole manifest (over ~64 KB
+// from `spawnSync(…, { input })`). Read fd 0 chunk by chunk instead: on EAGAIN wait a few ms (still synchronous)
+// and retry, stop at EOF (0 bytes, or the `EOF` error Windows reports for a closed pipe). Decode once at the end,
+// so a multi-byte UTF-8 char split across two chunks survives. Any other read error is thrown to the caller unchanged.
+function readStdinSync() {
+  const chunks = [];
+  const buf = Buffer.alloc(64 * 1024);
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    let n;
+    try { n = fs.readSync(0, buf, 0, buf.length, null); }
+    catch (e) {
+      if (e.code === "EAGAIN" || e.code === "EWOULDBLOCK") { Atomics.wait(pause, 0, 0, 5); continue; }
+      if (e.code === "EOF") break;
+      throw e;
+    }
+    if (n === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -3640,6 +4282,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const revokeArg = valueFlagArg(argv, REVOKE_FLAG, `${REVOKE_FLAG} D13`, fail);
   const wontDoFlag = argv.includes(WONT_DO_FLAG);
   const postponedFlag = argv.includes(POSTPONED_FLAG);
+  const buildFlag = argv.includes(BUILD_FLAG);
   const toArg = valueFlagArg(argv, TO_FLAG, `${TO_FLAG} ENG-12345`, fail);
   const pagesArg = valueFlagArg(argv, PAGES_FLAG, `${PAGES_FLAG} typed:Service,typed:Product`, fail);
   const taskArg = valueFlagArg(argv, TASK_FLAG, `${TASK_FLAG} <task-id>`, fail);
@@ -3650,10 +4293,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if ((decideMode || revokeMode) && (verifyMode || routeMode || nextMode || !!startId || !!addFile || !!splitFile)) {
     fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` writes into the folder; every other write / query mode does the same or moves it first, so a single call would describe a state the reader cannot identify. Run them as separate commands.`);
   }
+  if (buildFlag && !decideMode) fail(`\`${BUILD_FLAG}\` is an answer to \`${DECIDE_FLAG} D<N>\` — it names no decision on its own (and does not go with \`${REVOKE_FLAG}\`).`);
   if (decideMode) {
     if (!/^D\d+$/.test(decideArg)) fail(`\`${DECIDE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${DECIDE_FLAG} D13\`) — got \`${decideArg}\`.`);
-    if (!wontDoFlag && !postponedFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\` or \`${POSTPONED_FLAG}\`. The two words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination.`);
+    if (!wontDoFlag && !postponedFlag && !buildFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\`, \`${POSTPONED_FLAG}\` or \`${BUILD_FLAG}\`. The words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination, \`${BUILD_FLAG}\` re-opens the row for a builder.`);
     if (wontDoFlag && postponedFlag) fail(`\`${WONT_DO_FLAG}\` and \`${POSTPONED_FLAG}\` are two answers to one question — pick one.`);
+    if (buildFlag && (wontDoFlag || postponedFlag)) fail(`\`${BUILD_FLAG}\` re-opens the row for a builder; \`${WONT_DO_FLAG}\` / \`${POSTPONED_FLAG}\` close or defer it — two answers to one question, pick one.`);
+    if (buildFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — \`${BUILD_FLAG}\` re-opens the row here, it does not go anywhere.`);
     if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets "later" pass for an answer.`);
     if (wontDoFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — a decision that closes the debt does not go anywhere.`);
     // Refused at the boundary as well as normalised in `decideCellText`, because the destination ends up inside a
@@ -3669,16 +4315,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (val) fail(`\`${flag}\` does not go with \`${REVOKE_FLAG}\` — the subject is the decision, and the engine removes exactly the cells it wrote (named in each task's \`decisions:\` map). No addressing to give.`);
     }
   }
+  // `--handoff`: WRITE resume.md for a fresh session. It describes ONE folder state, so it refuses to combine with
+  // anything that moves the folder or answers about it in the same call — the rule `--next` carries.
+  const handoffMode = argv.includes(HANDOFF_FLAG);
+  if (handoffMode && !tasksMode) fail(`\`${HANDOFF_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it hands off the build of THAT folder.`);
+  {
+    const others = [[NEXT_FLAG, nextMode], [START_FLAG, !!startId], [ROUTE_FLAG, routeMode], ["--verify", verifyMode],
+      [SPLIT_FLAG, !!splitFile], [ADD_FLAG, !!addFile], [DECIDE_FLAG, decideMode], [REVOKE_FLAG, revokeMode]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (handoffMode && others.length) fail(`\`${HANDOFF_FLAG}\` cannot be combined with ${others.join(" / ")} — the resume must describe ONE folder state, and each of those moves the folder or answers about it. Run it first, then \`${HANDOFF_FLAG}\` on its own.`);
+  }
   if (tasksMode && !verifyMode && !decideMode && !revokeMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
+  // A HAND-OFF COPIES THE MANIFEST FOR THE FRESH SESSION, so a missing file (a cleaned temporary input folder) or a
+  // piped one is refused before it is parsed — exit 2 with nothing written, like the other hand-off refusals.
+  if (handoffMode && (!fromFile || !fs.existsSync(arg))) {
+    const cause = fromFile
+      ? `the manifest '${arg}' does not exist — the hand-off copies it beside ${RESUME_FILE} as ${RESUME_MANIFEST_FILE}, and the fresh session rebuilds every answer from that copy. A resumed session passes the copy ${RESUME_FILE} names; if that copy is gone, stop and ask the user — do not re-run the planning steps. The planning session, whose temporary input folder may have been cleaned, reruns step 4 to write the manifest again, then hands off.`
+      : "the manifest came in on stdin — the fresh session needs a PATH to re-open it. Pass the manifest as a file path.";
+    process.stdout.write(`migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off, and no ${RESUME_FILE}:\n  — ${cause}\n`);
+    process.exit(2);
+  }
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
   // instead (also the `--out manifest.json` typo, where the only path was consumed by --out, lands here).
   if (!fromFile && process.stdin.isTTY)
     fail("no manifest: pass a manifest path, or pipe JSON to stdin. (`--out <file>` names the OUTPUT — the manifest is a separate argument.)");
   let raw;
   const manifestLabel = fromFile ? `'${arg}'` : "from stdin";
-  try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
+  try { raw = fromFile ? fs.readFileSync(arg, "utf8") : readStdinSync(); }
   catch (e) { fail(`cannot read manifest ${manifestLabel}: ${e.message}`); }
   let manifest;
   try { manifest = JSON.parse(raw); }
@@ -3687,7 +4352,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
   let result;
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
+  const decisions = planDecisions(outFile, tasksDir);
+  const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
@@ -3728,13 +4395,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // publishes can never be a key nobody was told to read. That is why the engine owns this list.
   else if (readsDir) {
     let plan;
+    let records;
     try {
       plan = readPlan(result, checklistOpts(manifest));
       writeReadIndex(readsDir, plan);
-      // …and the skeletons for the two halves the stand does not hold, so no id is ever retyped.
-      writeEvidenceSkeletons(readsDir, plan);
+      // …and the record files for the halves the stand does not hold, merged the way every task-folder mode merges
+      // them, so no id is ever retyped and no filed value is lost.
+      records = ensureRecordFiles(readsDir, plan);
     } catch (e) { fail(`could not write the read plan to ${readsDir}: ${e.message}`); }
     output = renderReadPlan(plan, readsDir);
+    const warning = recordFilesWarning(readsDir, records);
+    if (warning) output += "\n" + warning + "\n";
   }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
   // be a second opinion on seams the folder froze.
@@ -3746,7 +4417,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { decl = JSON.parse(text); }
     catch (e) { fail(`${ADD_FLAG} '${addFile}' is not valid JSON: ${e.message}. Expected shape: ${DECL_SHAPE}`); }
     let res;
-    try { res = addTasks(tasksDir, result, decl, checklistOpts(manifest)); }
+    try { res = addTasks(tasksDir, result, decl, taskOpts()); }
     catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
     if (res.refused) {
       // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing. A CUT that does not resolve is named
@@ -3779,7 +4450,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       return [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(manifestArg),
         TASKS_FLAG, shellArg(tasksDir), START_FLAG, shellArg(id)].join(" ");
     };
-    try { output = runNextMode(result, tasksDir, checklistOpts(manifest), cmdFor); }
+    try { output = runNextMode(result, tasksDir, taskOpts(), cmdFor); }
     catch (e) { fail(`cannot read the task folder '${tasksDir}': ${e.message}`); }
     // …and when the manifest came in on stdin there is no path to print, so the command carries `-` and would
     // BLOCK on a terminal if it were pasted as it stands. Said here rather than left for the reader to discover.
@@ -3791,22 +4462,28 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         + " path to get commands that run exactly as printed.\n";
     }
   }
+  // BEFORE the slicing branch, for the reason `--next` is: it reports on the folder, it does not re-cut it.
+  else if (tasksMode && handoffMode) {
+    const nextCommand = (manifestFile, dir) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
+      shellArg(manifestFile), TASKS_FLAG, shellArg(dir), NEXT_FLAG].join(" ");
+    const startCommand = (dir) => (id) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
+      shellArg(path.resolve(arg)), TASKS_FLAG, shellArg(dir), START_FLAG, shellArg(id)].join(" ");
+    try {
+      output = runHandoffMode(result, tasksDir, taskOpts(),
+        { manifestPath: path.resolve(arg), environment: manifest.planMeta?.environment || null, nextCommand, startCommand });
+    } catch (e) { fail(`cannot write the hand-off for '${tasksDir}': ${e.message}`); }
+  }
   // `--decide` / `--revoke` — writes into the frozen folder. Placed BEFORE the slicing branch
   // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
   // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
   else if (tasksMode && decideMode) {
-    const opts = { ...checklistOpts(manifest), decision: decideArg,
-      mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
+    const opts = { ...taskOpts(), decision: decideArg,
+      mode: decideModeOf(wontDoFlag, buildFlag), destination: toArg || null,
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
       rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
-    // The same answer, addressed to one row, with every element encoded for the shell.
-    const cmdFor = (x) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(fromFile ? arg : "-"),
-      TASKS_FLAG, shellArg(tasksDir), DECIDE_FLAG, shellArg(opts.decision),
-      ...(opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG]),
-      ROW_FLAG, shellArg(`${x.task.id}:${x.n}`)].join(" ");
     let res;
-    try { res = runDecideMode(result, tasksDir, opts, cmdFor); }
+    try { res = runDecideMode(result, tasksDir, opts); }
     catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
     if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
     output = res.note;
@@ -3840,7 +4517,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
+    try { output = runTaskMode(result, tasksDir, taskOpts(), split, splitText, startId); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {
@@ -3952,11 +4629,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // banner, so an operator (and the build executor, which reads the exit code / `planGaps`, not the Markdown)
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
-  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
+  // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply, or a marker item that does not stand.
+  const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || statusBad || verifyIncomplete
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
     || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
-    || startRefusalFailure;
+    || startRefusalFailure || handoffRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -3966,6 +4645,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (verifyMode && tasksMode) label = "migration result report";
   else if (verifyMode) label = "verification";
   else if (tasksMode && nextMode) label = "startable tasks";
+  else if (tasksMode && handoffMode) label = "hand-off";
   else if (tasksMode) label = "build tasks";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
@@ -4080,5 +4760,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const fidelityList = fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ");
     process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelityList}\n`);
   }
-  if (notReady) process.exit(2);
+  // `exitCode`, not `process.exit(2)`: stdout to a pipe is async on macOS, and an immediate exit truncates the
+  // report to its first 8 KB (Node 20) / 64 KB (Node 25). Returning lets Node flush it, then exit 2.
+  if (notReady) process.exitCode = 2;
 }

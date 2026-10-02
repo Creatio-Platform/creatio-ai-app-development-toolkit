@@ -21,6 +21,10 @@
 export const SPLIT_FILE = "split.json";
 export const SPLIT_SCAFFOLD = "scaffold";
 const PAGE_SEP = "::";
+// The filed half of a page's `Quality gates` pair: the row that says the design pass ran and its record was filed.
+// Filing is build work, so this row belongs to the page's last writer; the judged half belongs to the review.
+export const QUALITY_FILED_ID = "quality:ran";
+export const isFiledGateRow = (row) => row?.deliverableId === QUALITY_FILED_ID;
 
 // A row is matched by its STRUCTURAL KEY — the label with its digits masked — for the same reason a task id is:
 // the digits are what a growing plan moves. `Fields — 19 expected` and `Fields — 20 expected` are one row with a
@@ -162,13 +166,24 @@ const groupClaim = (label) => {
 // re-took the first five rows because the key still had capacity. Marking the row object settles it: `byPage` and
 // `byGroup` hold the same objects, so a row claimed by name is visibly gone from its group and the other way round.
 const exactLabel = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+// A `Fields — N expected` / `Related lists — N expected` claim names no row; the refusal names the per-item rows
+// that replace it.
+const RETIRED_AGGREGATE = /^\s*(Fields|Related lists)\s+—\s+\d+\s+expected\s*$/i;
+export const isRetiredAggregate = (label) => RETIRED_AGGREGATE.test(String(label ?? ""));
+function retiredAggregate(label) {
+  const m = RETIRED_AGGREGATE.exec(String(label));
+  if (!m) return null;
+  const one = /^fields$/i.test(m[1]) ? "Field `<name>`" : "Related list `<detail>`";
+  return ` — this row is now one row per item (\`${one}\`): claim them with \`${GROUP_MARK}Form — Coverage (verified)\`,`
+    + " or name each row as `--checklist` prints it, then re-run";
+}
 function claimRow(entry, pageKey, itemId, index) {
   const page = entryPage(entry, pageKey);
   const key = rowKey(entryLabel(entry));
   const found = index.get(page)?.get(key);
   if (!found) {
     return { error: `\`${itemId}\` claims a row the plan does not have on page \`${page}\`: ${JSON.stringify(String(entry).slice(0, 90))}`
-      + ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page` };
+      + (retiredAggregate(entryLabel(entry)) || ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page`) };
   }
   // THE ROW THE ITEM NAMED, when it named one exactly. `rowKey` masks digits and truncates, so `Tab 1 — fields`
   // and `Tab 2 — fields` share a key; taking the first free row of the key hands an item the row another item
@@ -240,13 +255,14 @@ export function resolveSplit(split, groups, identity = new Map()) {
       title: raw.title,
       pageKey,
       stopGate: raw.stopGate === true,
-      writesTo: resolveWritesTo(raw.writesTo, identity),
+      writesTo: itemWritesTo(raw.writesTo, rows, identity),
       declaredWritesTo: raw.writesTo ?? "",
       rows,
     });
   }
   errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
-    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items));
+    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...filedGateOutsideLastWriter(items),
+    ...attributeAfterItsWriter(items), ...wiringBeforeChildPage(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -268,20 +284,100 @@ const CALLER = /^Handler — `([^`]+)`\s*$/;
 // THE THIRD CHECKED SEAM, and the one with no legitimate exception. A late scaffolding item is fine — per-type
 // routing genuinely belongs after the typed pages. A review placed before a writer of the page it judges is never
 // fine: it would file a verdict on a page that is still being built. The `Quality gates` rows name the page, so
-// the engine can say so rather than leave it to the reader.
+// the engine can say so rather than leave it to the reader. The filed row is the writer's and makes no item a review.
 const REVIEW_GROUP_NAME = "Quality gates";
 function reviewBeforeItsPage(items) {
   const out = [];
   items.forEach((it, i) => {
-    const judged = new Set(it.rows.filter((r) => r.group === REVIEW_GROUP_NAME).map((r) => r.pageKey));
+    const judged = new Set(it.rows.filter((r) => r.group === REVIEW_GROUP_NAME && !isFiledGateRow(r)).map((r) => r.pageKey));
     if (!judged.size) return;
-    const later = items.slice(i + 1).filter((o) => judged.has(o.declaredWritesTo));
+    // An item holding only binding rows writes the add-ons, not the page body the review judges.
+    const later = items.slice(i + 1).filter((o) => judged.has(o.declaredWritesTo) && !bindsOnly(o.rows));
     if (!later.length) return;
     const shown = later.slice(0, 3).map((o) => "`" + o.id + "`").join(", ");
     const more = later.length > 3 ? `, …and ${later.length - 3} more` : "";
     out.push(`\`${it.id}\` reviews ${[...judged].map((p) => "`" + p + "`").join(", ")} but sits BEFORE`
       + ` ${later.length} item(s) that still write ${later.length === 1 ? "that page" : "those pages"} (${shown}${more})`
       + " — a review files a verdict on a page that is finished, so it goes after every item that writes it.");
+  });
+  return out;
+}
+
+// THE FIFTH CHECKED SEAM. A page's filed gate row is closed by the design pass over the FINISHED page, so the item
+// holding it is the page's last writer. When any item's `writesTo` names the page, that is the last such item: a
+// read-only item files nothing, an earlier writer would file a record for a page a later item still changes, and
+// an item writing another page builds a different page. When no item names the page, its rows are built inside
+// writers of other pages, and the last WRITING item that carries any of its rows is the one that finishes it.
+// An item holding only binding rows writes the add-ons, not this page, so it is never the page's writer here.
+function declaredWriterOf(items, page) {
+  let at = -1;
+  items.forEach((it, i) => { if (it.declaredWritesTo === page && !bindsOnly(it.rows)) at = i; });
+  return at;
+}
+function lastCarrierOf(items, page) {
+  let at = -1;
+  items.forEach((it, i) => { if (it.declaredWritesTo && !bindsOnly(it.rows) && it.rows.some((r) => r.pageKey === page)) at = i; });
+  return at;
+}
+// The item that holds the page's filed row, and whether a `writesTo` declares it (false: it only carries rows).
+function lastWriterOf(items, page) {
+  const declared = declaredWriterOf(items, page);
+  return declared >= 0 ? { at: declared, declared: true } : { at: lastCarrierOf(items, page), declared: false };
+}
+const filedGateMisplacement = (it, page, owner) => {
+  if (!it.declaredWritesTo) {
+    return "but that item writes nothing — filing the design-pass record is build work, and a read-only item only judges it";
+  }
+  if (!owner.declared) return `but a LATER writing item still carries \`${page}\` rows — the design pass files its record on the finished page`;
+  if (it.declaredWritesTo !== page) return `but that item writes \`${it.declaredWritesTo}\`, not that page`;
+  return "but a LATER item still writes that page — the design pass files its record on the finished page";
+};
+function filedGateRemedy(items, page, owner) {
+  if (owner.declared) return `Move it into \`${items[owner.at].id}\`, the last item that writes \`${page}\`.`;
+  if (owner.at >= 0) {
+    return `Move it into \`${items[owner.at].id}\`, the last item that carries \`${page}\` rows (no item declares \`writesTo: ${page}\`).`;
+  }
+  return `No writing item carries \`${page}\` rows: give the item that builds that page \`writesTo: ${page}\` and put the row there.`;
+}
+function filedGateOutsideLastWriter(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    for (const r of it.rows) {
+      if (!isFiledGateRow(r)) continue;
+      const owner = lastWriterOf(items, r.pageKey);
+      if (owner.at === i) continue;
+      const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${QUALITY_FILED_ID}\`, record \`${r.pageKey}#quality-gates\`) of \`${r.pageKey}\``;
+      const why = filedGateMisplacement(it, r.pageKey, owner);
+      const claims = `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
+        + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
+      out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey, owner)} ${claims}`);
+    }
+  });
+  return out;
+}
+
+// THE SIXTH CHECKED SEAM, the same mistake as per-type routing one level down. A `Child page wiring` row binds a
+// related list to the child page it opens, and its `vk` names that page's key, so the item carrying it has to come
+// after every item writing that child page — and after every item writing the page that holds the list. The task
+// set's dependencies on those writers are derived from the queue order, so a wiring item placed first would carry
+// none at all.
+const reviewOnly = (it) => it.rows.length > 0 && it.rows.every((r) => r.group === REVIEW_GROUP_NAME);
+function wiringBeforeChildPage(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    const wired = new Set(it.rows.filter((r) => r.vk?.type === "relatedpage" && r.vk.childKey)
+      .flatMap((r) => [r.vk.childKey, r.pageKey]).filter(Boolean));
+    if (!wired.size) return;
+    // A review item only judges the page, so it builds no list and no child page, whatever it declares.
+    // A binding-only item writes add-ons, not the page it declares, so it is no writer this item has to follow.
+    const later = items.slice(i + 1).filter((o) => wired.has(o.declaredWritesTo) && !reviewOnly(o) && !bindsOnly(o.rows));
+    if (!later.length) return;
+    const pages = [...new Set(later.map((o) => o.declaredWritesTo))];
+    const shown = later.slice(0, 3).map((o) => "`" + o.id + "`").join(", ");
+    const more = later.length > 3 ? `, …and ${later.length - 3} more` : "";
+    out.push(`\`${it.id}\` wires ${pages.map((p) => "`" + p + "`").join(", ")} but sits BEFORE ${later.length}`
+      + ` item(s) that still write ${pages.length === 1 ? "that page" : "those pages"} (${shown}${more}) — a related list`
+      + " cannot be bound to a page that has not been built yet. Move it after them.");
   });
   return out;
 }
@@ -304,6 +400,38 @@ function routingBeforeTypedPages(items) {
     out.push(`\`${it.id}\` carries the per-type routing row but sits BEFORE ${after.length} item(s) that build a typed`
       + ` page (${shown}${more}) — routing binds each Type's form by the Type column, and a form that has not been`
       + " built yet cannot be bound. Move it after them.");
+  });
+  return out;
+}
+
+// THE FOURTH CHECKED SEAM. A handler that sets a virtual attribute the page has not declared yet is inert, so the
+// sub-agent holding it can only record its rows blocked. A handler row carries the attributes its own body sets
+// (`writesAttrs`), which makes this ordering checkable: a page's `[attribute-virtual] X` row goes in the same item
+// as, or an earlier item than, every handler row on that page writing X.
+// Matched on the RECORDED writes, not on "every handler of the page": an earlier item holding a handler that sets
+// none of the page's virtual attributes is a correct split. Writes made any other way (a helper that is not folded
+// under the handler, a model setter) are not recorded, so the rule cannot see them.
+function attributeAfterItsWriter(items) {
+  const firstWriter = new Map();          // "page|attribute" -> the EARLIEST item whose handler writes it
+  items.forEach((it, i) => {
+    for (const r of it.rows) {
+      if (r.vk?.type !== "handler") continue;
+      for (const attr of r.writesAttrs || []) {
+        const k = `${r.pageKey}|${attr}`;
+        if (!firstWriter.has(k)) firstWriter.set(k, { i, id: it.id, method: r.vk.method });
+      }
+    }
+  });
+  const out = [];
+  items.forEach((it, i) => {
+    for (const r of it.rows) {
+      if (r.vk?.type !== "vmattr") continue;
+      const w = firstWriter.get(`${r.pageKey}|${r.vk.name}`);
+      if (!w || w.i >= i) continue;
+      out.push(`\`[attribute-virtual] ${r.vk.name}\` on \`${r.pageKey}\` is in \`${it.id}\`, but \`${w.method}\`, which sets`
+        + ` it, is in \`${w.id}\` — an EARLIER item, so that handler would be built before the attribute it writes`
+        + ` exists. Move the attribute row into \`${w.id}\` or an item before it.`);
+    }
   });
   return out;
 }
@@ -357,6 +485,18 @@ function unconsumed(index) {
   return out;
 }
 
+// An item holding nothing but `Child page wiring` rows, at least one of them a binding, writes the child entities'
+// RelatedPage add-ons, not the page body, so it takes the same `wiring:<page>` artifact the engine's own cut gives
+// that group. The inline grid's no-page row belongs to the group and writes nothing, so it does not make the item a
+// page writer. On `page:<page>` the item would put every later writer of that page, and its repair rounds, behind
+// the child pages it waits on.
+const WIRING_GROUP_NAME = "Child page wiring";
+const bindsOnly = (rows) => rows.length > 0 && rows.every((r) => r.group === WIRING_GROUP_NAME)
+  && rows.some((r) => r.vk?.type === "relatedpage");
+const itemWritesTo = (declared, rows, identity) => {
+  const target = resolveWritesTo(declared, identity);
+  return bindsOnly(rows) ? target.replace(/^page:/, "wiring:") : target;
+};
 const resolveWritesTo = (declared, identity) => {
   if (!declared) return "";
   if (declared === SPLIT_SCAFFOLD) return SPLIT_SCAFFOLD;

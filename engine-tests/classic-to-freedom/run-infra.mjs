@@ -3,7 +3,7 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +16,7 @@ import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { stripImports, buildManifest } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
+import * as diag from "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs";
 
 // git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
 // could otherwise shadow it (Sonar S4036). These are the stock install locations on the CI
@@ -634,6 +635,21 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("SKILL.md points a builder at it, in the step that opens a page — a reference nothing links to is a file nobody reads",
     () => skill.includes("references/freedom-ui-browser-check.md"),
     () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
+  // A builder is handed exactly the files its 7.3 row names, so a SKILL.md mention alone never reaches it: the
+  // page-build row itself must hand the reference, in the look-up column and not as a brief to read whole.
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  const pageBuildRows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4 && cells[0].startsWith("Page build"));
+  check("orchestrate-build.md 7.3: the page-build row hands `freedom-ui-browser-check.md` as a reference to look up, not as a brief — the row is what a builder is given, so a reference it does not name is never opened",
+    () => pageBuildRows.length === 1
+      && pageBuildRows[0][3].includes("`./references/freedom-ui-browser-check.md`")
+      && !pageBuildRows[0][2].includes("freedom-ui-browser-check.md"),
+    () => pageBuildRows);
 }
 
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
@@ -1115,24 +1131,40 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
 // because the thing that can silently regress is a sentence, and the failure is invisible (every gate still
 // passes; the orchestrator simply re-derives a decision the engine already makes, and the two then disagree).
 {
-  const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
-  const engineReadme = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/README.md", import.meta.url)), "utf8");
-  const step7 = skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8."));
-  check("doc lint (anti-vacuity): step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
+  // Step 7 is split by reader: SKILL.md keeps the six rules in short form with the `--next` invocation, and sends the
+  // driver to `references/orchestrate-build.md` ONCE, at approval, for the contract in full. So each sentence is
+  // linted in the file that carries it, and each slice has its own anti-vacuity guard. Both are whitespace-flattened:
+  // these docs hard-wrap, and a phrase straddling a line break is still the same sentence.
+  const flatten = (t) => t.replace(/\s+/g, " ");
+  const read = (rel) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/" + rel, import.meta.url)), "utf8");
+  const skill = read("SKILL.md");
+  const orchestrate = read("references/orchestrate-build.md");
+  const engineReadme = read("engine/README.md");
+  const step7 = flatten(skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8.")));
+  const orchStep7 = flatten(orchestrate.slice(orchestrate.indexOf("## Step 7"), orchestrate.indexOf("## Step 8")));
+  const orchStep8 = orchestrate.slice(orchestrate.indexOf("## Step 8"));
+  check("doc lint (anti-vacuity): SKILL.md step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
     () => step7.length > 2000 && /7\.2 The orchestrator contract/.test(step7),
     () => ({ len: step7.length, head: step7.slice(0, 120) }));
+  check("doc lint (anti-vacuity): the orchestration reference's step 7 was located and holds the contract in full",
+    () => orchStep7.length > 20000 && /7\.2 The orchestrator contract/.test(orchStep7) && /7\.5 Repair/.test(orchStep7),
+    () => ({ len: orchStep7.length, head: orchStep7.slice(0, 120) }));
+  check("doc lint: SKILL.md step 7 sends the driver to the orchestration reference ONCE, when the plan is approved — a reference nothing sends the driver to is a contract nobody reads",
+    () => /read `\.\/references\/orchestrate-build\.md` ONCE/.test(step7),
+    () => step7.slice(0, 600));
   check("doc lint (AC4): step 7 carries the INVOCATION — the orchestrator is given the command that answers which task to start, not left to infer that one exists",
-    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7),
-    () => step7.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7) && /--tasks <migration-folder>\/build-tasks --next/.test(orchStep7),
+    () => step7.split("`").filter((l) => /--next/.test(l)).slice(0, 4));
   check("doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
-    () => /do not pick one from `index\.md`/i.test(step7) && /where you pick the next task from/i.test(step7),
-    () => step7.split("\n").filter((l) => /index\.md/.test(l)).slice(0, 6));
-check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
-    () => !/One task at a time, in the `Step` order the index lists/.test(step7),
-    () => step7.split("\n").filter((l) => /`Step` order/.test(l)).slice(0, 4));
+    () => /do not pick one from `index\.md`/i.test(step7) && /do not pick one from `index\.md`/i.test(orchStep7)
+      && /where you pick the next task from/i.test(orchStep7),
+    () => orchStep7.split(". ").filter((l) => /index\.md/.test(l)).slice(0, 6));
+  check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
+    () => ![step7, orchStep7].some((t) => /One task at a time, in the `Step` order the index lists/.test(t)),
+    () => orchStep7.split(". ").filter((l) => /`Step` order/.test(l)).slice(0, 4));
   check("doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",
-    () => /is not a failure/.test(step7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(step7),
-    () => step7.split("\n").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
+    () => /is not a failure/.test(orchStep7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(orchStep7),
+    () => orchStep7.split(". ").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
   check("doc lint: the engine README documents the mode, its verdicts and the clock-is-not-in-flight rule — the reference a reader reaches for when the skill's summary is not enough",
     () => /--tasks <dir> --next/.test(engineReadme) && /KEEPS its clock/.test(engineReadme)
       && /startBlocker/.test(engineReadme),
@@ -1141,9 +1173,9 @@ check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in 
   // Step 8's exit-code dictionary is where an orchestrator looks up "what does exit 2 mean?". Every check above is
   // sliced to step 7, so a verdict added to the engine and documented only there leaves the dictionary answering the
   // same question a second, shorter way, and nothing sees it. Assert the count the dictionary states matches the
-  // verdicts it enumerates, and that every verdict the engine can print has an entry.
-  const step8 = skill.slice(skill.indexOf("### 8. Validate"));
-  const dictLine = step8.split("\n").find((l) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(l)) || "";
+  // verdicts it enumerates, and that every verdict the engine can print has an entry. The dictionary is one
+  // paragraph, hard-wrapped, so it is read as a paragraph and flattened.
+  const dictLine = flatten(orchStep8.split(/\n\s*\n/).find((p) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(p.trimStart())) || "").trim();
   const statedCounts = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7 };
   const verdictMarks = (dictLine.match(/⛔/g) || []).length;
   // A REFUSAL is one of them: a mode that declines to touch the folder prints its banner and exits 2 like any
@@ -1158,6 +1190,112 @@ check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in 
   check("doc lint: every exit-2 verdict the engine can print has an entry in step 8's dictionary — including the halted run, whose remedy is a decision rather than a command",
     () => exit2Verdicts.every((v) => dictLine.includes(v)),
     () => ({ missing: exit2Verdicts.filter((v) => !dictLine.includes(v)) }));
+}
+
+console.log("\n===== run diagnostics (offline, injected runner) =====");
+{
+  // A stubbed runner stands in for clio and git, so every branch is exercised without a network or a clio install.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "diag-"));
+  const settings = path.join(tmp, "appsettings.json");
+  writeFileSync(settings, JSON.stringify({ Environments: { Demo: { Uri: "https://demo.example", Password: "secret" } } }));
+  const clioInfo = `[INF] - clio:   8.1.0.134\n[INF] - gate:   2.0.0.53\n[INF] - settings file path: ${settings}\n`;
+  const stand = "[WAR] - cliogate is not installed\n" + JSON.stringify({ coreVersion: "10.0.0.858", dbEngineType: "PostgreSql",
+    frameworkDescription: ".NET Framework 4.8", user: { displayValue: "Supervisor" }, userAccount: { displayValue: "Our company" } });
+  const runner = (over = {}) => (cmd, args) => {
+    const key = `${cmd} ${args.filter((a) => !a.startsWith("/") && !/^[A-Z]:/.test(a)).join(" ")}`;
+    if (key in over) return over[key];
+    if (key === "clio info") return { ok: true, out: clioInfo };
+    if (key.startsWith("clio get-info")) return { ok: true, out: stand };
+    if (key === "git -C rev-parse --abbrev-ref HEAD") return { ok: true, out: "feature/x\n" };
+    if (key === "git -C rev-parse --short HEAD") return { ok: true, out: "abc1234\n" };
+    return { ok: false, out: "" };
+  };
+  const root = path.join(tmp, "plugin");
+  const mk = (rel, content) => { const f = path.join(root, rel); mkdirSync(path.dirname(f), { recursive: true }); writeFileSync(f, content); };
+  mk(".codex-plugin/plugin.json", JSON.stringify({ version: "1.12.0" }));
+  const out = diag.render(diag.collect({ environment: "demo", root, run: runner() }));
+  check("diagnostics: the skill version is read from the first plugin.json present, and a non-git install prints no branch/commit (it is not an error)",
+    () => out.includes("classic-to-freedom-migration `1.12.0`\n") && !/branch|commit/.test(out.split("\n")[2]), () => out);
+  check("diagnostics: clio and bundled cliogate versions come from `clio info`", () => out.includes("`8.1.0.134` (CLI on PATH) · bundled cliogate `2.0.0.53`"), () => out);
+  check("diagnostics: the stand URL is looked up case-insensitively in the clio settings file, and nothing else from that entry is printed",
+    () => out.includes("`demo` · `https://demo.example`") && !out.includes("secret"), () => out);
+  check("diagnostics: the stand line carries version, DB and framework, a missing product reads `unknown (cliogate not installed)`, and the session's user/account never appear",
+    () => out.includes("Creatio `10.0.0.858` · product unknown (cliogate not installed) · DB `PostgreSql` · `.NET Framework 4.8`")
+      && !/Supervisor|Our company/.test(out), () => out);
+  mkdirSync(path.join(root, ".git"), { recursive: true });
+  const withGit = diag.render(diag.collect({ environment: "demo", root, run: runner() }));
+  check("diagnostics: a git checkout adds its branch and short commit", () => withGit.includes("`1.12.0` · branch `feature/x` · commit `abc1234`"), () => withGit);
+  const detached = diag.render(diag.collect({ environment: "demo", root, run: runner({ "git -C rev-parse --abbrev-ref HEAD": { ok: true, out: "HEAD\n" } }) }));
+  check("diagnostics: a detached checkout says so instead of printing the literal `HEAD` as a branch", () => detached.includes("branch detached · commit `abc1234`"), () => detached);
+  const down = diag.render(diag.collect({ environment: "demo", root, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - Could not connect to the Creatio application at 'https://demo.example'." } }) }));
+  check("diagnostics: an unreachable stand is `unknown (<clio's reason>)`, and the other lines are still filled",
+    () => down.includes("- **Stand:** unknown (Could not connect to the Creatio application at 'https://demo.example'.)") && down.includes("`8.1.0.134`"), () => down);
+  const noClio = diag.render(diag.collect({ environment: "demo", root, run: () => ({ ok: false, error: "clio not found on PATH" }) }));
+  check("diagnostics: with no clio every clio-derived value names that reason instead of failing",
+    () => noClio.includes("**clio:** unknown (clio not found on PATH)") && noClio.includes("**Stand:** unknown (clio not found on PATH)"), () => noClio);
+  const bare = diag.render(diag.collect({ root: tmp, run: runner() }));
+  check("diagnostics: no plugin.json and no --environment still render a block, each gap with its reason",
+    () => bare.includes("unknown (no plugin.json beside the skill)") && bare.includes("unknown (no --environment given)") && !bare.includes("**Stand:**"), () => bare);
+  // The Claude Code plugin cache is not a git checkout; its build comes from the registry beside the cache.
+  const plugins = path.join(tmp, "plugins");
+  const cached = path.join(plugins, "cache", "creatio", "toolkit", "1.12.0");
+  mkdirSync(path.join(cached, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(cached, ".claude-plugin", "plugin.json"), JSON.stringify({ version: "1.12.0" }));
+  const listing = path.join(tmp, "listing");
+  mkdirSync(path.join(listing, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+    "toolkit@other": [{ installPath: path.join(plugins, "cache", "other", "toolkit", "1.12.0"), gitCommitSha: "ffffffffffffffffffffffffffffffffffffffff" }],
+    "toolkit@creatio": [{ installPath: cached, gitCommitSha: "a5d7e1fd9c62aaaabbbbccccddddeeeeffff0000" }] } }));
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing } }));
+  const listPlugins = (source) => writeFileSync(path.join(listing, ".claude-plugin", "marketplace.json"), JSON.stringify({ plugins: [{ name: "toolkit", source }] }));
+  listPlugins({ source: "url", url: "https://example/toolkit.git", ref: "feature/ENG-1-x" });
+  const fromRegistry = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a plugin cache without `.git` reads the installed commit from `installed_plugins.json` (the record whose installPath is this dir) and the branch from the marketplace ref",
+    () => fromRegistry.includes("`1.12.0` · branch `feature/ENG-1-x` (marketplace ref) · commit `a5d7e1f`"), () => fromRegistry);
+  const registryD = diag.collect({ environment: "demo", root: cached, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - timeout" } }) });
+  const registryJson = JSON.stringify(registryD);
+  check("diagnostics: the `--json` object renders through `normalize` exactly as the CLI block — registry branch, commit and a stand error survive the round trip into the plan",
+    () => diag.render(diag.normalize(JSON.parse(registryJson), (s) => s)) === diag.render(registryD), () => diag.render(registryD));
+  listPlugins({ source: "github", repo: "o/toolkit" });
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing, source: { source: "github", repo: "o/m", ref: "release" } } }));
+  const marketRef = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a plugin entry with no ref takes the branch from the marketplace source ref",
+    () => marketRef.includes("branch `release` (marketplace ref) · commit `a5d7e1f`"), () => marketRef);
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing } }));
+  const commitOnly = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a registry record whose marketplace names no branch prints the commit alone, never `detached`",
+    () => commitOnly.includes("`1.12.0` · commit `a5d7e1f`\n") && !commitOnly.includes("detached"), () => commitOnly);
+  // The registry names the cache by the path Claude Code wrote; a symlinked config dir reaches the same directory.
+  const linked = path.join(tmp, "linked-plugins");
+  let symlinked = true;
+  try { symlinkSync(plugins, linked, "dir"); } catch { symlinked = false; }
+  if (symlinked) {
+    writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+      "toolkit@creatio": [{ installPath: path.join(linked, "cache", "creatio", "toolkit", "1.12.0"), gitCommitSha: "a5d7e1fd9c62aaaabbbbccccddddeeeeffff0000" }] } }));
+    const viaLink = diag.render(diag.collect({ root: cached, run: runner() }));
+    check("diagnostics: a registry installPath that reaches the cache through a symlink still matches it",
+      () => viaLink.includes("commit `a5d7e1f`"), () => viaLink);
+  }
+  writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "toolkit@creatio": [{ installPath: cached, gitCommitSha: "" }] } }));
+  const noSha = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a registry record with an empty commit prints the version alone and does not throw",
+    () => noSha.includes("classic-to-freedom-migration `1.12.0`\n"), () => noSha);
+  mkdirSync(path.join(cached, ".git"));
+  const checkoutWins = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a git checkout is read from git even when a registry record exists — git names the commit that is on disk",
+    () => checkoutWins.includes("branch `feature/x` · commit `abc1234`"), () => checkoutWins);
+  const json = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs"), "--json"],
+    { encoding: "utf8", env: { PATH: "" } });
+  check("diagnostics: `--json` prints the same values as one object, the shape `manifest.runDiagnostics` takes",
+    () => { const d = JSON.parse(json.stdout); return json.status === 0 && typeof d.skillVersion === "string" && d.clioVersion === "unknown (clio not found on PATH)"; },
+    () => json.stdout);
+  check("diagnostics: the CLI entry point exits 0 and prints the block even when nothing can be read",
+    () => {
+      const r = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs")],
+        { encoding: "utf8", env: { PATH: "" } });
+      return r.status === 0 && r.stdout.startsWith("### Run diagnostics") && r.stdout.includes("unknown (clio not found on PATH)");
+    });
+  rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
