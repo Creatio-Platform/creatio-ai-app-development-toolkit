@@ -479,7 +479,11 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // alone reported no drift on exactly the change a built page has to be re-checked against.
 // A layout row's field `names` are left out, so moving fields between tabs while every tab keeps its field count
 // does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
-const digestVk = (vk) => (vk?.type === "layout" && vk.names ? { ...vk, names: undefined } : vk);
+// A row's Classic `texts` are left out too: they are checked against the built page, not built by a different task.
+const digestVk = (vk) => {
+  const v = vk?.texts ? { ...vk, texts: undefined } : vk;
+  return v?.type === "layout" && v.names ? { ...v, names: undefined } : v;
+};
 // A PLAN BOUNDARY is digested as a marker, not by its reason text: a row flipping between "build it" and "the plan
 // says there is nothing to build" changes how the row is closed while its label stays put, and that is drift. The
 // marker is appended only when set, so a row that never was a boundary digests exactly as it did before.

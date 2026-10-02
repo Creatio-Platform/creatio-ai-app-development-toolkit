@@ -183,7 +183,8 @@ function rowsForFields(fields, regionOf) {
     const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
     const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
-    const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
+    const label = v.labelKey ? `label \`${esc(v.labelKey)}\` ← ${esc(v.labelSource || "?")}` : null;
+    const additional = [linked, label, tip].filter(Boolean).join(" · ") || DASH;
     return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
   });
 }
@@ -200,9 +201,16 @@ function rowsForDetails(details, tabRegion) {
       // mechanics, not plan content.
       editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
-    const add = [cols, editNote, rowActionsNote(d.addMode)].filter(Boolean).join(" · ") || DASH;
+    const add = [cols, editNote, rowActionsNote(d.addMode), detailTextsNote(d)].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
+}
+// Where a related list's title comes from and the texts its detail shows, as page keys with their en-US text.
+function detailTextsNote(d) {
+  const title = d.captionKey ? `title \`${esc(d.captionKey)}\` ← ${esc(d.captionSource || "?")}` : "⚠ no Classic title — see ⚠ Confirm";
+  const shown = (d.texts || []).filter((t) => t.text != null)
+    .map((t) => `\`${esc(t.key)}\` "${esc(t.text)}" ← ${esc(t.source)}`);
+  return [title, shown.length ? "texts: " + shown.join(" · ") : ""].filter(Boolean).join(" · ");
 }
 // THE ROUTE TO THE CANONICAL SETTINGS, in ONE place, because the plan says it in two (the Layout
 // table's Source cell and the coverage rows the build is gated on) and a run that pointed at the guidance item in
@@ -251,9 +259,10 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     const guided = isList ? null : featureGuidanceId(s.feature);
     const nativeSrc = nativeFeatureSource(guided, s.templateProvided, formTemplate);
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
-    const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
-    const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
-    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
+    const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : null;
+    const noteCell = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
+    const add = [noteCell, isList ? detailTextsNote(s) : null].filter(Boolean).join(" · ") || DASH;
+    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc((isList && s.caption) || s.feature), type, src, DASH, add] };
   });
 }
 function widgetSource(w, formTemplate = null) {
@@ -974,9 +983,10 @@ const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget",
 // add mechanism, …). A DENYLIST, not an allowlist: a new decision kind stays VISIBLE by default (the safe direction)
 // and is hidden only when it is added here as demonstrably cosmetic.
 const COSMETIC_CONFIRM_KINDS = new Set([
-  "element-caption", "group-caption", "detail-caption", "field-labels", "field-hint", "field-control",
+  "element-caption", "group-caption", "field-labels", "field-hint", "field-control",
   "layout-density", "layout-truncated", "image-column", "image-placement",
 ]);
+// `detail-caption` / `detail-text` stay visible: a related-list text Classic does not supply is a text only a person can give.
 // kinds whose decision is ALREADY printed in a TABLE the plan renders, so repeating them in the ⚠ Confirm
 // list makes the approver read the same question twice: `rule-condition` / `entity-filter` are each a row in the
 // **Business rules** table (`⚠ condition unread — parse gap` / `⚠ dynamic — resolve value`).
@@ -2077,6 +2087,7 @@ function dashboardsSigLines(s, targetPackage = "") {
   bucket(d.unrecorded, "\u26a0 written as a bare string \u2014 rewrite as `{ id, caption, sourcePackage? }`");
   return L;
 }
+const TRANSLATIONS_MISSING_LINE = "- Translations not migrated: requires a newer clio version";
 // The `### Run diagnostics` block in the plan, from `manifest.runDiagnostics` (the `diagnostics.mjs --json` object),
 // so the plan file alone names the skill build, the clio and the stand it was produced with. Every value is text an
 // agent copied, so `normalize` passes each one through `esc`; the block never throws and never stops the plan.
@@ -2132,6 +2143,7 @@ function renderPlanWith(result, opts) {
     `**Package:** ${fill(pm.package, "<FILL: owning package(s) + lock state → target package>")}`,
     "",
     sizeLine,
+    ...(result.translationsMissing ? [TRANSLATIONS_MISSING_LINE] : []),
     `- **Approach:** ${fill(pm.approach, "<FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>")}`,
     "",
     ...renderRunDiagnostics(opts.runDiagnostics),
@@ -2376,6 +2388,14 @@ function relatedListItemRows(cs, expDetails) {
       vk: { type: "details", n: expDetails, item: true } };
   });
 }
+// Every text the page registers: its key, its Classic value in each culture (en-US alone when the manifest carried
+// no cultures) and the Classic string it came from.
+function classicTexts(resources, cultures, sources) {
+  return Object.keys(resources || {}).filter((k) => resources[k] != null)
+    .map((k) => ({ key: k, cultures: cultures?.[k] || { "en-US": resources[k] }, source: sources?.[k] || null }));
+}
+// A row's text data, checked against the row's own built page.
+const textsVk = (texts) => (texts.length ? { texts } : {});
 function templateNameNote(name) {
   if (String(name || "").endsWith("Template")) return "";
   return " — ⚠ that is not a Freedom template schema name (they end in `Template`, e.g. `ListPageV3Template`); fix"
@@ -2466,7 +2486,11 @@ function formPageLabel(pm, opts, fill, isMain) {
 }
 function buildPageRows(result, opts, pm, typed, fill, isMain) {
   const pages = [...listPageRows(pm, opts, fill, isMain), ...entityRows(result), ...placementRows(opts)];
-  if (!typed.length) pages.push({ deliverableId: "page:form", label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
+  const cs = result.changeSet || {};
+  const texts = classicTexts(cs.resources, cs.resourceCultures, cs.resourceSources);
+  // A typed entity builds the base form only when a bind-only type reuses it ("Shared form (base)"); that form is
+  // checked, texts included, like the form page of an untyped entity.
+  if (!typed.length || typed.some((t) => t.bindOnly)) pages.push({ deliverableId: "page:form", label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage", ...textsVk(texts) } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
   for (const t of typed) { const ts = typedTypeSuffix(t); const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ deliverableId: `page:typed:${t.schema}`, label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
@@ -4673,7 +4697,49 @@ function resolveRowKinds(r, ctxFor, key) {
   if (r.na) return naRow(r);
   if (r.status?.kind === STATUS_WONT_DO) return [`Won't do — ${esc(r.status.decision || "?")}`, "a planning decision (`manifest.deliverableStatus`) — nothing to build, nothing to check", "skip"];
   if (r.info) return infoRow(r);
-  return resolveVk(r.vk, ctxFor(key));
+  const ctx = ctxFor(key);
+  return withTextCheck(resolveVk(r.vk, ctx), r.vk, ctx);
+}
+// The built page's strings as `{ key: { culture: text } }`: get-page's `resources.strings`, and a flat
+// `{ key: text }` read as en-US. Null when the payload carries no `resources`.
+function builtStringsOf(page) {
+  const res = entryObject(page)?.resources;
+  if (!res || typeof res !== "object") return null;
+  const out = {};
+  for (const [k, v] of Object.entries(res)) if (typeof v === "string") out[k] = { "en-US": v };
+  const strings = res.strings && typeof res.strings === "object" ? res.strings : {};
+  for (const [k, v] of Object.entries(strings)) {
+    if (typeof v === "string") out[k] = { "en-US": v };
+    else if (v && typeof v === "object") out[k] = v;
+  }
+  return out;
+}
+// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is absent
+// in every culture; a payload with no `resources` is `unread`.
+function textMismatches(texts, ctx) {
+  const built = builtStringsOf(ctx.page);
+  const differ = [], absent = [];
+  if (!built) return { differ, absent, unread: true };
+  for (const t of texts || []) {
+    const got = built[t.key] || {};
+    for (const [culture, want] of Object.entries(t.cultures || {})) {
+      if (typeof got[culture] !== "string") absent.push(`\`${t.key}\` ${culture}`);
+      else if (got[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${got[culture]}" ≠ Classic "${want}"`);
+    }
+  }
+  return { differ, absent };
+}
+// A text that differs from Classic in any culture fails the row; a Classic culture the built page does not carry
+// leaves a passing row unverified, and so does a built page read without its strings. Rows already MISSING or not
+// machine-checked keep their verdict.
+function withTextCheck(verdict, vk, ctx) {
+  const [, ev, outcome] = verdict;
+  if (!vk?.texts?.length || (outcome !== "ok" && outcome !== "unverified")) return verdict;
+  const { differ, absent, unread } = textMismatches(vk.texts, ctx);
+  if (unread && outcome === "ok") return ["⚠ verify", `${ev}; built page carries no \`resources\` to compare ${vk.texts.length} Classic text(s) against`, "unverified", ...verdict.slice(3)];
+  if (differ.length) return ["❌ MISSING", `${ev}; built text differs from Classic: ${differ.join("; ")}`, "missing", ...verdict.slice(3)];
+  if (absent.length && outcome === "ok") return ["⚠ verify", `${ev}; built page has no text in ${absent.join(", ")}`, "unverified", ...verdict.slice(3)];
+  return verdict;
 }
 function rowKindOf(r, outcome) {
   if (r.na) return "na";

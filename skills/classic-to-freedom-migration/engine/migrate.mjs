@@ -13,8 +13,9 @@
 //     "schemas": [ { "pkg": "Case", "body": "<define(...) source>" } | { "pkg": "Case", "file": "..." }, … ],
 //     "seed":   [ { "pkg": "BaseModulePageV2/CrtUIPlatform7x", "body"|"file": … }, … ],  // parent template chain
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
+//     "resourceStrings": { "SomeTabCaption": { "en-US": "…", "fr-FR": "…" }, … }, // optional; the same strings in every Classic culture (get-classic-page-sources)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
-//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity", "resourceStrings" }, … }, // optional; detail body → entity + list columns; resourceStrings → the detail's own strings in every culture (its Caption titles the related list); title = the schema's internal caption, never a display title (#11ii)
 //        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
 //        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
 //        // + optional `"ownSection": "<Section>"` (the child entity owns ANOTHER SECTION: its Classic card stays
@@ -51,7 +52,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView,
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView, defaultCultureText,
   SECTION_VIEW_METHODS } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
@@ -538,9 +539,11 @@ function sectionCodeForList(sectionChangeSet) {
 }
 function sectionChangeSetOf(manifest, opts, sectionEff) {
   if (opts.scopeSchema || !sectionEff) return null;
+  const strings = pageStringsOf(manifest);
   return mapToFreedom(sectionEff, {
     entityColumns: manifest.entityColumns || {},
-    resources: manifest.resources || {},
+    resources: strings.resources,
+    resourceStrings: strings.resourceStrings,
   });
 }
 // ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
@@ -1191,6 +1194,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   if (f.status === "error") { c.specError = f.error; return; } // malformed child manifest — keep the listed row
   const res = f.res;
   c.spec = res.designSpec;
+  c.changeSet = pageTextsOf(res.changeSet);
   c.mappedEntity = res.entity;
   c.resolvedFrom = key;
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
@@ -1258,6 +1262,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
     t.ruleCount = (res.changeSet?.pageBusinessRules || []).length + (res.changeSet?.entityBusinessRules || []).length;
     t.ruleSources = res.changeSet?.ruleSourceCount || 0;
+    t.changeSet = pageTextsOf(res.changeSet);
     // A typed page is a FIRST-CLASS scope of the surface (step 5.1: "every record page including typed variants"): it
     // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
     t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
@@ -1290,7 +1295,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
   else if (f.status === "error") miniPage.specError = f.error;
   else {
     const res = f.res;
-    miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
+    miniPage.spec = res.designSpec; miniPage.changeSet = pageTextsOf(res.changeSet); miniPage.blocked = !!res.gate?.blocked;
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
@@ -2188,7 +2193,11 @@ function detailSchemaRecord(e, scanText, p) {
   return {
     entity: eObj.entity || body.entity,
     columns: body.columns,
-    title: eObj.title || null, // human detail title (from its resources)
+    title: eObj.title || null, // the detail schema's internal caption — never a related-list title
+    // the detail's own strings in every culture (`{ Key: { culture: text } }`), null when the manifest carries none
+    strings: cultureMapOf(eObj.resourceStrings),
+    // the strings the detail body shows (`Resources.Strings.<Key>`), across all layers
+    textKeys: referencedStringKeys(scanText),
     editPage: ("editPage" in eObj) ? eObj.editPage : body.editPage,
     editable: ("editable" in eObj) ? eObj.editable : body.editable, // tags view/attach-only; never a gate answer
     // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
@@ -2207,6 +2216,41 @@ function detailSchemaRecord(e, scanText, p) {
     error: p.error || null,
     astDiagnostics: p.astDiagnostics || [],
   };
+}
+
+// A `{ key: { culture: text } }` map (get-page's `bundle.resources.strings` shape), or null when `v` is not an object.
+// Non-string and empty texts are dropped, and a key left with no culture is dropped.
+function cultureMapOf(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out = {};
+  for (const [key, byCulture] of Object.entries(v)) {
+    if (!byCulture || typeof byCulture !== "object" || Array.isArray(byCulture)) continue;
+    const cultures = Object.fromEntries(Object.entries(byCulture).filter(([c, t]) => c && typeof t === "string" && t !== ""));
+    if (Object.keys(cultures).length) out[key] = cultures;
+  }
+  return out;
+}
+// The page strings the mapper reads: `resources` (key → en-US text) and `resourceStrings` (key → every culture, or
+// null). A key `resourceStrings` carries takes its en-US text from them, so the text and its cultures share one source.
+export function pageStringsOf(manifest) {
+  const resourceStrings = cultureMapOf(manifest?.resourceStrings);
+  const derived = Object.fromEntries(Object.entries(resourceStrings || {}).map(([k, c]) => [k, defaultCultureText(c)]));
+  return { resources: { ...plainObject(manifest?.resources), ...derived }, resourceStrings };
+}
+// A sub-page's texts in the root result: the ChangeSet's `resources`, `resourceCultures` and `resourceSources`.
+function pageTextsOf(cs) {
+  return { resources: cs?.resources || {}, resourceCultures: cs?.resourceCultures || {}, resourceSources: cs?.resourceSources || {} };
+}
+// Translations are not migrated when the manifest has page strings in en-US only: `resources` without
+// `resourceStrings` is what a clio that predates `resourceStrings` writes.
+export const translationsMissing = (manifest) =>
+  !!manifest && manifest.resources != null && manifest.resourceStrings == null;
+const STRING_REF_RE = /Resources\.Strings\.([A-Za-z_$][\w$]*)/g;
+// Distinct `Resources.Strings.<Key>` references in a body, in first-seen order.
+function referencedStringKeys(text) {
+  const keys = new Set();
+  for (const m of String(text || "").matchAll(STRING_REF_RE)) keys.add(m[1]);
+  return [...keys];
 }
 
 // Parse each supplied detail-schema body (#11(ii)/B2) → { entity, columns, title, editPage, editable, addMode … }
@@ -2784,9 +2828,11 @@ export function runMigration(manifest, opts = {}) {
   // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  const pageStrings = pageStringsOf(manifest);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
-    resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
+    resources: pageStrings.resources,        // #5/#13 — localizable strings for tab/group/detail captions
+    resourceStrings: pageStrings.resourceStrings, // the same strings in every Classic culture, or null
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
     profileSchemas,                           // parsed embedded-profile bodies (entity + displayed columns)
@@ -3050,6 +3096,7 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
+  out.translationsMissing = translationsMissing(manifest);
   // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
   const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
