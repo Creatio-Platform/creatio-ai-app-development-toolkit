@@ -128,8 +128,9 @@ export function readPlan(result, opts = {}) {
 // answers, so an existing file is MERGED, never regenerated: an id the plan publishes and the file lacks is added
 // with the empty value, and every key already there — filed, empty, or one the plan has since dropped — keeps its
 // value. A file that does not parse as a JSON object is somebody's record the engine cannot read, so it is left
-// byte for byte as it is and reported. The file is replaced atomically, and only while it still holds the bytes
-// the merge read: a builder filing a record at the same moment keeps that record (see `mergeRecordFile`).
+// byte for byte as it is and reported. The file is replaced by a rename, re-checked against the bytes the merge
+// read just before it, so a record a builder files meanwhile is merged rather than overwritten, outside the short
+// gap that re-check leaves (see `replaceIfUnchanged`).
 // `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`. Returns the files written (created or
 // extended), the files left unread, and the files another writer kept changing under the merge.
 export function ensureRecordFiles(dir, plan) {
@@ -146,7 +147,7 @@ export function ensureRecordFiles(dir, plan) {
   for (const [file, keys, empty] of slots) by[mergeRecordFile(path.join(dir, file), keys, empty)].push(file);
   return { written: by[MERGE_WRITTEN], unreadable: by[MERGE_UNREADABLE], contended: by[MERGE_CONTENDED] };
 }
-// What one merge did to its file. MERGE_RACED is internal: the file changed between the read and the replace.
+/// What one merge did to its file. MERGE_RACED is internal: the file changed between the read and the replace.
 const MERGE_WRITTEN = "written";
 const MERGE_UNCHANGED = "unchanged";
 const MERGE_UNREADABLE = "unreadable";
@@ -154,6 +155,10 @@ const MERGE_CONTENDED = "contended";
 const MERGE_RACED = "raced";
 // How many times a merge re-reads a file that changed under it before it leaves the file to the other writer.
 export const MERGE_ATTEMPTS = 3;
+// How many times a rename the OS refused because another process holds the file is tried, with a short pause
+// growing by RENAME_BACKOFF_MS each time, before the file is left to that process.
+export const RENAME_ATTEMPTS = 4;
+const RENAME_BACKOFF_MS = 25;
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 // The parsed record, or null when the text is not a JSON object. Only the PARSE is caught: a file the process
 // cannot read at all (a directory in its place, no permission) throws to the caller.
@@ -179,26 +184,47 @@ function mergeRecordFile(full, keys, empty) {
 function mergeOnce(full, keys, empty) {
   const seen = readBytes(full);
   const doc = seen === null ? {} : parseRecordObject(seen.toString("utf8"));
-  if (!doc) return MERGE_UNREADABLE;
+  // A file that does not parse may be one a builder is writing right now: it counts as unreadable only when a
+  // second read finds the same bytes.
+  if (!doc) return sameBytes(readBytes(full), seen) ? MERGE_UNREADABLE : MERGE_RACED;
   const missing = keys.filter((k) => !Object.hasOwn(doc, k));
   if (!missing.length && seen !== null) return MERGE_UNCHANGED;
   for (const k of missing) doc[k] = structuredClone(empty);
-  return replaceIfUnchanged(full, seen, JSON.stringify(doc, null, 2) + "\n") ? MERGE_WRITTEN : MERGE_RACED;
+  return replaceIfUnchanged(full, seen, JSON.stringify(doc, null, 2) + "\n");
 }
 // Writes `text` to a temp file in the same folder and renames it over `full`, so a reader sees the old file or
-// the new one and never half of either. Renames only while `full` still holds `seen`; returns whether it did.
-// The temp file never outlives the call.
+// the new one and never half of either. The file is re-read immediately before the rename and the rename happens
+// only while it still holds `seen`. That narrows the window in which another writer's change can be lost to the
+// gap between that re-read and the rename; it does not close it, since a builder writes with plain file tools and
+// takes no lock. The temp file never outlives the call.
 function replaceIfUnchanged(full, seen, text) {
   fs.mkdirSync(path.dirname(full), { recursive: true });
   const temp = path.join(path.dirname(full), `.${path.basename(full)}.${process.pid}.${Date.now()}.tmp`);
   try {
     fs.writeFileSync(temp, text);
-    if (!sameBytes(readBytes(full), seen)) return false;
-    fs.renameSync(temp, full);
-    return true;
+    if (!sameBytes(readBytes(full), seen)) return MERGE_RACED;
+    return renameWithRetry(temp, full) ? MERGE_WRITTEN : MERGE_CONTENDED;
   } finally {
     fs.rmSync(temp, { force: true });
   }
+}
+// The rename errors Windows raises while another process has the target open (an editor, an indexer, a builder
+// mid-write). They are a busy file, not a broken folder, so the rename is tried again rather than failing the mode.
+const RENAME_LOCK_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+export const isRenameLockError = (e) => RENAME_LOCK_CODES.has(e?.code);
+const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Whether the rename happened. Any other error is thrown to the caller.
+function renameWithRetry(temp, full) {
+  for (let attempt = 1; attempt <= RENAME_ATTEMPTS; attempt++) {
+    try {
+      fs.renameSync(temp, full);
+      return true;
+    } catch (e) {
+      if (!isRenameLockError(e)) throw e;
+      if (attempt < RENAME_ATTEMPTS) pauseSync(RENAME_BACKOFF_MS * attempt);
+    }
+  }
+  return false;
 }
 // The line every mode prints for the record files it left as they were, or null when it left none.
 export function recordFilesWarning(dir, { unreadable = [], contended = [] } = {}) {
@@ -210,9 +236,9 @@ export function recordFilesWarning(dir, { unreadable = [], contended = [] } = {}
       + " keeping every value already filed, then re-run.");
   }
   if (contended.length) {
-    lines.push(`⚠ ${names(contended)} in ${dir} changed under the engine ${MERGE_ATTEMPTS} times in a row while it added`
-      + " the missing ids — NOT WRITTEN, left to the other writer so no record it filed is lost. Re-run once that"
-      + " writer is done.");
+    lines.push(`⚠ ${names(contended)} in ${dir} was busy while the engine added the missing ids — it kept changing, or`
+      + " another process held it open — so it was NOT WRITTEN and left to that writer, losing no record it filed."
+      + " Re-run once that writer is done.");
   }
   return lines.length ? lines.join("\n") : null;
 }

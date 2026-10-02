@@ -65,10 +65,13 @@ engine writes `reads/index.json` and owns every filename in it; page keys carry 
 slugged and the mapping recorded, and nothing downstream parses a filename. It also keeps the `evidence.json` /
 `judge.json` / `recorded.json` record files current with every published id already a key, the same merge every
 `--tasks` / `--next` / `--start` / `--handoff` runs: an id a file lacks is added, a value already filed is never changed or
-dropped, and a file that does not parse as a JSON object is reported and left as it is. The file is replaced
-atomically (a temp file renamed over it) and only while it still holds the bytes the merge read, so a builder filing a
-record at the same moment keeps it; a file that keeps changing under the merge is reported and left to that writer. A
-failure to write them is a warning on a task-folder mode's answer, never a crash of that mode. Like
+dropped, and a file that does not parse as a JSON object on two reads in a row is reported and left as it is. The
+file is replaced with a temp file renamed over it, and the merge re-reads it immediately before the rename, merging
+again onto anything a builder filed in the meantime. That narrows the window in which a builder's write can be lost
+to the gap between that re-read and the rename; it does not remove it, since a builder writes with plain file tools
+and takes no lock. A file that keeps changing, or that another process holds so the rename is refused after a few
+short retries, is reported and left to that writer. A failure to write them is a warning on a task-folder mode's
+answer, never a crash of that mode. Like
 `--tasks`, it WRITES rather than prints, so it refuses a second mode flag instead of losing to it.
 
 **`--verify --from <dir>` — the payload COMPOSED, not handed over.** The other half of that contract: it reads

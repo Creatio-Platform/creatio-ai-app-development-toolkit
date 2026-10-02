@@ -24,7 +24,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
-import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
+import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -9981,8 +9981,60 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   check("record files: a file that changes under EVERY merge attempt is left to the other writer and reported as contended — its latest record stands and no temp file is left behind",
     () => contended.contended.includes("evidence.json") && !contended.written.includes("evidence.json")
       && contendedDoc[builderId]?.n >= MERGE_ATTEMPTS && !Object.hasOwn(contendedDoc, missingId) && tempsLeft().length === 0
-      && /changed under the engine/.test(recordFilesWarning(raceBase, contended) || ""),
+      && /was busy/.test(recordFilesWarning(raceBase, contended) || ""),
     () => ({ contended, builder: contendedDoc[builderId], temps: tempsLeft() }));
+
+  // A rename the OS refuses while another process holds the file (EPERM / EBUSY / EACCES on Windows) is retried,
+  // then the file is reported as contended; any other rename error is not a busy file.
+  const lockError = (code) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+  const withLockedRename = (failures, code, fn) => {
+    const realRename = fs.renameSync;
+    let calls = 0;
+    fs.renameSync = (...args) => {
+      calls += 1;
+      if (calls <= failures) throw lockError(code);
+      return realRename(...args);
+    };
+    try { return { result: fn(), calls }; } finally { fs.renameSync = realRename; }
+  };
+  check("record files: `isRenameLockError` classifies EPERM, EBUSY and EACCES as a busy file, and nothing else",
+    () => ["EPERM", "EBUSY", "EACCES"].every((c) => isRenameLockError(lockError(c)))
+      && !["ENOSPC", "EISDIR", "ENOENT"].some((c) => isRenameLockError(lockError(c))) && !isRenameLockError(null),
+    () => "classification");
+  seedRace();
+  const brief = withLockedRename(RENAME_ATTEMPTS - 1, "EPERM", () => ensureRecordFiles(raceBase, PLAN));
+  check("record files: a rename refused fewer times than the retry budget succeeds on a later try — the file is written with the missing id",
+    () => brief.result.written.includes("evidence.json") && Object.hasOwn(JSON.parse(fs.readFileSync(evFile, "utf8")), missingId)
+      && tempsLeft().length === 0,
+    () => ({ result: brief.result, calls: brief.calls, temps: tempsLeft() }));
+  seedRace();
+  const seededBytes = fs.readFileSync(evFile, "utf8");
+  const held = withLockedRename(Infinity, "EBUSY", () => ensureRecordFiles(raceBase, PLAN));
+  check("record files: a rename refused on every try reports the file as contended — the file keeps its bytes, no temp file is left, and nothing throws",
+    () => held.result.contended.includes("evidence.json") && fs.readFileSync(evFile, "utf8") === seededBytes && tempsLeft().length === 0,
+    () => ({ result: held.result, calls: held.calls, temps: tempsLeft() }));
+  // The rename stub patches this process's `fs`, so the merge runs in-process through `ensureRecordFiles`, the call
+  // every mode makes, `--reads` included.
+  check("record files: …and that contended result renders the warning line every mode prints, `--reads` included, rather than an exception",
+    () => /was busy/.test(recordFilesWarning(raceBase, held.result) || ""), () => held.result);
+
+  // A file that does not parse on the first read because a builder is mid-write, and parses on the second: the
+  // merge treats it as raced and retries, so it is merged rather than reported as unreadable.
+  seedRace();
+  const halfWritten = Buffer.from("{ \"half\": ");
+  const realRead = fs.readFileSync;
+  let midReads = 0;
+  fs.readFileSync = (p, ...rest) => {
+    if (path.resolve(String(p)) !== path.resolve(evFile)) return realRead(p, ...rest);
+    midReads += 1;
+    return midReads === 1 ? halfWritten : realRead(p, ...rest);
+  };
+  let midWrite;
+  try { midWrite = ensureRecordFiles(raceBase, PLAN); } finally { fs.readFileSync = realRead; }
+  check("record files: a file unparseable on the first read and whole on the second is MERGED, not reported unreadable — only bytes that stay unparseable are",
+    () => midWrite.written.includes("evidence.json") && !midWrite.unreadable.includes("evidence.json")
+      && Object.hasOwn(JSON.parse(fs.readFileSync(evFile, "utf8")), missingId),
+    () => ({ midWrite, reads: midReads }));
   fs.rmSync(raceBase, { recursive: true, force: true });
 }
 
