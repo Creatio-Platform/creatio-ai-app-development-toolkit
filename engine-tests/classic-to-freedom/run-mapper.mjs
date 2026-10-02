@@ -7942,6 +7942,32 @@ check("detail add-mechanism: each raised as a decision + rendered in the plan (c
   check("detail add-mechanism: a longer identifier containing a wrapper name is NOT a lookup signal (word-bounded)",
     detectAddMode(`define("W",[],function(){return{methods:{addRecord:function(){this.openLookupWithMultiSelectX();this.myopenProductLookupToLink();}}};});`) === null);
 }
+// get-classic-page-sources entry shape: `body` is the top layer, `bodies` is the replacing chain base→top as
+// {pkg, body}. A lookup add declared only in the base layer is detected from `bodies`; `body` alone misses it.
+{
+  const baseLayer = `define("OrderProductDetailV2",[],function(){return{entitySchemaName:"OrderProduct",methods:{addRecord:function(){PICUtilities.openProductLookupToLink(this, "Product", this.onProductsSelected);}}};});`;
+  const topLayer = `define("OrderProductDetailV2",[],function(){return{methods:{getGridDataColumns:function(){var c=this.callParent(arguments);delete c.Comment;return c;}}};});`;
+  const layerRun = (entry) => runMigration({
+    entity: "Order", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("OrderPageV2",[],function(){return{entitySchemaName:"Order",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"OrderProductDetailV2",entitySchemaName:"OrderProduct",filter:{detailColumn:"Order",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { OrderProductDetailV2: { ...entry, editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS,
+  });
+  const damLines = (run) => run.plan.split("\n").filter((l) => /\[detail-add-mechanism\]/.test(l));
+  const chainRun = layerRun({ body: topLayer, bodies: [{ pkg: "Order", body: baseLayer }, { pkg: "Custom", body: topLayer }] });
+  const chainDetail = chainRun.changeSet.details.find((d) => d.detailSchema === "OrderProductDetailV2");
+  check("detail chain (bundle shape): base-layer addRecord → PICUtilities.openProductLookupToLink in `bodies` → addMode.lookup + detail-add-mechanism line",
+    chainDetail?.addMode?.lookup === true
+    && chainRun.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism" && n.item.startsWith("OrderProductDetailV2"))
+    && damLines(chainRun).length === 1 && /ADDS via a lookup/.test(damLines(chainRun)[0]),
+    () => ({ addMode: chainDetail?.addMode, lines: damLines(chainRun) }));
+  const topRun = layerRun({ body: topLayer });
+  const topDetail = topRun.changeSet.details.find((d) => d.detailSchema === "OrderProductDetailV2");
+  check("detail chain (bundle shape) control: the top `body` alone → no lookup add and no detail-add-mechanism line",
+    topDetail !== undefined && topDetail.addMode?.lookup !== true && damLines(topRun).length === 0
+    && !topRun.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism"),
+    () => ({ addMode: topDetail?.addMode, lines: damLines(topRun) }));
+}
 // review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
 // (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
 // "attach existing" grid button, fixes the list filters) is NOW detected. It was invisible to detectAddMode before
