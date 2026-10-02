@@ -3882,6 +3882,147 @@ check("formless: the `Inline grid` Call-legend definition renders when an inline
 check("formless: the `⚠ verify` Call-legend definition renders when an empty child is present",
   /\*\*`⚠ verify`\*\* = the child folded to 0 fields with no behaviour/.test(formlessEmpty.plan),
   () => formlessEmpty.plan.split("\n").filter((l) => /verify/.test(l)));
+// ---- Child page wiring: every child page the plan builds is wired to the related list that opens it ----
+// One parent with a related list per child resolution: a folded child (WA), a child whose Classic page exists but
+// was not folded (WB), an inline-editable grid (WG), a reused Freedom form (WR), a verified "no page" (WN) and an
+// approved section boundary (WS). Only WA and WB build a page that a list must open; WG is built as the list itself.
+const WIRE_DETAIL = (k, e) => `${k}:{schemaName:"${k}Detail",entitySchemaName:"${e}",filter:{detailColumn:"M",masterColumn:"Id"}}`;
+const WIRE_MANIFEST = { entity: "Par", targetPackage: "TgtPkg",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{${[["WA", "WAE"], ["WB", "WBE"], ["WG", "WGE"], ["WR", "WRE"], ["WN", "WNE"], ["WS", "WSE"]].map(([k, e]) => WIRE_DETAIL(k, e)).join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${["WA", "WB", "WG", "WR", "WN", "WS"].map((k) => `{operation:"insert",name:"${k}",parentName:"T",values:{itemType:2}}`).join(",")}]};});` }],
+  detailSchemas: {
+    WADetail: { entity: "WAE", editPage: "WAEPage" }, WBDetail: { entity: "WBE", editPage: "WBEPage" }, WGDetail: { entity: "WGE", editPage: "WGEPage" },
+    WRDetail: { entity: "WRE", reuseFreedomPage: "WRE_FormPage" }, WNDetail: { entity: "WNE", editPage: false },
+    WSDetail: { entity: "WSE", editPage: "WSEPage", opensClassicPage: "WSEPage" } },
+  childPageSchemas: {
+    WAEPage: { entity: "WAE", schemas: [{ pkg: "C", body: `define("WAEPage",[],function(){return{entitySchemaName:"WAE",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] },
+    WGEPage: { entity: "WGE", schemas: [{ pkg: "C", body: `define("WGEPage",[],function(){return{entitySchemaName:"WGE",methods:{getFilter:function(){return 1;}},diff:[]};});` }] } } };
+const wireRun = runMigration(WIRE_MANIFEST, { baseDir: FIX });
+const wireOpts = checklistOpts(WIRE_MANIFEST);
+const wireGroups = checklistGroups(wireRun, wireOpts);
+const wireRows = wireGroups.filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => ({ ...r, groupKey: g.pageKey })));
+const wireRow = (e) => wireRows.find((r) => r.label.includes("`" + e + "`"));
+check("child page wiring: the parent page carries ONE wiring row per related list whose child page is built — the folded child and the not-yet-folded Classic page — plus an explicit no-page row for the inline grid, and none for a reused form, a verified no-page child or a section boundary",
+  wireRows.length === 3 && wireRows.every((r) => r.groupKey === "main")
+  && wireRow("WAE")?.vk?.type === "relatedpage" && wireRow("WBE")?.vk?.type === "relatedpage"
+  && !!wireRow("WGE")?.na && !wireRow("WGE")?.vk
+  && !wireRow("WRE") && !wireRow("WNE") && !wireRow("WSE"),
+  () => wireRows.map((r) => [r.groupKey, r.deliverableId, r.vk?.type, r.na]));
+check("child page wiring: the row names the opening related list, the child page key, its template and the Classic page it replaces, and the read that closes it targets the child entity in the target package",
+  /Related list "WADetail" opens the rebuilt child page `child:WAE` \(on `BaseMiniPageTemplate`, replacing Classic `WAEPage`\) on Add and on open-record/.test(wireRow("WAE")?.label || "")
+  && /`child:WBE` \(replacing Classic `WBEPage`\)/.test(wireRow("WBE")?.label || "")
+  && wireRow("WAE").vk.evidence === "relatedPage:WAE" && wireRow("WAE").vk.entity === "WAE"
+  && wireRow("WAE").vk.package === "TgtPkg" && wireRow("WAE").vk.childKey === "child:WAE"
+  && wireRow("WBE").vk.childKey === "child:WBE" && wireRow("WAE").deliverableId === "child-page-wiring:WADetail",
+  () => wireRows.map((r) => [r.label, r.vk]));
+check("child page wiring: the wiring line is its own quoted paragraph — a bare `>` separates it from a quoted body that follows",
+  /#### Child page: WBE — opened by detail "WBDetail"\n> \*\*Wiring:\*\* [^\n]*\n>\n> ⚠ \*\*`WBEPage` is a REAL Classic edit page/.test(wireRun.plan),
+  () => wireRun.plan.split("\n").filter((l, i, a) => /Child page: WBE/.test(a[i - 1] || "") || /Child page: WBE/.test(l) || /Child page: WBE/.test(a[i - 2] || "")));
+{
+  // A reused Freedom form sets the same add-on as a rebuilt page of the same entity, so the two cannot both hold.
+  const m = { ...WIRE_MANIFEST, detailSchemas: { ...WIRE_MANIFEST.detailSchemas, WRDetail: { entity: "WAE", reuseFreedomPage: "WAE_FormPage" } } };
+  const plan = runMigration({ ...m, schemas: [{ pkg: "P", body: m.schemas[0].body.replace('entitySchemaName:"WRE"', 'entitySchemaName:"WAE"') }] }, { baseDir: FIX }).plan;
+  check("child page wiring: a reused form and a rebuilt page for ONE entity are named as a wiring conflict in the plan",
+    /⚠ \*\*Wiring conflict:\*\* 2 different pages, rebuilt or reused, are to open for `WAE` \(`child:WAE@WADetail`, `WAE_FormPage`\)/.test(plan),
+    () => plan.split("\n").filter((l) => /Wiring/.test(l)).map((l) => l.slice(0, 220)));
+}
+check("child page wiring: the plan states the same wiring under each built child's mapping, the inline grid's explicit no-page outcome, and nothing for the reused or boundary children",
+  /#### Child page: WAE — opened by detail "WADetail"\n> \*\*Wiring:\*\* Related list "WADetail" opens the rebuilt child page `child:WAE`[^\n]*Closed by `--verify` from the stand read `get-related-page-addon`[^\n]*`TgtPkg`/.test(wireRun.plan)
+  && /#### Child page: WBE — opened by detail "WBDetail"\n> \*\*Wiring:\*\* Related list "WBDetail" opens the rebuilt child page `child:WBE`/.test(wireRun.plan)
+  && /#### Child page: WGE — opened by detail "WGDetail"\n> \*\*Wiring:\*\* no page to wire — an inline-editable related list/.test(wireRun.plan)
+  && !/#### Child page: WRE[^\n]*\n> \*\*Wiring/.test(wireRun.plan) && !/#### Child page: WSE[^\n]*\n> \*\*Wiring/.test(wireRun.plan)
+  && !/#### Child page: WNE[^\n]*\n> \*\*Wiring/.test(wireRun.plan),
+  () => wireRun.plan.split("\n").filter((l) => /Child page: W|Wiring/.test(l)).map((l) => l.slice(0, 160)));
+{
+  const cl = renderChecklist(wireRun, wireOpts);
+  check("child page wiring: `--checklist` lists the wiring rows as pending work and the inline grid as N/A with its reason, never as pending",
+    /\*\*Child page wiring\*\*/.test(cl) && /\| Related list "WADetail" opens[^\n]*\| ☐ pending \|/.test(cl)
+    && /\| Related list "WGDetail" — `WGE` \| N\/A — no page to wire — an inline-editable related list/.test(cl),
+    () => cl.split("\n").filter((l) => /Related list "W/.test(l)).map((l) => l.slice(0, 200)));
+  const reads = readPlan(wireRun, wireOpts).reads.filter((r) => r.kind === "reachability" && r.reachabilityKey.startsWith("relatedPage:"));
+  check("child page wiring: the read plan asks the stand for each built child's RelatedPage add-on in the target package, copied whole, once per entity",
+    reads.map((r) => r.reachabilityKey).sort().join() === "relatedPage:WAE,relatedPage:WBE"
+    && reads.every((r) => /copied WHOLE/.test(r.what) && /`get-related-page-addon`/.test(r.what) && /`package-name` = `TgtPkg`/.test(r.what)),
+    () => reads);
+  const wired = (name, extra = {}) => ({ success: true, entitySchemaName: "WAE", packageName: "TgtPkg", pageCount: 1,
+    pages: [{ pageSchemaName: name, isDefault: true, isAdd: false, isSspDefault: false }], ...extra });
+  const wireMark = (reach, pages = { "child:WAE": { schemaName: "Tgt_WAEPage", viewConfig: { items: [] } } }) => {
+    const md = renderVerify(wireRun, wireOpts, { pages, reachability: reach }).markdown;
+    const line = md.split("\n").find((l) => /Related list "WADetail" opens/.test(l)) || "";
+    return line.split(" | ").slice(2, 4).join(" | ").replace(/ˋ/g, "`");
+  };
+  check("child page wiring: `--verify` closes the row only when the add-on's default page IS the built child page, read off the stand response",
+    /✅ Done \| Add and open-record open `Tgt_WAEPage`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") })),
+    () => wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }));
+  check("child page wiring: an add-on with no pages, a default on another page and a separate add page on another page are each ❌ MISSING, naming what opens instead",
+    /❌ MISSING \| the RelatedPage add-on for `WAE` has no default page in `TgtPkg`/.test(wireMark({ "relatedPage:WAE": { ...wired("x"), pageCount: 0, pages: [] } }))
+    && /❌ MISSING \| open-record opens `Other_Page`, Add opens `Other_Page`, the built child page is `Tgt_WAEPage`/.test(wireMark({ "relatedPage:WAE": wired("Other_Page") }))
+    && /❌ MISSING \| Add opens `Quick_Page`, the built child page is `Tgt_WAEPage`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", {
+      pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, isAdd: false }, { pageSchemaName: "Quick_Page", isDefault: false, isAdd: true }] }) })),
+    () => [wireMark({ "relatedPage:WAE": wired("Other_Page") })]);
+  check("child page wiring: a portal-only or per-type default does not decide what the related list opens — ❌ MISSING",
+    /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All external users" }] }) }))
+    && /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, typeColumnValue: "a1b2" }] }) })));
+  // clio names only the two seeded audiences: a custom-role entry reads as `roleName: null` with the role UId in `role`.
+  const customRole = { role: "7f3b2c1d-0000-4000-8000-00000000abcd", roleName: null };
+  const generalByUId = { role: "A29A3BA5-4B0D-DE11-9A51-005056C00008", roleName: null };
+  const roleMarks = () => [
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...customRole }, { pageSchemaName: "Old_Page", isDefault: true, roleName: "All employees" }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...customRole }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true, ...customRole }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All employees" }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true, ...customRole }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...generalByUId }] }) })];
+  check("child page wiring: only the general entry decides — a custom-role default (role UId, `roleName: null`) is skipped in either order, and the `All employees` default is read as the general one by name or by its UId",
+    /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(roleMarks()[0])
+    && /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(roleMarks()[1])
+    && /✅ Done/.test(roleMarks()[2]) && /✅ Done/.test(roleMarks()[3])
+    && /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All employees" }] }) })),
+    roleMarks);
+  check("child page wiring: the schema UId match ignores case — an uppercase add-on UId closes the row against a lowercase built UId even when the schema names differ",
+    /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Renamed_Page", pageSchemaUId: "33333333-AAAA-4BBB-8CCC-DDDDDDDDDDDD", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "33333333-aaaa-4bbb-8ccc-dddddddddddd", viewConfig: { items: [] } } })),
+    () => wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Renamed_Page", pageSchemaUId: "33333333-AAAA-4BBB-8CCC-DDDDDDDDDDDD", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "33333333-aaaa-4bbb-8ccc-dddddddddddd", viewConfig: { items: [] } } }));
+  check("child page wiring: when both sides carry a schema UId the entry is matched by UId, so a same-named page in another package does not close the row",
+    /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", pageSchemaUId: "11111111-1111-4111-8111-111111111111", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "22222222-2222-4222-8222-222222222222", viewConfig: { items: [] } } }))
+    && /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", pageSchemaUId: "22222222-2222-4222-8222-222222222222", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "22222222-2222-4222-8222-222222222222", viewConfig: { items: [] } } })));
+  check("child page wiring: no read, a failed read and a read from another package are ⚠ verify — never a close, never a builder's word",
+    /⚠ verify \| the RelatedPage add-on for `WAE` was not read/.test(wireMark({}))
+    && /⚠ verify \| the RelatedPage read for `WAE` is not a `get-related-page-addon` response \(boom\)/.test(wireMark({ "relatedPage:WAE": { success: false, error: "boom" } }))
+    && /⚠ verify/.test(wireMark({ "relatedPage:WAE": true }))
+    && /⚠ verify \| the add-on was read from `Custom`, the plan targets `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "Custom" }) }))
+    && /⚠ verify \| the add-on read carries no `packageName`, so it cannot confirm the add-on is in `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: undefined }) }))
+    && /⚠ verify \| the add-on read carries no `packageName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "" }) })),
+    () => [wireMark({}), wireMark({ "relatedPage:WAE": true }), wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: undefined }) })]);
+  check("child page wiring: a child page reported NOT BUILT is ❌ MISSING, and one that reports no schemaName is ⚠ verify — the binding is matched against the built page, not assumed",
+    /❌ MISSING \| the child page `child:WAE` is reported as NOT BUILT/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": false }))
+    && /⚠ verify \| the built child page `child:WAE` reports no `schemaName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": { viewConfig: { items: [] } } })));
+}
+{
+  // With no target package the row and its read name "the target package", and a read from any package is matched.
+  const noPkgManifest = { ...WIRE_MANIFEST, targetPackage: undefined };
+  const npRun = runMigration(noPkgManifest, { baseDir: FIX });
+  const npOpts = checklistOpts(noPkgManifest);
+  const npRow = checklistGroups(npRun, npOpts).filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows)
+    .find((r) => r.label.includes("`WAE`"));
+  const npRead = readPlan(npRun, npOpts).reads.find((r) => r.kind === "reachability" && r.reachabilityKey === "relatedPage:WAE");
+  const npMark = () => {
+    const md = renderVerify(npRun, npOpts, { pages: { "child:WAE": { schemaName: "Tgt_WAEPage", viewConfig: { items: [] } } },
+      reachability: { "relatedPage:WAE": { success: true, entitySchemaName: "WAE", packageName: "Custom", pageCount: 1,
+        pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, isAdd: false }] } } }).markdown;
+    return (md.split("\n").find((l) => /Related list "WADetail" opens/.test(l)) || "").split(" | ").slice(2, 4).join(" | ").replace(/ˋ/g, "`");
+  };
+  check("child page wiring: with no target package the row and the read plan name the target package generically, and `--verify` matches a read from any package",
+    /the RelatedPage add-on for `WAE` in the target package names that page/.test(npRow?.label || "")
+    && npRow?.vk?.package === null
+    && /`package-name` = the plan's target package/.test(npRead?.what || "")
+    && /✅ Done \| Add and open-record open `Tgt_WAEPage`/.test(npMark()),
+    () => [npRow?.label, npRow?.vk, npRead?.what, npMark()]);
+}
 // `logicOnly` (the inline-grid child's logicSpec) suppresses FORM-PAGE framing: the Base-field overrides
 // section renders normally but vanishes under logicOnly (it is a build instruction on the template's fields, not logic).
 {
@@ -9003,6 +9144,17 @@ const PG_MANIFEST = {
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
 const pgOpts = checklistOpts(PG_MANIFEST);
+// Two related lists on `main` open the SAME physical child page: one add-on, one page, so there is no conflict to
+// report, while each list keeps its own wiring row and the stand is read once.
+{
+  const rows = checklistGroups(pgRun, pgOpts).filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows)
+    .filter((r) => r.vk?.type === "relatedpage" && r.vk.entity === "C1");
+  const reads = readPlan(pgRun, pgOpts).reads.filter((r) => r.reachabilityKey === "relatedPage:C1");
+  check("child page wiring (one page reached by two lists): each list has its own wiring row, the add-on is read ONCE, and the plan reports no conflict",
+    rows.length === 2 && new Set(rows.map((r) => r.vk.childKey)).size === 1 && reads.length === 1
+      && !/Wiring conflict/.test(pgRun.plan),
+    () => ({ rows: rows.map((r) => [r.deliverableId, r.vk.childKey]), reads: reads.length }));
+}
 // The page keys the ROWS are stamped with — derived, never hardcoded, so this stays honest under a key-format change.
 const pgRowKeys = [];
 for (const g of checklistGroups(pgRun, pgOpts)) for (const r of g.rows) pgRowKeys.push(r.pageKey || g.pageKey || "main");
@@ -9533,6 +9685,32 @@ check("a page key identifies exactly ONE physical page — two same-entity child
   // …and the disambiguator is derived, not invented: it names the resolved Classic schema of the colliding page.
   && kcXKeys.includes("child:X") && kcXKeys.includes("child:X@XAltPage"),
   () => ({ kcKeys }));
+// A grandchild's related list lives on the CHILD page, so its wiring row is the child page's, and it names the
+// grandchild by its final key even when that key moved after the child's rows were first rendered.
+{
+  const kcWire = kcGroups.filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => [g.pageKey, r.vk?.childKey]));
+  check("child page wiring: each row sits on the page that holds the related list — the grandchild `X` page's row is on `child:B` and names its final, disambiguated key",
+    kcWire.length === 3
+    && kcWire.some(([k, c]) => k === "main" && c === "child:X") && kcWire.some(([k, c]) => k === "main" && c === "child:B")
+    && kcWire.some(([k, c]) => k === "child:B" && c === "child:X@XAltPage"),
+    () => kcWire);
+  // Without a person's answer the conflict stays open: the add-on opens one of the two pages, so the other row is ❌.
+  {
+    const altRow = kcGroups.flatMap((g) => g.rows).find((r) => r.vk?.type === "relatedpage" && r.vk.childKey === "child:X@XAltPage");
+    const md = renderVerify(kcRun, kcOpts, {
+      pages: { "child:X": { schemaName: "Built_X", viewConfig: { items: [] } }, "child:X@XAltPage": { schemaName: "Built_XAlt", viewConfig: { items: [] } } },
+      reachability: { "relatedPage:X": { success: true, entitySchemaName: "X", packageName: "TgtPkg", pages: [{ pageSchemaName: "Built_X", isDefault: true }] } } }).markdown;
+    const line = (md.split("\n").find((l) => altRow && l.includes(altRow.label.slice(0, 40)) && /child:X@XAltPage/.test(l)) || "").replace(/ˋ/g, "`");
+    check("child page wiring: with no recorded answer the conflicting row stays ❌ MISSING, naming the page the add-on opens instead",
+      !!altRow && /❌ MISSING \| open-record opens `Built_X`, Add opens `Built_X`, the built child page is `Built_XAlt`/.test(line),
+      () => line);
+    check("child page wiring: two pages of ONE entity are still ONE stand read — the add-on is per entity",
+      readPlan(kcRun, kcOpts).reads.filter((r) => r.reachabilityKey === "relatedPage:X").length === 1);
+  }
+  check("child page wiring: two different rebuilt pages for ONE entity share its single RelatedPage add-on, and the plan names the conflict and both pages",
+    (kcRun.plan.match(/⚠ \*\*Wiring conflict:\*\* 2 different pages, rebuilt or reused, are to open for `X` \(`child:X`, `child:X@XAltPage`\)/g) || []).length === 2,
+    () => kcRun.plan.split("\n").filter((l) => /Wiring/.test(l)).map((l) => l.slice(0, 200)));
+}
 check("the DIAMOND still collapses — the same physical page reached along two paths keeps ONE key (the fix must not turn shared pages into duplicates)",
   new Set(pgUnitKeys).size === pgUnitKeys.length && pgUnitKeys.filter((k) => k.startsWith("child:C1")).length === 1
   && new Set(pgRun.childPages.filter((c) => c.entity === "C1").map((c) => c.pageKey)).size === 1,
@@ -9554,7 +9732,13 @@ const kcManifestPath = path.join(os.tmpdir(), `c2f_kc_manifest_${process.pid}.js
 const kcBuiltFull = path.join(os.tmpdir(), `c2f_kc_built_full_${process.pid}.json`);
 const kcBuiltPart = path.join(os.tmpdir(), `c2f_kc_built_part_${process.pid}.json`);
 try {
-  fs.writeFileSync(kcManifestPath, JSON.stringify(KC_MANIFEST));
+  // Two different `X` pages share ONE RelatedPage add-on, so its default can open only one of them: the honest build
+  // binds the first and a person records an answer for the other wiring row, which this manifest carries.
+  const kcWiring = kcGroups.flatMap((g) => g.rows).filter((r) => r.vk?.type === "relatedpage");
+  // Only the second `X` row conflicts; every other wiring row closes from its own stand read.
+  const kcWiringAnswered = kcWiring.filter((r) => r.vk.entity === "X" && r.vk.childKey !== kcXKeys[0]);
+  fs.writeFileSync(kcManifestPath, JSON.stringify({ ...KC_MANIFEST, deliverableStatus: Object.fromEntries(kcWiringAnswered
+    .map((r) => [`${r.pageKey}#${r.deliverableId}`, { status: "wont-do", decision: "D1" }])) }));
   const kcCli = (args) => runMigrate([...args], { encoding: "utf8" });
   const kcRows = kcGroups.flatMap((g) => g.rows);
   // Everything the checklist asks for, filed honestly: every evidence id gets a complete record and a judge verdict,
@@ -9566,6 +9750,11 @@ try {
   }
   const kcReach = {};
   for (const r of kcRows.filter((x) => x.vk?.type === "onstand")) kcReach[r.vk.evidence] = r.vk.expectCount ? { workplaces: r.vk.expectCount, names: ["Recruiting"] } : true;
+  const kcSchemaName = (k) => `Built_${k.replace(/[^A-Za-z0-9]/g, "_")}`;
+  for (const r of kcWiring.filter((x) => !kcWiringAnswered.includes(x))) {
+    kcReach[r.vk.evidence] = { success: true, entitySchemaName: r.vk.entity, packageName: r.vk.package, pageCount: 1,
+      pages: [{ pageSchemaName: kcSchemaName(r.vk.childKey), isDefault: true, isAdd: false, isSspDefault: false }] };
+  }
   // `schemaUId` is the PROVENANCE field: the plan publishes no GUID, so it can only come from a real get-page.
   // One distinct, well-formed GUID per key here — a payload reusing one across keys is rejected by the CLI (a
   // dedicated check below proves that), and this fixture is the honest case.
@@ -9574,7 +9763,7 @@ try {
   // `entitySchemaName` is the object the page's data source is bound to — the migration invariant. Taken from the
   // page's `entity` vk, i.e. the same string the gate compares against, so a correct build is expressible.
   const kcEntry = (k) => ({ parentSchemaName: kcVk(k, "template")?.exp || "FormPageTemplate", packageName: kcVk(k, "placement")?.exp || undefined,
-    schemaUId: kcUid(), entitySchemaName: kcVk(k, "entity")?.exp,
+    schemaUId: kcUid(), schemaName: kcSchemaName(k), entitySchemaName: kcVk(k, "entity")?.exp,
     viewConfig: { items: [...(kcVk(k, "fields")?.names || []).map((n) => ({ name: n, type: "crt.Input" })),
       ...Array.from({ length: kcVk(k, "details")?.n || 0 }, (_, i) => ({ name: `DG${i}`, type: "crt.DataGrid" }))] } });
   const kcPagesFull = {};
@@ -9589,6 +9778,14 @@ try {
   for (const k of kcDropped) delete kcPagesPart[k];
   const kcFull = kcVerify(kcBuiltFull, kcPagesFull);
   const kcPart = kcVerify(kcBuiltPart, kcPagesPart);
+  check("F1 (real CLI, end to end): exactly one wiring row — the conflicting second `X` page — carries a recorded answer, and every other wiring row closes ✅ Done from its stand read",
+    kcWiringAnswered.length === 1 && kcWiring.length - kcWiringAnswered.length >= 2
+    && kcWiring.filter((r) => !kcWiringAnswered.includes(r)).every((r) => {
+      const re = new RegExp(String.raw`✅ Done \| Add and open-record open .${kcSchemaName(r.vk.childKey)}.`);
+      return re.test(kcFull.out);
+    }),
+    () => ({ wiring: kcWiring.map((r) => [r.pageKey, r.vk.entity, r.vk.childKey]), answered: kcWiringAnswered.map((r) => r.vk.childKey),
+      rows: kcFull.out.split("\n").filter((l) => /Related list/.test(l)).map((l) => l.slice(0, 260)) }));
   check("F1 (real CLI, end to end): with the second X page NEVER built the run does NOT close — publishing no key for it would let the SAME payload read ✅ 'all machine-checkable deliverables present' with a page that does not exist",
     kcDropped.length === 1                                   // the key exists to be dropped (not vacuous)
     && /✅ \*\*All machine-checkable deliverables present/.test(kcFull.verdict)   // control: an honest full build closes

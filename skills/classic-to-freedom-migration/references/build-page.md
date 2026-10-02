@@ -62,6 +62,23 @@ clio-safety rules apply to every write.
    - Resolve any `detail-unresolved` (auto-named `SchemaNDetail`) by fetching the detail schema
      first. For every `detail-editpage` flag, confirm a Freedom form exists for the child entity or
      migrate it as a follow-on page.
+   - **A `Child page wiring` task binds a page's related lists to the child pages they open.**
+     Which page a list opens on Add and on open-record is the child entity's RelatedPage add-on in
+     the target package — a config record, not part of either page body — so a built child page that
+     no add-on names is a page nothing opens. The task writes `wiring:<page>`, never the page body,
+     and waits on the last build task of each child page and of the page holding the lists, so both
+     exist when you start. Read the add-on first: `get-related-page-addon` with
+     `entity-schema-name` = the child entity and `package-name` = the target package.
+     `create-related-page-addon` REPLACES the whole configuration, so send back every entry you read
+     plus your change: the BUILT child page as the general default entry (`is-default`, no
+     `type-column-value`, the `All employees` role or none), a separate `is-add` entry only when a
+     different page must serve Add, and the portal and per-type entries as you found them. Read it
+     back and confirm `pageSchemaUId` (`pageSchemaName` when there is no UId) and `isDefault`.
+     `--verify` closes the row from that same read, matched against the built child page by schema
+     UId, or by `schemaName` when either side has no UId. A row the plan marks `no page to wire` is
+     an inline-editable list: there is nothing to bind. When the plan reports a **Wiring conflict** — two pages, rebuilt or reused, for one
+     entity and one add-on — bind the page the user chose and record the other
+     row `not-built — needs-decision`.
    - **Nothing is silently skipped:** anything you cannot build is that row's `not-built — <cause>`
      in the `Outcome` column plus the specifics under `## Notes` — and, per the documentation
      standard, a `worklog.md` entry too. A page that migrated fields and rules but dropped its

@@ -57,6 +57,19 @@ export const slugKey = (key) => slugify(key);
 // sending the read-only read-back agent after it would be sending it after a value it cannot fetch. The keys are
 // still NAMED in the rendered plan, as the builder's to record — dropping them silently would trade one missing
 // key for another.
+// The vk types answered by a stand read under `reachability`. An `onstand` file holds a VALUE (a flag or a count);
+// a `relatedpage` file holds the `get-related-page-addon` response itself, and the gate does the matching.
+const READ_VK_TYPES = new Set(["onstand", "relatedpage"]);
+function reachabilityWhat(key, vk) {
+  const holds = vk.type === "relatedpage"
+    ? `the file holds the response, copied WHOLE, under \`reachability.${key}\` — the gate matches its default and add pages against the built child page`
+    : `the file holds the VALUE for \`reachability.${key}\``;
+  return `${vk.what || "on-stand check"} — ${holds}`
+    + (vk.expectCount ? ` (a COUNT, not a flag: \`{ "workplaces": <n>, "names": [...] }\`)` : "")
+    // The engine fixes WHICH read happens; without the query it leaves HOW to the reader, and the known-wrong
+    // how is exactly what a repair round was spent on. Carried on the vk so the row and the gate agree.
+    + (vk.query ? ` — run: ${vk.query}` : "");
+}
 // WHAT THE CHECKLIST WALK YIELDS, in one pass: the published page keys in order, the keys whose rules are gated,
 // the distinct on-stand keys, the evidence ids, and the dashboards the plan moves. Extracted so `readPlan` stays
 // under Sonar's cognitive-complexity budget. Two rows can share one evidence id (the quality-gate pair) and the
@@ -73,7 +86,7 @@ function walkGroups(groups) {
     const vk = r.vk;
     if (!vk) continue;
     if (vk.type === "rule") ruleKeys.add(key);
-    else if (vk.type === "onstand" && vk.evidence && !reach.has(vk.evidence)) reach.set(vk.evidence, vk);
+    else if (READ_VK_TYPES.has(vk.type) && vk.evidence && !reach.has(vk.evidence)) reach.set(vk.evidence, vk);
     else if (vk.type === "evidence" && vk.id && !evidenceIds.includes(vk.id)) evidenceIds.push(vk.id);
     else if (vk.type === "dashboards") addDashboards(dashboards, vk);
   }
@@ -108,12 +121,7 @@ export function readPlan(result, opts = {}) {
       + " row's status VERBATIM, never interpreted, so the list can be diffed against the log by eye" });
   for (const [key, vk] of reach) {
     if (vk.recordedBy === "builder") { builderRecorded.push({ reachabilityKey: key, what: vk.what || "on-stand check" }); continue; }
-    add("reachability", slugKey(key), { reachabilityKey: key,
-      what: `${vk.what || "on-stand check"} — the file holds the VALUE for \`reachability.${key}\``
-        + (vk.expectCount ? ` (a COUNT, not a flag: \`{ "workplaces": <n>, "names": [...] }\`)` : "")
-        // The engine fixes WHICH read happens; without the query it leaves HOW to the reader, and the known-wrong
-        // how is exactly what a repair round was spent on. Carried on the vk so the row and the gate agree.
-        + (vk.query ? ` — run: ${vk.query}` : "") });
+    add("reachability", slugKey(key), { reachabilityKey: key, what: reachabilityWhat(key, vk) });
   }
   // THE PLAN VERSION, stamped the way `--split` freezes its cut and `tasks.mjs` stamps every task file. It is
   // what lets the composing half tell a read plan cut against THIS plan from one cut against an earlier draft:

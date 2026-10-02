@@ -52,7 +52,8 @@ never reported stale.
 list is DERIVED from the same `checklistGroups` walk `--checklist` and `--verify` use, so a page key the checklist
 gates can never be a key nobody was told to read. Four kinds: **two files per published page key** (`meta.json`
 for identity, `bundle.json` for the merged view), a **business-rules** read for the keys carrying a gated rule row
-only, one **reachability** read per distinct on-stand key, and — only when the plan moves any — one **dashboards**
+only, one **reachability** read per distinct on-stand key (for `relatedPage:<Entity>` the file is the `get-related-page-addon`
+response copied whole, matched by the engine against the built child page), and — only when the plan moves any — one **dashboards**
 read per run, since `DashboardMigrationLog` is a stand table no page read can reach. An on-stand key the BUILD
 agent records rather than reads (a card widget the converter placed) is listed as the builder's, not handed to the
 read-only read-back agent as a read it cannot perform.
@@ -128,7 +129,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   49 characters, or a plan row left in no item, is refused with nothing written — and an unclaimed row is named by
   page, with no owner picked for it. The mechanical cut answers to the same rule against its own output, where a
   dropped row is a defect in the slicer rather than a file anybody can correct. Items sharing a `writesTo` are
-  chained automatically. Four seams are checked rather than
+  chained automatically. Six seams are checked rather than
   trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
   (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
@@ -147,6 +148,10 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   digest is untouched), and a handler built before the attribute it writes is inert. The rule follows those
   recorded writes, not every handler of the page, so an earlier item holding an unrelated handler resolves; a
   write made any other way than `this.set("X", …)` in the handler's own body is not recorded and not checked.
+  And an item carrying `Child page wiring` rows may not sit before an item that writes a child page those rows bind
+  or the page holding the related lists: a list cannot be bound to a page that is not built yet. An item holding
+  only such rows writes `wiring:<page>`, the artifact the budget cut gives them, so nothing writing the page body
+  waits behind it, and the two `Quality gates` rules do not count it as a writer of the page.
   An item may claim a whole group (`@Form — Custom methods`) or the next N rows of one
   (`@Form — Custom methods[50]`), taken in plan order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
   hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row
@@ -351,6 +356,7 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
+  // "reachability" also holds "relatedPage:<Entity>": the get-related-page-addon response, verbatim — never a flag
   "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"], "findings": ["…"], "findingsRaised": ["…"] } },
   "judge":    { "<id from --checklist>": { "convincing": true, "why": "…" } } }
 ```
@@ -426,7 +432,7 @@ its id on its page: the item's kind and name, never label text or a count. Ids: 
 `feature:<feature>[:<extra type>]` · `datasource:<name>` · `dcm:bar` · `dcm:next` · `business-rules` ·
 `method:<name>` · `<kind>:<item>` (an imperative member, e.g. `attribute-virtual:Dept`) · `dashboards:<element|migrated|partials|delivery>` ·
 `card-action:<name>` · `card-actions:native` · `confirm:<kind>:<item>` · `child-page:<detail>` (a child with no page of its
-own) · `quality:ran` · `quality:judged`. The `<pageKey>#<deliverableId>` address is a stable manifest contract:
+own) · `child-page-wiring:<detail>` (the related list that opens a rebuilt child page, on the page that holds the list) · `quality:ran` · `quality:judged`. The `<pageKey>#<deliverableId>` address is a stable manifest contract:
 any manifest key that names one deliverable uses it.
 
 **One row per field and per related list.** Every page's coverage carries one "Field <name>" row per field and

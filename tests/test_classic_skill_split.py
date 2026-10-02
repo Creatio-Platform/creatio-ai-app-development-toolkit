@@ -109,6 +109,8 @@ def engine_task_labels():
     if not fallback:
         raise AssertionError("artifactLabel() no longer has the shape this test reads")
     groups |= {consts[fallback.group(1)], fallback.group(2)}
+    # A page's binding rows are their own task, labelled by the group they come from.
+    groups.add(consts["WIRING_GROUP"])
     writes = {consts[k] for k in ("ARTIFACT_SCAFFOLD", "ARTIFACT_WHOLE")}
     return groups, writes, consts["REPAIR_KIND"]
 
