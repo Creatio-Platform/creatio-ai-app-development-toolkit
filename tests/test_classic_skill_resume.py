@@ -1,12 +1,13 @@
-"""Guards on how the classic-to-freedom-migration build hands off to a fresh session.
+"""Guards on where the classic-to-freedom-migration build runs once the plan is sliced.
 
 Every build turn pays for the whole conversation before it, so a driver that
 planned and then built in one session carried discovery and planning into each
-of hundreds of build turns. After approval the build loop is handed to a fresh
-session: the engine writes `resume.md` (`--tasks <dir> --handoff`), the driver
-gives the user one prompt to paste and stops, and the fresh session reads that
-file and the orchestration reference instead of steps 0-6. These tests keep the
-two hand-off points, the resume entry and its reading list in the skill text.
+of hundreds of build turns. After approval the engine writes `resume.md`
+(`--tasks <dir> --handoff`) and the driver ASKS the user where the build runs:
+a new session that pastes one prompt, this session as it is, or this session
+after `/compact`. The answer is recorded once in `worklog.md` and the step-8
+repair round follows it. These tests keep the gate, its three answers, the
+resume entry and its reading list in the skill text.
 """
 
 import unittest
@@ -19,6 +20,11 @@ ORCHESTRATE = SKILL_DIR / "references/orchestrate-build.md"
 ENGINE_README = SKILL_DIR / "engine/README.md"
 
 HANDOFF_CMD = "--tasks <migration-folder>/build-tasks --handoff"
+GATE_HEADING = "**7.1b The BUILD SESSION GATE"
+COMPACT_LINE = ("/compact Keep only: migration folder <migration-folder>. "
+                "Continue the build from <migration-folder>/resume.md.")
+OPTION_LABELS = ("New session (Recommended)", "Continue here", "Compress here")
+WORKLOG_LINE = "`Build session: new | here | compact`"
 SKILL_BYTE_BUDGET = 95_000
 
 
@@ -42,11 +48,11 @@ def section(text, start, end):
 
 
 class HandOffPointTests(unittest.TestCase):
-    """7.1b names both hand-off points, the command, and the stop."""
+    """7.1b runs the hand-off, then asks where the build runs."""
 
     def setUp(self):
         self.text = read(ORCHESTRATE)
-        self.handoff = section(self.text, "**7.1b Hand off to a fresh session", "**7.2 ")
+        self.handoff = section(self.text, GATE_HEADING, "**7.2 ")
 
     def test_7_1b_sits_between_slicing_and_the_contract(self):
         self.assertLess(self.text.find("**7.1 Record the approval"), self.text.find("**7.1b "))
@@ -59,9 +65,33 @@ class HandOffPointTests(unittest.TestCase):
         self.assertIn("more than one task", self.handoff)
         self.assertIn("opens repair tasks", self.handoff)
 
-    def test_7_1b_says_to_stop(self):
-        self.assertIn("STOP", self.handoff)
-        self.assertIn("fresh session", self.handoff)
+    def answer(self, label):
+        """The per-answer bullet that opens on `label`, up to the next bullet."""
+        return section(self.handoff, f"- **{label}**", "\n-")
+
+    def test_7_1b_is_a_gate_that_asks_once(self):
+        self.assertIn("BUILD SESSION GATE", self.handoff)
+        self.assertIn("exactly ONE `AskUserQuestion`", self.handoff)
+        self.assertIn("names the task count", self.handoff)
+        self.assertIn("stop until it is answered", self.handoff)
+
+    def test_7_1b_offers_three_options_with_their_cost(self):
+        for label in OPTION_LABELS:
+            self.assertIn(label, self.handoff, f"7.1b does not offer {label!r}")
+        self.assertIn("every build step then starts small", self.handoff)
+        self.assertIn("carries the whole planning conversation", self.handoff)
+        self.assertIn("a smaller saving than a new session", self.handoff)
+
+    def test_7_1b_asks_only_over_the_budget(self):
+        self.assertIn("over `TASK_BUDGET.run`", self.handoff)
+        self.assertIn("A run within `TASK_BUDGET.run` is not asked", self.handoff)
+
+    def test_stop_belongs_to_the_new_session_answer_alone(self):
+        new = self.answer("New session")
+        self.assertIn("STOP", new)
+        self.assertIn("no `--start`", new)
+        self.assertEqual(self.handoff.count("STOP"), new.count("STOP"),
+                         "7.1b stops outside the new-session answer")
 
     def test_7_1b_says_the_driver_does_not_write_the_resume(self):
         self.assertIn("never write `resume.md` yourself", self.handoff)
@@ -73,6 +103,49 @@ class HandOffPointTests(unittest.TestCase):
         self.assertIn("--handoff", step8)
         self.assertIn("7.1b", step8)
         self.assertIn("repair tasks", step8)
+
+    def test_step_8_follows_the_recorded_build_session(self):
+        repairs = section(self.text, "**When that run opens repair tasks", "**`--verify --built <file>`")
+        self.assertIn("`Build session:`", repairs)
+        self.assertIn("without asking again", repairs)
+        self.assertIn(HANDOFF_CMD, repairs)
+        for answer in ("*new*", "*compact*", "*here*"):
+            self.assertIn(answer, repairs, f"step 8 does not say what {answer} does")
+        self.assertIn("--next", repairs)
+
+
+class BuildSessionAnswerTests(unittest.TestCase):
+    """Each 7.1b answer names its action; option 3 is offered only where `/compact` exists."""
+
+    def setUp(self):
+        self.handoff = section(read(ORCHESTRATE), GATE_HEADING, "**7.2 ")
+
+    def answer(self, label):
+        return section(self.handoff, f"- **{label}**", "\n-")
+
+    def test_new_session_gives_the_resume_prompt(self):
+        self.assertIn("resume prompt", self.answer("New session"))
+
+    def test_continue_here_runs_the_loop_in_this_session(self):
+        here = self.answer("Continue here")
+        self.assertIn("--next", here)
+        self.assertIn("7.2", here)
+
+    def test_compress_here_gives_the_compact_line_and_ends_the_turn(self):
+        compact = self.answer("Compress here")
+        self.assertIn(COMPACT_LINE, compact)
+        self.assertIn("end the turn", compact)
+        self.assertIn("*Resuming*", compact)
+
+    def test_option_3_is_offered_only_on_a_host_with_compact(self):
+        self.assertIn("only on a host that has `/compact` (Claude Code, Codex CLI)", self.handoff)
+        self.assertIn("ask with options 1 and 2", self.handoff)
+
+    def test_the_answer_is_recorded_once_and_can_change(self):
+        self.assertIn(WORKLOG_LINE, self.handoff)
+        self.assertIn("`worklog.md`", self.handoff)
+        self.assertIn("once per run", self.handoff)
+        self.assertIn("update the line", self.handoff)
 
 
 class ResumeSectionTests(unittest.TestCase):
@@ -102,6 +175,13 @@ class ResumeSectionTests(unittest.TestCase):
     def test_it_takes_the_manifest_copy_from_the_resume(self):
         self.assertIn("`resume-manifest.json`", self.resuming)
 
+    def test_it_names_both_entries(self):
+        self.assertIn("a new session", self.resuming)
+        self.assertIn("after `/compact`", self.resuming)
+
+    def test_it_does_not_say_the_build_always_moves(self):
+        self.assertNotIn("The build loop runs in a fresh session once the plan is sliced", self.resuming)
+
 
 class WholeReadsAgreeTests(unittest.TestCase):
     """The build's whole-read list and the Resuming section name the same reads for a resumed session."""
@@ -119,7 +199,7 @@ class ManifestCopyTests(unittest.TestCase):
     """--handoff copies the manifest into the folder; the clean-up deletes that copy too."""
 
     def test_7_1b_names_the_copy(self):
-        handoff = section(read(ORCHESTRATE), "**7.1b Hand off to a fresh session", "**7.2 ")
+        handoff = section(read(ORCHESTRATE), GATE_HEADING, "**7.2 ")
         self.assertIn("`resume-manifest.json`", handoff)
 
     def test_the_step_4_2_clean_up_names_the_copy(self):
@@ -145,6 +225,14 @@ class SkillRouteTests(unittest.TestCase):
         step7 = section(read(SKILL), "### 7. Implement The Approved Plan", "### 8.")
         self.assertIn("--handoff", step7)
         self.assertIn("7.1b", step7)
+
+    def test_step_7_asks_where_the_build_runs(self):
+        step7 = section(read(SKILL), "### 7. Implement The Approved Plan", "### 8.")
+        line = section(step7, "**7.1b ", "**7.2 ")
+        self.assertIn("ASK where the build runs", line)
+        for answer in ("new session", "here", "`/compact`"):
+            self.assertIn(answer, line)
+        self.assertNotIn("relay its prompt for a fresh", line)
 
     def test_skill_body_stays_within_its_byte_budget(self):
         self.assertLessEqual(len(SKILL.read_bytes()), SKILL_BYTE_BUDGET)

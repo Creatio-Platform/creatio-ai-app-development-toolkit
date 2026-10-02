@@ -34,12 +34,13 @@ and the `--- progress ---` block the engine prints — you paste that block, you
 Everything else you open during the build is a targeted read. A resumed session's whole reads are
 `resume.md` and this file instead, and nothing else — see *Resuming* below.
 
-## Resuming — a fresh session continues the build from `resume.md`
+## Resuming — continue the build from `resume.md`
 
-The build loop runs in a fresh session once the plan is sliced (7.1b), because every build turn pays
-for the whole conversation before it, and a driver that also carried discovery and planning pays for
-them on every build turn. When the user hands you a migration folder that holds
-`resume.md` (the prompt 7.1b printed names it), you are that fresh session:
+Once the plan is sliced, 7.1b asks the user where the build runs, because every build turn pays for
+the whole conversation before it, and a driver that also carried discovery and planning pays for
+them on every build turn. You enter this section from a new session — the user hands you a
+migration folder that holds `resume.md` (the prompt 7.1b printed names it) — or from this same
+session after `/compact` (the 7.1b line names `resume.md`). Either way:
 
 1. **Skip steps 0-6.** Do not re-read `discovery.md`, `plan.md`, the manifest or the stand material
    behind them, and do not re-run `--plan`: the plan is approved and sliced, and the approval entry
@@ -161,26 +162,52 @@ is no `Reference cache` in such a run — it exists to stop several fresh contex
 same guidance, and here there is only one builder. A 31-row section came out as six tasks and five
 sub-agents before this, one of them caching material nobody else read.
 
-**7.1b Hand off to a fresh session — then STOP.** Once the plan is approved and sliced, and the
-run is **over `TASK_BUDGET.run`** (it has more than one task besides its review, not just the
-`Whole migration` build), the build loop leaves this session: everything above it (discovery,
-the plan, its approval) would otherwise be paid for again on every build turn. With the `Route:`
+**7.1b The BUILD SESSION GATE — ask where the build runs.** Once the plan is approved and sliced,
+and the run is **over `TASK_BUDGET.run`** (it has more than one task besides its review, not just
+the `Whole migration` build), every build turn in this session would pay again for everything above
+it (discovery, the plan, its approval) — so the user decides where the build runs. With the `Route:`
 line written (7.0), run
 `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --handoff`
 It writes `<migration-folder>/resume.md` — manifest path, folder, environment, the approved plan
 version, the route, the progress block, the next task and one resume prompt — every value computed
 from the folder, so **never write `resume.md` yourself** — and it copies the manifest beside it as
-`resume-manifest.json`, which `resume.md` names, so the fresh session never needs your temporary
+`resume-manifest.json`, which `resume.md` names, so a resumed session never needs your temporary
 input folder. It refuses (exit **2**, nothing written), in stages, naming every cause of a stage at
 once: a plan with gaps; a manifest path that does not exist, or a manifest on stdin; then together a
 folder not sliced, no `## ` entry in `decisions.md` holding both `Plan version:` with exactly the
 current version and a non-empty `Approved by:`, and no `worklog.md` `Route:` naming one of the 7.0
 routes; then a `D<N>` in `decisions.md` nothing cites; then a `--next` answer of `ledger` or
-`stuck`. Fix what it names and run it again. Then give the user the resume prompt it printed, to
-paste into a fresh session, and
-**STOP**: no `--start` and no dispatch in this session. The same hand-off happens again when a
-step-8 `--verify --tasks` opens repair tasks. A run below `TASK_BUDGET.run` (the `Whole migration`
-task and its review) stays in this session.
+`stuck`. Fix what it names and run it again.
+
+Then issue exactly ONE `AskUserQuestion` that names the task count — *"The build has <N> tasks.
+Where should it run?"* — with these options in plain words, each saying what the user does and what
+it costs, and stop until it is answered:
+
+1. **New session (Recommended)** — open a new chat and paste the one prompt `--handoff` printed;
+   every build step then starts small instead of carrying discovery and planning (several times
+   fewer tokens per build step on a long run).
+2. **Continue here** — nothing to do; the build starts now in this session, but every build step
+   carries the whole planning conversation.
+3. **Compress here** — type the line you are given, then "continue"; same window,
+   a smaller saving than a new session.
+
+Offer option 3 only on a host that has `/compact` (Claude Code, Codex CLI); elsewhere
+ask with options 1 and 2. **Never mention the choice in passing and keep going** — an aside is not a
+question. A run within `TASK_BUDGET.run` is not asked: the `Whole migration` task and its review
+continue in this session.
+
+**Per answer:**
+
+- **New session** — give the user the resume prompt `--handoff` printed, to paste into a new chat,
+  and **STOP**: no `--start` and no dispatch in this session.
+- **Continue here** — continue the 7.2 loop in this session with `--next`; `resume.md` stays behind
+  as a recovery point should this session be lost.
+- **Compress here** — give the user this line to type, then "continue", and end the turn:
+  `/compact Keep only: migration folder <migration-folder>. Continue the build from <migration-folder>/resume.md.`
+  After the compaction, continue as *Resuming* says.
+- **Record the answer** in `worklog.md` as `Build session: new | here | compact` (the one chosen).
+  Ask once per run: when a step-8 `--verify --tasks` opens repair tasks, that round follows
+  this line without asking again. The user may change it at any time by saying so — update the line.
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
@@ -513,10 +540,13 @@ self-reported.** On an orchestrated run the gate is
 the payload.** Step 7.4's `--reads` named every file; this composes
 `built.json` out of them, writes it and `verify.md` into that folder, and gates on it.
 
-**When that run opens repair tasks, hand off again (7.1b).** `--verify --tasks` writing a repair
-round means more build turns are coming, and the verify reads that preceded them are the heaviest
-material this session holds. Run `--tasks <migration-folder>/build-tasks --handoff`, give the user
-the resume prompt, and STOP; the fresh session dispatches the repair tasks through `--next`.
+**When that run opens repair tasks, follow the recorded `Build session:` (7.1b)
+without asking again.** `--verify --tasks` writing a repair round means more build turns are coming, and the verify
+reads that preceded them are the heaviest material this session holds. *new* → run
+`--tasks <migration-folder>/build-tasks --handoff`, give the user the resume prompt, and STOP; the
+new session dispatches the repair tasks through `--next`. *compact* → run `--handoff` and give the
+user the 7.1b `/compact` line. *here* → continue in this session with `--next`. A user who changes
+their mind says so; update the line first.
 
 **`--verify --built <file>` is the REPLAY path** — the same gate against a payload already composed
 (the `built.json` from an earlier run, or a recorded fixture). Use it to re-check a run offline,
