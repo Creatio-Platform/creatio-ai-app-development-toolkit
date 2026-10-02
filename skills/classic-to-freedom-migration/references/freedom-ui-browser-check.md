@@ -11,10 +11,11 @@ could have returned anything. This file exists to make that loop impossible to r
 
 ## Cheap evidence first
 
-A build task opens the browser ONCE, after its last save — not after each edit; between edits the evidence is
-the saved schema read back with `get-page`, and the page is opened again only after fixing a defect that check
-found. What the one check costs is decided by the evidence it reads: on one measured section, page-build tasks
-that verified through screenshots and DOM reads cost about 4.5× the ones that did not. Browser surfaces name
+Browser checks are at most TWO per task: a build task opens the browser once, after its last save — not after
+each edit — and a second time only to confirm the fix of a defect the first check found, never a third. Between
+edits the evidence is the saved schema read back with `get-page`. What the one check costs is decided by the
+evidence it reads: on one measured section, page-build tasks that verified through screenshots and DOM reads
+cost about 4.5× the ones that did not. Browser surfaces name
 their tools differently, so the kind of evidence is the rule and the tool names are examples. Read the cheapest
 kind that answers the question, and stop when it has:
 
@@ -28,6 +29,17 @@ kind that answers the question, and stop when it has:
 4. **A screenshot** (e.g. `computer` → screenshot) only where the layout is the thing checked — island order,
    spacing, a panel's toggle — at most one per page, and that screenshot is the one the `creatio-ui-guidelines`
    review reuses, not a second.
+
+A rule or handler is behaviour, and it is checked in the same order. Read its wiring in `get-page` first: the
+rule or handler is present, bound to the field the AC names, and sets the attribute or column it should. On the
+stand, inside the one check, exercise each AC with one value change per AC — e.g. `form_input` setting the
+field's value, not a click-and-type sequence through the control — then read the result off the cheapest
+evidence: the captured `UpdateQuery` of the save for the columns a save wrote, or one DOM read for what the page
+shows (the field's `required`/`readonly` state or its presence). Where the handler writes data, read the record
+back with a data read. An AC that says something must NOT happen is still exercised: make its value change and
+show the request or the record without the effect. Where a surface's value setter does not fire the page's
+change handler (the field shows the value, the dependent field does not react), that is a surface limit, not
+a defect: type that one value instead, and say so in the task's `Browser checks:` line.
 
 **The request hook.** Install it in the Creatio tab that is already open, then open the page by an in-app route
 change (click through to it, or set `location.hash`). A reload or a typed URL is a full page load and discards
