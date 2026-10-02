@@ -2260,7 +2260,15 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
   // classic-layout removal check as its OWN row (reconcile plans only), so a base extra can be decided independently
   // without the Fields presence row hiding real MISSING fields. It no-ops (✅) unless the folder is frozen classic-layout.
-  if (expFields && pm.freedomExists) cover.push({ label: "No base field controls outside the plan (classic-layout removal)", vk: { type: "classic-extras", names: fieldOps.map((o) => o.name) } });
+  // `tabs` are the plan's OWN (client-created) tab names: a built tab NOT among them is native Freedom structure the mode
+  // keeps, so the fields it holds are exempt from removal (see nativeTabFieldNames).
+  const planTabNames = [...new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name))];
+  if (expFields && pm.freedomExists) cover.push({ label: "No base field controls outside the plan (classic-layout removal)", vk: { type: "classic-extras", names: fieldOps.map((o) => o.name), tabs: planTabNames } });
+  // Native Freedom tabs are KEPT in both modes (never auto-removed); a Freedom tab can be a reimagined analog of a Classic
+  // tab the user relied on, and the names do not match, so the agent cannot tell which to drop on its own. This confirm
+  // deliverable has the build agent enumerate EVERY native tab from get-page and confirm keep/remove with the user —
+  // removal of any is an explicit `--decide`, never automatic. Reconcile plans only (nothing native to keep on a rebuild).
+  if (pm.freedomExists) cover.push({ label: "Native Freedom tabs kept — enumerate every native tab (get-page) and confirm keep/remove with the user; remove any only via `--decide`", vk: null });
   // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
   // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
@@ -3153,17 +3161,38 @@ function keptConnectionFieldNames(ctx) {
   for (const c of (ctx.containers || []).filter(isConnectionGroupLeaf)) addConnectionLookupIds(c, names);
   return names;
 }
+// The field CONTROL names that live inside a NATIVE Freedom tab — a built tab container the PLAN did not create. The plan
+// carries only the client's customizations, so a tab on the built page whose name is not among the plan's tabs is native
+// Freedom structure (e.g. Products, Opportunity Insights) that users relied on in Classic; classic-layout KEEPS it as-is,
+// so the fields it holds are never EXTRA to remove. A tab the plan DOES create (a client-added tab) is still policed. A
+// native tab a client genuinely wants gone is removed only by an explicit `--decide`, never by the automatic gate — the
+// build brief has the sub-agent enumerate every native tab and confirm with the user, because a Freedom tab can be a
+// REIMAGINED analog of a Classic tab (the names do not match, e.g. Classic "Tactic & competitors" -> Freedom "Insights").
+export function nativeTabFieldNames(ctx, planTabs) {
+  const names = new Set();
+  const planned = new Set(planTabs || []);
+  for (const c of ctx.containers || []) {
+    const isTabC = TAB_TYPES.includes(c.type) || c.parentType === "crt.TabPanel";
+    if (!isTabC || planned.has(c.name)) continue; // a plan-created (client) tab keeps its extras under the gate
+    for (const o of c.fieldOps || []) { if (o.name) names.add(o.name); if (o.bound) names.add(o.bound); }
+  }
+  return names;
+}
 // The `classic-extras` row — ❌ EXTRA listing base field controls to remove, or ✅ when there are none. A field CONTROL
 // the maximum matching could not assign to any expected name (`opToName[oi] < 0`) is a base field the mode was supposed
-// to REMOVE — unless it is a lookup inside a KEPT "Connected to" group (exempt by element name OR bound column).
+// to REMOVE — unless it is a lookup inside a KEPT "Connected to" group (exempt by element name OR bound column), or it
+// lives inside a NATIVE Freedom tab the plan did not create (`nativeTabFieldNames` — native tabs are kept, not stripped).
 // `crt.ImageInput` is NOT in this removal set: a plan image binds through `values.value` (not the `control` the Fields
 // row keys on), so its name is never in `vk.names` here — flagging it would report a correctly built plan image as EXTRA.
 // Image presence is gated by the separate image row; this row is text/lookup/date/checkbox/number controls only.
 const EXTRA_EXEMPT_TYPE = "crt.ImageInput";
-function classicLayoutExtraRow(identified, opToName, ctx) {
+function classicLayoutExtraRow(identified, opToName, ctx, planTabs) {
   const kept = keptConnectionFieldNames(ctx);
+  const nativeTab = nativeTabFieldNames(ctx, planTabs);
+  const isKept = (o) => kept.has(o.name) || (o.bound && kept.has(o.bound))
+    || nativeTab.has(o.name) || (o.bound && nativeTab.has(o.bound));
   const extras = identified.filter((o, oi) => opToName[oi] < 0 && LAYOUT_FIELD_RE.test(o.type || "")
-    && o.type !== EXTRA_EXEMPT_TYPE && !kept.has(o.name) && !(o.bound && kept.has(o.bound))).map((o) => o.name || o.bound);
+    && o.type !== EXTRA_EXEMPT_TYPE && !isKept(o)).map((o) => o.name || o.bound);
   if (!extras.length) return ["✅ Done", "no base field control outside the plan", "ok"];
   const ov = extras.length > 8 ? "…" : "";
   return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}`, "missing"];
@@ -3176,7 +3205,7 @@ function resolveClassicExtrasVk(vk, ctx) {
   const names = [...new Set(vk.names || [])];
   const identified = ctx.ops.filter((o) => o.name || o.bound);
   const { opToName } = maxFieldMatch(names, identified);
-  return classicLayoutExtraRow(identified, opToName, ctx);
+  return classicLayoutExtraRow(identified, opToName, ctx, vk.tabs);
 }
 function resolveFieldsByIdentity(vk, names, ctx) {
   const ops = ctx.ops;

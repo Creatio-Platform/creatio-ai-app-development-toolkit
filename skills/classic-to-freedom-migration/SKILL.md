@@ -407,9 +407,12 @@ reconcile (`planMeta.freedomExists`), the developer picks the build-time reconci
 implementation — NOT at plan time (`--plan`/`--spec` are identical either way): **`overlay`** (add the client's
 customization delta onto the existing Freedom layout, keeping base positions and extras) or **`classic-layout`**
 (re-lay the page so its fields and details sit exactly where they were in Classic — move base fields to their
-Classic positions, remove base layout elements not in the plan, keep Freedom-only value-add and the standard
-components Feed / Attachments / Connected to / Timeline). In BOTH modes the standard Freedom components are kept
-as-is and their Classic counterparts are not migrated. Ask the developer if
+Classic positions, remove only loose base field controls not in the plan from the regions the plan manages, keep
+Freedom-only value-add and the standard components Feed / Attachments / Connected to / Timeline). In BOTH modes the
+standard Freedom components are kept as-is and their Classic counterparts are not migrated. **In BOTH modes native
+Freedom TABS and their content (Products, Opportunity Insights, History, …) are KEPT** — `classic-layout` never
+auto-removes a tab; because a Freedom tab can be a reimagined analog of a Classic tab (names differ), the build agent
+enumerates every native tab from `get-page` and confirms keep/remove with the user, removing any only via `--decide`. Ask the developer if
 they have not said; recommend `overlay` unless they want the page to look as it did in Classic. Record the choice in
 `decisions.md`, then pass it on the FIRST `--tasks` cut with `--reconcile-mode overlay|classic-layout`. The engine
 freezes it in the folder, reads it back on every re-slice (you need not re-pass it), and stamps `reconcileMode:` on

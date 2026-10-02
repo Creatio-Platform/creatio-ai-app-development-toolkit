@@ -12,7 +12,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, posCell, boundAttributeOf } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, posCell, boundAttributeOf, nativeTabFieldNames } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -12148,22 +12148,41 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => /Owner/.test(extraLine(vC.markdown)), () => extraLine(vC.markdown));
 }
 
-/* NEGATIVE: a broad tab that NAMES connections but also holds an unrelated base field must NOT exempt that field —
-   only the group's own LEAF container is used, never the ancestor tab that wraps it. */
+/* Native Freedom tabs are KEPT: any base field inside a tab the PLAN did not create is native tab content (even nested in
+   a group) and is NOT flagged EXTRA, while a base field in a plan-managed region OUTSIDE any tab still is. */
 {
   const rnN = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } },
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});` }] }, { baseDir: FIX });
   const builtNested = { pages: { main: { viewConfig: { items: [
     { name: "A", type: "crt.Input" },
-    { name: "ConnectionsTab", type: "crt.TabContainer", items: [
-      { name: "Owner", type: "crt.ComboBox" },
-      { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "ComboBox_ConnCase", type: "crt.ComboBox" }] }] }] } } } };
+    { name: "StrayField", type: "crt.ComboBox" },
+    { name: "ProductsTab", type: "crt.TabContainer", items: [
+      { name: "NativeField", type: "crt.ComboBox" },
+      { name: "ProductsGroup", type: "crt.GridContainer", items: [{ name: "NestedNativeField", type: "crt.Input" }] }] }] } } } };
   const vN = renderVerify(rnN, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtNested);
   const nLine = (vN.markdown.split("\n").find((l) => /❌ EXTRA/.test(l)) || "");
-  check("verify: an unrelated base field in an ancestor tab that NAMES connections is STILL flagged EXTRA (leaf-only exemption)",
-    () => /Owner/.test(nLine), () => nLine);
-  check("verify: the lookup in the nested leaf Connected-to group is NOT flagged EXTRA",
-    () => !/ConnCase/.test(nLine), () => nLine);
+  check("verify: base fields inside a NATIVE tab (not a plan tab), even nested in a group, are NOT flagged EXTRA — native tabs are kept",
+    () => !/NativeField/.test(nLine) && !/NestedNativeField/.test(nLine), () => nLine);
+  check("verify: a base field OUTSIDE any tab (a plan-managed region) is STILL flagged EXTRA",
+    () => /StrayField/.test(nLine), () => nLine);
+}
+
+/* nativeTabFieldNames collects the field identities inside every NON-plan tab (native Freedom structure, exempt from
+   removal), skips a tab the plan created (its extras stay under the gate) and a non-tab container (only tabs are kept). */
+{
+  const ctx = { containers: [
+    { name: "ProductsTab", type: "crt.TabContainer", parentType: "", fieldOps: [{ name: "NativeA" }, { name: "NativeB", bound: "Col" }] },
+    { name: "InsightsTab", type: "crt.TabPanelItem", parentType: "crt.TabPanel", fieldOps: [{ name: "Strength" }] },
+    { name: "MyClientTab", type: "crt.TabContainer", parentType: "", fieldOps: [{ name: "ClientX" }] },
+    { name: "SomeGroup", type: "crt.GridContainer", parentType: "", fieldOps: [{ name: "GroupField" }] },
+  ] };
+  const s = nativeTabFieldNames(ctx, ["MyClientTab"]);
+  check("nativeTabFieldNames: a non-plan tab's fields (incl. a TabPanel child and a `bound` id) are collected as native/exempt",
+    () => s.has("NativeA") && s.has("NativeB") && s.has("Col") && s.has("Strength"), () => [...s]);
+  check("nativeTabFieldNames: a PLAN-created tab's field is NOT exempt (its extras stay under the gate)",
+    () => !s.has("ClientX"), () => [...s]);
+  check("nativeTabFieldNames: a non-tab container's field is NOT exempt (only tabs are kept wholesale)",
+    () => !s.has("GroupField"), () => [...s]);
 }
 
 /* The exemption is LOOKUPS-ONLY: inside a connections-named leaf, a crt.ComboBox is kept (a real connection lookup),

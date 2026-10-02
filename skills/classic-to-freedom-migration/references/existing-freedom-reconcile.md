@@ -139,8 +139,14 @@ Read the plan's Layout table — its `Region` (tab / group / island) and `Positi
   the plan puts in the side island but the base page renders in the Overview content is MOVED, not
   skipped as "already native".
 - **in the plan, present and already correct** → keep (no-op).
-- **a base LAYOUT element NOT in the plan** → **`remove`** it. This removes only the on-page control,
-  **NOT** the entity column or its data — so it is safe. ("Not described → not on the page.")
+- **a loose base FIELD control NOT in the plan**, sitting in a region the plan manages (Overview, the side
+  profile, a plan group) → **`remove`** it. This removes only the on-page control, **NOT** the entity column
+  or its data — so it is safe. ("Not described → not on the page.") This is the ONLY automatic removal.
+- **a native Freedom TAB and everything inside it** (Products, Opportunity Insights, History, …) → **KEEP
+  as-is.** A native tab is standard functionality the user relied on in Classic — often a REIMAGINED analog
+  of a Classic tab, so its name will NOT match (Classic "Tactic & competitors" → Freedom "Opportunity
+  Insights"). `classic-layout` never auto-removes a native tab or its fields. Removing one is a deliberate
+  user decision only (`--decide <rowKey> --wont-do`), never an automatic strip — see the confirmation step below.
 - **a Freedom-only NON-field value-add component with no Classic analog** (charts, DCM progress bar,
   Account/Contact compact profile cards, Next steps, …) → **KEEP as-is.** Mode 2 transfers the
   field/detail structure, not these widgets.
@@ -148,6 +154,14 @@ Read the plan's Layout table — its `Region` (tab / group / island) and `Positi
   NOT migrate its Classic counterpart — see "Standard Freedom components" above. The rule is the same in
   both modes; `classic-layout` does NOT re-lay it to a Classic slot.
 - field STATUS where Classic and Freedom differ → **Classic wins** (the plan's `Rule` cell).
+
+**Native tabs — enumerate and confirm (do NOT guess).** Because a native Freedom tab can be a reimagined
+analog of a Classic tab (the names do not match), you cannot tell on your own which tabs correspond to what
+the client had. So in `classic-layout`: `get-page` the Freedom page, **list EVERY native tab it ships**, keep
+them all by default, and **present the full list to the user** for confirmation — remove a tab ONLY if the
+user explicitly decides to (`--decide <rowKey> --wont-do`), and record that in `decisions.md`. A plan field
+or detail that belongs inside a native tab stays in that tab (the tab is its `Region`); it is not pulled out
+to Overview, and it is not inserted a second time if the tab already renders it.
 
 ### Step 4 (M2) — Conflicts
 
@@ -180,9 +194,15 @@ Handlers, business rules, and auto-fills are ported **exactly as in a normal mig
 - **Mode 1 — absence in the delta is not intent to remove.** Never delete a base/standard Freedom element
   just because the client did not add it in Classic; prefer **hide** to delete for anything carrying
   data or referenced by other logic.
-- **Mode 2 — the plan IS the field/detail set.** A base layout element not in the plan is **removed**
-  (the on-page control only, never the entity column or its data); a Freedom-only value-add component is
-  always **kept**; a removal you cannot tie to the plan is a decision, not a silent act.
+- **Mode 2 — the plan IS the field/detail set, inside the regions it manages.** A loose base FIELD control
+  not in the plan, in a region the plan manages (Overview / side profile / a plan group), is **removed**
+  (the on-page control only, never the entity column or its data). A Freedom-only value-add component, and
+  **every native Freedom TAB with its content**, are always **kept** — never auto-removed. A removal you
+  cannot tie to the plan is a decision, not a silent act.
+- **Both — keep native Freedom tabs; confirm them with the user.** Native tabs (Products, Opportunity
+  Insights, History, …) are standard functionality users relied on; a Freedom tab may be a reimagined analog
+  of a Classic tab with a different name, so enumerate EVERY native tab from `get-page`, keep them all, and
+  put the list to the user. Remove a tab only on an explicit `--decide <rowKey> --wont-do`.
 - **Both — keep the standard Freedom components.** Feed, Attachments, Connected to and Timeline the page
   already ships are kept as-is, and their Classic counterparts (`ESNTab` / `FileDetailV2` /
   `EntityConnectionsDetailV2` / `TimelineTab`) are NOT migrated; close that row with `--decide <rowKey>
