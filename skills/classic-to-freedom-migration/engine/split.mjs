@@ -369,7 +369,8 @@ function wiringBeforeChildPage(items) {
       .flatMap((r) => [r.vk.childKey, r.pageKey]).filter(Boolean));
     if (!wired.size) return;
     // A review item only judges the page, so it builds no list and no child page, whatever it declares.
-    const later = items.slice(i + 1).filter((o) => wired.has(o.declaredWritesTo) && !reviewOnly(o));
+    // A binding-only item writes add-ons, not the page it declares, so it is no writer this item has to follow.
+    const later = items.slice(i + 1).filter((o) => wired.has(o.declaredWritesTo) && !reviewOnly(o) && !bindsOnly(o.rows));
     if (!later.length) return;
     const pages = [...new Set(later.map((o) => o.declaredWritesTo))];
     const shown = later.slice(0, 3).map((o) => "`" + o.id + "`").join(", ");
@@ -484,10 +485,14 @@ function unconsumed(index) {
   return out;
 }
 
-// An item holding nothing but `Child page wiring` rows writes the child entities' RelatedPage add-ons, not the page
-// body, so it takes the same `wiring:<page>` artifact the engine's own cut gives those rows. On `page:<page>` it would
-// put every later writer of that page, and its repair rounds, behind the child pages it waits on.
-const bindsOnly = (rows) => rows.length > 0 && rows.every((r) => r.vk?.type === "relatedpage");
+// An item holding nothing but `Child page wiring` rows, at least one of them a binding, writes the child entities'
+// RelatedPage add-ons, not the page body, so it takes the same `wiring:<page>` artifact the engine's own cut gives
+// that group. The inline grid's no-page row belongs to the group and writes nothing, so it does not make the item a
+// page writer. On `page:<page>` the item would put every later writer of that page, and its repair rounds, behind
+// the child pages it waits on.
+const WIRING_GROUP_NAME = "Child page wiring";
+const bindsOnly = (rows) => rows.length > 0 && rows.every((r) => r.group === WIRING_GROUP_NAME)
+  && rows.some((r) => r.vk?.type === "relatedpage");
 const itemWritesTo = (declared, rows, identity) => {
   const target = resolveWritesTo(declared, identity);
   return bindsOnly(rows) ? target.replace(/^page:/, "wiring:") : target;

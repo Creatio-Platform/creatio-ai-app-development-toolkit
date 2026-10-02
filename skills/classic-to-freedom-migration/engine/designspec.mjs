@@ -3972,11 +3972,19 @@ function resolveOnstandVk(vk, ctx) {
 // under `reachability["relatedPage:<Entity>"]` — never by a builder's word. The engine itself matches the entry
 // against the child page that was built: the entry's `pageSchemaUId` against `pages[<childKey>].schemaUId` from that
 // page's own `get-page`, and the schema names when either side carries no UId.
-// The general entries serve the internal audience for every record: no record type, and no role or the
-// `All employees` one. Portal, per-role and per-type entries layer on top and do not decide what the list opens.
+// The general entries serve the internal audience for every record: no record type, and either no role at all
+// (both `role` and `roleName` blank) or the `All employees` role, by name or by its seeded UId. clio names only
+// the two seeded audiences, so a custom-role entry reads as `roleName: null` with the role UId in `role` - that
+// entry is per-role, not general. Portal, per-role and per-type entries layer on top and do not decide what the
+// list opens.
 const GENERAL_ROLE = "All employees";
+const GENERAL_ROLE_UID = "a29a3ba5-4b0d-de11-9a51-005056c00008";
+const blankText = (s) => typeof s !== "string" || !s.trim();
+const isGeneralAudience = (p) => (blankText(p.role) && blankText(p.roleName))
+  || (typeof p.roleName === "string" && p.roleName.trim().toLowerCase() === GENERAL_ROLE.toLowerCase())
+  || (typeof p.role === "string" && p.role.trim().toLowerCase() === GENERAL_ROLE_UID);
 const generalRelatedPages = (pages) => pages.filter((p) => p && typeof p === "object" && !p.typeColumnValue
-  && (!p.roleName || p.roleName === GENERAL_ROLE));
+  && isGeneralAudience(p));
 const sameUId = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 // Whether an add-on entry opens the built child page: by UId when both sides carry one, by name otherwise.
 const opensChild = (p, child) => (child.uid && p.pageSchemaUId ? sameUId(p.pageSchemaUId, child.uid) : p.pageSchemaName === child.name);

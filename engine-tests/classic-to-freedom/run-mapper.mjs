@@ -3959,11 +3959,29 @@ check("child page wiring: the plan states the same wiring under each built child
   check("child page wiring: a portal-only or per-type default does not decide what the related list opens — ❌ MISSING",
     /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All external users" }] }) }))
     && /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, typeColumnValue: "a1b2" }] }) })));
-  check("child page wiring: only the general entry decides — a default scoped to another role is skipped, and the `All employees` default is read as the general one",
-    /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [
-      { pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "Sales" }, { pageSchemaName: "Old_Page", isDefault: true, roleName: "All employees" }] }) }))
+  // clio names only the two seeded audiences: a custom-role entry reads as `roleName: null` with the role UId in `role`.
+  const customRole = { role: "7f3b2c1d-0000-4000-8000-00000000abcd", roleName: null };
+  const generalByUId = { role: "A29A3BA5-4B0D-DE11-9A51-005056C00008", roleName: null };
+  const roleMarks = () => [
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...customRole }, { pageSchemaName: "Old_Page", isDefault: true, roleName: "All employees" }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...customRole }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true, ...customRole }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All employees" }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true, ...customRole }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...generalByUId }] }) })];
+  check("child page wiring: only the general entry decides — a custom-role default (role UId, `roleName: null`) is skipped in either order, and the `All employees` default is read as the general one by name or by its UId",
+    /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(roleMarks()[0])
+    && /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(roleMarks()[1])
+    && /✅ Done/.test(roleMarks()[2]) && /✅ Done/.test(roleMarks()[3])
     && /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All employees" }] }) })),
-    () => wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "Sales" }, { pageSchemaName: "Old_Page", isDefault: true, roleName: "All employees" }] }) }));
+    roleMarks);
+  check("child page wiring: the schema UId match ignores case — an uppercase add-on UId closes the row against a lowercase built UId even when the schema names differ",
+    /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Renamed_Page", pageSchemaUId: "33333333-AAAA-4BBB-8CCC-DDDDDDDDDDDD", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "33333333-aaaa-4bbb-8ccc-dddddddddddd", viewConfig: { items: [] } } })),
+    () => wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Renamed_Page", pageSchemaUId: "33333333-AAAA-4BBB-8CCC-DDDDDDDDDDDD", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "33333333-aaaa-4bbb-8ccc-dddddddddddd", viewConfig: { items: [] } } }));
   check("child page wiring: when both sides carry a schema UId the entry is matched by UId, so a same-named page in another package does not close the row",
     /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", pageSchemaUId: "11111111-1111-4111-8111-111111111111", isDefault: true }] }) },
       { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "22222222-2222-4222-8222-222222222222", viewConfig: { items: [] } } }))
@@ -3978,6 +3996,27 @@ check("child page wiring: the plan states the same wiring under each built child
   check("child page wiring: a child page reported NOT BUILT is ❌ MISSING, and one that reports no schemaName is ⚠ verify — the binding is matched against the built page, not assumed",
     /❌ MISSING \| the child page `child:WAE` is reported as NOT BUILT/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": false }))
     && /⚠ verify \| the built child page `child:WAE` reports no `schemaName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": { viewConfig: { items: [] } } })));
+}
+{
+  // With no target package the row and its read name "the target package", and a read from any package is matched.
+  const noPkgManifest = { ...WIRE_MANIFEST, targetPackage: undefined };
+  const npRun = runMigration(noPkgManifest, { baseDir: FIX });
+  const npOpts = checklistOpts(noPkgManifest);
+  const npRow = checklistGroups(npRun, npOpts).filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows)
+    .find((r) => r.label.includes("`WAE`"));
+  const npRead = readPlan(npRun, npOpts).reads.find((r) => r.kind === "reachability" && r.reachabilityKey === "relatedPage:WAE");
+  const npMark = () => {
+    const md = renderVerify(npRun, npOpts, { pages: { "child:WAE": { schemaName: "Tgt_WAEPage", viewConfig: { items: [] } } },
+      reachability: { "relatedPage:WAE": { success: true, entitySchemaName: "WAE", packageName: "Custom", pageCount: 1,
+        pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, isAdd: false }] } } }).markdown;
+    return (md.split("\n").find((l) => /Related list "WADetail" opens/.test(l)) || "").split(" | ").slice(2, 4).join(" | ").replace(/ˋ/g, "`");
+  };
+  check("child page wiring: with no target package the row and the read plan name the target package generically, and `--verify` matches a read from any package",
+    /the RelatedPage add-on for `WAE` in the target package names that page/.test(npRow?.label || "")
+    && npRow?.vk?.package === null
+    && /`package-name` = the plan's target package/.test(npRead?.what || "")
+    && /✅ Done \| Add and open-record open `Tgt_WAEPage`/.test(npMark()),
+    () => [npRow?.label, npRow?.vk, npRead?.what, npMark()]);
 }
 // `logicOnly` (the inline-grid child's logicSpec) suppresses FORM-PAGE framing: the Base-field overrides
 // section renders normally but vanishes under logicOnly (it is a build instruction on the template's fields, not logic).
@@ -9691,7 +9730,8 @@ try {
   // Two different `X` pages share ONE RelatedPage add-on, so its default can open only one of them: the honest build
   // binds the first and a person records an answer for the other wiring row, which this manifest carries.
   const kcWiring = kcGroups.flatMap((g) => g.rows).filter((r) => r.vk?.type === "relatedpage");
-  const kcWiringAnswered = kcWiring.filter((r) => r.vk.childKey !== kcXKeys[0]);
+  // Only the second `X` row conflicts; every other wiring row closes from its own stand read.
+  const kcWiringAnswered = kcWiring.filter((r) => r.vk.entity === "X" && r.vk.childKey !== kcXKeys[0]);
   fs.writeFileSync(kcManifestPath, JSON.stringify({ ...KC_MANIFEST, deliverableStatus: Object.fromEntries(kcWiringAnswered
     .map((r) => [`${r.pageKey}#${r.deliverableId}`, { status: "wont-do", decision: "D1" }])) }));
   const kcCli = (args) => runMigrate([...args], { encoding: "utf8" });
@@ -9733,6 +9773,14 @@ try {
   for (const k of kcDropped) delete kcPagesPart[k];
   const kcFull = kcVerify(kcBuiltFull, kcPagesFull);
   const kcPart = kcVerify(kcBuiltPart, kcPagesPart);
+  check("F1 (real CLI, end to end): exactly one wiring row — the conflicting second `X` page — carries a recorded answer, and every other wiring row closes ✅ Done from its stand read",
+    kcWiringAnswered.length === 1 && kcWiring.length - kcWiringAnswered.length >= 2
+    && kcWiring.filter((r) => !kcWiringAnswered.includes(r)).every((r) => {
+      const re = new RegExp(String.raw`✅ Done \| Add and open-record open .${kcSchemaName(r.vk.childKey)}.`);
+      return re.test(kcFull.out);
+    }),
+    () => ({ wiring: kcWiring.map((r) => [r.pageKey, r.vk.entity, r.vk.childKey]), answered: kcWiringAnswered.map((r) => r.vk.childKey),
+      rows: kcFull.out.split("\n").filter((l) => /Related list/.test(l)).map((l) => l.slice(0, 260)) }));
   check("F1 (real CLI, end to end): with the second X page NEVER built the run does NOT close — publishing no key for it would let the SAME payload read ✅ 'all machine-checkable deliverables present' with a page that does not exist",
     kcDropped.length === 1                                   // the key exists to be dropped (not vacuous)
     && /✅ \*\*All machine-checkable deliverables present/.test(kcFull.verdict)   // control: an honest full build closes

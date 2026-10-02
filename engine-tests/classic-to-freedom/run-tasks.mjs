@@ -1353,6 +1353,27 @@ check("split: a helper whose CALLER is not in the plan at all is not a chain def
     () => writesOf([C1_ITEM, WIRE_ITEM], "wire-main") === "wiring:main"
       && !!mainRow && writesOf([C1_ITEM, { ...WIRE_ITEM, rows: ["@Child page wiring", mainRow] }], "wire-main") === "page:main",
     () => [writesOf([C1_ITEM, WIRE_ITEM], "wire-main"), mainRow]);
+  // A binding-only item writes add-ons, not the holder page, so it is no writer a wiring item has to follow.
+  const mainWiring = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Child page wiring");
+  const secondBind = { ...mainWiring?.rows[0], label: 'Related list "R8D" opens the rebuilt child page `child:C1@R8D`', deliverableId: "child-page-wiring:R8D" };
+  const TWO_GROUPS = GROUPS.map((g) => (g === mainWiring ? { ...g, rows: [...g.rows, secondBind] } : g));
+  const twoSplit = (items, groups) => resolveSplit({ items }, groups, new Map()).errors.filter((e) => /wires /.test(e));
+  const WIRE_C1 = { id: "wire-c1", title: "w", pageKey: "child:C1", writesTo: "child:C1", rows: ["@Child page wiring"] };
+  const halves = [{ ...WIRE_ITEM, id: "wire-main-1", rows: ["@Child page wiring[1]"] }, { ...WIRE_ITEM, id: "wire-main-2" }];
+  check("split: binding-only items raise no wiring error against each other — two on one holder, or the holder's before a child page's own — since neither writes the page the other wires",
+    () => !!mainWiring?.rows[0]?.vk && twoSplit([C1_ITEM, MAIN_ITEM, ...halves], TWO_GROUPS).length === 0
+      && twoSplit([C1_ITEM, MAIN_ITEM, WIRE_ITEM, WIRE_C1], GROUPS).length === 0,
+    () => [twoSplit([C1_ITEM, MAIN_ITEM, ...halves], TWO_GROUPS), twoSplit([C1_ITEM, MAIN_ITEM, WIRE_ITEM, WIRE_C1], GROUPS)]);
+  // The inline grid's no-page row sits in the same `Child page wiring` group as the binding rows and has no `vk`.
+  const naRow = { label: 'Related list "R9D" — `C9`', deliverableId: "child-page-wiring:R9D", na: "no page to wire — an inline-editable related list" };
+  const NA_GROUPS = GROUPS.map((g) => (g.pageKey === "main" && g.baseTitle === "Child page wiring" ? { ...g, rows: [...g.rows, naRow] } : g));
+  const mainFiled = NA_GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates")?.rows.find((r) => r.deliverableId === "quality:ran");
+  const naSplit = resolveSplit({ items: [C1_ITEM, { ...MAIN_ITEM, rows: [...MAIN_ITEM.rows, ...(mainFiled ? ["@Quality gates[1]"] : [])] }, WIRE_ITEM] }, NA_GROUPS, new Map());
+  check("split: an item holding the whole `Child page wiring` group, the inline grid's no-page row included, writes `wiring:<page>` and leaves the page's filed gate with the page's last writer",
+    () => !!mainFiled && naSplit.items.find((it) => it.id === "wire-main")?.writesTo === "wiring:main"
+      && naSplit.items.find((it) => it.id === "wire-main").rows.some((r) => r.na)
+      && !naSplit.errors.some((e) => /quality:ran/.test(e)),
+    () => [!!mainFiled, naSplit.items.map((it) => [it.id, it.writesTo]), naSplit.errors]);
 }
 
 // Per-type routing binds each Type's form by the Type column, so it cannot run before those forms exist. Like the
