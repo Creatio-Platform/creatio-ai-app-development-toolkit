@@ -483,6 +483,12 @@ export function mapToFreedom(eff, opts = {}) {
   // lookup's referenced object "Lookup (Contact)".
   const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
   const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
+  // A field with no entity column behind it has no column title to auto-label from: its label is the Classic page
+  // string, in every culture. Null for a column-bound field, and when the entity columns are not known.
+  const pageLabelFor = (col) => {
+    if (!Object.keys(cols).length || cols[col] != null || columnTitles[col] != null) return null;
+    return pageText(col) ?? pageText(col + "Caption");
+  };
   // Name-bound field inserts → fields. Here, not in `mergeHierarchy`: that never receives `entityColumns`.
   eff = promoteNameBoundFields(eff, cols);
   const needsDecision = [];
@@ -532,7 +538,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
-  const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor,
+  const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor, pageLabelFor,
     index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
@@ -852,7 +858,7 @@ function foldFieldSummaries(acc) {
 }
 
 function mapFields(ctx, containers) {
-  const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
+  const { cols, colMeta, labelFor, pageLabelFor, registerText, index, profileAnchors, payloadFields } = ctx;
   const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
   const needsDecision = [], viewConfigDiff = [], accountedFor = new Set();
   const attributes = {}, pdsColumns = {};
@@ -951,8 +957,16 @@ function mapFields(ctx, containers) {
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
     // a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
-    // an inline label/caption (clio rejects hardcoded page text). `titleText`/`typeLabel` are PLAN-only metadata.
+    // an inline label/caption (clio rejects hardcoded page text). A field with no column binds its label to the
+    // Classic page string. `titleText`/`typeLabel`/`labelKey`/`labelSource` are PLAN-only metadata.
     if (lbl != null) values.titleText = lbl;
+    const pageLabel = pageLabelFor(col);
+    if (pageLabel) {
+      registerText(pageLabel.key, pageLabel);
+      values.label = "$Resources.Strings." + pageLabel.key;
+      values.labelKey = pageLabel.key;
+      values.labelSource = pageLabel.source;
+    }
     values.typeLabel = fieldTypeLabel(col, meta, c);
     applyFieldTypeMeta(values, col, c, meta);
     applyHintTip(values, f, col);
@@ -1341,8 +1355,9 @@ function mapDetails(ctx, containers, profileRegion) {
     return { feat: r ? featureView(r) : null, featByEntity: !!r?.meta?.byEntity };
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
-  const emitStandardFeature = (d, dentity, tab, feat, featByEntity) => {
-    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
+  const emitStandardFeature = (d, dentity, tab, feat, featByEntity, listTitle = null) => {
+    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null,
+      caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null });
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1391,6 +1406,15 @@ function mapDetails(ctx, containers, profileRegion) {
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
     });
   };
+  // A list-shaped standard feature is titled like any related list: its Classic title in every culture, or a
+  // `detail-caption` decision when none is readable. Component-shaped features carry no list title.
+  const standardListTitle = (d, dinfo, feat) => {
+    if ((feat.uiShape || "list") !== "list") return null;
+    const title = classicDetailTitle(d, dinfo, pageText);
+    if (title) registerText(title.key, title);
+    else needsDecision.push(detailCaptionDecision(d));
+    return title;
+  };
   // Emit ONE deduped placement: a standard feature (A3 analog) or a rebuilt custom detail. Own fn for Sonar CC 15.
   const emitDetail = ({ d, tab, own }) => {
     // Ensure the OWNING tab is emitted as a container so a tab holding ONLY details is still built (+ caption).
@@ -1398,7 +1422,7 @@ function mapDetails(ctx, containers, profileRegion) {
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
-    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); return; }
+    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity, standardListTitle(d, dinfo, feat)); return; }
     const detailTitle = classicDetailTitle(d, dinfo, pageText);
     const detailTexts = classicDetailTexts(d, dinfo);
     flagDetailIssues(d, dinfo, dentity, tab, detailTitle, detailTexts);

@@ -12200,6 +12200,58 @@ const n2TreeManifest = (titleA, titleB) => ({
     () => layered.details);
 }
 
+// A list-shaped standard feature (Activities, Emails) is titled like any related list: its Classic title in every
+// culture, or a `detail-caption` decision when none is readable.
+{
+  const featureCs = (details, opts) => mapToFreedom(mergeHierarchy([L("Base", { entity: "Contract", details: {
+      Activities: { schemaName: "ActivityDetailV2", entitySchemaName: "Activity", detailColumn: "Contract", masterColumn: "Id" },
+      Emails: { schemaName: "EmailDetailV2", entitySchemaName: "Activity", detailColumn: "Contract", masterColumn: "Id" },
+      ...details },
+    diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+           di({ name: "Activities", parentName: "T", propertyName: "items", itemType: 2 }),
+           di({ name: "Emails", parentName: "T", propertyName: "items", itemType: 2 })] })]), opts);
+  const activityStrings = { Caption: { "en-US": "Activities", "fr-FR": "Activités" } };
+  const own = featureCs({}, { detailSchemas: { ActivityDetailV2: { entity: "Activity", columns: [], strings: activityStrings } } });
+  const feature = (cs, name) => (cs.standardFeatures || []).find((s) => s.feature === name);
+  check("standard list title: Activities is titled with its detail's own Caption, in every culture",
+    () => feature(own, "Activities")?.caption === "Activities" && feature(own, "Activities")?.captionSource === "ActivityDetailV2 · Caption"
+      && own.resourceCultures?.[feature(own, "Activities").captionKey]?.["fr-FR"] === "Activités",
+    () => ({ feature: feature(own, "Activities"), cultures: own.resourceCultures }));
+  const renamed = featureCs({}, {
+    resources: { ActivitiesDetailCaptionOnPage: "Contract activities" },
+    resourceStrings: { ActivitiesDetailCaptionOnPage: { "en-US": "Contract activities", "fr-FR": "Activités du contrat" } },
+    detailSchemas: { ActivityDetailV2: { entity: "Activity", columns: [], strings: activityStrings } } });
+  check("standard list title: the page's rename (`<Key>DetailCaptionOnPage`) titles a standard list ahead of the detail's Caption",
+    () => feature(renamed, "Activities")?.caption === "Contract activities"
+      && renamed.resourceCultures?.ActivitiesDetailCaptionOnPage?.["fr-FR"] === "Activités du contrat",
+    () => feature(renamed, "Activities"));
+  check("standard list title: a standard list with no readable title has no caption and is a `detail-caption` decision",
+    () => feature(own, "Emails")?.caption === null
+      && own.needsDecision.some((n) => n.kind === "detail-caption" && n.item === "EmailDetailV2"),
+    () => ({ feature: feature(own, "Emails"), decisions: own.needsDecision.filter((n) => n.kind === "detail-caption") }));
+}
+
+// A field with no entity column behind it is labelled by its Classic page string, in every culture; a column-bound
+// field writes no label and auto-labels from the column title.
+{
+  const labelCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+    di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
+    di({ name: "Dept", parentName: "Header", propertyName: "items", bindTo: "Department" }),
+  ] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } },
+    resources: { Department: "Department" },
+    resourceStrings: { Department: { "en-US": "Department", "fr-FR": "Service" } } });
+  const valuesOf = (name) => labelCs.viewConfigDiff.find((o) => o.name === name)?.values;
+  check("field label: a field with no column binds its label to the Classic page string",
+    () => valuesOf("Department")?.label === "$Resources.Strings.Department" && valuesOf("Department")?.labelSource === "page · Department",
+    () => valuesOf("Department"));
+  check("field label: the page string travels in every culture",
+    () => labelCs.resourceCultures?.Department?.["fr-FR"] === "Service",
+    () => labelCs.resourceCultures);
+  check("field label: a column-bound field writes no label",
+    () => valuesOf("InternalRequest") && valuesOf("InternalRequest").label === undefined,
+    () => valuesOf("InternalRequest"));
+}
+
 // ===== N1: make --verify trustworthy (business rules gated, component role/analog) ================
 // The shared detector's verdict contract, fixed by unit tests BEFORE the engine code (TDD). resolveRuleVk gates a
 // page's business rules against the read-page-business-rules slot; resolveComponentVk accepts a curated Freedom

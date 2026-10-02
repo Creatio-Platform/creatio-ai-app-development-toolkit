@@ -183,7 +183,8 @@ function rowsForFields(fields, regionOf) {
     const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
     const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
-    const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
+    const label = v.labelKey ? `label \`${esc(v.labelKey)}\` ← ${esc(v.labelSource || "?")}` : null;
+    const additional = [linked, label, tip].filter(Boolean).join(" · ") || DASH;
     return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
   });
 }
@@ -258,9 +259,10 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     const guided = isList ? null : featureGuidanceId(s.feature);
     const nativeSrc = nativeFeatureSource(guided, s.templateProvided, formTemplate);
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
-    const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
-    const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
-    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
+    const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : null;
+    const noteCell = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
+    const add = [noteCell, isList ? detailTextsNote(s) : null].filter(Boolean).join(" · ") || DASH;
+    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc((isList && s.caption) || s.feature), type, src, DASH, add] };
   });
 }
 function widgetSource(w, formTemplate = null) {
