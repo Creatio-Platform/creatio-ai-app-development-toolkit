@@ -7820,7 +7820,7 @@ check("detail add-mechanism: each raised as a decision + rendered in the plan (c
   const topRun = layerRun({ body: topLayer });
   const topDetail = topRun.changeSet.details.find((d) => d.detailSchema === "OrderProductDetailV2");
   check("detail chain (bundle shape) control: the top `body` alone → no lookup add and no detail-add-mechanism line",
-    !topDetail?.addMode?.lookup && damLines(topRun).length === 0
+    topDetail !== undefined && topDetail.addMode?.lookup !== true && damLines(topRun).length === 0
     && !topRun.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism"),
     () => ({ addMode: topDetail?.addMode, lines: damLines(topRun) }));
 }
