@@ -775,8 +775,7 @@ function withDependencies(tasks) {
     const prev = lastOn.get(chainKey);
     if (prev) deps.push(prev);
     lastOn.set(chainKey, t.id);
-    deps.push(...reviewDeps(t, writersSoFar));
-    deps.push(...wiringDeps(t, lastOn));
+    deps.push(...reviewDeps(t, writersSoFar), ...wiringDeps(t, lastOn));
     if (t.writesTo) writersSoFar.push(t);
     return { ...t, dependsOn: [...new Set(deps)].filter((d) => d !== t.id) };
   });

@@ -2998,7 +2998,8 @@ function childWiringPageText(c) {
   const tpl = CHILD_TEMPLATE_SCHEMA[choice];
   const classic = c.resolvedFrom || (typeof c.editPage === "string" ? c.editPage : "");
   const parts = [tpl ? `on \`${esc(tpl)}\`` : "", classic ? `replacing Classic \`${esc(classic)}\`` : ""].filter(Boolean);
-  return `the rebuilt child page \`${esc(c.pageKey)}\`${parts.length ? ` (${parts.join(", ")})` : ""}`;
+  const detail = parts.length ? ` (${parts.join(", ")})` : "";
+  return `the rebuilt child page \`${esc(c.pageKey)}\`${detail}`;
 }
 const relatedPageQuery = (entity, pkg) =>
   `\`get-related-page-addon\` (through \`clio-run\`) with \`entity-schema-name\` = \`${esc(entity)}\` and \`package-name\` = ${pkg ? "`" + esc(pkg) + "`" : "the plan's target package"}`;
@@ -3985,7 +3986,8 @@ function relatedPageRead(vk, v) {
   if (v === undefined || v === null) return { verdict: ["⚠ verify", `the RelatedPage add-on for \`${esc(vk.entity)}\` was not read${how}`, "unverified", "verifier"] };
   if (v === false) return { verdict: ["❌ MISSING", `no RelatedPage add-on for \`${esc(vk.entity)}\` (built.reachability.${vk.evidence} = false) — the related list opens nothing built here`, "missing"] };
   if (typeof v !== "object" || Array.isArray(v) || v.success === false || !Array.isArray(v.pages)) {
-    return { verdict: ["⚠ verify", `the RelatedPage read for \`${esc(vk.entity)}\` is not a \`get-related-page-addon\` response${v?.error ? ` (${esc(String(v.error))})` : ""}${how}`, "unverified", "verifier"] };
+    const error = v?.error ? ` (${esc(String(v.error))})` : "";
+    return { verdict: ["⚠ verify", `the RelatedPage read for \`${esc(vk.entity)}\` is not a \`get-related-page-addon\` response${error}${how}`, "unverified", "verifier"] };
   }
   const readPkg = typeof v.packageName === "string" ? v.packageName : "";
   if (vk.package && readPkg && readPkg !== vk.package) {
@@ -4006,14 +4008,18 @@ function resolveRelatedPageVk(vk, ctx) {
   const read = relatedPageRead(vk, reachabilityValue(ctx.root, vk.evidence));
   if (read.verdict) return read.verdict;
   const opens = read.pages.find((p) => p.isDefault === true);
-  if (!opens) return ["❌ MISSING", `the RelatedPage add-on for \`${esc(vk.entity)}\` has no default page${vk.package ? ` in \`${esc(vk.package)}\`` : ""} — the related list opens nothing built here`, "missing"];
+  if (!opens) {
+    const inPkg = vk.package ? ` in \`${esc(vk.package)}\`` : "";
+    return ["❌ MISSING", `the RelatedPage add-on for \`${esc(vk.entity)}\` has no default page${inPkg} — the related list opens nothing built here`, "missing"];
+  }
   const child = wiredChildSchema(vk, ctx.root);
   if (child.verdict) return child.verdict;
   // A separate add entry overrides the default for Add; with none, the default page serves Add too.
   const adds = read.pages.find((p) => p.isAdd === true) || opens;
   const wrong = [["open-record", opens], ["Add", adds]].filter(([, p]) => !opensChild(p, child));
   if (!wrong.length) return ["✅ Done", `Add and open-record open \`${esc(child.name)}\` (RelatedPage add-on for \`${esc(vk.entity)}\`)`, "ok"];
-  return ["❌ MISSING", `${wrong.map(([what, p]) => `${what} opens \`${esc(String(p.pageSchemaName || p.pageSchemaUId || "?"))}\``).join(", ")}, the built child page is \`${esc(child.name)}\``, "missing"];
+  const opensWhat = wrong.map(([what, p]) => what + " opens `" + esc(String(p.pageSchemaName || p.pageSchemaUId || "?")) + "`").join(", ");
+  return ["❌ MISSING", `${opensWhat}, the built child page is \`${esc(child.name)}\``, "missing"];
 }
 // --- per-dashboard verification ----------------------------------------------------------------------------
 // The plan names every dashboard and its destination, so the gate compares against THAT list: one boolean for
