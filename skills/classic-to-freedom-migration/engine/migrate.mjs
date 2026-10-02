@@ -3830,11 +3830,16 @@ function runHandoffMode(result, dir, opts, ctx) {
     nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
   });
   fs.writeFileSync(resumeFile, text);
-  return [`migrate.mjs: wrote ${resumeFile} and the manifest copy ${manifestCopy} — the build loop moves to a FRESH`
-    + " SESSION now.",
-  "Give the user the prompt below to paste into a fresh session, then STOP: do not `--start` or dispatch",
-  "anything more in this session. The fresh session reads resume.md and orchestrate-build.md → Resuming.",
-  ...(records.length ? ["", ...records] : []), "", prompt, ""].join("\n");
+  // THE NOTE DOES NOT DECIDE WHERE THE BUILD RUNS — the user does, through the orchestrate-build.md 7.1b question.
+  // It names the three answers so the tool output and 7.1b say the same thing; the golden ties the two together.
+  return [`migrate.mjs: wrote ${resumeFile} and the manifest copy ${manifestCopy}.`,
+    "Where the build runs is the user's choice (orchestrate-build.md 7.1b). If worklog.md has no `Build session:`",
+    "line yet, ask it now, record the answer as that line, then act on it:",
+    "- New session: give the user the prompt below to paste into a fresh session; no `--start` or dispatch here.",
+    "- Continue here: continue the 7.2 loop with `--next`; resume.md stays behind as a recovery point.",
+    `- Compress here: the user types /compact, then sends \`Continue the build from ${resumeFile}.\``,
+    "The fresh or compacted session reads resume.md and orchestrate-build.md → Resuming.",
+    ...(records.length ? ["", ...records] : []), "", prompt, ""].join("\n");
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -4103,7 +4108,9 @@ function runRevokeMode(result, dir, opts) {
   // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
   // A withdrawn build-it entry left the folder as asked; a skipped cell is a decision still in force. They are
-  // reported apart, and only the skipped cells decide the exit status.
+  // reported apart. Exit status: a run that cleared at least one cell succeeds even with skipped cells, because a
+  // skipped cascade cell is the expected result of revoking a cascaded decision (§3 — the repair task stays closed);
+  // a run that cleared nothing fails when any skipped cell stays in force.
   const skipped = res.skipped || [];
   const withdrawnLines = skipped.filter((s) => s.withdrawn).map((s) => `  · withdrawn ${s.task.file} row ${s.n}: ${s.why}`);
   const inForceLines = skipped.filter((s) => !s.withdrawn).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);

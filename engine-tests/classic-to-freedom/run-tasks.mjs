@@ -5937,10 +5937,22 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     () => promptBlock.includes(path.resolve(folder)) && promptBlock.includes(COPY)
       && promptBlock.includes("--next") && (promptBlock.match(/```/g) || []).length === 2,
     () => promptBlock);
-  check("--handoff (R4): the stdout note names resume.md, gives the prompt to paste into a FRESH session, and says to STOP",
-    () => (ok.stdout || "").includes(RESUME) && /fresh session/i.test(ok.stdout || "") && /STOP/.test(ok.stdout || "")
-      && (ok.stdout || "").includes(COPY),
+  check("--handoff (R4): the stdout note names resume.md and the manifest copy, gives the prompt to paste into a fresh session, and sends the choice to the 7.1b question",
+    () => (ok.stdout || "").includes(RESUME) && /fresh session/i.test(ok.stdout || "") && (ok.stdout || "").includes(COPY)
+      && (ok.stdout || "").includes("7.1b") && (ok.stdout || "").includes("`Build session:`"),
     () => ok.stdout);
+  check("--handoff (R4): the stdout note has no unconditional STOP — whether the build leaves this session is the user's 7.1b answer, not the tool's",
+    () => !/\bSTOP\b/.test(ok.stdout || ""), () => ok.stdout);
+  {
+    // THE NOTE AND 7.1b NAME THE SAME ANSWERS. Each side had its own test, so they drifted apart once; this reads the
+    // option labels from 7.1b itself and requires every one of them in the tool output.
+    const doc = fs.readFileSync(path.join(ENGINE_DIR, "..", "references", "orchestrate-build.md"), "utf8");
+    const gate = doc.slice(doc.indexOf("**7.1b "), doc.indexOf("**7.2 "));
+    const labels = [...gate.matchAll(/^\d+\. \*\*([^*]+?)(?: \(Recommended\))?\*\*/gm)].map((m) => m[1]);
+    check("--handoff (R4): every 7.1b answer is named in the stdout note, so the tool output and the question cannot disagree",
+      () => labels.length === 3 && labels.every((l) => (ok.stdout || "").includes(`- ${l}:`)),
+      () => ({ labels, stdout: ok.stdout }));
+  }
   check("--handoff: it reads the task folder, it does not move it — no task started, no token issued",
     () => readTaskDir(dir).every((t) => t.status === "todo") && !/DISPATCH TOKEN/.test(ok.stdout || ""),
     () => readTaskDir(dir).map((t) => t.status));

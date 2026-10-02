@@ -2875,8 +2875,8 @@ function listConditionsOf(item) {
 
 // The keys this element declares that the engine models nowhere and that are worth a question — see
 // `LIST_PRESENTATION_PROPS` for the family that is not. `activeRowActions` is excluded too: it is the slot the
-// grid's row actions are inserted under, and this surface already reads those as `rowActions`, so listing it
-// beside `controlColumnName` asked about something the plan had answered. Sorted by the projection already.
+// grid's row actions are inserted under, and this surface reads those row actions as `rowActions`, so the plan
+// already answers it and it is not a question. Sorted by the projection already.
 const listOpenProps = (item) => (item.unmodelledProps || [])
   .filter((k) => !LIST_PRESENTATION_PROPS.has(k) && k !== LIST_ROW_ACTIONS_PROPERTY);
 
@@ -3012,9 +3012,10 @@ function indexChildrenByParent(items) {
   return childrenByParent;
 }
 // The package that DECLARES a section element: the first client layer that defined or touched it (the fold's
-// `declaringPackage`). Not the tail of `provenance` — on the real Opportunity section that named `WorkSalesBase`,
-// the layer that only hides `CreateOrderFromOpportunityButton`, instead of `OrderInSales`, which inserts it and
-// owns its click handler. The full chain stays on the item's `provenance` for a reader who needs every layer.
+// `declaringPackage`), not a later layer that only hides or restyles it — so it is not the tail of `provenance`.
+// Example: Opportunity's `CreateOrderFromOpportunityButton` is declared by `OrderInSales`, which inserts it and
+// owns its click handler, not by `WorkSalesBase`, which only hides it. The full chain stays on the item's
+// `provenance` for a reader who needs every layer.
 function declaringPackageOf(item) {
   return item.declaringPackage || null;
 }
