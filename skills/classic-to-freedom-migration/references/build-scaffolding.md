@@ -34,10 +34,20 @@ named identically in the app's page list, and paid an extra ~90-second call for 
 
 **Never repair an app's package composition on your own.** Linking a package to an app or flipping
 its primary flag changes which package owns the app's identity and where the Section Wizard writes
-every future schema. Surface it as a decision with the three `sectionHost.mode` values —
+every future schema. Surface it as a decision with the `sectionHost.mode` values —
 `existing-app` (`create-app-section` into the app, which needs the app's primary package to be the
-target package and editable), `new-app` (the one `create-app` call above) and `pages-only-no-menu`
-(no menu registration; the pages are reached by URL and page bindings) — and the user picks.
+target package and editable), `new-app` (the one `create-app` call above), `pages-only-no-menu`
+(no menu registration; the pages are reached by URL and page bindings) and, when a Freedom section
+for the object is already in the menu, `existing-section` — and the user picks.
+
+## `existing-section` scaffolds no app and no section
+
+The section is already in the menu, so this task makes no `create-app`, `create-app-section` or
+`create-page` call. Its work is the target package: confirm it exists and depends on the package of
+each base page (`create-package` made it in planning). Every page write in the
+build is an extension of `sectionHost.listPage` / `sectionHost.formPage`, saved with
+`target-package-uid` of the target package so the replacing schema lands there and not in the base
+page's package. Re-templating below does not apply: the existing page keeps its template.
 
 ## Re-templating the scaffolded form page
 
@@ -55,7 +65,13 @@ build does this, in this order, inside the ONE task that owns the page:
 4. `create-related-page-addon` for the entity, in the target package, pointing the default page at
    the new `schemaUId`. Then `get-related-page-addon` and confirm `pageSchemaUId` + `isDefault` read
    back as you set them — the list page opens whatever this record says, and a build that skips it
-   leaves a section whose rows open nothing.
+   leaves a section whose rows open nothing. **For a parallel section (`planMeta.parallelSection`) do
+   not do this step on your own.** The RelatedPage add-on is per object, not per section, and its
+   `pages` list replaces the object's whole configuration: pointing the default at the new page also
+   moves the EXISTING section's rows, and the add-record path, to it. Keep the existing default entry
+   unless the user's answer to "which page opens the records outside the new section" says
+   otherwise; when the new section's rows must open the new page and the binding cannot do that
+   without changing the existing section, stop and ask the user.
 5. **Give the new page a primary data source before anything binds to it.** A page `create-page`
    made from a template carries the template's `#PrimaryDataSourceName()#` macro UNEXPANDED, so it
    has no data source of its own: declare a `crt.EntityDataSource` (scope `page`) over the entity in

@@ -59,6 +59,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
@@ -401,7 +402,8 @@ function miniPageIssue(miniPage, miniPageVerified) {
 // hard BLOCK. TOP-LEVEL only (visited.size===0); nested folds have their own 0-field handling. Reconcile exempt.
 // Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
 function hollowFormIssue(changeSet, typedPages, manifest, visited) {
-  if (typedPages.length || visited.size !== 0 || manifest.planMeta?.freedomExists) return null;
+  // Only a reconcile is exempt: it extends a page that already has a body. A parallel section is a Rebuild.
+  if (typedPages.length || visited.size !== 0 || reconcilesExisting(manifest.planMeta)) return null;
   const mainFields = countFormFields(changeSet.viewConfigDiff);
   if (mainFields !== 0) return null;
   return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
@@ -945,21 +947,24 @@ function signalUnresolved(k, signals) {
 //     "application":               { "resolved": true, "code": "UsrTasksApp" | null },
 //     "primaryPackage":            { "resolved": true, "name": "UsrTasks" | null, "editable": true },
 //     "targetPackageInApplication":{ "resolved": true, "value": true },
-//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" } }
+//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" | "existing-section",
+//                                    "listPage": "Contracts_ListPage", "formPage": "Contracts_FormPage" } } // the two page names: existing-section only
 const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage", "targetPackageInApplication", "sectionHost"];
 // `existing-app` — register into the app that already owns the entity (the only mode that needs the primary ==
 // target match). `new-app` — the build creates its own Freedom app first (the answer when the owning app is a
 // vendor/install wrapper). `pages-only-no-menu` — pages ship, the section is deliberately NOT registered; a
 // legitimate outcome, but an APPROVED one, never a silent fallback: the whole point of this gate is that the
-// missing menu entry is a plan decision, not a surprise found two hours into a build.
-const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu"];
+// missing menu entry is a plan decision, not a surprise found two hours into a build. `existing-section` — a
+// Freedom section for this object is already in the menu and the user chose to extend it: nothing is registered,
+// the Classic customizations land as extensions of that section's own list and form pages in the target package.
+const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXISTING_SECTION_MODE];
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
 export function placementIssues(manifest) {
-  const p = manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
-  const has = (k) => p[k] && typeof p[k] === "object" && p[k].resolved === true;
-  const unresolved = PLACEMENT_KEYS.filter((k) => !has(k));
+  const p = placementOf(manifest);
+  const has = (k) => isResolvedFact(p, k);
+  const unresolved = requiredPlacementKeys(p).filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -977,6 +982,46 @@ export function placementIssues(manifest) {
   }
   // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs.
   if (mode === "existing-app") issues.push(...existingAppIssues(p, target));
+  if (mode === EXISTING_SECTION_MODE) issues.push(...existingSectionIssues(p.sectionHost, manifest.planMeta));
+  issues.push(...parallelSectionIssues(manifest.planMeta, mode));
+  return issues;
+}
+const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
+// `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
+// target package and the host decision are required. The ONE source for both the gate above and the keys the
+// plan's placement banner asks for — a banner listing keys the gate does not need sends the agent after answers
+// nobody reads.
+const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
+function requiredPlacementKeys(p) {
+  return isResolvedFact(p, "sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
+}
+// The `parallelSection` contract. A parallel section is a NEW app and section built next to an EXISTING Freedom
+// section, so it needs both the 'new-app' host and `freedomExists`. Without `freedomExists` the flag is dropped by
+// `isParallelSection` and the plan quietly renders as a plain Rebuild with no parallel-section banner — so it is a
+// blocker, not a no-op.
+function parallelSectionIssues(planMeta, mode) {
+  if (planMeta?.parallelSection !== true) return [];
+  const issues = [];
+  if (mode !== "new-app") {
+    issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
+  }
+  if (planMeta.freedomExists !== true) {
+    issues.push("planMeta.parallelSection is true but planMeta.freedomExists is not true — a parallel section is built next to an EXISTING Freedom section; without one the plan would be a plain Rebuild. Set planMeta.freedomExists: true, or drop parallelSection when no Freedom section exists.");
+  }
+  return issues;
+}
+// The `existing-section` contract. The plan targets two pages that already exist, so it must name them, and the
+// main-scope Call must be a reconcile: an extension of an existing page is never a rebuild.
+function existingSectionIssues(host, planMeta) {
+  const issues = [];
+  const blank = (v) => typeof v !== "string" || v.trim() === "";
+  if (blank(host.listPage) || blank(host.formPage)) {
+    issues.push("placement.sectionHost.mode is 'existing-section' but sectionHost.listPage / sectionHost.formPage are not both named — record the existing section's list and form page schema names (from list-pages / list-entity-client-schemas), the pages this plan extends.");
+  }
+  if (planMeta?.freedomExists !== true) {
+    issues.push("placement.sectionHost.mode is 'existing-section' but planMeta.freedomExists is not true — extending an existing section is a reconcile of its pages; set planMeta.freedomExists: true.");
+  }
   return issues;
 }
 // The `existing-app` half of `placementIssues`, extracted so that function stays under Sonar's
@@ -984,7 +1029,7 @@ export function placementIssues(manifest) {
 // a dead end — it is the fork.
 function existingAppIssues(p, target) {
   const issues = [];
-  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
+  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), to 'pages-only-no-menu' (ship the pages without a menu entry), or — when a Freedom section for this object is already in the menu — to 'existing-section' (extend that section's pages, register nothing); or fix the app's package composition on-stand FIRST and re-record these facts.";
   if (!p.application.code) {
     issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
   }
@@ -1025,14 +1070,18 @@ export function checklistOpts(manifest, opts = {}) {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
-    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
+    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? formTemplateMissing(pm, manifest) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
+    // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
+    placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
     sectionHostMode: manifest.placement?.sectionHost?.mode ?? null,
+    // The existing section's pages an `existing-section` plan extends; null in every other mode.
+    existingSection: existingSectionPages(manifest.placement?.sectionHost),
     // The app the section is registered INTO, published so the build side never has to guess one. In the run this
     // exists for, the agent doing the registration had no application code in front of it and invented one off the
     // stand — against an app that could not host a section at all.
@@ -1040,6 +1089,15 @@ export function checklistOpts(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
   };
+}
+// An `existing-section` form page keeps its own template, so there is no template to choose.
+function formTemplateMissing(pm, manifest) {
+  const blank = (v) => v == null || String(v).trim() === "";
+  return manifest.placement?.sectionHost?.mode !== EXISTING_SECTION_MODE && blank(pm.formTemplate) && blank(manifest.template);
+}
+function existingSectionPages(host) {
+  if (host?.mode !== EXISTING_SECTION_MODE) return null;
+  return { listPage: host.listPage ?? null, formPage: host.formPage ?? null };
 }
 // A SUB-page's checklist opts. Deliberately NOT the parent's threaded through: with the parent's planMeta the
 // child's `Form template` row expects the PARENT's template (a mismatch nobody can ever fix), and a truthy
@@ -2984,6 +3042,11 @@ export function runMigration(manifest, opts = {}) {
   // PLACEMENT completeness — the app-hosting facts. Mirrored here for the same reason as the two above: the CLI
   // gate reads the result, not the manifest.
   out.placement = manifest.placement || null;
+  // `existing-section` names ONE form page; a typed entity has a form page per record type, which this mode
+  // cannot target, so its plan is refused rather than half-planned as per-type rebuilds.
+  if (specOpts.existingSection && (out.typedPages || []).length) {
+    specOpts.placementBlockers = [...specOpts.placementBlockers, `placement.sectionHost.mode is 'existing-section' but '${out.entity}' has ${out.typedPages.length} typed form pages — this mode extends one list page and one form page only. Record the case in decisions.md and plan it with the user as a reconcile of each form page outside this mode.`];
+  }
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);

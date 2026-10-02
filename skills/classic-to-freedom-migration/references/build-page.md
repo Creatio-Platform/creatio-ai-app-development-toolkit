@@ -131,8 +131,10 @@ per acceptance criterion — the AC and what you did that shows it holds:
 An AC with no line means the row is `⚠ Partial`, naming that AC. **Test each AC, don't argue it.**
 An AC is already a test case; the ones saying a behaviour must NOT happen are the ones that break
 silently, so go and try that case. "Wired, saves cleanly" verifies the schema, not the behaviour. A
-page handler is client-side: it fires on a UI save in the browser, not on an OData insert. Where a
-behaviour writes data, read the record back and check the mapped values.
+page handler is client-side: it fires on a UI save in the browser, not on an OData insert. The proof
+of that save is its captured `UpdateQuery` (the columns it wrote); where a behaviour writes data, read
+the record back and check the mapped values; a detail's link shows in its captured `SelectQuery` filter
+— each with one value change per AC, as `build-task-execution.md` → *Evidence, cheapest first* says.
 
 **Gate-toggle safety (shared stand).** If a **system setting** gates the behaviour, name the exact
 `SysSettingsValue` row you are testing — its culture/user/role — since a per-role override beats the
@@ -273,6 +275,11 @@ rules.
   `get-page`; and read the cheap evidence first — the data requests, then the console, then the
   DOM, a screenshot only for layout — as `build-task-execution.md` → *Evidence, cheapest first*
   ranks it.
+- **The save-check-fix loop.** Save, open the page, fix what it shows, save, open it again — four
+  of one section's seven page tasks ran that cycle three to five times, and clicked and typed
+  through the form to exercise each rule. Browser checks are at most two per task, the second only
+  confirming a fix the first found; a question between saves is a `get-page` read-back; a rule is
+  exercised with one value change per AC; and the task's `Browser checks:` Notes line shows the count.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
