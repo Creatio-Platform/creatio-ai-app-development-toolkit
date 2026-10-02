@@ -103,8 +103,10 @@ CREATE/lay out a Freedom page: components, colSpan/gaps, captions, islands, cont
 UI **page-creation** guideline specifically, NOT the clio build `get-guidance` contracts
 (page-modification / field-contract / related-list …) you read to write the schema — that one is the
 gate agents skip. Apply it WHILE designing the page, and if you didn't, run it as a review pass and
-FIX the findings (style parity with the reference page) — fill BOTH rows, not just the one that
-happens to be easier. Add any further evidence rows without removing generated ones.
+FIX the findings (style parity with the reference page). The first row is build work: the page's
+LAST build task carries it as its last row and files the `<pageKey>#quality-gates` record, after
+every other write to the page. The second row belongs to the page's read-only review task, which
+judges that record. Add any further evidence rows without removing generated ones.
 
 **Every non-`mapped` Member-ledger member ALREADY has a generated row — find it, don't add it.** The
 table covers the whole ledger, just under two different group headings, so do **not** append
@@ -129,8 +131,10 @@ per acceptance criterion — the AC and what you did that shows it holds:
 An AC with no line means the row is `⚠ Partial`, naming that AC. **Test each AC, don't argue it.**
 An AC is already a test case; the ones saying a behaviour must NOT happen are the ones that break
 silently, so go and try that case. "Wired, saves cleanly" verifies the schema, not the behaviour. A
-page handler is client-side: it fires on a UI save in the browser, not on an OData insert. Where a
-behaviour writes data, read the record back and check the mapped values.
+page handler is client-side: it fires on a UI save in the browser, not on an OData insert. The proof
+of that save is its captured `UpdateQuery` (the columns it wrote); where a behaviour writes data, read
+the record back and check the mapped values; a detail's link shows in its captured `SelectQuery` filter
+— each with one value change per AC, as `build-task-execution.md` → *Evidence, cheapest first* says.
 
 **Gate-toggle safety (shared stand).** If a **system setting** gates the behaviour, name the exact
 `SysSettingsValue` row you are testing — its culture/user/role — since a per-role override beats the
@@ -165,25 +169,25 @@ never the **Described in** citation copied across; a hand-authored summary table
 rule-1 violation.
 
 **What the generated `Quality gates` rows must contain (the `creatio-ui-guidelines` done-gate —
-`./references/build-task-execution.md`, run inside the build task that touches the page).** They are
-TWO of the pre-seeded rows above — not extra rows you add — sharing ONE evidence id: file ONE record
-in `<built-file>.evidence[<id>]` naming the shipped reference page you diffed against AND the
-components you checked via `get-component-info` (e.g. `referencePage: "AccountPage"`,
-`components: ["crt.ExpansionPanel", "crt.GridContainer"]`), and have it reviewed for `judge[<id>]`
-by a SEPARATE context wherever the host allows a sub-agent — a record reviewed by its own author is
-a weaker verdict, so say in `worklog.md` which it was. The first row closes when that record is
+`./references/build-task-execution.md`, run inside the page's last build task).** They are
+TWO of the pre-seeded rows above — not extra rows you add — sharing ONE evidence id: the page's last
+build task files ONE record in `<built-file>.evidence[<id>]` naming the shipped reference page you
+diffed against AND the components you checked via `get-component-info` (e.g.
+`referencePage: "AccountPage"`, `components: ["crt.ExpansionPanel", "crt.GridContainer"]`), and the
+page's review task — a SEPARATE context wherever the host allows a sub-agent — rules on it in
+`judge[<id>]`; a record reviewed by its own author is a weaker verdict, so say in `worklog.md` which
+it was. The first row closes when that record is
 complete; the second closes only when the judge entry marks it convincing — a record nobody reviewed
 leaves the second row open even if the first reads ✅. Either row left `☐`/not-`Done`, or the first
 marked `Done` with no reference-page + component evidence (a surface review), means **that page is
 NOT done** — mark the page's own row `⚠ Partial` and do not report the task complete.
 
-**The evidence record, field by field.** Records live in `evidence.json` in the migration folder,
-one per evidence id. The engine derives every id and writes the file, with each id as a key, the
-first time the read plan is written — and never rewrites a file that exists, so an id a re-sliced or
-re-planned run added can be missing from it. Fill the value under the key your row names. When that
-key is absent, add it by copying the id character for character from `evidenceIds` in
-`reads/index.json`, which every `--reads` rewrites for the current plan — never type one from a row's
-label, which is escaped for display, and never shorten or rename a key.
+**The evidence record, field by field.** Records live in `evidence.json` in the migration folder
+(the parent of `build-tasks/`), one per evidence id. The engine derives every id and keeps the file
+current from the first slice on: every `--tasks`, `--next` and `--start` adds each id the plan
+publishes as a key and never changes or drops a value already filed, so the key your row names is
+there when your task starts. Fill the value under that key — never type a key from a row's label,
+which is escaped for display, and never shorten or rename one.
 
 The ids come in five shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
 page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
@@ -271,6 +275,11 @@ rules.
   `get-page`; and read the cheap evidence first — the data requests, then the console, then the
   DOM, a screenshot only for layout — as `build-task-execution.md` → *Evidence, cheapest first*
   ranks it.
+- **The save-check-fix loop.** Save, open the page, fix what it shows, save, open it again — four
+  of one section's seven page tasks ran that cycle three to five times, and clicked and typed
+  through the form to exercise each rule. Browser checks are at most two per task, the second only
+  confirming a fix the first found; a question between saves is a `get-page` read-back; a rule is
+  exercised with one value change per AC; and the task's `Browser checks:` Notes line shows the count.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a

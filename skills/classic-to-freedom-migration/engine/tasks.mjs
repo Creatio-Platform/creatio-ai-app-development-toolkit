@@ -40,7 +40,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
-  slotIndex, takeSlot, coverageProblem, isRetiredAggregate } from "./split.mjs";
+  slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -216,11 +216,27 @@ const REFS_GROUP = "Reference cache";
 const REVIEW_GROUP = "Quality gates";
 // The review pass reads a built page and files a verdict; it writes nothing, so it is its own read-only task
 // rather than the tail of the build that it is supposed to judge.
+//
+// THE FILED HALF OF A PAGE'S GATE IS BUILD WORK. `Quality gates` carries two rows per page: `quality:ran` (the
+// design pass ran and its record was filed) and `quality:judged` (an independent judge found that record
+// convincing). Filing the record is the builder's act, so that row goes to the page's own build bucket, where
+// GROUP_PHASE sorts it after every other row of the page — the page's LAST build task owns it, and that task
+// runs after every other write to the page. The judged row stays in the read-only review.
 const artifactOf = (group, baseTitle, identity) => {
   if (isScaffold(group, baseTitle)) return ARTIFACT_SCAFFOLD;
   const id = identity.get(group.pageKey) || group.pageKey;
-  return baseTitle === REVIEW_GROUP ? `review:${id}` : `page:${id}`;
+  return baseTitle === REVIEW_GROUP && !group.filedGate ? `review:${id}` : `page:${id}`;
 };
+// Each `Quality gates` group split into its filed row (marked `filedGate`, a build row of the page) and the rest
+// (the review). Every other group passes through unchanged.
+function withFiledGatesRouted(groups) {
+  return groups.flatMap((g) => {
+    if (baseTitleOf(g) !== REVIEW_GROUP || !g.rows.some(isFiledGateRow)) return [g];
+    const filed = { ...g, rows: g.rows.filter(isFiledGateRow), filedGate: true };
+    const judged = { ...g, rows: g.rows.filter((r) => !isFiledGateRow(r)) };
+    return judged.rows.length ? [filed, judged] : [filed];
+  });
+}
 // A review task and the reference cache both write nothing ON THE STAND — the cache writes local files, the review
 // writes a verdict. Published as `writesTo:` so the orchestrator's parallelism rule is a field comparison and not a
 // judgement: two tasks may run at once only when their `writesTo` differ. What the cache still imposes on every
@@ -577,7 +593,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   // BUCKET BY ARTIFACT. The bucket, not the group, is the unit a task is cut from — two tasks that would write one
   // page body are one bucket here and can therefore never be handed to two sub-agents.
   const buckets = new Map();
-  groups.forEach((g, i) => {
+  withFiledGatesRouted(groups).forEach((g, i) => {
     const base = baseTitleOf(g);
     const artifact = artifactOf(g, base, identity);
     let b = buckets.get(artifact);
@@ -2061,7 +2077,9 @@ export function mergeTaskSet(fresh, existing = []) {
   const { usable, blocked } = triageExisting(existing);
   const byId = new Map();
   for (const e of usable) byId.set(e.meta.id, e);
-  const tasks = fresh.tasks.map((t) => carryOver(t, matchFor(byId, t)));
+  const sources = usable.filter((e) => e.meta.origin !== TASK_ORIGIN_ORCHESTRATOR && e.meta.kind !== REPAIR_KIND);
+  const live = new Set(fresh.tasks.map((t) => t.id));
+  const tasks = fresh.tasks.map((t) => carryWithMovedFiledMarks(t, matchFor(byId, t), sources, live));
   const claimed = new Set(fresh.tasks.map((t) => t.id));
   // An orchestrator file whose `id` an engine task also claims cannot become that task's record (`matchFor`), and
   // it is not `extra` either — so without this it falls out of the index entirely: no queue row, no `## Attention` line.
@@ -2242,6 +2260,48 @@ function rekeyDecisions(map, oldTable, newKeys) {
   return out;
 }
 
+const withMark = (r, m) => ({ ...r, outcome: m.text, outcomeKind: m.outcome, outcomeCause: m.cause,
+  outcomeReason: m.reason || "", naNoReason: !!m.naNoReason });
+
+/// A FILED GATE ROW KEEPS ITS OUTCOME WHEN IT CHANGES TASKS. Outcomes are carried per task, and the filed row is the
+// one row a re-slice can move between engine tasks of one page: into the page's last build task from a review
+// task that held it, or between chunks when the page's cut moves. A mark is carried only when the row MOVED: the
+// receiving task's own file does not list the row (when it does, its cell is the record, and a blank cell there
+// is a cleared Outcome that stays blank), and the mark comes from a previous owner, an engine file whose table
+// lists that exact label with a mark. The label names its page's evidence id, so it is unique to its page.
+// Several previous owners are ranked by `previousOwnerRank`.
+const sameLabel = (a, b) => String(a || "").trim().replace(/\s+/g, " ") === String(b || "").trim().replace(/\s+/g, " ");
+const listsRow = (e, label) => (e?.table || []).some((r) => sameLabel(r.label, label));
+const markFor = (e, label) => (e.table || []).find((r) => sameLabel(r.label, label) && r.mark)?.mark || null;
+// A file whose task is still in the plan before a retired one: a live file is rewritten on every sync and a
+// retired one never is, so the live file is the more recent record. Then the higher recorded `order`, then the
+// file name, so the choice never depends on the order the folder lists its files in.
+function previousOwnerRank(a, b, live) {
+  const byLive = Number(live.has(b.meta.id)) - Number(live.has(a.meta.id));
+  if (byLive) return byLive;
+  const byOrder = (Number(b.meta.order) || 0) - (Number(a.meta.order) || 0);
+  return byOrder || String(a.file).localeCompare(String(b.file));
+}
+function movedMarkFor(label, prev, sources, live) {
+  const owners = sources.filter((e) => e !== prev && markFor(e, label));
+  if (!owners.length) return null;
+  return markFor(owners.sort((a, b) => previousOwnerRank(a, b, live))[0], label);
+}
+function carryWithMovedFiledMarks(task, prev, sources, live) {
+  const own = prev?.outcomes instanceof Map ? prev.outcomes : new Map();
+  const rows = task.rows || [];
+  const keys = rowKeys(rows.map((r) => r.label));
+  const moved = new Map();
+  rows.forEach((r, i) => {
+    if (!isFiledGateRow(r) || listsRow(prev, r.label)) return;
+    const mark = movedMarkFor(r.label, prev, sources, live);
+    if (mark) moved.set(keys[i], mark);
+  });
+  if (!moved.size) return carryOver(task, prev);
+  if (prev) return carryOver(task, { ...prev, outcomes: new Map([...own, ...moved]) });
+  return { ...task, rows: rows.map((r, i) => (moved.has(keys[i]) ? withMark(r, moved.get(keys[i])) : r)) };
+}
+
 function carryOver(task, prev) {
   if (!prev) return task;
   const outcomes = prev.outcomes instanceof Map ? prev.outcomes : new Map();
@@ -2250,8 +2310,7 @@ function carryOver(task, prev) {
   const keys = rowKeys((task.rows || []).map((r) => r.label));
   task = { ...task, rows: (task.rows || []).map((r, i) => {
     const m = outcomes.get(keys[i]);
-    return m ? { ...r, outcome: m.text, outcomeKind: m.outcome, outcomeCause: m.cause,
-      outcomeReason: m.reason || "", naNoReason: !!m.naNoReason } : r;
+    return m ? withMark(r, m) : r;
   }) };
   const declared = declaredNow(prev.meta);
   const stamped = statusEditedIn(prev.meta);
@@ -2391,7 +2450,8 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       // A split has no `review:` artifact, so an item that judges a page is recognised by the `Quality gates` rows
       // it carries. Read-only is the CORRECT thing for such an item — which is exactly why it needs this: with no
       // `writesTo` it joins no chain, and without the review dependency nothing would make it wait for the page.
-      reviewsArtifacts: [...new Set(srcRows.filter((r) => r.groupTitle === REVIEW_GROUP)
+      // The filed row is the writer's, so it makes no item a review.
+      reviewsArtifacts: [...new Set(srcRows.filter((r) => r.groupTitle === REVIEW_GROUP && !isFiledGateRow(r))
         .map((r) => `page:${identity.get(r.rowPageKey) || r.rowPageKey}`))],
       order: i + 2,                       // the reference cache keeps position 1
       phase: DEFAULT_PHASE,

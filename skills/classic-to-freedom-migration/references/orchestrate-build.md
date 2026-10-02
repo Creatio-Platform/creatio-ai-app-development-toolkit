@@ -34,12 +34,13 @@ and the `--- progress ---` block the engine prints — you paste that block, you
 Everything else you open during the build is a targeted read. A resumed session's whole reads are
 `resume.md` and this file instead, and nothing else — see *Resuming* below.
 
-## Resuming — a fresh session continues the build from `resume.md`
+## Resuming — continue the build from `resume.md`
 
-The build loop runs in a fresh session once the plan is sliced (7.1b), because every build turn pays
-for the whole conversation before it, and a driver that also carried discovery and planning pays for
-them on every build turn. When the user hands you a migration folder that holds
-`resume.md` (the prompt 7.1b printed names it), you are that fresh session:
+Once the plan is sliced, 7.1b asks the user where the build runs, because every build turn pays for
+the whole conversation before it, and a driver that also carried discovery and planning pays for
+them on every build turn. You enter this section from a new session — the user hands you a
+migration folder that holds `resume.md` (the prompt 7.1b printed names it) — or from this same
+session after `/compact` (the 7.1b line names `resume.md`). Either way:
 
 1. **Skip steps 0-6.** Do not re-read `discovery.md`, `plan.md`, the manifest or the stand material
    behind them, and do not re-run `--plan`: the plan is approved and sliced, and the approval entry
@@ -53,7 +54,10 @@ them on every build turn. When the user hands you a migration folder that holds
 3. **Continue the 7.2 loop with the `--next` command `resume.md` ends on** —
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --next` — and carry
    on exactly as 7.2-7.5 and step 8 say. The engine answers from the folder; `resume.md` is not
-   updated as you go, so trust `--next`, not the snapshot in it.
+   updated as you go, so trust `--next`, not the snapshot in it. The record files
+   (`evidence.json`, `judge.json`, `recorded.json`) are already in the migration folder and every
+   `--next` / `--start` keeps them current, so the builders you dispatch file their evidence into
+   them during the build.
 4. **Something you need is not in the folder?** A fact the build needs that lived only in the
    earlier conversation is a gap in `decisions.md` / `worklog.md`: ask the user and record the answer
    there. Do not widen what you read to find it.
@@ -112,7 +116,9 @@ not carry it.
    done together in one item (a related list and the handler that filters it; a folded handler chain
    and its helpers; the containers before what goes in them; a page's `[attribute-virtual] X` row in
    the same item as, or an item before, every handler that sets X — a handler writing an attribute
-   that does not exist yet is inert), mark an item `"stopGate": true` when
+   that does not exist yet is inert; each page's FILED `Quality gates` row — the first of its two,
+   so `@Quality gates[1]` claims it — in the LAST item that writes that page, and the judged row in
+   the read-only review), mark an item `"stopGate": true` when
    it could legitimately halt the run rather than finish (it is carried into the task's front matter
    and shown as `⏸ stop-gate` in `index.md`, so the orchestrator sees it before dispatching), and
    give an item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns
@@ -120,8 +126,8 @@ not carry it.
    sentence as an id is refused along with the whole file. Then:
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
    The engine REFUSES a split that claims a row twice, names a row the plan does not have, places a
-   virtual attribute in a later item than a handler recorded as setting it, or leaves a plan row in
-   NO item; it writes nothing at all in that case and **exits `2`** — the same code
+   virtual attribute in a later item than a handler recorded as setting it, puts a page's filed
+   `Quality gates` row anywhere but that page's last writer, or leaves a plan row in NO item; it writes nothing at all in that case and **exits `2`** — the same code
    every mode that reads the cut answers with, so `--tasks`, `--tasks --next` and `--tasks --route`
    cannot disagree about whether one folder state is approvable. An unclaimed row is work nobody is
    scheduled to do: the refusal names those rows and their pages, with the count still owed, and
@@ -161,26 +167,56 @@ is no `Reference cache` in such a run — it exists to stop several fresh contex
 same guidance, and here there is only one builder. A 31-row section came out as six tasks and five
 sub-agents before this, one of them caching material nobody else read.
 
-**7.1b Hand off to a fresh session — then STOP.** Once the plan is approved and sliced, and the
-run is **over `TASK_BUDGET.run`** (it has more than one task besides its review, not just the
-`Whole migration` build), the build loop leaves this session: everything above it (discovery,
-the plan, its approval) would otherwise be paid for again on every build turn. With the `Route:`
+**7.1b The BUILD SESSION GATE — ask where the build runs.** Once the plan is approved and sliced,
+and the run is **over `TASK_BUDGET.run`** (it has more than one task besides its review, not just
+the `Whole migration` build), every build turn in this session would pay again for everything above
+it (discovery, the plan, its approval) — so the user decides where the build runs. With the `Route:`
 line written (7.0), run
 `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --handoff`
 It writes `<migration-folder>/resume.md` — manifest path, folder, environment, the approved plan
 version, the route, the progress block, the next task and one resume prompt — every value computed
 from the folder, so **never write `resume.md` yourself** — and it copies the manifest beside it as
-`resume-manifest.json`, which `resume.md` names, so the fresh session never needs your temporary
+`resume-manifest.json`, which `resume.md` names, so a resumed session never needs your temporary
 input folder. It refuses (exit **2**, nothing written), in stages, naming every cause of a stage at
 once: a plan with gaps; a manifest path that does not exist, or a manifest on stdin; then together a
 folder not sliced, no `## ` entry in `decisions.md` holding both `Plan version:` with exactly the
 current version and a non-empty `Approved by:`, and no `worklog.md` `Route:` naming one of the 7.0
 routes; then a `D<N>` in `decisions.md` nothing cites; then a `--next` answer of `ledger` or
-`stuck`. Fix what it names and run it again. Then give the user the resume prompt it printed, to
-paste into a fresh session, and
-**STOP**: no `--start` and no dispatch in this session. The same hand-off happens again when a
-step-8 `--verify --tasks` opens repair tasks. A run below `TASK_BUDGET.run` (the `Whole migration`
-task and its review) stays in this session.
+`stuck`. Fix what it names and run it again.
+
+Then issue exactly ONE `AskUserQuestion` that names the task count — *"The build has <N> tasks.
+Where should it run?"* — with these options in plain words, each saying what the user does and what
+it costs, and stop until it is answered:
+
+1. **New session (Recommended)** — open a new chat and paste the one prompt `--handoff` printed;
+   every build step then starts small instead of carrying discovery and planning (several times
+   fewer tokens per build step on a long run).
+2. **Continue here** — nothing to do; the build starts now in this session, but every build step
+   carries the whole planning conversation.
+3. **Compress here** — type `/compact`, then the one message you are given; same window,
+   a smaller saving than a new session.
+
+Offer option 3 only on a host that has `/compact` (Claude Code, Codex CLI); elsewhere
+ask with options 1 and 2. **Never mention the choice in passing and keep going** — an aside is not a
+question. A run within `TASK_BUDGET.run` is not asked: the `Whole migration` task and its review
+continue in this session.
+
+**Per answer — first record it, then act on it.** Write the answer into `worklog.md` as
+`Build session: new | here | compact` (the one chosen) BEFORE anything below: a new or a compacted
+session learns the choice only from that line.
+
+- **New session** — give the user the resume prompt `--handoff` printed, to paste into a new chat,
+  and **STOP**: no `--start` and no dispatch in this session.
+- **Continue here** — continue the 7.2 loop in this session with `--next`; `resume.md` stays behind
+  as a recovery point should this session be lost.
+- **Compress here** — give the user two steps and end the turn: type `/compact` (where it takes a
+  note, as in Claude Code: `/compact Keep only: migration folder <migration-folder>.`), then send
+  `Continue the build from <migration-folder>/resume.md.` That second message is what brings the
+  build back, whatever the summary kept; after it, continue as *Resuming* says.
+
+Ask once per run: when a step-8 `--verify --tasks` opens repair tasks, that round follows the
+recorded line without asking again. The user
+may change it at any time by saying so — update the line first.
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
@@ -223,6 +259,15 @@ task and its review) stays in this session.
    needs to exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own
    task, so a page is never built against an unanswered question. (A question that could change
    WHICH pages exist blocks the plan at the structure gate instead, so it never reaches a task.)
+
+   **The record files exist from the first slice on.** Every `--tasks`, `--next`, `--start` and
+   `--handoff` keeps `evidence.json`, `judge.json` and `recorded.json` in the migration folder current: each id
+   the plan publishes is a key, an id the plan gains is added, and a value already filed is never
+   changed or dropped. A file that does not parse is reported on stdout and left as it is — repair
+   its JSON by hand, keeping every value, then re-run. So a builder files its evidence record during
+   its own task — the page's LAST build task files the `<pageKey>#quality-gates` record — and the
+   review judges it; `--reads` at 7.4 writes the read plan and merges the record files the same
+   way, never overwriting a filed value.
 
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
@@ -357,7 +402,7 @@ answered on the stand is recorded there and is not repeated in its own file.
 | Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when the plan lists dashboards | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
-| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md` |
+| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Quality gates — the review that judges a page | `group: Quality gates` (read-only, `writesTo:` empty) | `./references/judge-brief.md` | — |
 | Read-back (7.4) — not a task file | the driver's own read-back pass over `--reads` | `./references/read-back-brief.md` | — |
 
@@ -389,8 +434,9 @@ its own verdict, so:
 - **The read-back** is one sub-agent with stand access but NO write access, handed
   `./references/read-back-brief.md` and the read plan's `reads/index.json`.
 - **The judge's and the builder's records** — `evidence.json`, `judge.json`, `recorded.json` — are
-  FILES the engine reads beside the read-back's; what each holds is in
-  `./references/judge-brief.md`.
+  FILES the engine reads beside the read-back's. They exist from the first slice on (7.2) and hold
+  what the builders and judges filed; `--reads` merges into them the same way and never overwrites
+  a value. What each holds is in `./references/judge-brief.md`.
 - **Then the engine composes the payload.**
   `node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`
   opens those files, builds `built.json` out of them and runs the gate on it — `--tasks` still does
@@ -513,10 +559,18 @@ self-reported.** On an orchestrated run the gate is
 the payload.** Step 7.4's `--reads` named every file; this composes
 `built.json` out of them, writes it and `verify.md` into that folder, and gates on it.
 
-**When that run opens repair tasks, hand off again (7.1b).** `--verify --tasks` writing a repair
-round means more build turns are coming, and the verify reads that preceded them are the heaviest
-material this session holds. Run `--tasks <migration-folder>/build-tasks --handoff`, give the user
-the resume prompt, and STOP; the fresh session dispatches the repair tasks through `--next`.
+**When that run opens repair tasks, follow the recorded `Build session:` (7.1b)
+without asking again.** `--verify --tasks` writing a repair round means more build turns are coming, and the verify
+reads that preceded them are the heaviest material this session holds.
+- *new* → run `--tasks <migration-folder>/build-tasks --handoff`, give the user the resume prompt,
+  and STOP; the new session dispatches the repair tasks through `--next`.
+- *compact* → run `--handoff`, give the user the two 7.1b compress steps, and end the turn; after
+  the compaction, continue as *Resuming* says.
+- *here* → continue in this session with `--next`.
+- *no `Build session:` line* (the run was within `TASK_BUDGET.run` at 7.1b, so nobody was asked) →
+  continue in this session with `--next`.
+
+A user who changes their mind says so; update the line first.
 
 **`--verify --built <file>` is the REPLAY path** — the same gate against a payload already composed
 (the `built.json` from an earlier run, or a recorded fixture). Use it to re-check a run offline,

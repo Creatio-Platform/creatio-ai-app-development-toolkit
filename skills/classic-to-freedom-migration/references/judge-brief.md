@@ -67,10 +67,9 @@ the work it judges fails the run's dispatch gate.
 
 ## The record you rule on
 
-The engine derives every id you rule on, and you never make one up. It writes `evidence.json` and
-`judge.json` with each id as a key the first time the read plan is written and never rewrites them,
-so an id a re-planned run added can be missing: the refile step above adds that key, under the exact
-id the record was filed under. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design
+The engine derives every id you rule on, and you never make one up. It keeps `evidence.json` and
+`judge.json` current with each id as a key from the first slice on, and never changes a value
+already filed. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design
 pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
 `list#listpage:<kind>:<item>` and `<pageKey>#datasource:<name>`, where `<pageKey>` is `main`,
 `list`, `child:<Entity>`, `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two

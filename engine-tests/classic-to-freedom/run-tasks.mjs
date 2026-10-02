@@ -24,6 +24,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -1464,7 +1465,9 @@ console.log("\n===== a review waits for the page it judges, and may not precede 
 // on a page that is still being built. The `Quality gates` rows name the page, so the engine says so.
 {
   const rows = allRows("main");
-  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows[0].label;
+  // The JUDGED row is what makes an item a review; the filed row is build work and stays with the writer.
+  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows
+    .find((r) => r.deliverableId === "quality:judged").label;
   const build = rows.filter((r) => r !== gateRow);
   const REVIEW = splitItem("the-review", "main", "", [gateRow]);
   const BUILD = splitItem("the-build", "main", "main", build);
@@ -3861,12 +3864,24 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
     () => back.status === "partial" && /status: partial/.test(fs.readFileSync(p, "utf8")),
     () => fs.readFileSync(p, "utf8").split("\n").slice(0, 4));
 
-  check("two deliverables of ONE task that share a long common prefix keep SEPARATE outcomes — the `Quality gates` rows differ only in their last sentence, and filing both under a truncated key let the second silently overwrite the first",
+  // Two filed gate rows of different pages differ only in the id they name at the end, and the collapsed run puts
+  // them in ONE task.
+  const twins = (() => {
+    const d = tmp("partial-twins");
+    const opts = checklistOpts(MANIFEST);
+    const whole = syncTaskDir(d, RUN, opts).tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+    const at = whole.rows.map((r, i) => [r, i + 1]).filter(([r]) => r.deliverableId === "quality:ran").map(([, n]) => n);
+    const fp = path.join(d, whole.file);
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), at[0], "not-built — needs-decision"));
+    const rows = syncTaskDir(d, RUN, opts).tasks.find((t) => t.id === whole.id).rows;
+    return { at, rows: at.map((n) => rows[n - 1]) };
+  })();
+  check("two deliverables of ONE task that share a long common prefix keep SEPARATE outcomes — two pages' filed `Quality gates` rows differ only in the id they name at the end, and filing both under a truncated key would let the second silently overwrite the first",
     () => {
-      const rows = second.tasks.find((t) => t.id === target.id).rows;
-      return rows.length === 2 && rows[0].label.slice(0, 60) === rows[1].label.slice(0, 60)
-        && rows[0].outcomeKind === "not-built" && rows[1].outcomeKind === "built";
-    }, () => second.tasks.find((t) => t.id === target.id).rows.map((r) => r.outcomeKind));
+      const [a, b] = twins.rows;
+      return twins.at.length >= 2 && a.label.slice(0, 60) === b.label.slice(0, 60)
+        && a.outcomeKind === "not-built" && b.outcomeKind === "built";
+    }, () => ({ at: twins.at, kinds: twins.rows.map((r) => r?.outcomeKind) }));
 
   check("the index counts `partial` in its OWN bucket and NOT as done — a run with unbuilt deliverables that reads `Done: 9 · Open: 0` has told the reader the opposite of the truth",
     () => /\*\*⚠ Partial:\*\* 1/.test(idx) && !/\*\*Done:\*\* 1 /.test(idx) && /◐ partial/.test(idx),
@@ -4200,7 +4215,7 @@ check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md
   () => {
     const d = tmp("asserted-progress");
     const s1 = syncTaskDir(d, RUN, OPTS);
-    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const tgt = taskAt(s1, "child:G1", "Page build");
     const fp = path.join(d, tgt.file);
     fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — no Freedom equivalent, my call"));
     const s2 = syncTaskDir(d, RUN, OPTS);
@@ -4213,7 +4228,7 @@ check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md
   }, () => {
     const d = tmp("asserted-progress-d");
     const s1 = syncTaskDir(d, RUN, OPTS);
-    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const tgt = taskAt(s1, "child:G1", "Page build");
     const fp = path.join(d, tgt.file);
     fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — no Freedom equivalent, my call"));
     return renderProgress(syncTaskDir(d, RUN, OPTS), d);
@@ -4235,6 +4250,9 @@ console.log("\n===== the residual is ROUTED: a not-built row becomes a repair ro
 
 // A folder whose one `Quality gates` deliverable the build agent recorded as NOT BUILT — dispatched, signed and
 // closed the way a real run closes it, because the residual's closure is checked against the dispatch record.
+// A task of the fixture with more than one deliverable row, for the checks that record different outcomes on two
+// rows of ONE task. The review task holds a single row (the judged gate), so it cannot be that task.
+const TWO_ROW_TARGET = ["child:G1", "Page build"];
 const partialFolder = (name, notBuilt = [1], [pageKey, group] = ["child:G1", "Quality gates"]) => {
   const d = tmp(name);
   const tgt = taskAt(syncTaskDir(d, RUN, OPTS), pageKey, group);
@@ -4512,14 +4530,14 @@ check("the round's OWN status is computed from its cells — every row `built` r
 
 check("a round that fixed SOME of its rows closes those and only those — the whole point of per-row outcomes: crediting every row it covers because one status word said `done` is the bucket problem one level down",
   () => {
-    const { d, tgt } = partialFolder("repair-cells-some", [1, 2]);
+    const { d, tgt } = partialFolder("repair-cells-some", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
     const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual).filter(Boolean));
     return backAt(set, tgt.id).status === "partial"
       && residuals.has("closed") && residuals.has("open");
-  }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2]);
+  }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).rows.map((r) => [r.outcome, r.residual]); });
 
@@ -4547,7 +4565,7 @@ check("a deliverable is routed ONCE however many files record it — a `partial`
 
 check("a row a round has SETTLED stops being named as NOT BUILT — its own Outcome cell reads `not-built` for good, so the progress block and the index Attention kept printing a deliverable that is on the stand while the gate had correctly stopped counting it; two surfaces disagreeing about one row is how a reader learns to skip the list",
   () => {
-    const { d, tgt } = partialFolder("notbuilt-settled", [1, 2]);
+    const { d, tgt } = partialFolder("notbuilt-settled", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
@@ -4555,13 +4573,13 @@ check("a row a round has SETTLED stops being named as NOT BUILT — its own Outc
     const idxLines = renderTaskIndex(set).split("\n").filter((l) => /row \d+ — \*\*not built\*\*/.test(l));
     // Before either round runs, BOTH rows are open and the line has to count two of them on one task — a list
     // that only ever renders `1` cannot say it lost one.
-    const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2]);
+    const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2], TWO_ROW_TARGET);
     const both = renderProgress(syncTaskDir(d2, RUN, OPTS), d2);
     return residuals.has("closed") && residuals.has("open")
       && /⚠ NOT BUILT — 2 deliverable\(s\) across 1 task\(s\)/.test(both)
       && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d))
       && idxLines.length === 1;
-  }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2]);
+  }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
     return { progress: renderProgress(s, d).split("\n").filter((l) => /NOT BUILT/.test(l)),
@@ -4700,7 +4718,7 @@ check("the round that started the chain closes when a LATER round fixes its rows
 
 check("a round still being worked holds its cause PENDING — some cells filled and the rest blank is a sub-agent mid-task, and opening the next round over it would put a second agent on rows the first has not reached",
   () => {
-    const { d } = partialFolder("repair-midflight", [1, 2]);
+    const { d } = partialFolder("repair-midflight", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     const id = repairIds(d)[0];
     startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
@@ -4709,7 +4727,7 @@ check("a round still being worked holds its cause PENDING — some cells filled 
     editFrontMatter(d, id, "agentNonce", `tok-${id}`);
     const res = syncRepairDir(d, RUN, {}, OPTS);
     return res.written.length === 0 && res.set.tasks.find((t) => t.kind === "repair").status === "in-progress";
-  }, () => { const { d } = partialFolder("repair-midflight-d", [1, 2]);
+  }, () => { const { d } = partialFolder("repair-midflight-d", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     const id = repairIds(d)[0];
     startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
@@ -4750,8 +4768,8 @@ console.log("\n===== a residual credits the ROWS IT COVERS, never the cause buck
 
 // The fixture above, carried one step further: the residual is routed, dispatched and CLOSED, so the task reads
 // `done`. Everything below then changes the task AFTER that, which is the case the earlier checks never made.
-const closedResidual = (name) => {
-  const { d, tgt } = partialFolder(name);
+const closedResidual = (name, target = undefined) => {
+  const { d, tgt } = partialFolder(name, [1], target);
   syncRepairDir(d, RUN, {}, OPTS);
   closeRepairs(d);
   return { d, tgt };
@@ -4778,7 +4796,7 @@ check("a repair task's rows are READ, and `covers` is carried beside them — th
 
 check("a SECOND row recorded not-built after the first residual closed is NOT credited by it — same page, same cause bucket, a repair task that never listed it. Crediting it is this ticket's own failure mode: the run would report success over a deliverable the build agent wrote down as not built",
   () => {
-    const { d, tgt } = closedResidual("covers-second-row");
+    const { d, tgt } = closedResidual("covers-second-row", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const after = syncTaskDir(d, RUN, OPTS);
@@ -4789,7 +4807,7 @@ check("a SECOND row recorded not-built after the first residual closed is NOT cr
     return back.status === "partial" && rows.length === 2
       && rows.find((r) => r.n === 1).residual === "closed"
       && unrouted.length === 1 && unrouted[0].n === 2;
-  }, () => { const { d, tgt } = closedResidual("covers-second-row-d");
+  }, () => { const { d, tgt } = closedResidual("covers-second-row-d", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const a = syncTaskDir(d, RUN, OPTS);
@@ -4798,13 +4816,13 @@ check("a SECOND row recorded not-built after the first residual closed is NOT cr
 
 check("that second row opens a NEW repair round rather than sitting uncredited — the prior round closed `done`, which is an ATTEMPT, so the cause advances to round 2 and the cap stays the terminal",
   () => {
-    const { d, tgt } = closedResidual("covers-second-round");
+    const { d, tgt } = closedResidual("covers-second-round", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const next = syncRepairDir(d, RUN, {}, OPTS);
     return next.written.length === 1 && next.written[0].repairRound === 2
       && next.written[0].cause.startsWith("not-built:");
-  }, () => { const { d, tgt } = closedResidual("covers-second-round-d");
+  }, () => { const { d, tgt } = closedResidual("covers-second-round-d", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const n = syncRepairDir(d, RUN, {}, OPTS);
@@ -4812,14 +4830,14 @@ check("that second row opens a NEW repair round rather than sitting uncredited �
 
 check("a row BLANKED after the residual closed is not credited either — an unaccounted row is the weaker claim of the two (nobody said anything about it at all), so a bucket that credits it is the same defect with less evidence",
   () => {
-    const { d, tgt } = closedResidual("covers-blanked");
+    const { d, tgt } = closedResidual("covers-blanked", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "—"));
     const after = syncTaskDir(d, RUN, OPTS);
     const unrouted = notBuiltRows(after.tasks).filter((r) => !r.residual);
     return after.tasks.find((t) => t.id === tgt.id).status === "partial"
       && unrouted.length === 1 && unrouted[0].n === 2 && unrouted[0].cause === null;
-  }, () => { const { d, tgt } = closedResidual("covers-blanked-d");
+  }, () => { const { d, tgt } = closedResidual("covers-blanked-d", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "—"));
     const a = syncTaskDir(d, RUN, OPTS);
@@ -7933,7 +7951,9 @@ console.log("\n===== build order: virtual attributes are declared before the han
     () => ({ exported: phaseKeys.length, unmatched: phaseKeys.filter((k) => !emittedTitles.has(k)) }));
   {
     // A handler row its task recorded blocked, routed, and closed blocked again by its repair round, then the rest
-    // of the page dispatched: its rows and the rows of the page's other tasks, in queue order.
+    // of the page dispatched: its rows and the rows of the page's other tasks, in queue order. A repair round writes
+    // the page, so it follows every build task of that page; those are dispatched before it, and the page's
+    // remaining tasks (its review) after.
     const d = tmp("vmattr-stalled-handler");
     const ordered = () => [...syncTaskDir(d, attrRun, attrOpts).tasks].sort((x, y) => x.order - y.order);
     const handlerTask = ordered().findLast((t) => t.pageKey === "main" && t.rows.some((r) => r.vk === "handler"));
@@ -7948,13 +7968,15 @@ console.log("\n===== build order: virtual attributes are declared before the han
       fs.writeFileSync(f, text.replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
       syncTaskDir(d, attrRun, { ...attrOpts, now: AT(nextMin()) });
     };
-    for (const t of ordered().filter((x) => x.order <= handlerTask.order)) {
+    const sent = new Set();
+    for (const t of ordered().filter((x) => x.order <= handlerTask.order || (x.kind !== "repair" && x.writesTo === handlerTask.writesTo))) {
       dispatch(t, t.id === handlerTask.id ? (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built") : "built");
+      sent.add(t.id);
     }
     const round1 = syncRepairDir(d, attrRun, {}, attrOpts).written;
     for (const t of round1) dispatch(t, NOT_BUILT_BLOCKED);
     const held = syncRepairDir(d, attrRun, {}, attrOpts);
-    for (const t of ordered().filter((x) => x.kind !== "repair" && x.order > handlerTask.order && x.pageKey === "main")) dispatch(t, "built");
+    for (const t of ordered().filter((x) => x.kind !== "repair" && !sent.has(x.id) && x.pageKey === "main")) dispatch(t, "built");
     const again = syncRepairDir(d, attrRun, {}, attrOpts);
     const labels = (xs) => xs.map((h) => h.row.deliverable).sort();
     const handlerLabels = handlerRows.map((n) => handlerTask.rows[n - 1].label).sort();
@@ -7966,6 +7988,33 @@ console.log("\n===== build order: virtual attributes are declared before the han
         && again.written.every((t) => t.repairRound === 2),
       () => ({ handlerLabels, round1: round1.map((t) => t.file), held: labels(held.stalled), stalled: labels(again.stalled), round2 }));
     fs.rmSync(d, { recursive: true, force: true });
+
+    // The repair round of that handler row is routed while a LATER build task of the same page is still open. The
+    // round writes the page too, so it is not startable until that build task is done, and is startable after.
+    const d2 = tmp("vmattr-stalled-handler-order");
+    const ordered2 = () => [...syncTaskDir(d2, attrRun, attrOpts).tasks].sort((x, y) => x.order - y.order);
+    const dispatch2 = (t, mark) => {
+      const tok = `tok-${t.id}`;
+      startTask(d2, t.id, attrRun, { ...attrOpts, dispatchToken: tok }, null, AT(nextMin()));
+      const f = taskFilePath(d2, t.id);
+      let text = fs.readFileSync(f, "utf8");
+      for (let i = 1; i <= rowCount(text); i++) text = setOutcome(text, i, typeof mark === "function" ? mark(i) : mark);
+      fs.writeFileSync(f, text.replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
+      syncTaskDir(d2, attrRun, { ...attrOpts, now: AT(nextMin()) });
+    };
+    const handler2 = ordered2().find((t) => t.id === handlerTask.id);
+    const handlerMark = (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built");
+    for (const t of ordered2().filter((x) => x.order <= handler2.order)) dispatch2(t, t.id === handler2.id ? handlerMark : "built");
+    const laterBuilds = ordered2().filter((x) => x.kind !== "repair" && x.writesTo === handler2.writesTo && x.order > handler2.order);
+    const round = syncRepairDir(d2, attrRun, {}, attrOpts).written;
+    const startableIds = () => startableTasks(syncTaskDir(d2, attrRun, attrOpts), d2).startable.map((t) => t.id);
+    const before = startableIds();
+    for (const t of laterBuilds) dispatch2(t, "built");
+    const after = startableIds();
+    check("build order + repair: the handler's repair round is NOT startable while a later build task of its page is open, and IS startable once that task is done",
+      () => laterBuilds.length > 0 && round.length === 1 && !before.includes(round[0].id) && after.includes(round[0].id),
+      () => ({ laterBuilds: laterBuilds.map((t) => t.id), round: round.map((t) => t.id), before, after }));
+    fs.rmSync(d2, { recursive: true, force: true });
   }
 }
 
@@ -8065,16 +8114,19 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
-  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "271f6b9d" };
+  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "ce526a7f" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
     () => Object.entries(PINNED_HANDLER_DIGESTS).every(([id, digest]) => chunked.tasks.find((t) => t.id === id)?.rowsDigest === digest),
     () => chunked.tasks.filter((t) => t.rows.some((r) => r.vk === "handler")).map((t) => `${t.id}:${t.rowsDigest}`));
 
-  // A split of the real plan: every row placed, the review last, the list page in its own item.
+  // A split of the real plan: every row placed, the review last, the list page in its own item. Each page's last
+  // writer takes the filed gate row — the first row of its `Quality gates` group, so `[1]` claims it — and the
+  // review takes the rest of the group.
+  const withFiledGate = (it) => ({ ...it, rows: [...it.rows, "@Quality gates[1]"] });
   const planSplit = (mainItems) => ({ planVersion: wRun.planVersion, items: [
-    ...mainItems,
-    { id: "list-page", title: "list", pageKey: "list", writesTo: "list", rows: ["@List page", "@⚠ Confirm worklist"] },
+    ...mainItems.slice(0, -1), withFiledGate(mainItems.at(-1)),
+    withFiledGate({ id: "list-page", title: "list", pageKey: "list", writesTo: "list", rows: ["@List page", "@⚠ Confirm worklist"] }),
     { id: "review", title: "review", pageKey: "main", writesTo: "", rows: ["@Quality gates", "list::@Quality gates"] },
   ] });
   const MAIN_BASE = ["@Pages", "@Form — Layout (by tab/region)", "@Form — Coverage (verified)", "@⚠ Confirm worklist"];
@@ -8397,8 +8449,8 @@ check("identity: every other machine-checked row keeps the plain `--verify (<kin
 
 // RISK1 — the digest guard. `closedByOf` renders the cell; `rowsDigest` hashes the SOURCE rows. A `done` task
 // that reads as drifted is RE-DISPATCHED into a live migration, so improving a cell's wording must never move it.
-// The values are PINNED literals. They moved once, when coverage became one row per field and per related list
-// (the three page-build tasks carrying those rows). Recomputing the set twice inside one
+// The values are PINNED literals. They move only when a task's own rows change — a row added, dropped or moved
+// between tasks — never when a cell's wording does. Recomputing the set twice inside one
 // run would be trivially equal and prove nothing; a literal is what actually catches a future edit that lets the
 // rendered cell leak into the digest.
 const ROWS_DIGESTS_BASE = JSON.parse(fs.readFileSync(path.join(DIR, "fixtures", "applicants-recorded", "rows-digests.base.json"), "utf8"));
@@ -9758,6 +9810,504 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
       () => ({ synced: synced.status, err: synced.stdout.slice(0, 400), lists, decided, rows: lists.map(([, n]) => [after.rows[n - 1]?.outcome, map.get(n)]) }));
     fs.rmSync(base, { recursive: true, force: true });
   }
+}
+
+console.log("\n===== the record files exist from slicing on, and a re-slice merges into them =====");
+// A builder files its evidence record during the build, so `evidence.json` / `judge.json` / `recorded.json` must
+// already exist when the first build task starts — not only after the `--reads` step that runs once every build
+// task is done. Every task-folder mode writes them into the MIGRATION folder (the parent of the task folder), and
+// writing into an existing file only ever ADDS a missing id.
+{
+  const RECORD_FILES = ["evidence.json", "judge.json", "recorded.json"];
+  const PLAN = readPlan(RUN, checklistOpts(MANIFEST));
+  const PLAN2 = readPlan(RUN2, checklistOpts(MANIFEST2));
+  const readJson = (base, f) => (fs.existsSync(path.join(base, f)) ? JSON.parse(fs.readFileSync(path.join(base, f), "utf8")) : {});
+  const recordState = (base) => Object.fromEntries(RECORD_FILES.map((f) => [f, fs.existsSync(path.join(base, f))
+    ? fs.readFileSync(path.join(base, f), "utf8").slice(0, 120) : null]));
+  check("record files (anti-vacuity): the fixture publishes evidence ids, and the grown plan publishes one the first does not",
+    () => PLAN.evidenceIds.length > 0 && PLAN2.evidenceIds.some((id) => !PLAN.evidenceIds.includes(id)),
+    () => ({ a: PLAN.evidenceIds, b: PLAN2.evidenceIds }));
+
+  const base = tmp("records");
+  const dir = path.join(base, "build-tasks");
+  const run = cliTasks(["--tasks", dir], MANIFEST);
+  check("record files: `--tasks` on a fresh folder writes `evidence.json` and `judge.json` beside the task folder with EVERY published id already a key — the first builder files into a file that exists",
+    () => run.status === 0 && ["evidence.json", "judge.json"].every((f) => {
+      const doc = readJson(base, f);
+      return PLAN.evidenceIds.every((id) => Object.hasOwn(doc, id));
+    }),
+    () => ({ status: run.status, stderr: run.stderr, files: fs.readdirSync(base), state: recordState(base) }));
+  check("record files: the empty value beside each id is the one `--reads` writes — both findings lists scaffolded on an evidence record, `convincing: null` on a verdict",
+    () => {
+      const ev = readJson(base, "evidence.json"), ju = readJson(base, "judge.json");
+      return PLAN.evidenceIds.every((id) => Array.isArray(ev[id].findings) && Array.isArray(ev[id].findingsRaised)
+        && ev[id].referencePage === "" && ju[id].convincing === null);
+    }, () => recordState(base));
+  check("record files: `recorded.json` follows the plan — written with every builder-recorded key when the plan has any, absent when it has none",
+    () => PLAN.builderRecorded.length
+      ? PLAN.builderRecorded.every((b) => readJson(base, "recorded.json")[b.reachabilityKey] === null)
+      : !fs.existsSync(path.join(base, "recorded.json")),
+    () => ({ builderRecorded: PLAN.builderRecorded, state: recordState(base) }));
+
+  // A filed value, an id the plan does not publish, and a verdict — all three must come back untouched.
+  const ownId = PLAN.evidenceIds[0];
+  const filed = { referencePage: "Contacts_FormPage", components: ["crt.Input", "crt.ComboBox"], findings: ["kept"], findingsRaised: [], note: "ünïcode · `tick`" };
+  const ev = readJson(base, "evidence.json");
+  ev[ownId] = filed;
+  ev["gone#quality-gates"] = { referencePage: "Old" };
+  fs.writeFileSync(path.join(base, "evidence.json"), JSON.stringify(ev, null, 2) + "\n");
+  const ju = readJson(base, "judge.json");
+  ju[ownId] = { convincing: true, why: "names the page and the components" };
+  fs.writeFileSync(path.join(base, "judge.json"), JSON.stringify(ju, null, 2) + "\n");
+  const grown = cliTasks(["--tasks", dir], MANIFEST2);
+  const ev2 = readJson(base, "evidence.json"), ju2 = readJson(base, "judge.json");
+  const added = PLAN2.evidenceIds.filter((id) => !PLAN.evidenceIds.includes(id));
+  check("record files: a re-slice after the plan GAINS an evidence id inserts that id into both files — a page added to the plan gets a slot without anyone retyping its id",
+    () => grown.status === 0 && added.length > 0 && added.every((id) => id in ev2 && id in ju2)
+      && PLAN2.evidenceIds.every((id) => id in ev2 && id in ju2),
+    () => ({ status: grown.status, stderr: grown.stderr, added, keys: Object.keys(ev2) }));
+  check("record files: …and a value already filed is kept BYTE-IDENTICAL, in both files — the merge adds keys, it never rewrites an answer",
+    () => JSON.stringify(ev2[ownId]) === JSON.stringify(filed)
+      && JSON.stringify(ju2[ownId]) === JSON.stringify({ convincing: true, why: "names the page and the components" }),
+    () => ({ evidence: ev2[ownId], judge: ju2[ownId] }));
+  check("record files: …and a key the plan does not publish is KEPT — dropping it would delete a record somebody filed",
+    () => JSON.stringify(ev2["gone#quality-gates"]) === JSON.stringify({ referencePage: "Old" }),
+    () => Object.keys(ev2));
+  const before = fs.readFileSync(path.join(base, "evidence.json"), "utf8");
+  cliTasks(["--tasks", dir], MANIFEST2);
+  check("record files: a re-slice with nothing to add leaves the file's bytes exactly as they were",
+    () => fs.readFileSync(path.join(base, "evidence.json"), "utf8") === before,
+    () => fs.readFileSync(path.join(base, "evidence.json"), "utf8").slice(0, 200));
+
+  // An unparseable file is somebody's record the engine cannot read. Reported, never replaced.
+  const broken = "{ \"main#quality-gates\": { \"referencePage\": \"half-writ";
+  fs.writeFileSync(path.join(base, "judge.json"), broken);
+  const reported = cliTasks(["--tasks", dir], MANIFEST2);
+  check("record files: an UNPARSEABLE existing file is reported by name on stdout and left byte for byte as it was — the engine cannot tell what it holds, so it never overwrites it",
+    () => reported.status === 0 && fs.readFileSync(path.join(base, "judge.json"), "utf8") === broken
+      && /judge\.json/.test(reported.stdout || "") && /not overwritten|left as it is|NOT (READ|WRITTEN)/i.test(reported.stdout || ""),
+    () => ({ status: reported.status, stdout: (reported.stdout || "").slice(-600), back: fs.readFileSync(path.join(base, "judge.json"), "utf8") }));
+  fs.writeFileSync(path.join(base, "judge.json"), JSON.stringify(ju2, null, 2) + "\n");
+
+  // `--next` and `--start` read the cut, so they keep the files current the same way.
+  for (const f of RECORD_FILES) fs.rmSync(path.join(base, f), { force: true });
+  const next = cliTasks(["--tasks", dir, "--next"], MANIFEST2);
+  check("record files: `--next` writes them too — a folder whose record files went missing gets them back from the mode the orchestrator runs most",
+    () => [0, 2].includes(next.status) && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
+    () => ({ status: next.status, stderr: next.stderr, state: recordState(base) }));
+  // `--start` on a PAGE BUILD task: the page it builds files its own records, the `Quality gates` one included.
+  // The CLI's own budget keeps this small plan in one Whole-migration task, so the folder is cut by a split that
+  // gives every page its own build item.
+  const startBase = tmp("records-start");
+  const startDir = path.join(startBase, "build-tasks");
+  const startSplit = path.join(startBase, "split.json");
+  fs.writeFileSync(startSplit, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
+  const cutStart = cliTasks(["--tasks", startDir, "--split", startSplit], MANIFEST);
+  // The page's dependencies are dispatched and closed first, so `--start` opens the page task itself.
+  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => (t.artifact || "").startsWith("page:"));
+  check("record files (anti-vacuity): the per-page cut holds a page build task to start",
+    () => pageTask != null, () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 300)] }));
+  clearDepsOf(startDir, pageTask.id, RUN, checklistOpts(MANIFEST));
+  const startable = startableTasks(syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)), startDir).startable;
+  const startedPage = pageTask.artifact.slice("page:".length);
+  const pageIds = PLAN.evidenceIds.filter((id) => id.startsWith(`${startedPage}#`));
+  check("record files (anti-vacuity): that page publishes evidence ids, its `#quality-gates` record among them, and its task is startable once its dependencies closed",
+    () => pageIds.length > 0 && pageIds.includes(`${startedPage}#quality-gates`) && startable.some((t) => t.id === pageTask.id),
+    () => ({ pageIds, startable: startable.map((t) => [t.id, t.artifact]) }));
+  for (const f of RECORD_FILES) fs.rmSync(path.join(startBase, f), { force: true });
+  const started = cliTasks(["--tasks", startDir, "--start", pageTask.id], MANIFEST);
+  check("record files: `--start` on the page build task marks it in-progress and hands back its dispatch token",
+    () => started.status === 0 && readTaskDir(startDir).find((t) => t.id === pageTask.id)?.status === "in-progress"
+      && (started.stdout || "").includes(`DISPATCH TOKEN for \`${pageTask.id}\``),
+    () => ({ status: started.status, stdout: (started.stdout || "").slice(0, 400), stderr: started.stderr }));
+  check("record files: `--start` on a page build task writes them too — `evidence.json` and `judge.json` hold every evidence id of THAT page, its `#quality-gates` record included",
+    () => ["evidence.json", "judge.json"].every((f) => pageIds.every((id) => Object.hasOwn(readJson(startBase, f), id))),
+    () => ({ task: [pageTask.id, pageTask.artifact], pageIds, state: recordState(startBase) }));
+  fs.rmSync(startBase, { recursive: true, force: true });
+
+  // `--handoff` keeps them current too: the fresh session resumes into a folder whose record files exist.
+  const hoBase = tmp("records-handoff");
+  const hoDir = path.join(hoBase, "mig", "build-tasks");
+  const hoManifest = path.join(hoBase, "scratch", "manifest.json");
+  fs.mkdirSync(path.dirname(hoManifest), { recursive: true });
+  fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
+  const cliHo = (...args) => spawnSync(process.execPath, [MIGRATE, hoManifest, ...args], { encoding: "utf8" });
+  cliHo("--tasks", hoDir);
+  const hoFolder = path.dirname(hoDir);
+  fs.writeFileSync(path.join(hoFolder, "decisions.md"), "# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n"
+    + `- Decision: build the plan\n- Approved by: user\n- Plan version: \`${RUN.planVersion}\`\n`);
+  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n");
+  for (const f of RECORD_FILES) fs.rmSync(path.join(hoFolder, f), { force: true });
+  const handedOff = cliHo("--tasks", hoDir, "--handoff");
+  check("record files: `--handoff` recreates deleted record files with EVERY published id — the fresh session's first builder files into a file that exists",
+    () => handedOff.status === 0 && fs.existsSync(path.join(hoFolder, "resume.md"))
+      && ["evidence.json", "judge.json"].every((f) => PLAN.evidenceIds.every((id) => Object.hasOwn(readJson(hoFolder, f), id)))
+      && PLAN.builderRecorded.every((b) => Object.hasOwn(readJson(hoFolder, "recorded.json"), b.reachabilityKey)),
+    () => ({ status: handedOff.status, stdout: (handedOff.stdout || "").slice(0, 600), stderr: handedOff.stderr, state: recordState(hoFolder) }));
+  fs.rmSync(hoBase, { recursive: true, force: true });
+
+  // A record file that parses as JSON but not as an OBJECT — `[]` or `null` — is as unreadable as broken JSON.
+  for (const [label, text] of [["an array", "[]\n"], ["null", "null\n"]]) {
+    const seededBase = tmp("records-non-object");
+    const seededDir = path.join(seededBase, "build-tasks");
+    fs.mkdirSync(seededBase, { recursive: true });
+    fs.writeFileSync(path.join(seededBase, "evidence.json"), text);
+    const seeded = cliTasks(["--tasks", seededDir], MANIFEST);
+    check(`record files: \`evidence.json\` holding ${label} stays BYTE-IDENTICAL after \`--tasks\`, and the run names it as unreadable`,
+      () => seeded.status === 0 && fs.readFileSync(path.join(seededBase, "evidence.json"), "utf8") === text
+        && /`evidence\.json`[^\n]*could not be read as a JSON object/.test(seeded.stdout || ""),
+      () => ({ status: seeded.status, back: fs.readFileSync(path.join(seededBase, "evidence.json"), "utf8"), stdout: (seeded.stdout || "").slice(-500) }));
+    fs.rmSync(seededBase, { recursive: true, force: true });
+  }
+
+  // `--reads` runs the same merge: it adds an id the file lacks and keeps every filed value.
+  const filedAgain = readJson(base, "evidence.json");
+  filedAgain[ownId] = filed;
+  delete filedAgain[added[0]];
+  fs.writeFileSync(path.join(base, "evidence.json"), JSON.stringify(filedAgain, null, 2) + "\n");
+  const reads = cliTasks(["--reads", base], MANIFEST2);
+  const ev3 = readJson(base, "evidence.json");
+  check("record files: `--reads` merges the same way — the missing id is added and the filed value survives",
+    () => reads.status === 0 && added[0] in ev3 && JSON.stringify(ev3[ownId]) === JSON.stringify(filed),
+    () => ({ status: reads.status, stderr: reads.stderr, keys: Object.keys(ev3) }));
+
+  // A record file the process cannot read or write at all — here a DIRECTORY where `evidence.json` belongs — is
+  // a warning on the mode's answer, never a crash of the mode.
+  const blockedBase = tmp("records-blocked");
+  const blockedDir = path.join(blockedBase, "build-tasks");
+  fs.mkdirSync(path.join(blockedBase, "evidence.json"));
+  const blockedTasks = cliTasks(["--tasks", blockedDir], MANIFEST2);
+  const blockedNext = cliTasks(["--tasks", blockedDir, "--next"], MANIFEST2);
+  const failureWarned = (r) => /NOT brought up to date/.test(r.stdout || "") && (r.stdout || "").includes(blockedBase);
+  check("record files: a record file the engine cannot touch (a directory named `evidence.json`) makes `--tasks` print the failure as a warning and exit normally",
+    () => blockedTasks.status === 0 && failureWarned(blockedTasks) && /--- progress ---/.test(blockedTasks.stdout),
+    () => ({ status: blockedTasks.status, stdout: (blockedTasks.stdout || "").slice(-600), stderr: (blockedTasks.stderr || "").slice(0, 600) }));
+  check("record files: …and `--next` still names the startable task with its `--start` command, the warning beside it",
+    () => [0, 2].includes(blockedNext.status) && failureWarned(blockedNext) && /--start /.test(blockedNext.stdout),
+    () => ({ status: blockedNext.status, stdout: (blockedNext.stdout || "").slice(-600), stderr: (blockedNext.stderr || "").slice(0, 600) }));
+  fs.rmSync(blockedBase, { recursive: true, force: true });
+  fs.rmSync(base, { recursive: true, force: true });
+
+  // A builder filing a record WHILE a mode merges. The racer writes the builder's value into `evidence.json` each
+  // time the merge reads that file, up to `fires` times — between the merge's read and its replace.
+  const raceBase = tmp("records-race");
+  const evFile = path.join(raceBase, "evidence.json");
+  const [builderId, missingId] = [PLAN.evidenceIds[0], PLAN.evidenceIds.at(-1)];
+  const seedRace = () => {
+    for (const f of fs.readdirSync(raceBase)) fs.rmSync(path.join(raceBase, f), { force: true });
+    const seed = Object.fromEntries(PLAN.evidenceIds.filter((id) => id !== missingId).map((id) => [id, { referencePage: "" }]));
+    fs.writeFileSync(evFile, JSON.stringify(seed, null, 2) + "\n");
+  };
+  const withRacer = (fires, fn) => {
+    const realRead = fs.readFileSync;
+    let fired = 0;
+    fs.readFileSync = (p, ...rest) => {
+      const out = realRead(p, ...rest);
+      if (path.resolve(String(p)) === path.resolve(evFile) && fired < fires) {
+        fired += 1;
+        const doc = JSON.parse(realRead(evFile, "utf8"));
+        doc[builderId] = { referencePage: "Raced_FormPage", components: ["crt.Input"], findings: ["mine"], findingsRaised: [], n: fired };
+        fs.writeFileSync(evFile, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return out;
+    };
+    try { return fn(); } finally { fs.readFileSync = realRead; }
+  };
+  const tempsLeft = () => fs.readdirSync(raceBase).filter((f) => f.endsWith(".tmp"));
+  check("record files (anti-vacuity): the plan publishes at least two evidence ids, so one can be filed and another missing",
+    () => builderId && missingId && builderId !== missingId, () => PLAN.evidenceIds);
+  seedRace();
+  const raced = withRacer(1, () => ensureRecordFiles(raceBase, PLAN));
+  const racedDoc = JSON.parse(fs.readFileSync(evFile, "utf8"));
+  check("record files: a builder that files a record between the merge's read and its replace KEEPS that record — the merge re-reads the fresh file and adds only the id still missing",
+    () => raced.written.includes("evidence.json") && racedDoc[builderId]?.referencePage === "Raced_FormPage"
+      && racedDoc[builderId]?.n === 1 && Object.hasOwn(racedDoc, missingId) && tempsLeft().length === 0,
+    () => ({ raced, builder: racedDoc[builderId], missing: Object.hasOwn(racedDoc, missingId), temps: tempsLeft() }));
+  seedRace();
+  const contended = withRacer(Infinity, () => ensureRecordFiles(raceBase, PLAN));
+  const contendedDoc = JSON.parse(fs.readFileSync(evFile, "utf8"));
+  check("record files: a file that changes under EVERY merge attempt is left to the other writer and reported as contended — its latest record stands and no temp file is left behind",
+    () => contended.contended.includes("evidence.json") && !contended.written.includes("evidence.json")
+      && contendedDoc[builderId]?.n >= MERGE_ATTEMPTS && !Object.hasOwn(contendedDoc, missingId) && tempsLeft().length === 0
+      && /was busy/.test(recordFilesWarning(raceBase, contended) || ""),
+    () => ({ contended, builder: contendedDoc[builderId], temps: tempsLeft() }));
+
+  // A rename the OS refuses while another process holds the file (EPERM / EBUSY / EACCES on Windows) is retried,
+  // then the file is reported as contended; any other rename error is not a busy file.
+  const lockError = (code) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+  const withLockedRename = (failures, code, fn) => {
+    const realRename = fs.renameSync;
+    let calls = 0;
+    fs.renameSync = (...args) => {
+      calls += 1;
+      if (calls <= failures) throw lockError(code);
+      return realRename(...args);
+    };
+    try { return { result: fn(), calls }; } finally { fs.renameSync = realRename; }
+  };
+  check("record files: `isRenameLockError` classifies EPERM, EBUSY and EACCES as a busy file, and nothing else",
+    () => ["EPERM", "EBUSY", "EACCES"].every((c) => isRenameLockError(lockError(c)))
+      && !["ENOSPC", "EISDIR", "ENOENT"].some((c) => isRenameLockError(lockError(c))) && !isRenameLockError(null),
+    () => "classification");
+  seedRace();
+  const brief = withLockedRename(RENAME_ATTEMPTS - 1, "EPERM", () => ensureRecordFiles(raceBase, PLAN));
+  check("record files: a rename refused fewer times than the retry budget succeeds on a later try — the file is written with the missing id",
+    () => brief.result.written.includes("evidence.json") && Object.hasOwn(JSON.parse(fs.readFileSync(evFile, "utf8")), missingId)
+      && tempsLeft().length === 0,
+    () => ({ result: brief.result, calls: brief.calls, temps: tempsLeft() }));
+  seedRace();
+  const seededBytes = fs.readFileSync(evFile, "utf8");
+  const held = withLockedRename(Infinity, "EBUSY", () => ensureRecordFiles(raceBase, PLAN));
+  check("record files: a rename refused on every try reports the file as contended — the file keeps its bytes, no temp file is left, and nothing throws",
+    () => held.result.contended.includes("evidence.json") && fs.readFileSync(evFile, "utf8") === seededBytes && tempsLeft().length === 0,
+    () => ({ result: held.result, calls: held.calls, temps: tempsLeft() }));
+  // The rename stub patches this process's `fs`, so the merge runs in-process through `ensureRecordFiles`, the call
+  // every mode makes, `--reads` included.
+  check("record files: …and that contended result renders the warning line every mode prints, `--reads` included, rather than an exception",
+    () => /was busy/.test(recordFilesWarning(raceBase, held.result) || ""), () => held.result);
+
+  // A file that does not parse on the first read because a builder is mid-write, and parses on the second: the
+  // merge treats it as raced and retries, so it is merged rather than reported as unreadable.
+  seedRace();
+  const halfWritten = Buffer.from("{ \"half\": ");
+  const realRead = fs.readFileSync;
+  let midReads = 0;
+  fs.readFileSync = (p, ...rest) => {
+    if (path.resolve(String(p)) !== path.resolve(evFile)) return realRead(p, ...rest);
+    midReads += 1;
+    return midReads === 1 ? halfWritten : realRead(p, ...rest);
+  };
+  let midWrite;
+  try { midWrite = ensureRecordFiles(raceBase, PLAN); } finally { fs.readFileSync = realRead; }
+  check("record files: a file unparseable on the first read and whole on the second is MERGED, not reported unreadable — only bytes that stay unparseable are",
+    () => midWrite.written.includes("evidence.json") && !midWrite.unreadable.includes("evidence.json")
+      && Object.hasOwn(JSON.parse(fs.readFileSync(evFile, "utf8")), missingId),
+    () => ({ midWrite, reads: midReads }));
+  fs.rmSync(raceBase, { recursive: true, force: true });
+}
+
+console.log("\n===== the filed half of a page's quality gate belongs to the page's LAST build task =====");
+// The `quality:ran` row says the design pass ran and its record was filed. Filing is the builder's act and the
+// review only judges it, so the row goes to the build task that finishes the page and the review keeps the judged
+// row alone.
+{
+  const FILED = "quality:ran", JUDGED = "quality:judged";
+  const hasRow = (t, id) => t.rows.some((r) => r.deliverableId === id);
+  const writersOf = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact).sort((a, b) => a.order - b.order);
+  const mainWriters = writersOf(SET5, "page:main");
+  check("filed gate (anti-vacuity): the bulk fixture really cuts `page:main` into several build tasks",
+    () => mainWriters.length > 1, () => SET5.tasks.map((t) => `${t.order}:${t.artifact}·${t.group}`));
+  check("filed gate: a page cut into several build tasks carries `quality:ran` in its LAST build task only",
+    () => hasRow(mainWriters.at(-1), FILED) && mainWriters.slice(0, -1).every((t) => !hasRow(t, FILED)),
+    () => mainWriters.map((t) => ({ order: t.order, rows: t.rows.map((r) => r.deliverableId || "—") })));
+  check("filed gate: …and it is that task's LAST row — the design pass looks at the page every other row of the task built",
+    () => mainWriters.at(-1).rows.at(-1).deliverableId === FILED,
+    () => mainWriters.at(-1).rows.map((r) => r.deliverableId || r.label.slice(0, 30)));
+  check("filed gate: the page's review task carries the judged row and nothing else of the gate",
+    () => {
+      const review = SET5.tasks.find((t) => t.artifact === "review:main");
+      return review && hasRow(review, JUDGED) && !hasRow(review, FILED) && review.writesTo === "";
+    }, () => SET5.tasks.find((t) => t.artifact === "review:main")?.rows.map((r) => r.deliverableId));
+  check("filed gate: the review still waits on EVERY build task of the page it judges, the one that files the record included",
+    () => {
+      const review = SET5.tasks.find((t) => t.artifact === "review:main");
+      return mainWriters.every((w) => review.dependsOn.includes(w.id));
+    }, () => ({ deps: SET5.tasks.find((t) => t.artifact === "review:main")?.dependsOn, writers: mainWriters.map((t) => t.id) }));
+  check("filed gate: on every page of the per-artifact cut exactly ONE task owns `quality:ran`, and it is that page's last writer",
+    () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
+      const owners = SET.tasks.filter((t) => t.rows.some((r) => r.deliverableId === FILED && r.pageKey === k));
+      const writers = SET.tasks.filter((t) => t.writesTo && t.rows.some((r) => r.pageKey === k));
+      const last = writers.sort((a, b) => a.order - b.order).at(-1);
+      return owners.length === 1 && owners[0] === last;
+    }), () => SET.tasks.map((t) => `${t.order}:${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
+  const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+  const whole = collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+  const wholeReview = collapsed.tasks.find((t) => t.artifact === "review:whole");
+  check("filed gate: in a COLLAPSED run the Whole-migration task owns every page's `quality:ran` and the review owns only the judged rows",
+    () => whole && wholeReview
+      && ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => whole.rows.some((r) => r.deliverableId === FILED && r.pageKey === k))
+      && !hasRow(wholeReview, FILED) && hasRow(wholeReview, JUDGED),
+    () => collapsed.tasks.map((t) => `${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
+  check("filed gate: the row text is unchanged by the move — it is the plan's row, so `--verify` resolves it as before",
+    () => {
+      const plan = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows.find((r) => r.deliverableId === FILED);
+      return SET.tasks.some((t) => t.writesTo && t.rows.some((r) => r.label === plan.label && r.group === "Quality gates"));
+    }, () => "the filed row by label");
+
+  // A folder whose review task holds the filed row with an Outcome on it: re-slicing moves the row to the page's
+  // last build task, and the Outcome moves with it.
+  const d = path.join(tmp("filed-carry"), "build-tasks");
+  const first = syncTaskDir(d, RUN5, OPTS5);
+  const lastBuild = writersOf(first, "page:main").at(-1);
+  const review = first.tasks.find((t) => t.artifact === "review:main");
+  const filedRow = lastBuild.rows.find((r) => r.deliverableId === FILED);
+  let carried = null;
+  if (filedRow && review) {
+    // The filed row in the review task, and absent from the build task.
+    const oldReview = { ...review, rows: [filedRow, ...review.rows] };
+    const oldBuild = { ...lastBuild, rows: lastBuild.rows.filter((r) => r !== filedRow) };
+    fs.writeFileSync(path.join(d, oldBuild.file), renderTaskFile(oldBuild, first));
+    fs.writeFileSync(path.join(d, oldReview.file), setOutcome(renderTaskFile(oldReview, first), 1, "built"));
+    syncTaskDir(d, RUN5, OPTS5);
+    const after = readTaskDir(d).find((t) => t.id === lastBuild.id);
+    carried = after?.rows.find((r) => r.label === filedRow.label);
+  }
+  check("filed gate: re-slicing a folder whose REVIEW task recorded an Outcome on the filed row carries that Outcome to the build task that now owns the row",
+    () => carried?.outcomeKind === "built",
+    () => ({ filedRow: !!filedRow, review: !!review, carried }));
+  fs.rmSync(path.dirname(d), { recursive: true, force: true });
+
+  // A RETIRED file still listing the filed row: its task id is not in the current plan, so the file is reported
+  // stale and never rewritten, and its mark stays in the folder while another task owns the row.
+  const filedAt = (t) => t.rows.findIndex((r) => r.deliverableId === FILED) + 1;
+  const retire = (dir, set, task, id, mark) => {
+    const file = `task-${id}.md`;
+    fs.writeFileSync(path.join(dir, file), setOutcome(renderTaskFile({ ...task, id, file }, set), filedAt(task), mark));
+  };
+  const filedOf = (dir, id) => readTaskDir(dir).find((t) => t.id === id)?.rows.find((r) => r.deliverableId === FILED || r.label === filedRow?.label);
+  const editOwn = (dir, task, mark) => {
+    const f = path.join(dir, readTaskDir(dir).find((t) => t.id === task.id).file);
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), filedAt(task), mark));
+  };
+
+  // The owner's Outcome cleared by hand stays cleared: the owner's own file lists the row, so nothing is carried in.
+  const dc = path.join(tmp("filed-cleared"), "build-tasks");
+  const setC = syncTaskDir(dc, RUN5, OPTS5);
+  const ownerC = writersOf(setC, "page:main").at(-1);
+  retire(dc, setC, ownerC, "retiredfiled01", "built");
+  editOwn(dc, ownerC, "built");
+  syncTaskDir(dc, RUN5, OPTS5);
+  editOwn(dc, ownerC, "");
+  syncTaskDir(dc, RUN5, OPTS5);
+  const clearedOnce = filedOf(dc, ownerC.id);
+  syncTaskDir(dc, RUN5, OPTS5);
+  const clearedTwice = filedOf(dc, ownerC.id);
+  check("filed gate: an Outcome CLEARED on the row's current owner stays cleared across two syncs — a retired file that still lists the row with a mark is not carried back in",
+    () => clearedOnce && clearedTwice && !clearedOnce.outcomeKind && !clearedTwice.outcomeKind,
+    () => ({ once: clearedOnce?.outcome, twice: clearedTwice?.outcome }));
+
+  // The owner's own mark wins over a retired file's.
+  editOwn(dc, ownerC, NOT_BUILT_BLOCKED);
+  syncTaskDir(dc, RUN5, OPTS5);
+  check("filed gate: the owner's OWN mark on the filed row wins over a retired file's mark for the same row",
+    () => filedOf(dc, ownerC.id)?.outcomeKind === "not-built", () => filedOf(dc, ownerC.id));
+  fs.rmSync(path.dirname(dc), { recursive: true, force: true });
+
+  // The row moved into a task with no file yet (a new task id after a re-slice): the previous owner is the retired
+  // file, and its outcome and reason carry over, onto the filed row only.
+  const dn = path.join(tmp("filed-new-id"), "build-tasks");
+  const setN = syncTaskDir(dn, RUN5, OPTS5);
+  const ownerN = writersOf(setN, "page:main").at(-1);
+  retire(dn, setN, ownerN, "retiredfiled02", NOT_BUILT_BLOCKED);
+  fs.rmSync(path.join(dn, ownerN.file));
+  syncTaskDir(dn, RUN5, OPTS5);
+  const fresh = readTaskDir(dn).find((t) => t.id === ownerN.id);
+  const carriedNew = fresh?.rows.find((r) => r.label === ownerN.rows[filedAt(ownerN) - 1].label);
+  const freshText = fresh ? fs.readFileSync(path.join(dn, fresh.file), "utf8") : "";
+  check("filed gate: a filed row that moved into a NEW task id carries its previous owner's outcome and reason, on that row only and listed once",
+    () => carriedNew?.outcomeKind === "not-built" && carriedNew.outcome === NOT_BUILT_BLOCKED
+      && fresh.rows.filter((r) => r.outcome === NOT_BUILT_BLOCKED).length === 1
+      && freshText.split(carriedNew.label).length === 2,
+    () => ({ carried: carriedNew, marked: fresh?.rows.filter((r) => r.outcome).map((r) => [r.label.slice(0, 40), r.outcome]) }));
+  fs.rmSync(path.dirname(dn), { recursive: true, force: true });
+}
+
+console.log("\n===== a split must give the filed gate row to the page's last writer =====");
+{
+  const rows = allRows("main");
+  const gates = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows;
+  const filedRow = gates.find((r) => r.deliverableId === "quality:ran").label;
+  const judgedRow = gates.find((r) => r.deliverableId === "quality:judged").label;
+  const rest = rows.filter((r) => r !== filedRow && r !== judgedRow);
+  const others = FULL_SPLIT.items.filter((i) => i.pageKey !== "main");
+  const refused = (items) => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  const readOnly = refused([splitItem("the-build", "main", "main", rest), ...others,
+    splitItem("the-review", "main", "", [filedRow, judgedRow])]);
+  check("split: the filed `quality:ran` row claimed by a READ-ONLY item is refused, naming the row, its page and the item to move it into",
+    () => readOnly.refused && readOnly.problems.some((p) => /quality:ran/.test(p) && p.includes("the-review")
+      && p.includes("`main`") && p.includes("the-build")),
+    () => readOnly.problems);
+  const half = Math.ceil(rest.length / 2);
+  const early = refused([splitItem("first-half", "main", "main", [...rest.slice(0, half), filedRow]),
+    splitItem("second-half", "main", "main", rest.slice(half)), ...others,
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split: the filed row in a writer that a LATER item still writes after is refused, naming that later item as the owner",
+    () => early.refused && early.problems.some((p) => /quality:ran/.test(p) && p.includes("first-half") && p.includes("second-half")),
+    () => early.problems);
+  const right = refused([splitItem("first-half", "main", "main", rest.slice(0, half)),
+    splitItem("second-half", "main", "main", [...rest.slice(half), filedRow]), ...others,
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split: the filed row in the page's last writer and the judged row in a later read-only review is accepted — and the writer is not mistaken for a review",
+    () => {
+      if (right.refused) return false;
+      const set = mergeTaskSet(right, []);
+      const owner = set.tasks.find((t) => t.id === "second-half");
+      const rev = set.tasks.find((t) => t.id === "the-review");
+      return !(owner.reviewsArtifacts || []).length && rev.dependsOn.includes("second-half") && rev.dependsOn.includes("first-half");
+    }, () => right.problems || mergeTaskSet(right, []).tasks.map((t) => `${t.id}→${t.dependsOn.join(",")}`));
+
+  // An item that writes ANOTHER page is never the home of this page's filed row.
+  const otherWriter = others.find((i) => i.writesTo && i.writesTo !== "main");
+  const onMain = (label) => `main::${label}`;
+  const filedMentions = (problems) => problems.filter((p) => /quality:ran/.test(p) && p.includes("of `main`"));
+  const crossed = refused([splitItem("the-build", "main", "main", rest),
+    ...others.map((i) => (i === otherWriter ? { ...i, rows: [...i.rows, onMain(filedRow)] } : i)),
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split (anti-vacuity): the fixture has a writer of a page other than `main` to misplace the filed row into",
+    () => !!otherWriter, () => others.map((i) => [i.id, i.writesTo]));
+  check("split: `main`'s filed row in an item writing ANOTHER page, beside a real `main` writer, is refused — the message names that item, the page it writes, and the `main` writer to move it into",
+    () => crossed.refused && filedMentions(crossed.problems).some((p) => p.includes(`\`${otherWriter.id}\``)
+      && p.includes(`writes \`${otherWriter.writesTo}\``) && p.includes("`the-build`, the last item that writes `main`")),
+    () => crossed.problems);
+  // No item declares `writesTo: main`: main's rows ride in writers of other pages. The last WRITING item that
+  // carries main's rows finishes the page, so it holds the filed row; an earlier carrier is refused, and the
+  // refusal never says that either item writes `main`.
+  const carriers = others.filter((i) => i.writesTo && i.writesTo !== "main");
+  const [firstCarrier, lastCarrier] = [carriers[0], carriers.at(-1)];
+  const restHalf = Math.ceil(rest.length / 2);
+  const carrying = (filedIn) => refused([
+    ...others.map((i) => {
+      if (i === firstCarrier) return { ...i, rows: [...i.rows, ...rest.slice(0, restHalf).map(onMain), ...(filedIn === i ? [onMain(filedRow)] : [])] };
+      if (i === lastCarrier) return { ...i, rows: [...i.rows, ...rest.slice(restHalf).map(onMain), ...(filedIn === i ? [onMain(filedRow)] : [])] };
+      return i;
+    }),
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split (anti-vacuity): the fixture has two writers of pages other than `main` to carry main's rows",
+    () => carriers.length >= 2 && firstCarrier !== lastCarrier, () => others.map((i) => [i.id, i.writesTo]));
+  const inLastCarrier = carrying(lastCarrier);
+  check("split: when NO item declares `writesTo: main`, `main`'s filed row in the LAST writing item that carries `main` rows is accepted, even though that item writes another page",
+    () => !inLastCarrier.refused, () => inLastCarrier.problems);
+  const inFirstCarrier = carrying(firstCarrier);
+  const firstFiled = filedMentions(inFirstCarrier.problems || []);
+  check("split: …and in an EARLIER carrier it is refused, naming the last carrier as \"the last item that carries `main` rows\" — never claiming either item writes `main`",
+    () => inFirstCarrier.refused && firstFiled.length === 1 && firstFiled[0].includes(`\`${firstCarrier.id}\``)
+      && firstFiled[0].includes(`\`${lastCarrier.id}\`, the last item that carries \`main\` rows`)
+      && !/writes `main`/.test(firstFiled[0]),
+    () => inFirstCarrier.problems);
+  // No item declares `writesTo: main` and no WRITING item carries any `main` row: every one sits in a read-only
+  // item. There is no item to move the filed row into, so the remedy is to declare the writer.
+  const readOnlyMain = refused([...others, splitItem("main-read-only", "main", "", [...rest, filedRow, judgedRow])]);
+  const readOnlyFiled = filedMentions(readOnlyMain.problems || []);
+  check("split: when no WRITING item carries `main` rows at all, the filed row is refused naming the row, its page and the item, with the remedy to give the item that builds that page `writesTo: main`",
+    () => readOnlyMain.refused && readOnlyFiled.length === 1 && /quality:ran/.test(readOnlyFiled[0])
+      && readOnlyFiled[0].includes("of `main`") && readOnlyFiled[0].includes("`main-read-only`")
+      && readOnlyFiled[0].includes("give the item that builds that page `writesTo: main`"),
+    () => readOnlyMain.problems);
+  // The same seam on the list page: two writers, the filed row in the first.
+  const listGates = GROUPS.find((g) => g.pageKey === LIST_PAGE_KEY && g.baseTitle === "Quality gates").rows;
+  const listFiled = listGates.find((r) => r.deliverableId === "quality:ran").label;
+  const listJudged = listGates.find((r) => r.deliverableId === "quality:judged").label;
+  const listRest = allRows(LIST_PAGE_KEY).filter((r) => r !== listFiled && r !== listJudged);
+  const listHalf = Math.ceil(listRest.length / 2);
+  const notList = FULL_SPLIT.items.filter((i) => i.pageKey !== LIST_PAGE_KEY);
+  const listEarly = refused([...notList,
+    splitItem("list-first", LIST_PAGE_KEY, LIST_PAGE_KEY, [...listRest.slice(0, listHalf), listFiled]),
+    splitItem("list-second", LIST_PAGE_KEY, LIST_PAGE_KEY, listRest.slice(listHalf)),
+    splitItem("list-review", LIST_PAGE_KEY, "", [listJudged])]);
+  check("split: the list page's filed row in a list writer that a LATER list writer follows is refused, naming the later writer as the owner",
+    () => listRest.length > 1 && listEarly.refused && listEarly.problems.some((p) => /quality:ran/.test(p)
+      && p.includes(`of \`${LIST_PAGE_KEY}\``) && p.includes("list-first") && p.includes(`\`list-second\`, the last item that writes \`${LIST_PAGE_KEY}\``)),
+    () => ({ rest: listRest.length, problems: listEarly.problems }));
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

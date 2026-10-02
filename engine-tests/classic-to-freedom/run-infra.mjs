@@ -635,6 +635,21 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("SKILL.md points a builder at it, in the step that opens a page — a reference nothing links to is a file nobody reads",
     () => skill.includes("references/freedom-ui-browser-check.md"),
     () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
+  // A builder is handed exactly the files its 7.3 row names, so a SKILL.md mention alone never reaches it: the
+  // page-build row itself must hand the reference, in the look-up column and not as a brief to read whole.
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  const pageBuildRows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4 && cells[0].startsWith("Page build"));
+  check("orchestrate-build.md 7.3: the page-build row hands `freedom-ui-browser-check.md` as a reference to look up, not as a brief — the row is what a builder is given, so a reference it does not name is never opened",
+    () => pageBuildRows.length === 1
+      && pageBuildRows[0][3].includes("`./references/freedom-ui-browser-check.md`")
+      && !pageBuildRows[0][2].includes("freedom-ui-browser-check.md"),
+    () => pageBuildRows);
 }
 
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
