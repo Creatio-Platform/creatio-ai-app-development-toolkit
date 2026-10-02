@@ -21,6 +21,10 @@
 export const SPLIT_FILE = "split.json";
 export const SPLIT_SCAFFOLD = "scaffold";
 const PAGE_SEP = "::";
+// The filed half of a page's `Quality gates` pair: the row that says the design pass ran and its record was filed.
+// Filing is build work, so this row belongs to the page's last writer; the judged half belongs to the review.
+export const QUALITY_FILED_ID = "quality:ran";
+export const isFiledGateRow = (row) => row?.deliverableId === QUALITY_FILED_ID;
 
 // A row is matched by its STRUCTURAL KEY — the label with its digits masked — for the same reason a task id is:
 // the digits are what a growing plan moves. `Fields — 19 expected` and `Fields — 20 expected` are one row with a
@@ -257,7 +261,8 @@ export function resolveSplit(split, groups, identity = new Map()) {
     });
   }
   errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
-    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...attributeAfterItsWriter(items));
+    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...filedGateOutsideLastWriter(items),
+    ...attributeAfterItsWriter(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -279,12 +284,12 @@ const CALLER = /^Handler — `([^`]+)`\s*$/;
 // THE THIRD CHECKED SEAM, and the one with no legitimate exception. A late scaffolding item is fine — per-type
 // routing genuinely belongs after the typed pages. A review placed before a writer of the page it judges is never
 // fine: it would file a verdict on a page that is still being built. The `Quality gates` rows name the page, so
-// the engine can say so rather than leave it to the reader.
+// the engine can say so rather than leave it to the reader. The filed row is the writer's and makes no item a review.
 const REVIEW_GROUP_NAME = "Quality gates";
 function reviewBeforeItsPage(items) {
   const out = [];
   items.forEach((it, i) => {
-    const judged = new Set(it.rows.filter((r) => r.group === REVIEW_GROUP_NAME).map((r) => r.pageKey));
+    const judged = new Set(it.rows.filter((r) => r.group === REVIEW_GROUP_NAME && !isFiledGateRow(r)).map((r) => r.pageKey));
     if (!judged.size) return;
     const later = items.slice(i + 1).filter((o) => judged.has(o.declaredWritesTo));
     if (!later.length) return;
@@ -293,6 +298,58 @@ function reviewBeforeItsPage(items) {
     out.push(`\`${it.id}\` reviews ${[...judged].map((p) => "`" + p + "`").join(", ")} but sits BEFORE`
       + ` ${later.length} item(s) that still write ${later.length === 1 ? "that page" : "those pages"} (${shown}${more})`
       + " — a review files a verdict on a page that is finished, so it goes after every item that writes it.");
+  });
+  return out;
+}
+
+// THE FIFTH CHECKED SEAM. A page's filed gate row is closed by the design pass over the FINISHED page, so the item
+// holding it is the page's last writer. When any item's `writesTo` names the page, that is the last such item: a
+// read-only item files nothing, an earlier writer would file a record for a page a later item still changes, and
+// an item writing another page builds a different page. When no item names the page, its rows are built inside
+// writers of other pages, and the last WRITING item that carries any of its rows is the one that finishes it.
+function declaredWriterOf(items, page) {
+  let at = -1;
+  items.forEach((it, i) => { if (it.declaredWritesTo === page) at = i; });
+  return at;
+}
+function lastCarrierOf(items, page) {
+  let at = -1;
+  items.forEach((it, i) => { if (it.declaredWritesTo && it.rows.some((r) => r.pageKey === page)) at = i; });
+  return at;
+}
+// The item that holds the page's filed row, and whether a `writesTo` declares it (false: it only carries rows).
+function lastWriterOf(items, page) {
+  const declared = declaredWriterOf(items, page);
+  return declared >= 0 ? { at: declared, declared: true } : { at: lastCarrierOf(items, page), declared: false };
+}
+const filedGateMisplacement = (it, page, owner) => {
+  if (!it.declaredWritesTo) {
+    return "but that item writes nothing — filing the design-pass record is build work, and a read-only item only judges it";
+  }
+  if (!owner.declared) return `but a LATER writing item still carries \`${page}\` rows — the design pass files its record on the finished page`;
+  if (it.declaredWritesTo !== page) return `but that item writes \`${it.declaredWritesTo}\`, not that page`;
+  return "but a LATER item still writes that page — the design pass files its record on the finished page";
+};
+function filedGateRemedy(items, page, owner) {
+  if (owner.declared) return `Move it into \`${items[owner.at].id}\`, the last item that writes \`${page}\`.`;
+  if (owner.at >= 0) {
+    return `Move it into \`${items[owner.at].id}\`, the last item that carries \`${page}\` rows (no item declares \`writesTo: ${page}\`).`;
+  }
+  return `No writing item carries \`${page}\` rows: give the item that builds that page \`writesTo: ${page}\` and put the row there.`;
+}
+function filedGateOutsideLastWriter(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    for (const r of it.rows) {
+      if (!isFiledGateRow(r)) continue;
+      const owner = lastWriterOf(items, r.pageKey);
+      if (owner.at === i) continue;
+      const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${QUALITY_FILED_ID}\`, record \`${r.pageKey}#quality-gates\`) of \`${r.pageKey}\``;
+      const why = filedGateMisplacement(it, r.pageKey, owner);
+      const claims = `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
+        + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
+      out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey, owner)} ${claims}`);
+    }
   });
   return out;
 }

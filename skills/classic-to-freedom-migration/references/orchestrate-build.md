@@ -54,7 +54,10 @@ session after `/compact` (the 7.1b line names `resume.md`). Either way:
 3. **Continue the 7.2 loop with the `--next` command `resume.md` ends on** —
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --next` — and carry
    on exactly as 7.2-7.5 and step 8 say. The engine answers from the folder; `resume.md` is not
-   updated as you go, so trust `--next`, not the snapshot in it.
+   updated as you go, so trust `--next`, not the snapshot in it. The record files
+   (`evidence.json`, `judge.json`, `recorded.json`) are already in the migration folder and every
+   `--next` / `--start` keeps them current, so the builders you dispatch file their evidence into
+   them during the build.
 4. **Something you need is not in the folder?** A fact the build needs that lived only in the
    earlier conversation is a gap in `decisions.md` / `worklog.md`: ask the user and record the answer
    there. Do not widen what you read to find it.
@@ -113,7 +116,9 @@ not carry it.
    done together in one item (a related list and the handler that filters it; a folded handler chain
    and its helpers; the containers before what goes in them; a page's `[attribute-virtual] X` row in
    the same item as, or an item before, every handler that sets X — a handler writing an attribute
-   that does not exist yet is inert), mark an item `"stopGate": true` when
+   that does not exist yet is inert; each page's FILED `Quality gates` row — the first of its two,
+   so `@Quality gates[1]` claims it — in the LAST item that writes that page, and the judged row in
+   the read-only review), mark an item `"stopGate": true` when
    it could legitimately halt the run rather than finish (it is carried into the task's front matter
    and shown as `⏸ stop-gate` in `index.md`, so the orchestrator sees it before dispatching), and
    give an item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns
@@ -121,8 +126,8 @@ not carry it.
    sentence as an id is refused along with the whole file. Then:
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
    The engine REFUSES a split that claims a row twice, names a row the plan does not have, places a
-   virtual attribute in a later item than a handler recorded as setting it, or leaves a plan row in
-   NO item; it writes nothing at all in that case and **exits `2`** — the same code
+   virtual attribute in a later item than a handler recorded as setting it, puts a page's filed
+   `Quality gates` row anywhere but that page's last writer, or leaves a plan row in NO item; it writes nothing at all in that case and **exits `2`** — the same code
    every mode that reads the cut answers with, so `--tasks`, `--tasks --next` and `--tasks --route`
    cannot disagree about whether one folder state is approvable. An unclaimed row is work nobody is
    scheduled to do: the refusal names those rows and their pages, with the count still owed, and
@@ -254,6 +259,15 @@ may change it at any time by saying so — update the line first.
    needs to exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own
    task, so a page is never built against an unanswered question. (A question that could change
    WHICH pages exist blocks the plan at the structure gate instead, so it never reaches a task.)
+
+   **The record files exist from the first slice on.** Every `--tasks`, `--next`, `--start` and
+   `--handoff` keeps `evidence.json`, `judge.json` and `recorded.json` in the migration folder current: each id
+   the plan publishes is a key, an id the plan gains is added, and a value already filed is never
+   changed or dropped. A file that does not parse is reported on stdout and left as it is — repair
+   its JSON by hand, keeping every value, then re-run. So a builder files its evidence record during
+   its own task — the page's LAST build task files the `<pageKey>#quality-gates` record — and the
+   review judges it; `--reads` at 7.4 writes the read plan and merges the record files the same
+   way, never overwriting a filed value.
 
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
@@ -420,8 +434,9 @@ its own verdict, so:
 - **The read-back** is one sub-agent with stand access but NO write access, handed
   `./references/read-back-brief.md` and the read plan's `reads/index.json`.
 - **The judge's and the builder's records** — `evidence.json`, `judge.json`, `recorded.json` — are
-  FILES the engine reads beside the read-back's; what each holds is in
-  `./references/judge-brief.md`.
+  FILES the engine reads beside the read-back's. They exist from the first slice on (7.2) and hold
+  what the builders and judges filed; `--reads` merges into them the same way and never overwrites
+  a value. What each holds is in `./references/judge-brief.md`.
 - **Then the engine composes the payload.**
   `node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`
   opens those files, builds `built.json` out of them and runs the gate on it — `--tasks` still does

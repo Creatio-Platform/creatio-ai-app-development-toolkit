@@ -14,7 +14,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
+import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -13360,7 +13360,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_skel_"));
   try {
     const plan = readPlan(lpRun, checklistOpts({}));
-    const wrote = writeEvidenceSkeletons(d, plan);
+    const { written: wrote } = ensureRecordFiles(d, plan);
     const ev = JSON.parse(fs.readFileSync(path.join(d, "evidence.json"), "utf8"));
     const ju = JSON.parse(fs.readFileSync(path.join(d, "judge.json"), "utf8"));
     check("`--reads` writes `evidence.json` / `judge.json` with EVERY published id already a key — the filer supplies values and never types an id",
@@ -13379,7 +13379,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
       () => ({ gnarly }));
     // These hold the run's own answers. Regenerating one would delete them.
     fs.writeFileSync(path.join(d, "evidence.json"), JSON.stringify({ mine: 1 }));
-    writeEvidenceSkeletons(d, plan);
+    ensureRecordFiles(d, plan);
     check("an existing `evidence.json` is never overwritten — it holds the run's own answers, and a second `--reads` must not delete them",
       () => JSON.parse(fs.readFileSync(path.join(d, "evidence.json"), "utf8")).mine === 1,
       () => ({ back: fs.readFileSync(path.join(d, "evidence.json"), "utf8").slice(0, 60) }));

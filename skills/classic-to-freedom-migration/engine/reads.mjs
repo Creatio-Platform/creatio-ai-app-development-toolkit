@@ -123,31 +123,124 @@ export function readPlan(result, opts = {}) {
   return { version: READS_INDEX_VERSION, planVersion: result?.planVersion || null, reads, builderRecorded, evidenceIds };
 }
 
-// The skeletons the agent FILLS rather than authors: every published id already a key, an empty value beside it.
-// A record filed under a mistyped id is a record the gate reports as never filed. Written ONLY when absent —
-// they carry the run's own answers, and regenerating one would delete them.
-export function writeEvidenceSkeletons(dir, plan) {
-  const written = [];
-  for (const [file, empty] of [[EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
-    [JUDGE_SKELETON_FILE, { convincing: null }]]) {
-    const full = path.join(dir, file);
-    if (fs.existsSync(full) || !plan.evidenceIds.length) continue;
-    const skel = {};
-    for (const id of plan.evidenceIds) skel[id] = { ...empty };
-    fs.writeFileSync(full, JSON.stringify(skel, null, 2) + "\n");
-    written.push(file);
+// The record files the agent FILLS rather than authors: every published id already a key, an empty value beside
+// it. A record filed under a mistyped id is a record the gate reports as never filed. They carry the run's own
+// answers, so an existing file is MERGED, never regenerated: an id the plan publishes and the file lacks is added
+// with the empty value, and every key already there — filed, empty, or one the plan has since dropped — keeps its
+// value. A file that does not parse as a JSON object is somebody's record the engine cannot read, so it is left
+// byte for byte as it is and reported. The file is replaced by a rename, re-checked against the bytes the merge
+// read just before it, so a record a builder files meanwhile is merged rather than overwritten, outside the short
+// gap that re-check leaves (see `replaceIfUnchanged`).
+// `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`. Returns the files written (created or
+// extended), the files left unread, and the files another writer kept changing under the merge.
+export function ensureRecordFiles(dir, plan) {
+  // Each file with the empty value written beside a key it lacks.
+  const slots = (plan.evidenceIds?.length ? [
+    [EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
+    [JUDGE_SKELETON_FILE, { convincing: null }],
+  ] : []).map(([file, empty]) => [file, plan.evidenceIds, empty]);
+  // `null`, not `false`: nothing has been recorded yet, and `false` is an answer — the row stays unconfirmed until
+  // the build agent replaces it.
+  const recorded = (plan.builderRecorded || []).map((b) => b.reachabilityKey);
+  if (recorded.length) slots.push([RECORDED_SKELETON_FILE, recorded, null]);
+  const by = { [MERGE_WRITTEN]: [], [MERGE_UNCHANGED]: [], [MERGE_UNREADABLE]: [], [MERGE_CONTENDED]: [] };
+  for (const [file, keys, empty] of slots) by[mergeRecordFile(path.join(dir, file), keys, empty)].push(file);
+  return { written: by[MERGE_WRITTEN], unreadable: by[MERGE_UNREADABLE], contended: by[MERGE_CONTENDED] };
+}
+/// What one merge did to its file. MERGE_RACED is internal: the file changed between the read and the replace.
+const MERGE_WRITTEN = "written";
+const MERGE_UNCHANGED = "unchanged";
+const MERGE_UNREADABLE = "unreadable";
+const MERGE_CONTENDED = "contended";
+const MERGE_RACED = "raced";
+// How many times a merge re-reads a file that changed under it before it leaves the file to the other writer.
+export const MERGE_ATTEMPTS = 3;
+// How many times a rename the OS refused because another process holds the file is tried, with a short pause
+// growing by RENAME_BACKOFF_MS each time, before the file is left to that process.
+export const RENAME_ATTEMPTS = 4;
+const RENAME_BACKOFF_MS = 25;
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// The parsed record, or null when the text is not a JSON object. Only the PARSE is caught: a file the process
+// cannot read at all (a directory in its place, no permission) throws to the caller.
+function parseRecordObject(text) {
+  try {
+    const doc = JSON.parse(text);
+    return isPlainObject(doc) ? doc : null;
+  } catch { return null; }
+}
+// The file's bytes, or null when there is no file.
+const readBytes = (full) => (fs.existsSync(full) ? fs.readFileSync(full) : null);
+const sameBytes = (a, b) => (a === null || b === null ? a === b : a.equals(b));
+// A builder may file a record while a mode merges. Each attempt merges onto the bytes it just read; when the file
+// changed before the replace, the next attempt merges onto the fresh content, so only keys still missing are
+// added and the other writer's values stand. A file that keeps changing is left to that writer and reported.
+function mergeRecordFile(full, keys, empty) {
+  for (let attempt = 0; attempt < MERGE_ATTEMPTS; attempt++) {
+    const outcome = mergeOnce(full, keys, empty);
+    if (outcome !== MERGE_RACED) return outcome;
   }
-  const recorded = plan.builderRecorded || [];
-  const full = path.join(dir, RECORDED_SKELETON_FILE);
-  if (recorded.length && !fs.existsSync(full)) {
-    // `null`, not `false`: nothing has been recorded yet, and `false` is an answer — the row stays unconfirmed
-    // until the build agent replaces it.
-    const skel = {};
-    for (const b of recorded) skel[b.reachabilityKey] = null;
-    fs.writeFileSync(full, JSON.stringify(skel, null, 2) + "\n");
-    written.push(RECORDED_SKELETON_FILE);
+  return MERGE_CONTENDED;
+}
+function mergeOnce(full, keys, empty) {
+  const seen = readBytes(full);
+  const doc = seen === null ? {} : parseRecordObject(seen.toString("utf8"));
+  // A file that does not parse may be one a builder is writing right now: it counts as unreadable only when a
+  // second read finds the same bytes.
+  if (!doc) return sameBytes(readBytes(full), seen) ? MERGE_UNREADABLE : MERGE_RACED;
+  const missing = keys.filter((k) => !Object.hasOwn(doc, k));
+  if (!missing.length && seen !== null) return MERGE_UNCHANGED;
+  for (const k of missing) doc[k] = structuredClone(empty);
+  return replaceIfUnchanged(full, seen, JSON.stringify(doc, null, 2) + "\n");
+}
+// Writes `text` to a temp file in the same folder and renames it over `full`, so a reader sees the old file or
+// the new one and never half of either. The file is re-read immediately before the rename and the rename happens
+// only while it still holds `seen`. That narrows the window in which another writer's change can be lost to the
+// gap between that re-read and the rename; it does not close it, since a builder writes with plain file tools and
+// takes no lock. The temp file never outlives the call.
+function replaceIfUnchanged(full, seen, text) {
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const temp = path.join(path.dirname(full), `.${path.basename(full)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(temp, text);
+    if (!sameBytes(readBytes(full), seen)) return MERGE_RACED;
+    return renameWithRetry(temp, full) ? MERGE_WRITTEN : MERGE_CONTENDED;
+  } finally {
+    fs.rmSync(temp, { force: true });
   }
-  return written;
+}
+// The rename errors Windows raises while another process has the target open (an editor, an indexer, a builder
+// mid-write). They are a busy file, not a broken folder, so the rename is tried again rather than failing the mode.
+const RENAME_LOCK_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+export const isRenameLockError = (e) => RENAME_LOCK_CODES.has(e?.code);
+const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Whether the rename happened. Any other error is thrown to the caller.
+function renameWithRetry(temp, full) {
+  for (let attempt = 1; attempt <= RENAME_ATTEMPTS; attempt++) {
+    try {
+      fs.renameSync(temp, full);
+      return true;
+    } catch (e) {
+      if (!isRenameLockError(e)) throw e;
+      if (attempt < RENAME_ATTEMPTS) pauseSync(RENAME_BACKOFF_MS * attempt);
+    }
+  }
+  return false;
+}
+// The line every mode prints for the record files it left as they were, or null when it left none.
+export function recordFilesWarning(dir, { unreadable = [], contended = [] } = {}) {
+  const names = (files) => files.map((f) => "`" + f + "`").join(", ");
+  const lines = [];
+  if (unreadable.length) {
+    lines.push(`⚠ ${names(unreadable)} in ${dir} could not be read as a JSON object — NOT READ and NOT WRITTEN, left as`
+      + " it is: the engine cannot tell which records it holds, so it adds no id to it. Repair the JSON by hand,"
+      + " keeping every value already filed, then re-run.");
+  }
+  if (contended.length) {
+    lines.push(`⚠ ${names(contended)} in ${dir} was busy while the engine added the missing ids — it kept changing, or`
+      + " another process held it open — so it was NOT WRITTEN and left to that writer, losing no record it filed."
+      + " Re-run once that writer is done.");
+  }
+  return lines.length ? lines.join("\n") : null;
 }
 export const EVIDENCE_SKELETON_FILE = "evidence.json";
 export const JUDGE_SKELETON_FILE = "judge.json";
@@ -203,7 +296,8 @@ export function renderReadPlan(plan, dir) {
       `Written for you with all ${plan.evidenceIds.length} published id(s) already as keys — **fill the values, never`
       + " the keys.** The evidence records a build agent filed, and the independent verdict on them, live in no page"
       + " body and on no stand row, so nothing can read them back; an id retyped off this table is the one that goes"
-      + " wrong. An existing file is never overwritten. Leave a record out and its row says so in its own words.");
+      + " wrong. An existing file is merged, never overwritten: an id it lacks is added and every filed value is"
+      + " kept. Leave a record out and its row says so in its own words.");
   }
   if (plan.builderRecorded?.length) {
     L.push("", "**Not reads — the BUILD agent records these**", "",
