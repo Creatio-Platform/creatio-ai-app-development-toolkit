@@ -2849,8 +2849,11 @@ check("checklist: 'existing-section' targets the existing form page and closes i
   /Form page → `SupportUnit_FormPage` \(existing — extended\)/.test(clExisting.stdout || "")
   && (clExisting.stdout || "").split("\n").some((l) => /Form template →/.test(l) && /N\/A — .*existing-section/.test(l)),
   () => (clExisting.stdout || "").split("\n").filter((l) => /Form (page|template)/.test(l)).join("\n"));
-check("plan: the 'existing-section' banner names the save call and target-package-uid, so the replacing schema lands in the target package",
-  /`target-package-uid` of `UsrSU`/.test(plExisting.stdout || "") && /`update-page` \/ `sync-pages`/.test(plExisting.stdout || ""));
+check("plan: the 'existing-section' banner ties target-package-uid to update-page only, so the replacing schema lands in the target package",
+  /`update-page` passing `target-package-uid` of `UsrSU`/.test(plExisting.stdout || "")
+  && !/`sync-pages` passing `target-package-uid`/.test(plExisting.stdout || "")
+  && !/`update-page` \/ `sync-pages`/.test(plExisting.stdout || "")
+  && /Do not save these pages with `sync-pages`/.test(plExisting.stdout || ""));
 const plExistingTyped = runMigrate(["-", "--plan"], { input: JSON.stringify({ ...placementBase, planMeta: { ...FULL_PLANMETA, freedomExists: true }, placement: existingSectionPlacement,
   typedPages: [{ schema: "SUTypeAPage", type: "A" }, { schema: "SUTypeBPage", type: "B" }], typedPageSchemas: {} }), encoding: "utf8" });
 check("placement gate: 'existing-section' over a TYPED entity is INCOMPLETE — the mode names one form page and cannot target a page per record type",
