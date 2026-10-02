@@ -10236,6 +10236,15 @@ console.log("\n===== a split must give the filed gate row to the page's last wri
       && firstFiled[0].includes(`\`${lastCarrier.id}\`, the last item that carries \`main\` rows`)
       && !/writes `main`/.test(firstFiled[0]),
     () => inFirstCarrier.problems);
+  // No item declares `writesTo: main` and no WRITING item carries any `main` row: every one sits in a read-only
+  // item. There is no item to move the filed row into, so the remedy is to declare the writer.
+  const readOnlyMain = refused([...others, splitItem("main-read-only", "main", "", [...rest, filedRow, judgedRow])]);
+  const readOnlyFiled = filedMentions(readOnlyMain.problems || []);
+  check("split: when no WRITING item carries `main` rows at all, the filed row is refused naming the row, its page and the item, with the remedy to give the item that builds that page `writesTo: main`",
+    () => readOnlyMain.refused && readOnlyFiled.length === 1 && /quality:ran/.test(readOnlyFiled[0])
+      && readOnlyFiled[0].includes("of `main`") && readOnlyFiled[0].includes("`main-read-only`")
+      && readOnlyFiled[0].includes("give the item that builds that page `writesTo: main`"),
+    () => readOnlyMain.problems);
   // The same seam on the list page: two writers, the filed row in the first.
   const listGates = GROUPS.find((g) => g.pageKey === LIST_PAGE_KEY && g.baseTitle === "Quality gates").rows;
   const listFiled = listGates.find((r) => r.deliverableId === "quality:ran").label;
