@@ -265,6 +265,12 @@ rules.
   what leaves a one-field island. → the mapping reference → *Embedded profile cards*.
 - **`success` mistaken for "works".** clio returns `success` for bodies that fail at runtime —
   render in the browser.
+- **Browser checked after each edit.** Opening the page after every save, with screenshots and DOM
+  walks as the evidence, made one section's page-build tasks cost about 4.5× those that skipped it.
+  One browser check per task, after the last save; between edits read the saved schema back with
+  `get-page`; and read the cheap evidence first — the data requests, then the console, then the
+  DOM, a screenshot only for layout — as `build-task-execution.md` → *Evidence, cheapest first*
+  ranks it.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
@@ -298,7 +304,8 @@ rules.
 - **Detail add flow ≠ plain related list.** Many details are NOT a default add-new list: they ADD
   via a **lookup** (pick existing), call a backend **service** to link/insert, and/or are an
   **inline-editable grid**. The engine detects this from the detail body
-  (`openLookup`/`addFromLookup`, `serviceName`/`callService`,
+  (`openLookup`/`addFromLookup`/`openLookupWithMultiSelect`/`openProductLookupToLink`,
+  `serviceName`/`callService`,
   `ConfigurationGrid`/`getCellControlsConfig`) and raises a `detail-add-mechanism` ⚠ naming the
   lookup/service/editable-columns. An **editable-grid** detail is emitted as an **`Editable list`**
   (target `crt.DataGrid` + `features.editable.enable`, carrying the editable columns) — not a
@@ -313,8 +320,14 @@ rules.
   removes those row actions from existing records. The engine raises a separate
   `detail-row-actions` ⚠ (and a `⚠ no row Copy/Delete` note in the Layout table), independent of
   the add flow: an add-disabled detail can keep its row actions and vice versa. Build the Freedom
-  list rows without the named Copy/Delete actions — the row-action property comes from
-  `get-component-info` on the target version — and keep records opening from the list on click. A
+  list rows without the named Copy/Delete actions and keep records opening from the list on
+  click: set `rowToolbarItems` to only the actions the Classic detail keeps — Open alone when both
+  Copy and Delete are gone, as one `crt.MenuItem` (localized caption, icon `edit-row-action`)
+  whose `clicked` fires `crt.UpdateRecordRequest` for the row's record. Never set it to `[]` and
+  never set `features.rows.toolbar: false`: any value replaces all the platform's default row
+  actions, so both leave the rows with no Open. The full recipe (the exact `clicked` params and
+  the Open item's guards) is the read-only detail rule in the `creatio-ui-guidelines` reference
+  `page-layout-and-controls.md`. A
   removed Classic Edit maps to nothing: Freedom has no separate Edit row action, so it never means
   "stop records opening". When the override is in a form the engine cannot read (a reference to
   another function, an over-long body), the same ⚠ says its effect is **UNKNOWN** and the Layout

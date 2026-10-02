@@ -60,12 +60,14 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -401,7 +403,8 @@ function miniPageIssue(miniPage, miniPageVerified) {
 // hard BLOCK. TOP-LEVEL only (visited.size===0); nested folds have their own 0-field handling. Reconcile exempt.
 // Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
 function hollowFormIssue(changeSet, typedPages, manifest, visited) {
-  if (typedPages.length || visited.size !== 0 || manifest.planMeta?.freedomExists) return null;
+  // Only a reconcile is exempt: it extends a page that already has a body. A parallel section is a Rebuild.
+  if (typedPages.length || visited.size !== 0 || reconcilesExisting(manifest.planMeta)) return null;
   const mainFields = countFormFields(changeSet.viewConfigDiff);
   if (mainFields !== 0) return null;
   return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
@@ -947,21 +950,24 @@ function signalUnresolved(k, signals) {
 //     "application":               { "resolved": true, "code": "UsrTasksApp" | null },
 //     "primaryPackage":            { "resolved": true, "name": "UsrTasks" | null, "editable": true },
 //     "targetPackageInApplication":{ "resolved": true, "value": true },
-//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" } }
+//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" | "existing-section",
+//                                    "listPage": "Contracts_ListPage", "formPage": "Contracts_FormPage" } } // the two page names: existing-section only
 const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage", "targetPackageInApplication", "sectionHost"];
 // `existing-app` — register into the app that already owns the entity (the only mode that needs the primary ==
 // target match). `new-app` — the build creates its own Freedom app first (the answer when the owning app is a
 // vendor/install wrapper). `pages-only-no-menu` — pages ship, the section is deliberately NOT registered; a
 // legitimate outcome, but an APPROVED one, never a silent fallback: the whole point of this gate is that the
-// missing menu entry is a plan decision, not a surprise found two hours into a build.
-const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu"];
+// missing menu entry is a plan decision, not a surprise found two hours into a build. `existing-section` — a
+// Freedom section for this object is already in the menu and the user chose to extend it: nothing is registered,
+// the Classic customizations land as extensions of that section's own list and form pages in the target package.
+const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXISTING_SECTION_MODE];
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
 export function placementIssues(manifest) {
-  const p = manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
-  const has = (k) => p[k] && typeof p[k] === "object" && p[k].resolved === true;
-  const unresolved = PLACEMENT_KEYS.filter((k) => !has(k));
+  const p = placementOf(manifest);
+  const has = (k) => isResolvedFact(p, k);
+  const unresolved = requiredPlacementKeys(p).filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -979,6 +985,46 @@ export function placementIssues(manifest) {
   }
   // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs.
   if (mode === "existing-app") issues.push(...existingAppIssues(p, target));
+  if (mode === EXISTING_SECTION_MODE) issues.push(...existingSectionIssues(p.sectionHost, manifest.planMeta));
+  issues.push(...parallelSectionIssues(manifest.planMeta, mode));
+  return issues;
+}
+const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
+// `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
+// target package and the host decision are required. The ONE source for both the gate above and the keys the
+// plan's placement banner asks for — a banner listing keys the gate does not need sends the agent after answers
+// nobody reads.
+const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
+function requiredPlacementKeys(p) {
+  return isResolvedFact(p, "sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
+}
+// The `parallelSection` contract. A parallel section is a NEW app and section built next to an EXISTING Freedom
+// section, so it needs both the 'new-app' host and `freedomExists`. Without `freedomExists` the flag is dropped by
+// `isParallelSection` and the plan quietly renders as a plain Rebuild with no parallel-section banner — so it is a
+// blocker, not a no-op.
+function parallelSectionIssues(planMeta, mode) {
+  if (planMeta?.parallelSection !== true) return [];
+  const issues = [];
+  if (mode !== "new-app") {
+    issues.push(`planMeta.parallelSection is true but placement.sectionHost.mode is '${mode}' — a parallel section is a new app and section over the same object; set the mode to 'new-app'.`);
+  }
+  if (planMeta.freedomExists !== true) {
+    issues.push("planMeta.parallelSection is true but planMeta.freedomExists is not true — a parallel section is built next to an EXISTING Freedom section; without one the plan would be a plain Rebuild. Set planMeta.freedomExists: true, or drop parallelSection when no Freedom section exists.");
+  }
+  return issues;
+}
+// The `existing-section` contract. The plan targets two pages that already exist, so it must name them, and the
+// main-scope Call must be a reconcile: an extension of an existing page is never a rebuild.
+function existingSectionIssues(host, planMeta) {
+  const issues = [];
+  const blank = (v) => typeof v !== "string" || v.trim() === "";
+  if (blank(host.listPage) || blank(host.formPage)) {
+    issues.push("placement.sectionHost.mode is 'existing-section' but sectionHost.listPage / sectionHost.formPage are not both named — record the existing section's list and form page schema names (from list-pages / list-entity-client-schemas), the pages this plan extends.");
+  }
+  if (planMeta?.freedomExists !== true) {
+    issues.push("placement.sectionHost.mode is 'existing-section' but planMeta.freedomExists is not true — extending an existing section is a reconcile of its pages; set planMeta.freedomExists: true.");
+  }
   return issues;
 }
 // The `existing-app` half of `placementIssues`, extracted so that function stays under Sonar's
@@ -986,7 +1032,7 @@ export function placementIssues(manifest) {
 // a dead end — it is the fork.
 function existingAppIssues(p, target) {
   const issues = [];
-  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
+  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), to 'pages-only-no-menu' (ship the pages without a menu entry), or — when a Freedom section for this object is already in the menu — to 'existing-section' (extend that section's pages, register nothing); or fix the app's package composition on-stand FIRST and re-record these facts.";
   if (!p.application.code) {
     issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
   }
@@ -1027,14 +1073,18 @@ export function checklistOpts(manifest, opts = {}) {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
-    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
+    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? formTemplateMissing(pm, manifest) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
+    // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
+    placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
     sectionHostMode: manifest.placement?.sectionHost?.mode ?? null,
+    // The existing section's pages an `existing-section` plan extends; null in every other mode.
+    existingSection: existingSectionPages(manifest.placement?.sectionHost),
     // The app the section is registered INTO, published so the build side never has to guess one. In the run this
     // exists for, the agent doing the registration had no application code in front of it and invented one off the
     // stand — against an app that could not host a section at all.
@@ -1042,6 +1092,15 @@ export function checklistOpts(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
   };
+}
+// An `existing-section` form page keeps its own template, so there is no template to choose.
+function formTemplateMissing(pm, manifest) {
+  const blank = (v) => v == null || String(v).trim() === "";
+  return manifest.placement?.sectionHost?.mode !== EXISTING_SECTION_MODE && blank(pm.formTemplate) && blank(manifest.template);
+}
+function existingSectionPages(host) {
+  if (host?.mode !== EXISTING_SECTION_MODE) return null;
+  return { listPage: host.listPage ?? null, formPage: host.formPage ?? null };
 }
 // A SUB-page's checklist opts. Deliberately NOT the parent's threaded through: with the parent's planMeta the
 // child's `Form template` row expects the PARENT's template (a mismatch nobody can ever fix), and a truthy
@@ -2069,7 +2128,7 @@ export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, i
 export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
-  const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b/.test(body);
+  const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b|\bopenLookupWithMultiSelect\b|\bopenProductLookupToLink\b/.test(body);
   const editableGrid = /\bConfigurationGrid\b|ConfigurationGridUtilities|getEditableGridRowViewModelClassName|getCellControlsConfig/.test(body);
   const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
   const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
@@ -3029,6 +3088,11 @@ export function runMigration(manifest, opts = {}) {
   // PLACEMENT completeness — the app-hosting facts. Mirrored here for the same reason as the two above: the CLI
   // gate reads the result, not the manifest.
   out.placement = manifest.placement || null;
+  // `existing-section` names ONE form page; a typed entity has a form page per record type, which this mode
+  // cannot target, so its plan is refused rather than half-planned as per-type rebuilds.
+  if (specOpts.existingSection && (out.typedPages || []).length) {
+    specOpts.placementBlockers = [...specOpts.placementBlockers, `placement.sectionHost.mode is 'existing-section' but '${out.entity}' has ${out.typedPages.length} typed form pages — this mode extends one list page and one form page only. Record the case in decisions.md and plan it with the user as a reconcile of each form page outside this mode.`];
+  }
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
@@ -3129,6 +3193,8 @@ const ROUTE_FLAG = "--route";
 // `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
+// `--handoff`: WRITE `<migration-folder>/resume.md` — the build loop handed to a fresh session. Takes no value.
+const HANDOFF_FLAG = "--handoff";
 // `--decide D<N>` / `--revoke D<N>`: the ONE path a PERSON's scope decision reaches the ledger.
 // See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` to a heading in
 // `<migration-folder>/decisions.md`, and refuse when it does not.
@@ -3165,7 +3231,7 @@ const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_F
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
 // for, so the flag that produced them has to be the thing that fails.
-const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG,
+const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG, HANDOFF_FLAG,
   WONT_DO_FLAG, POSTPONED_FLAG, BUILD_FLAG, ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
@@ -3310,6 +3376,10 @@ let routeRefusalFailure = false;
 // for the WHOLE refusal set rather than per reason — some of the reasons (an unreadable file, an id the folder
 // does not hold) carry no dispatch verdict of their own, so only a set-wide flag makes every one of them non-zero.
 let startRefusalFailure = false;
+// ⛔ `--handoff` WROTE NO RESUME — the plan is not approved at this version, not sliced, the run has no route, or
+// `--next` would refuse the folder. A hand-off the fresh session cannot resume from is a refusal, and it exits like
+// one.
+let handoffRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -3654,6 +3724,84 @@ function runNextMode(result, dir, opts, cmdFor) {
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
   return nextAnswerLines(answer, dir, cmdFor).join("\n") + "\n";
+}
+
+// `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
+//
+// It writes `<migration-folder>/resume.md` and the manifest copy it names (`resume-manifest.json`), and nothing
+// else of its own; the folder refresh is the one `--next` runs, so the next task it names is the one `--next` would
+// name. A fresh session can only resume what the folder records, so every precondition that session would otherwise
+// discover mid-build is refused HERE, before anything of the hand-off is written. The causes are checked in
+// stages, and each stage reports every cause it finds before the next one runs: the plan's own gaps; the manifest
+// path (the CLI, before parsing); the cut folder, the approval of THIS plan version and the dispatch route, together;
+// the folder refresh `--next` would refuse (an uncited decision); and a `--next` answer that exits 2 (a broken
+// dispatch ledger, or a run that cannot move).
+const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
+// The folder-level preconditions, with the values they read — the renderer reuses them rather than reading again.
+function handoffCauses(result, dir, folder) {
+  const causes = [];
+  if (!fs.existsSync(path.join(dir, TASK_INDEX_FILE))) {
+    causes.push(`the plan is not sliced — there is no task folder at ${dir} (no ${TASK_INDEX_FILE}). Slice it first`
+      + ` (orchestrate-build.md 7.1): \`${TASKS_FLAG} ${shellArg(dir)} ${SPLIT_FLAG} split.json\`, then hand off.`);
+  }
+  const approvalLine = planApprovalLine(readTextOr(path.join(folder, "decisions.md")), result.planVersion);
+  if (!approvalLine) {
+    causes.push(`decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\` (no \`## \``
+      + ` entry holds both a \`Plan version: ${result.planVersion}\` field and a non-empty \`Approved by:\` field). Record`
+      + " the approval naming that version and who approved it (orchestrate-build.md 7.1 step 1), then hand off — a"
+      + " fresh session builds only the plan an approval names.");
+  }
+  const route = worklogRoute(readTextOr(path.join(folder, "worklog.md")));
+  if (!route) {
+    causes.push(`worklog.md in ${folder} has no \`Route:\` line naming one of ${DISPATCH_ROUTES.join(" · ")} (the last`
+      + " `Route:` line is the one read). Resolve the dispatch route first (orchestrate-build.md 7.0) and write it"
+      + " there, so the fresh session dispatches every task the same way.");
+  }
+  return { causes, approvalLine, route };
+}
+const handoffRefusalHeader = (tasksDir) =>
+  `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:`;
+function runHandoffMode(result, dir, opts, ctx) {
+  const gapRefusal = planGapRefusal(result);
+  if (gapRefusal) { handoffRefusalFailure = true; return gapRefusal; }
+  const tasksDir = path.resolve(dir);
+  const folder = path.dirname(tasksDir);
+  const { causes, approvalLine, route } = handoffCauses(result, tasksDir, folder);
+  if (causes.length) {
+    handoffRefusalFailure = true;
+    return handoffRefusalHeader(tasksDir) + "\n" + causes.map((c) => `  — ${c}`).join("\n") + "\n";
+  }
+  const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
+  if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
+  const answer = startableTasks(set, tasksDir);
+  // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
+  // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
+  // `--next` names.
+  if (answer.verdict === NEXT_LEDGER || answer.verdict === NEXT_STUCK) {
+    handoffRefusalFailure = true;
+    if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir: tasksDir, started: true };
+    else startableGateFailure = { dir: tasksDir, answer };
+    return [`${handoffRefusalHeader(tasksDir)} \`--next\` answers \`${answer.verdict}\` and exits 2, so a fresh`
+      + " session would open on a refusal. Fix what it names below, then hand off:",
+    ...nextAnswerLines(answer, tasksDir, ctx.startCommand(tasksDir))].join("\n") + "\n";
+  }
+  // THE MANIFEST TRAVELS WITH THE FOLDER. The fresh session re-opens it on every command, so it must not depend on
+  // the planning session's temporary input folder. A hand-off re-run from the copy itself leaves it as it is.
+  const manifestCopy = path.join(folder, RESUME_MANIFEST_FILE);
+  if (path.resolve(ctx.manifestPath) !== manifestCopy) fs.copyFileSync(ctx.manifestPath, manifestCopy);
+  const resumeFile = path.join(folder, RESUME_FILE);
+  const { text, prompt } = renderResume({
+    migrationDir: folder, tasksDir, manifestPath: manifestCopy, environment: ctx.environment,
+    planVersion: result.planVersion, approvalLine, route,
+    progress: renderProgress(set, tasksDir), next: answer.startable[0] || null, verdict: answer.verdict,
+    nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
+  });
+  fs.writeFileSync(resumeFile, text);
+  return [`migrate.mjs: wrote ${resumeFile} and the manifest copy ${manifestCopy} — the build loop moves to a FRESH`
+    + " SESSION now.",
+  "Give the user the prompt below to paste into a fresh session, then STOP: do not `--start` or dispatch",
+  "anything more in this session. The fresh session reads resume.md and orchestrate-build.md → Resuming.",
+  "", prompt, ""].join("\n");
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -4127,9 +4275,28 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (val) fail(`\`${flag}\` does not go with \`${REVOKE_FLAG}\` — the subject is the decision, and the engine removes exactly the cells it wrote (named in each task's \`decisions:\` map). No addressing to give.`);
     }
   }
+  // `--handoff`: WRITE resume.md for a fresh session. It describes ONE folder state, so it refuses to combine with
+  // anything that moves the folder or answers about it in the same call — the rule `--next` carries.
+  const handoffMode = argv.includes(HANDOFF_FLAG);
+  if (handoffMode && !tasksMode) fail(`\`${HANDOFF_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it hands off the build of THAT folder.`);
+  {
+    const others = [[NEXT_FLAG, nextMode], [START_FLAG, !!startId], [ROUTE_FLAG, routeMode], ["--verify", verifyMode],
+      [SPLIT_FLAG, !!splitFile], [ADD_FLAG, !!addFile], [DECIDE_FLAG, decideMode], [REVOKE_FLAG, revokeMode]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (handoffMode && others.length) fail(`\`${HANDOFF_FLAG}\` cannot be combined with ${others.join(" / ")} — the resume must describe ONE folder state, and each of those moves the folder or answers about it. Run it first, then \`${HANDOFF_FLAG}\` on its own.`);
+  }
   if (tasksMode && !verifyMode && !decideMode && !revokeMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
+  // A HAND-OFF COPIES THE MANIFEST FOR THE FRESH SESSION, so a missing file (a cleaned temporary input folder) or a
+  // piped one is refused before it is parsed — exit 2 with nothing written, like the other hand-off refusals.
+  if (handoffMode && (!fromFile || !fs.existsSync(arg))) {
+    const cause = fromFile
+      ? `the manifest '${arg}' does not exist — the hand-off copies it beside ${RESUME_FILE} as ${RESUME_MANIFEST_FILE}, and the fresh session rebuilds every answer from that copy. A resumed session passes the copy ${RESUME_FILE} names; if that copy is gone, stop and ask the user — do not re-run the planning steps. The planning session, whose temporary input folder may have been cleaned, reruns step 4 to write the manifest again, then hands off.`
+      : "the manifest came in on stdin — the fresh session needs a PATH to re-open it. Pass the manifest as a file path.";
+    process.stdout.write(`migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off, and no ${RESUME_FILE}:\n  — ${cause}\n`);
+    process.exit(2);
+  }
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
   // instead (also the `--out manifest.json` typo, where the only path was consumed by --out, lands here).
   if (!fromFile && process.stdin.isTTY)
@@ -4250,6 +4417,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         + " \"pipe the same manifest in again\" — pasted bare it would wait on a terminal. Pass the manifest as a"
         + " path to get commands that run exactly as printed.\n";
     }
+  }
+  // BEFORE the slicing branch, for the reason `--next` is: it reports on the folder, it does not re-cut it.
+  else if (tasksMode && handoffMode) {
+    const nextCommand = (manifestFile, dir) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
+      shellArg(manifestFile), TASKS_FLAG, shellArg(dir), NEXT_FLAG].join(" ");
+    const startCommand = (dir) => (id) => [shellArg(process.execPath), shellArg(path.resolve(process.argv[1])),
+      shellArg(path.resolve(arg)), TASKS_FLAG, shellArg(dir), START_FLAG, shellArg(id)].join(" ");
+    try {
+      output = runHandoffMode(result, tasksDir, taskOpts(),
+        { manifestPath: path.resolve(arg), environment: manifest.planMeta?.environment || null, nextCommand, startCommand });
+    } catch (e) { fail(`cannot write the hand-off for '${tasksDir}': ${e.message}`); }
   }
   // `--decide` / `--revoke` — writes into the frozen folder. Placed BEFORE the slicing branch
   // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
@@ -4413,7 +4591,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
     || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
-    || startRefusalFailure;
+    || startRefusalFailure || handoffRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -4423,6 +4601,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (verifyMode && tasksMode) label = "migration result report";
   else if (verifyMode) label = "verification";
   else if (tasksMode && nextMode) label = "startable tasks";
+  else if (tasksMode && handoffMode) label = "hand-off";
   else if (tasksMode) label = "build tasks";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
