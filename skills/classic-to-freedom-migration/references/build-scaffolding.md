@@ -45,9 +45,9 @@ for the object is already in the menu, `existing-section` — and the user picks
 The section is already in the menu, so this task makes no `create-app`, `create-app-section` or
 `create-page` call. Its work is the target package: confirm it exists and depends on the package of
 each base page (`create-package` made it in planning). Every page write in the
-build is an extension of `sectionHost.listPage` / `sectionHost.formPage`, saved with
-`target-package-uid` of the target package so the replacing schema lands there and not in the base
-page's package. Re-templating below does not apply: the existing page keeps its template.
+build is an extension of `sectionHost.listPage` / `sectionHost.formPage`, saved with `update-page`
+passing `target-package-uid` of the target package so the replacing schema lands there and not in
+the base page's package. Do not save these pages with `sync-pages`: it has no package target. Re-templating below does not apply: the existing page keeps its template.
 
 ## Re-templating the scaffolded form page
 

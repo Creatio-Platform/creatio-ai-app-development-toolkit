@@ -50,9 +50,10 @@ with clio's `create-package` through `clio-run`. Take its arguments and its resu
 stop and report it as a blocker, and do not create the package another way. Use the package name the
 tool returns (the stand can prefix it) as `manifest.targetPackage`. A result saying the package was
 created but a later step (its dependencies, its read-back) failed is a blocker too: settle it before
-any page write. Save each page with `update-page` /
-`sync-pages` passing `target-package-uid` of that package, so the replacing schema lands there and
-not in the base page's package.
+any page write. Save each page with `update-page` passing `target-package-uid` of that package, so
+the replacing schema lands there and not in the base page's package. `sync-pages` has no package
+target: never save these pages with it, since clio would pick the design package itself and can
+write the replacing schema into the base page's package. Take the argument from `get-tool-contract`.
 
 **Option 1 — an existing client package.** An editable client package that already extends these
 pages is offered as an alternative to the new package, in its own `AskUserQuestion`, saying that

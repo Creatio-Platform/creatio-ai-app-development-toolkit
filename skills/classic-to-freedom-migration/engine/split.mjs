@@ -255,14 +255,14 @@ export function resolveSplit(split, groups, identity = new Map()) {
       title: raw.title,
       pageKey,
       stopGate: raw.stopGate === true,
-      writesTo: resolveWritesTo(raw.writesTo, identity),
+      writesTo: itemWritesTo(raw.writesTo, rows, identity),
       declaredWritesTo: raw.writesTo ?? "",
       rows,
     });
   }
   errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
     ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...filedGateOutsideLastWriter(items),
-    ...attributeAfterItsWriter(items));
+    ...attributeAfterItsWriter(items), ...wiringBeforeChildPage(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -291,7 +291,8 @@ function reviewBeforeItsPage(items) {
   items.forEach((it, i) => {
     const judged = new Set(it.rows.filter((r) => r.group === REVIEW_GROUP_NAME && !isFiledGateRow(r)).map((r) => r.pageKey));
     if (!judged.size) return;
-    const later = items.slice(i + 1).filter((o) => judged.has(o.declaredWritesTo));
+    // An item holding only binding rows writes the add-ons, not the page body the review judges.
+    const later = items.slice(i + 1).filter((o) => judged.has(o.declaredWritesTo) && !bindsOnly(o.rows));
     if (!later.length) return;
     const shown = later.slice(0, 3).map((o) => "`" + o.id + "`").join(", ");
     const more = later.length > 3 ? `, …and ${later.length - 3} more` : "";
@@ -307,14 +308,15 @@ function reviewBeforeItsPage(items) {
 // read-only item files nothing, an earlier writer would file a record for a page a later item still changes, and
 // an item writing another page builds a different page. When no item names the page, its rows are built inside
 // writers of other pages, and the last WRITING item that carries any of its rows is the one that finishes it.
+// An item holding only binding rows writes the add-ons, not this page, so it is never the page's writer here.
 function declaredWriterOf(items, page) {
   let at = -1;
-  items.forEach((it, i) => { if (it.declaredWritesTo === page) at = i; });
+  items.forEach((it, i) => { if (it.declaredWritesTo === page && !bindsOnly(it.rows)) at = i; });
   return at;
 }
 function lastCarrierOf(items, page) {
   let at = -1;
-  items.forEach((it, i) => { if (it.declaredWritesTo && it.rows.some((r) => r.pageKey === page)) at = i; });
+  items.forEach((it, i) => { if (it.declaredWritesTo && !bindsOnly(it.rows) && it.rows.some((r) => r.pageKey === page)) at = i; });
   return at;
 }
 // The item that holds the page's filed row, and whether a `writesTo` declares it (false: it only carries rows).
@@ -350,6 +352,32 @@ function filedGateOutsideLastWriter(items) {
         + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
       out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey, owner)} ${claims}`);
     }
+  });
+  return out;
+}
+
+// THE SIXTH CHECKED SEAM, the same mistake as per-type routing one level down. A `Child page wiring` row binds a
+// related list to the child page it opens, and its `vk` names that page's key, so the item carrying it has to come
+// after every item writing that child page — and after every item writing the page that holds the list. The task
+// set's dependencies on those writers are derived from the queue order, so a wiring item placed first would carry
+// none at all.
+const reviewOnly = (it) => it.rows.length > 0 && it.rows.every((r) => r.group === REVIEW_GROUP_NAME);
+function wiringBeforeChildPage(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    const wired = new Set(it.rows.filter((r) => r.vk?.type === "relatedpage" && r.vk.childKey)
+      .flatMap((r) => [r.vk.childKey, r.pageKey]).filter(Boolean));
+    if (!wired.size) return;
+    // A review item only judges the page, so it builds no list and no child page, whatever it declares.
+    // A binding-only item writes add-ons, not the page it declares, so it is no writer this item has to follow.
+    const later = items.slice(i + 1).filter((o) => wired.has(o.declaredWritesTo) && !reviewOnly(o) && !bindsOnly(o.rows));
+    if (!later.length) return;
+    const pages = [...new Set(later.map((o) => o.declaredWritesTo))];
+    const shown = later.slice(0, 3).map((o) => "`" + o.id + "`").join(", ");
+    const more = later.length > 3 ? `, …and ${later.length - 3} more` : "";
+    out.push(`\`${it.id}\` wires ${pages.map((p) => "`" + p + "`").join(", ")} but sits BEFORE ${later.length}`
+      + ` item(s) that still write ${pages.length === 1 ? "that page" : "those pages"} (${shown}${more}) — a related list`
+      + " cannot be bound to a page that has not been built yet. Move it after them.");
   });
   return out;
 }
@@ -457,6 +485,18 @@ function unconsumed(index) {
   return out;
 }
 
+// An item holding nothing but `Child page wiring` rows, at least one of them a binding, writes the child entities'
+// RelatedPage add-ons, not the page body, so it takes the same `wiring:<page>` artifact the engine's own cut gives
+// that group. The inline grid's no-page row belongs to the group and writes nothing, so it does not make the item a
+// page writer. On `page:<page>` the item would put every later writer of that page, and its repair rounds, behind
+// the child pages it waits on.
+const WIRING_GROUP_NAME = "Child page wiring";
+const bindsOnly = (rows) => rows.length > 0 && rows.every((r) => r.group === WIRING_GROUP_NAME)
+  && rows.some((r) => r.vk?.type === "relatedpage");
+const itemWritesTo = (declared, rows, identity) => {
+  const target = resolveWritesTo(declared, identity);
+  return bindsOnly(rows) ? target.replace(/^page:/, "wiring:") : target;
+};
 const resolveWritesTo = (declared, identity) => {
   if (!declared) return "";
   if (declared === SPLIT_SCAFFOLD) return SPLIT_SCAFFOLD;
