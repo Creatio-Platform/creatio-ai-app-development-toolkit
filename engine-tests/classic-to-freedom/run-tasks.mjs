@@ -9856,17 +9856,25 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   fs.writeFileSync(startSplit, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
   const cutStart = cliTasks(["--tasks", startDir, "--split", startSplit], MANIFEST);
   // The page's dependencies are dispatched and closed first, so `--start` opens the page task itself.
-  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => /^page:/.test(t.artifact || ""));
-  if (pageTask) clearDepsOf(startDir, pageTask.id, RUN, checklistOpts(MANIFEST));
+  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => (t.artifact || "").startsWith("page:"));
+  check("record files (anti-vacuity): the per-page cut holds a page build task to start",
+    () => pageTask != null, () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 300)] }));
+  clearDepsOf(startDir, pageTask.id, RUN, checklistOpts(MANIFEST));
   const startable = startableTasks(syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)), startDir).startable;
-  const startedPage = pageTask?.artifact.slice("page:".length);
+  const startedPage = pageTask.artifact.slice("page:".length);
   const pageIds = PLAN.evidenceIds.filter((id) => id.startsWith(`${startedPage}#`));
+  check("record files (anti-vacuity): that page publishes evidence ids, its `#quality-gates` record among them, and its task is startable once its dependencies closed",
+    () => pageIds.length > 0 && pageIds.includes(`${startedPage}#quality-gates`) && startable.some((t) => t.id === pageTask.id),
+    () => ({ pageIds, startable: startable.map((t) => [t.id, t.artifact]) }));
   for (const f of RECORD_FILES) fs.rmSync(path.join(startBase, f), { force: true });
-  const started = pageTask ? cliTasks(["--tasks", startDir, "--start", pageTask.id], MANIFEST) : null;
+  const started = cliTasks(["--tasks", startDir, "--start", pageTask.id], MANIFEST);
+  check("record files: `--start` on the page build task marks it in-progress and hands back its dispatch token",
+    () => started.status === 0 && readTaskDir(startDir).find((t) => t.id === pageTask.id)?.status === "in-progress"
+      && (started.stdout || "").includes(`DISPATCH TOKEN for \`${pageTask.id}\``),
+    () => ({ status: started.status, stdout: (started.stdout || "").slice(0, 400), stderr: started.stderr }));
   check("record files: `--start` on a page build task writes them too — `evidence.json` and `judge.json` hold every evidence id of THAT page, its `#quality-gates` record included",
-    () => started?.status === 0 && startable.some((t) => t.id === pageTask.id) && pageIds.includes(`${startedPage}#quality-gates`)
-      && ["evidence.json", "judge.json"].every((f) => pageIds.every((id) => Object.hasOwn(readJson(startBase, f), id))),
-    () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 200)], startable: startable.map((t) => t.artifact), task: pageTask && [pageTask.id, pageTask.artifact], pageIds, status: started?.status, stderr: started?.stderr, state: recordState(startBase) }));
+    () => ["evidence.json", "judge.json"].every((f) => pageIds.every((id) => Object.hasOwn(readJson(startBase, f), id))),
+    () => ({ task: [pageTask.id, pageTask.artifact], pageIds, state: recordState(startBase) }));
   fs.rmSync(startBase, { recursive: true, force: true });
 
   // `--handoff` keeps them current too: the fresh session resumes into a folder whose record files exist.
