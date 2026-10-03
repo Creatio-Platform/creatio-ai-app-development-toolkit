@@ -81,7 +81,7 @@ class AttributionPolicyTests(unittest.TestCase):
         paths = shipped_instruction_paths()
         # Act
         violations = [
-            str(path.relative_to(ROOT)) for path in paths
+            path.relative_to(ROOT).as_posix() for path in paths
             if UNAVAILABLE_SKILL in path.read_text(encoding="utf-8").lower()
         ]
         # Assert
