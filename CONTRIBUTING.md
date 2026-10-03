@@ -30,6 +30,19 @@ Pull requests are welcome. Before opening one:
 
 By submitting a pull request you agree that your contribution is licensed under the same MIT License as the rest of the repository (see [LICENSE](LICENSE)).
 
+## Attribution Policy Maintenance
+
+Toolkit maintainers own the `company-agent-policy` sections in `AGENTS.md` and `CLAUDE.md`.
+Update both sections together and advance the policy version when the contract changes. External
+policy synchronization must go through a pull request and the same CI checks as other changes.
+The public Toolkit must not require internal attribution tooling that its release does not ship.
+Host-specific attribution integrations remain responsible for their own metadata and trailer behavior.
+
+Run `python -m unittest discover -s tests -p 'test_attribution_policy.py'` before publishing a policy
+update. The tests check matching policy blocks, conditional host integration, and shipped instruction
+files for unavailable attribution skill references. The existing PR test workflow discovers this file
+automatically. Verify the same rules against the assembled release before publishing it.
+
 ## Dependencies
 
 Code the release ships (`skills/`, `hooks/` and `runtime/` from `plugin_runtime`, plus `installer/` from
