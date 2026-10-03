@@ -16,7 +16,7 @@ INSTRUCTION_SUFFIXES = {".md", ".mdc", ".yaml", ".yml"}
 
 
 def shipped_instruction_paths():
-    """Read host instructions and prompts from the inventory used to build releases."""
+    """Read host instructions and prompts from the release manifest."""
     manifest = json.loads((ROOT / ".release-manifest.json").read_text(encoding="utf-8"))
     paths = {ROOT / "CLAUDE.md"}
     for entries in manifest.values():
