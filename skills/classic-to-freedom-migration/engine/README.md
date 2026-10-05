@@ -184,7 +184,10 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   one. Each read-modify-write of `timings.json` (closing finished clocks on every sync; reading the clocks, checking
   the one-writer rule and opening a clock on `--start`) holds `timings.json.lock`, created exclusively: a second
   engine process waits up to 2 s and then refuses (`timings-locked`, exit 2, nothing written) instead of writing the
-  clocks it read and dropping the first one's. A lock older than 30 s was left by a killed run and is taken over.
+  clocks it read and dropping the first one's. A lock older than 30 s was left by a killed run and is taken over;
+  a lock whose token could not be written is removed at once and the write's own error reported. A sync closes only
+  the clocks that were already open when it read the task files, so a task re-started by another process after
+  that read keeps its new clock.
   A ledger file another program holds open (an antivirus scan, an editor) is waited on for about 1.6 s, far
   longer than the opportunistic record-file merge waits; still busy after that, the command refuses
   (`ledger-busy`, exit 2) naming the file instead of throwing, and a re-run completes the write. `--add` under a
@@ -595,7 +598,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `designspec.mjs` — render the plan / design spec / checklist / verify table as Markdown.
 - `reads.mjs` — `--reads`: which stand reads the verify gate needs and the file each raw response goes into, derived from the checklist walk. Writes `reads/index.json`; composes nothing.
 - `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
-- `fsatomic.mjs` — `writeFileAtomic` (temp file + rename, retried while Windows reports the target busy: about 1.6 s for a ledger write, about 150 ms for the `reads.mjs` merge; a ledger file still busy throws `FileBusyError`), shared by `reads.mjs` and `tasks.mjs`.
+- `fsatomic.mjs` — `writeFileAtomic` (temp file + rename, retried while Windows reports the target busy: about 1.6 s for a ledger write, about 150 ms for the `reads.mjs` merge; a ledger file still refused throws `FileBusyError`, carrying the last rename error's own code), shared by `reads.mjs` and `tasks.mjs`.
 - `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
 - `diagnostics.mjs` — `node diagnostics.mjs --environment <name> [--json]`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus branch/commit: from git when the install is a checkout, else from the Claude Code registry — `installed_plugins.json` for the commit, the marketplace's `source.ref` for the branch), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account. `--json` prints the same values as one object — `manifest.runDiagnostics`, which `--plan` renders as the plan's own `### Run diagnostics` block and leaves out of the plan version.

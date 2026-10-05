@@ -36,45 +36,54 @@ export const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuff
 export const tempPathFor = (full) => path.join(path.dirname(full),
   `.${path.basename(full)}.${process.pid}.${Date.now()}.${randomBytes(3).toString("hex")}.tmp`);
 
-// Whether the rename happened within `budget`. Any error other than a busy file is thrown to the caller.
-export function renameWithRetry(temp, full, budget = MERGE_RENAME) {
+// Null once the rename happened within `budget`, else the error the LAST attempt raised: a caller that gives up
+// reports the code the OS actually gave, not one it assumed. Any error other than a busy file is thrown at once.
+function renameRefusal(temp, full, budget) {
+  let last = null;
   for (let attempt = 1; attempt <= budget.attempts; attempt++) {
     try {
       fs.renameSync(temp, full);
-      return true;
+      return null;
     } catch (e) {
       if (!isRenameLockError(e)) {
         throw e;
       }
+      last = e;
       if (attempt < budget.attempts) {
         pauseSync(budget.pauseMs(attempt));
       }
     }
   }
-  return false;
+  return last;
 }
 
-// A ledger file another process kept open through the whole ledger budget. Its message is the refusal a person
-// reads, so a caller that only prints `e.message` still names the file and the remedy. `code` stays EBUSY, the
-// code a caller testing for a busy file already checks.
+// Whether the rename happened within `budget`. Any error other than a busy file is thrown to the caller.
+export const renameWithRetry = (temp, full, budget = MERGE_RENAME) => renameRefusal(temp, full, budget) === null;
+
+// A ledger file the OS refused to replace through the whole ledger budget. EPERM / EACCES / EBUSY is what Windows
+// raises for a file another process holds open, and also for a target that can never be replaced (read-only, no
+// delete right), and the two cannot be told apart from here. So the error keeps the OS's own `code` and carries
+// the last rename error as `cause`, and its message, which a caller that prints only `e.message` shows a person,
+// names that code, the attempts, the file and the re-run.
 export class FileBusyError extends Error {
-  constructor(file) {
-    super(`another process holds ${file}; re-run`);
-    this.code = "EBUSY";
+  constructor(file, cause, attempts) {
+    super(`rename refused (${cause.code}) after ${attempts} attempts replacing ${file}; re-run`, { cause });
+    this.code = cause.code;
     this.file = file;
   }
 }
 
 // Replaces `full` with exactly `text` (the same bytes `fs.writeFileSync(full, text)` would write), or throws and
-// leaves `full` as it was. A target that stays busy through the ledger budget throws `FileBusyError`: the caller
-// asked for the file to hold `text`, and returning normally would tell it that it does. The temp file never
+// leaves `full` as it was. A target the OS keeps refusing through the ledger budget throws `FileBusyError`: the
+// caller asked for the file to hold `text`, and returning normally would tell it that it does. The temp file never
 // outlives the call.
 export function writeFileAtomic(full, text) {
   const temp = tempPathFor(full);
   try {
     fs.writeFileSync(temp, text);
-    if (!renameWithRetry(temp, full, LEDGER_RENAME)) {
-      throw new FileBusyError(full);
+    const refused = renameRefusal(temp, full, LEDGER_RENAME);
+    if (refused) {
+      throw new FileBusyError(full, refused, LEDGER_RENAME.attempts);
     }
   } finally {
     fs.rmSync(temp, { force: true });

@@ -3130,32 +3130,59 @@ function takeOverStaleLock(lock, staleMs) {
   fs.rmSync(aside, { force: true });
 }
 
+// Writes this holder's token into the lock it just created. A write that fails leaves a lock with no token, which
+// every process, this one included, would read as another holder's for the whole stale threshold; so the lock is
+// closed and removed, and the write's own error is thrown. It is thrown outside `createLock`'s classification, so
+// an EPERM / EACCES from the write is never mistaken for a held lock.
+function writeLockToken(lock, fd, token) {
+  try {
+    fs.writeSync(fd, token);
+  } catch (e) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // The write's error is the one the caller needs; a close failing after it adds nothing.
+    }
+    fs.rmSync(lock, { force: true });
+    throw e;
+  }
+  fs.closeSync(fd);
+}
+
+// One `wx` create: the fd once this process holds the lock, null while another process does. Any other failure is
+// thrown. A denial with no lock file is retried ONCE at once: the previous holder's delete can finish between the
+// failed create and the check. Refused twice running, the folder itself refuses the write, and the real error goes
+// to the caller instead of a `timings-locked` refusal naming a lock no process holds.
+function createLock(lock, retryDenied = true) {
+  try {
+    return fs.openSync(lock, "wx");
+  } catch (e) {
+    const failure = lockFailure(lock, e);
+    if (failure === "held") {
+      return null;
+    }
+    if (failure === "denied" && retryDenied) {
+      return createLock(lock, false);
+    }
+    throw e;
+  }
+}
+
 function acquireTimingsLock(lock, { waitMs, staleMs }) {
   const token = `${process.pid}-${randomBytes(6).toString("hex")}`;
   const started = Date.now();
   let pause = LOCK_POLL_MS;
-  let denied = false;
   for (;;) {
-    try {
-      const fd = fs.openSync(lock, "wx");
-      try { fs.writeSync(fd, token); } finally { fs.closeSync(fd); }
+    const fd = createLock(lock);
+    if (fd !== null) {
+      writeLockToken(lock, fd, token);
       return token;
-    } catch (e) {
-      const failure = lockFailure(lock, e);
-      if (failure === "other") throw e;
-      // A denial with no lock file is retried ONCE at once: the previous holder's delete can finish between the
-      // failed create and the check. Refused twice running, the folder itself refuses the write, and the real error
-      // goes to the caller instead of a `timings-locked` refusal naming a lock no process holds.
-      if (failure === "denied") {
-        if (denied) throw e;
-        denied = true;
-        continue;
-      }
-      denied = false;
     }
     takeOverStaleLock(lock, staleMs);
     const waited = Date.now() - started;
-    if (waited >= waitMs) throw new TimingsLockedError(lock, waited);
+    if (waited >= waitMs) {
+      throw new TimingsLockedError(lock, waited);
+    }
     pauseSync(Math.min(pause, waitMs - waited));
     pause = Math.min(pause * 2, LOCK_POLL_MAX_MS);
   }
@@ -3191,15 +3218,24 @@ function ledgerRefusal(e) {
 
 // CLOSE the clocks of every task that finished since the last pass. A task closed with no open clock records
 // nothing — it was never dispatched through the engine, and a duration nobody measured would poison the forecast.
-function closeClocks(dir, tasks, now, limits) {
-  return withTimingsLock(dir, () => closeClocksLocked(dir, tasks, now), limits);
+// `seen` is the open clocks as they stood BEFORE the caller read the task files that `tasks` was built from. The
+// statuses in `tasks` were read outside the lock, so a task read as finished may have been re-opened and started
+// again by another process since; that new clock is not the one the finished file answers for. Only a clock
+// already open before the read is closed. A clock opened after it stays running, and the next pass, which reads
+// the file again, closes it once its task is finished.
+function closeClocks(dir, tasks, now, seen, limits) {
+  return withTimingsLock(dir, () => closeClocksLocked(dir, tasks, now, seen), limits);
 }
-function closeClocksLocked(dir, tasks, now) {
+// The same clock: opened at the same moment with the same token. A re-start always opens a new clock.
+const sameClock = (a, b) => !!b && a.startedAt === b.startedAt && (a.token || "") === (b.token || "");
+function closeClocksLocked(dir, tasks, now, seen) {
   const state = readTimingsFile(dir);
   let changed = false;
   for (const t of tasks) {
     const clock = state.running[t.id];
-    if (!SETTLED.has(t.status) || !clock?.startedAt) continue;
+    if (!SETTLED.has(t.status) || !clock?.startedAt || !sameClock(clock, seen[t.id])) {
+      continue;
+    }
     delete state.running[t.id];
     changed = true;
     const minutes = (new Date(now) - new Date(clock.startedAt)) / 60000;
@@ -4612,6 +4648,8 @@ function applyPlanStatuses(merged, decisions) {
   return [];
 }
 export function syncTaskDir(dir, result, opts = {}, split = null) {
+  // Read before any task file is, so every clock in it was open when the statuses below were read.
+  const seenClocks = readTimingsFile(dir).running;
   const fresh = taskSetFor(dir, result, opts, split);
   // A refused split writes NOTHING. Half a folder schedules half a plan and silently drops the rest, which is the
   // failure the coverage check exists to prevent.
@@ -4627,7 +4665,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   // A ledger file kept busy past the rename budget is a refusal too, with the difference `REFUSED_LEDGER_BUSY`
   // states: what was written before it stays written, and the re-run derives every file again.
   try {
-    closeClocks(dir, merged.tasks, opts.now || new Date().toISOString(), opts.timingsLock);
+    closeClocks(dir, merged.tasks, opts.now || new Date().toISOString(), seenClocks, opts.timingsLock);
     attachDispatch(merged, dir);
     // AFTER both: a residual only closes its task if somebody was dispatched for it, which is what `attachDispatch`
     // reads off the clocks. The parent's own clock is untouched — `partial` already settled it, and `done` is the

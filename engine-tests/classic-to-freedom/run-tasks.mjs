@@ -10801,10 +10801,26 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     const waited = Date.now() - t0;
     check("atomic (T1, ledger budget): a ledger file busy on every rename is tried LEDGER_RENAME.attempts times over at least 1 s — far past the merge's RENAME_ATTEMPTS — and then refused as `FileBusyError` naming the file and the re-run, the file unchanged",
       () => held.error instanceof FileBusyError && held.error.code === "EBUSY" && held.error.file === f
-        && held.error.message === `another process holds ${f}; re-run`
+        && held.error.message === `rename refused (EBUSY) after ${LEDGER_RENAME.attempts} attempts replacing ${f}; re-run`
         && LEDGER_RENAME.attempts > RENAME_ATTEMPTS && renames === LEDGER_RENAME.attempts && waited >= 1000
         && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
       () => ({ error: held.error?.message, renames, waited, temps: tempsIn(d) }));
+    // A target the OS refuses for good (read-only, no delete right) raises the same codes a busy file does. The
+    // error has to carry the code the OS gave, not a synthetic EBUSY, and the LAST attempt's error as its cause.
+    for (const code of ["EPERM", "EACCES"]) {
+      const raised = [];
+      const refused = withStub("renameSync", () => {
+        const e = busy(code);
+        raised.push(e);
+        throw e;
+      }, () => attempt(() => writeFileAtomic(f, "next\n")));
+      check(`atomic (T1, real code): a rename refused with ${code} on every attempt throws \`FileBusyError\` keeping ${code} as its code and the last rename error as its cause, its message naming the code, the attempts, the file and the re-run`,
+        () => refused.error instanceof FileBusyError && refused.error.code === code && refused.error.cause === raised.at(-1)
+          && raised.length === LEDGER_RENAME.attempts
+          && refused.error.message === `rename refused (${code}) after ${LEDGER_RENAME.attempts} attempts replacing ${f}; re-run`
+          && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+        () => ({ error: refused.error?.message, code: refused.error?.code, raised: raised.length, temps: tempsIn(d) }));
+    }
     let tries = 0;
     const longer = withStub("renameSync", (real, ...args) => {
       tries += 1;
@@ -10957,6 +10973,69 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
         && after.running[other.id]?.token === "tok-concurrent-start" && !after.running[id]
         && after.samples.length === samplesBefore + 1 && after.samples.at(-1).id === id,
       () => ({ started: started.started?.id, other: other?.id, lockOpens, running: after.running, samples: after.samples.map((s) => s.id) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5c — `closeClocks` decides from task files read BEFORE it takes the lock. A task this sync read as finished can
+  // be re-opened and re-started by another process between that read and the lock (its cells cleared, then
+  // `--start`). That clock is not the one the finished file answers for, so the close must leave it running; the
+  // clock of a task that genuinely finished while it ran is still closed into a sample.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("close-stale-read"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    const m = clearDepsOf(d, id, RUN, OPTS);
+    const started = startTask(d, id, RUN, OPTS, null, at(m + 10));
+    closeCells(d, id);
+    const reopened = readTaskDir(d).find((t) => t.id !== id && t.status === "todo");
+    closeCells(d, reopened.id);
+    const samplesBefore = readTimingsFile(d).samples.length;
+    let lockOpens = 0;
+    const synced = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 1) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = JSON.parse(fs.readFileSync(f, "utf8"));
+        doc.running = { ...doc.running, [reopened.id]: { startedAt: at(m + 12), token: "tok-reopened-start" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => syncTaskDir(d, RUN, { ...OPTS, now: at(m + 15) }));
+    const after = readTimingsFile(d);
+    check("race (T5c, anti-vacuity): the sync read the re-opened task as finished — the clock below is one a stale read would close",
+      () => synced.tasks?.find((t) => t.id === reopened.id)?.status === "done",
+      () => ({ status: synced.tasks?.find((t) => t.id === reopened.id)?.status, refusal: synced.refusal }));
+    check("race (T5c): a clock another process opens after the sync read the task files, before `closeClocks` takes the lock, survives the close although the sync read that task as finished — and the genuinely finished task's clock is still closed into a sample",
+      () => started.started?.id === id && lockOpens >= 1 && !synced.refused
+        && after.running[reopened.id]?.token === "tok-reopened-start" && !after.samples.some((x) => x.id === reopened.id)
+        && !after.running[id] && after.samples.length === samplesBefore + 1 && after.samples.at(-1).id === id,
+      () => ({ lockOpens, running: after.running, samples: after.samples.map((x) => x.id) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T4b — the token write fails after the lock was created. The lock this process just made must not outlive the
+  // failure: left behind, it reads as another process's lock for the whole stale threshold, and every run in that
+  // window waits and refuses, this one included.
+  {
+    const d = path.join(tmp("token-write"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    for (const code of ["EPERM", "ENOSPC"]) {
+      let writes = 0;
+      const t0 = Date.now();
+      const failed = withStub("writeSync", () => {
+        writes += 1;
+        throw busy(code);
+      }, () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+      const waited = Date.now() - t0;
+      check(`lock (T4b): a token write that fails with ${code} after the lock create rethrows the real ${code} at once — not a \`timings-locked\` refusal, nothing run under the lock — and removes the lock it created`,
+        () => failed.error?.code === code && failed.error.lockFile === undefined && failed.value === undefined
+          && writes === 1 && waited < QUICK.waitMs && !fs.existsSync(lockOf(d)),
+        () => ({ error: failed.error?.message, writes, waited, lock: fs.existsSync(lockOf(d)) }));
+    }
+    const t1 = Date.now();
+    const next = attempt(() => withTimingsLock(d, () => "ran", QUICK));
+    check("lock (T4b): the next run takes the lock at once — no orphaned lock to wait out",
+      () => next.value === "ran" && Date.now() - t1 < QUICK.waitMs && !fs.existsSync(lockOf(d)),
+      () => ({ error: next.error?.message }));
     fs.rmSync(path.dirname(d), { recursive: true, force: true });
   }
 }
