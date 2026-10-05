@@ -68,7 +68,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3489,6 +3489,7 @@ function refusalCause(set, dir) {
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
   if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
   if (set.refusal === REFUSED_TIMINGS_LOCKED) return `another engine process is writing the dispatch record in ${dir}`;
+  if (set.refusal === REFUSED_LEDGER_BUSY) return `another process holds ${set.busyFile} open, so it could not be replaced`;
   if (set.refusal === REFUSED_RETIRED) return `recorded cells in ${dir} sit on an aggregate coverage row, and this plan has one row per item`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_STATUS) return "a deliverable status in `manifest.deliverableStatus` does not resolve against decisions.md";
@@ -3527,6 +3528,10 @@ function refusalRemedy(set) {
     return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
   }
   if (set.refusal === REFUSED_TIMINGS_LOCKED) return timingsLockedRemedy(set.lockFile);
+  if (set.refusal === REFUSED_LEDGER_BUSY) {
+    return " Close whatever has that file open (an editor, a viewer, a sync client) or wait for an antivirus scan to"
+      + " finish, then re-run the same command: every file in the folder is derived again, so the re-run completes the write.";
+  }
   if (set.refusal === REFUSED_TIMINGS) {
     return ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
       + " which sub-agent closed which task, so the engine will not replace it.";
@@ -3561,7 +3566,9 @@ function splitRefusalText(set, dir) {
   // its coverage is short — so several hundred characters of JSON shape only bury the rows to place.
   const malformed = set.refusal === REFUSED_UNREADABLE || set.refusal === REFUSED_UNRESOLVED;
   const shape = malformed ? ` Expected shape: ${SPLIT_SHAPE}` : "";
-  return `migrate.mjs: ⛔ NOTHING WRITTEN — ${refusalCause(set, dir)}:\n`
+  // A busy ledger file is the one refusal that comes AFTER writing began, so it does not claim nothing was written.
+  const head = set.refusal === REFUSED_LEDGER_BUSY ? "THE TASK FOLDER WAS NOT FULLY WRITTEN" : "NOTHING WRITTEN";
+  return `migrate.mjs: ⛔ ${head} — ${refusalCause(set, dir)}:\n`
     + set.problems.map((p) => "  · " + p).join("\n")
     + `\n${refusalRemedy(set).trim()}${shape}\n`;
 }
