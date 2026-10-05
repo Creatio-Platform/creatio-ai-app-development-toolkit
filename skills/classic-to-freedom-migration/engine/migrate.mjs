@@ -68,7 +68,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3388,6 +3388,12 @@ function startRefusalText(set, startId, dir) {
   if (set.unread) {
     return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
   }
+  // ONE WRITER OF THE CLOCKS. Another engine process held the clock lock through the whole wait, so this one could
+  // not check the open clocks without racing it.
+  if (set.timingsLocked) {
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened:`
+      + ` another engine process is writing ${TIMINGS_FILE} in ${dir}.${timingsLockedRemedy(set.timingsLocked)}\n`;
+  }
   if (set.statusUnwritable) {
     return `migrate.mjs: ⛔ \`${set.statusUnwritable}\` has no \`status:\` line in its front matter, and the engine updates an orchestrator-authored file one line at a time — starting it would show \`in-progress\` in the index while the file itself recorded nothing. Add a \`status: todo\` line to its front matter, then re-run. Nothing was marked started.\n`;
   }
@@ -3482,6 +3488,7 @@ function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
   if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
+  if (set.refusal === REFUSED_TIMINGS_LOCKED) return `another engine process is writing the dispatch record in ${dir}`;
   if (set.refusal === REFUSED_RETIRED) return `recorded cells in ${dir} sit on an aggregate coverage row, and this plan has one row per item`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_STATUS) return "a deliverable status in `manifest.deliverableStatus` does not resolve against decisions.md";
@@ -3519,6 +3526,7 @@ function refusalRemedy(set) {
     }
     return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
   }
+  if (set.refusal === REFUSED_TIMINGS_LOCKED) return timingsLockedRemedy(set.lockFile);
   if (set.refusal === REFUSED_TIMINGS) {
     return ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
       + " which sub-agent closed which task, so the engine will not replace it.";
@@ -3530,6 +3538,12 @@ function refusalRemedy(set) {
   }
   return ` Fix or remove ${SPLIT_FILE}.`;
 }
+
+// A held clock lock is a wait, not a repair: another `--tasks` run is mid-write, and a lock left by a killed run is
+// taken over by the engine itself once it is stale.
+const timingsLockedRemedy = (lockFile) => ` Re-run once the other \`--tasks\` command has finished. A lock left behind by a`
+  + ` killed run is taken over automatically ${TIMINGS_LOCK.staleMs / 1000} s after it was written; do not delete`
+  + ` ${lockFile} while another run may hold it.`;
 
 // Each decision either drops deliverables, recorded one status per deliverable, or drops none, recorded in the
 // marker list. The open deliverable ids are listed per page.

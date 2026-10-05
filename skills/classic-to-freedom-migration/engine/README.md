@@ -178,6 +178,13 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   0.49 and 1.00 minutes per weight unit, so `TASK_BUDGET.minutesPerWeight` (0.79, that run's median) is the cold
   start and this run's own closed tasks replace it as soon as there are four. The clock lives in the task files
   and the progress block, never in `index.md` — the index is derived and compared byte for byte.
+- **A ledger write is atomic, and the clocks have one writer at a time.** Every file `tasks.mjs` writes into the
+  folder (task files, `index.md`, the frozen split, `timings.json`) is written to a temp file beside it and renamed
+  over it (`fsatomic.mjs`), so a killed process leaves the previous file whole rather than an empty or half-written
+  one. Each read-modify-write of `timings.json` (closing finished clocks on every sync; reading the clocks, checking
+  the one-writer rule and opening a clock on `--start`) holds `timings.json.lock`, created exclusively: a second
+  engine process waits up to 2 s and then refuses (`timings-locked`, exit 2, nothing written) instead of writing the
+  clocks it read and dropping the first one's. A lock older than 30 s was left by a killed run and is taken over.
 - **Under the budget a bucket is ONE task; over it, it is cut on a structural seam.** The monolithic case is one
   chunk of the same contract, not a second code path. Chunks pack greedily along the seams the plan already
   publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row
@@ -584,6 +591,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `designspec.mjs` — render the plan / design spec / checklist / verify table as Markdown.
 - `reads.mjs` — `--reads`: which stand reads the verify gate needs and the file each raw response goes into, derived from the checklist walk. Writes `reads/index.json`; composes nothing.
 - `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
+- `fsatomic.mjs` — `writeFileAtomic` (temp file + rename, retried while Windows reports the target busy), shared by `reads.mjs` and `tasks.mjs`.
 - `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
 - `diagnostics.mjs` — `node diagnostics.mjs --environment <name> [--json]`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus branch/commit: from git when the install is a checkout, else from the Claude Code registry — `installed_plugins.json` for the commit, the marketplace's `source.ref` for the branch), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account. `--json` prints the same values as one object — `manifest.runDiagnostics`, which `--plan` renders as the plan's own `### Run diagnostics` block and leaves out of the plan version.
