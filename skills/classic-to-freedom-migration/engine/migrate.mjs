@@ -15,7 +15,7 @@
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "resourceStrings": { "SomeTabCaption": { "en-US": "…", "fr-FR": "…" }, … }, // optional; the same strings in every Classic culture (get-classic-page-sources)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
-//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity", "resourceStrings" }, … }, // optional; detail body → entity + list columns; resourceStrings → the detail's own strings in every culture (its Caption titles the related list); title = the schema's internal caption, never a display title (#11ii)
+//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity", "resourceStrings" }, … }, // optional; detail body → entity + list columns; resourceStrings → the detail's own strings in every culture (its Caption titles the related list); title = the schema's internal caption, never a display title
 //        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
 //        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
 //        // + optional `"ownSection": "<Section>"` (the child entity owns ANOTHER SECTION: its Classic card stays
