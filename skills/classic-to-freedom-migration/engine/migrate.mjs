@@ -3494,6 +3494,17 @@ function planApprovalRefusal(result, dir, written) {
     + " (orchestrate-build.md 7.1 step 1), then re-run.\n";
 }
 
+// BOTH GATES OF A TASK-FOLDER WRITE, in their order: plan gaps first, then plan approval. Returns the refusal text,
+// or null when the plan passes both. An approval refusal raises its own exit flag here, so the banner on stdout and
+// the exit code stay one verdict.
+function taskWriteRefusal(result, dir, written) {
+  const gapRefusal = planGapRefusal(result);
+  if (gapRefusal) return gapRefusal;
+  const unapproved = planApprovalRefusal(result, dir, written);
+  if (unapproved) approvalRefusalFailure = true;
+  return unapproved;
+}
+
 // WHAT WAS REFUSED, AND WHAT CLEARS IT — one pair of writers, because the build leg, `--route` and `--verify`
 // all refuse on the same three causes and an operator acts on the remedy, not on the banner.
 const handedIn = (set) => set.splitSource === SPLIT_HANDED;
@@ -3607,10 +3618,8 @@ function recordFileLines(records) {
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
-  const gapRefusal = planGapRefusal(result);
-  if (gapRefusal) return gapRefusal;
-  const unapproved = planApprovalRefusal(result, dir, "task folder");
-  if (unapproved) { approvalRefusalFailure = true; return unapproved; }
+  const gated = taskWriteRefusal(result, dir, "task folder");
+  if (gated) return gated;
   // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
