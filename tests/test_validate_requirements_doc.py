@@ -826,8 +826,8 @@ class TestValidateRequirementsDocPortalSection(unittest.TestCase):
         self.assertIn("All external users", str(ctx.exception))
 
     def test_internal_only_doc_keeps_edge_cases_at_8(self):
-        # No portal section → Edge Cases stays `## 8` and the doc is valid (regression
-        # that the number-agnostic Edge Cases handling did not break internal-only plans).
+        # No portal section → Edge Cases stays `## 8` and the doc is valid: the number-agnostic
+        # Edge Cases check accepts an internal-only plan.
         self.assertNotIn("## 8. Portal section", VALID_DOC)
         validate_requirements_doc(VALID_DOC)  # must not raise
 
