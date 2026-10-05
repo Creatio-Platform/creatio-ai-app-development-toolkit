@@ -472,6 +472,8 @@ in full (7.0-7.7) and step 8's driver side; below is what stays in view during t
 (`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
 `AskUserQuestion`, then stop until it is answered.
 
+**7.1 Record the plan approval first** (reference 7.1 step 1): without it `--tasks`, `--start` and `--route` exit 2.
+
 **7.1b Over `TASK_BUDGET.run`? Run `--tasks <migration-folder>/build-tasks --handoff`**, then ASK where the build runs:
 new session, here, or `/compact`.
 

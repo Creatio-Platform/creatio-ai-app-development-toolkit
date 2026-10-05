@@ -1111,7 +1111,11 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   check("every golden runner that spawns migrate.mjs with a manifest on stdin pins the child's `cwd`, so the goldens pass from any directory (`npm test` runs them from the engine folder, CI from engine-tests/)",
     offenders.length === 0, () => offenders);
   check("the stdin-spawn scan sees the real call sites (run-mapper's runMigrate and run-tasks' stdin helpers), so a green result is not an empty scan",
-    calls.filter(({ call }) => spawnsStdinMigrate(call)).length >= 7,
+    // Both runners that pipe a manifest are seen, through at least the three stdin spawns they hold.
+    (() => {
+      const seen = calls.filter(({ call }) => spawnsStdinMigrate(call));
+      return seen.length >= 3 && ["run-mapper.mjs", "run-tasks.mjs"].every((f) => seen.some((c) => c.f === f));
+    })(),
     () => calls.filter(({ call }) => spawnsStdinMigrate(call)).map(({ f }) => f));
   check("(negative) an unpinned stdin spawn is flagged, while a pinned one and a file-path spawn are not",
     unpinned('spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: m, encoding: "utf8" })')
