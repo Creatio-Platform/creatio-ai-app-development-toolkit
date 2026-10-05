@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1330"/><stop offset="0.55" stop-color="#152252"/><stop offset="1" stop-color="#1d2f6b"/>
+    </linearGradient>
+    <linearGradient id="freedom" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f7cff"/><stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="beam1" gradientUnits="userSpaceOnUse" x1="392" y1="214" x2="462" y2="214">
+      <stop offset="0" stop-color="#6ea8ff" stop-opacity="0.15"/><stop offset="1" stop-color="#8ab4ff" stop-opacity="1"/>
+    </linearGradient>
+    <linearGradient id="beam2" gradientUnits="userSpaceOnUse" x1="742" y1="214" x2="812" y2="214">
+      <stop offset="0" stop-color="#6ea8ff" stop-opacity="0.15"/><stop offset="1" stop-color="#a78bfa" stop-opacity="1"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="420" fill="url(#bg)"/>
+  <g opacity="0.10" stroke="#9db4ff" stroke-width="1">
+    <path d="M0 60H1200M0 120H1200M0 180H1200M0 240H1200M0 300H1200M0 360H1200"/>
+    <path d="M60 0V420M180 0V420M300 0V420M420 0V420M540 0V420M660 0V420M780 0V420M900 0V420M1020 0V420M1140 0V420"/>
+  </g>
+
+  <!-- Freedom UI web page -->
+  <g>
+    <rect x="70" y="100" width="300" height="228" rx="12" fill="#0a1130" stroke="#6d81c4" stroke-width="1.6"/>
+    <rect x="70" y="100" width="300" height="36" rx="12" fill="#16224d"/>
+    <rect x="70" y="124" width="300" height="12" fill="#16224d"/>
+    <g fill="#6d81c4"><circle cx="90" cy="118" r="4"/><circle cx="104" cy="118" r="4"/><circle cx="118" cy="118" r="4"/></g>
+    <rect x="140" y="112" width="140" height="12" rx="6" fill="#0a1130"/>
+    <g fill="#1b2a5b">
+      <rect x="90" y="152" width="124" height="30" rx="7"/><rect x="226" y="152" width="124" height="30" rx="7"/>
+      <rect x="90" y="192" width="124" height="30" rx="7"/><rect x="226" y="192" width="124" height="30" rx="7"/>
+      <rect x="90" y="234" width="260" height="76" rx="9"/>
+    </g>
+    <g fill="#6d81c4">
+      <rect x="100" y="163" width="70" height="8" rx="4"/><rect x="236" y="163" width="84" height="8" rx="4"/>
+      <rect x="100" y="203" width="88" height="8" rx="4"/><rect x="236" y="203" width="60" height="8" rx="4"/>
+      <rect x="102" y="248" width="110" height="8" rx="4"/>
+      <rect x="102" y="268" width="226" height="6" rx="3"/><rect x="102" y="282" width="196" height="6" rx="3"/><rect x="102" y="296" width="150" height="6" rx="3"/>
+    </g>
+  </g>
+  <text x="220" y="368" fill="#8ea3d8" font-size="17" letter-spacing="2.5" text-anchor="middle">FREEDOM UI WEB PAGE</text>
+
+  <path d="M392 214H456" stroke="url(#beam1)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M462 214l-14-7v14z" fill="#8ab4ff"/>
+
+  <!-- Converter, no feature flag -->
+  <g>
+    <g filter="url(#glow)">
+      <rect x="484" y="150" width="236" height="128" rx="14" fill="#17295a" stroke="#8ab4ff" stroke-width="2"/>
+    </g>
+    <text x="602" y="186" fill="#c9d6ff" font-size="13" letter-spacing="0.6" text-anchor="middle" font-family="SFMono-Regular, Menlo, monospace">mobile-page-converter</text>
+    <g opacity="0.55">
+      <rect x="520" y="208" width="64" height="32" rx="16" fill="#0e1735" stroke="#50638f" stroke-width="2"/>
+      <circle cx="537" cy="224" r="10" fill="#50638f"/>
+      <text x="598" y="230" fill="#6b7a9f" font-size="15" font-family="SFMono-Regular, Menlo, monospace">--enable</text>
+    </g>
+    <path d="M512 250L694 198" stroke="#f87171" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+  <text x="602" y="134" fill="#9db4ff" font-size="14" letter-spacing="1.4" text-anchor="middle">AVAILABLE BY DEFAULT</text>
+  <text x="602" y="368" fill="#8ea3d8" font-size="17" letter-spacing="2.5" text-anchor="middle">NO FEATURE FLAG</text>
+
+  <path d="M742 214H806" stroke="url(#beam2)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M812 214l-14-7v14z" fill="#a78bfa"/>
+
+  <!-- Freedom UI mobile page -->
+  <g>
+    <rect x="850" y="50" width="168" height="282" rx="26" fill="#101a3f" stroke="url(#freedom)" stroke-width="2.5"/>
+    <rect x="906" y="62" width="56" height="8" rx="4" fill="#1b2a5b"/>
+    <rect x="864" y="80" width="140" height="36" rx="10" fill="url(#freedom)" opacity="0.9"/>
+    <rect x="876" y="92" width="70" height="12" rx="6" fill="#ffffff" opacity="0.85"/>
+    <g fill="#1b2a5b">
+      <rect x="864" y="128" width="140" height="30" rx="8"/><rect x="864" y="166" width="140" height="30" rx="8"/>
+      <rect x="864" y="204" width="140" height="30" rx="8"/><rect x="864" y="242" width="140" height="56" rx="9"/>
+    </g>
+    <g fill="#6f8ad6">
+      <rect x="874" y="139" width="70" height="8" rx="4"/><rect x="874" y="177" width="90" height="8" rx="4"/>
+      <rect x="874" y="215" width="60" height="8" rx="4"/>
+      <rect x="874" y="254" width="104" height="6" rx="3"/><rect x="874" y="268" width="84" height="6" rx="3"/><rect x="874" y="282" width="96" height="6" rx="3"/>
+    </g>
+    <g filter="url(#glow)">
+      <circle cx="1020" cy="310" r="26" fill="#0f2a22" stroke="#34d399" stroke-width="3"/>
+      <path d="M1007 310l9 9 17-19" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+  <text x="934" y="368" fill="#c9d6ff" font-size="17" letter-spacing="2.5" text-anchor="middle">MOBILE PAGE</text>
+</svg>

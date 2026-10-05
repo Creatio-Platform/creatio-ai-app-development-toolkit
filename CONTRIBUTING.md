@@ -30,6 +30,58 @@ Pull requests are welcome. Before opening one:
 
 By submitting a pull request you agree that your contribution is licensed under the same MIT License as the rest of the repository (see [LICENSE](LICENSE)).
 
+## Attribution Policy Maintenance
+
+Toolkit maintainers own the `company-agent-policy` sections in `AGENTS.md` and `CLAUDE.md`.
+Update both sections together and advance the policy version when the contract changes. External
+policy synchronization must go through a pull request and the same CI checks as other changes.
+The public Toolkit must not require internal attribution tooling that its release does not ship.
+Host-specific attribution integrations remain responsible for their own metadata and trailer behavior.
+
+Run `python -m pytest tests/test_attribution_policy.py` before publishing a policy update. The tests
+check matching policy blocks, conditional host integration, and shipped instruction files, manifests
+and hook scripts for `$skill-name` references that the release does not ship. The existing PR test workflow discovers this file
+automatically. Verify the same rules against the assembled release before publishing it.
+
+## Dependencies
+
+Code the release ships (`skills/`, `hooks/` and `runtime/` from `plugin_runtime`, plus `installer/` from
+`release_extras` in `.release-manifest.json`) imports only the standard library and files shipped next to
+it: it runs on the developer's machine with no install step. The other shipped entries, `.github/plugin`
+included, carry data only. CI, test and maintenance code (`.github/workflows/`, `scripts/`,
+`engine-tests/`, `tests/`) may take npm dev dependencies.
+The reasoning, the vendored-parser exception and the exact boundary are in
+[`docs/engine-zero-dependency-decision.md`](docs/engine-zero-dependency-decision.md).
+
+## Comments Describe the Code, Not Its Review History
+
+A comment, a test's check title and a shipped reference doc state the rule or invariant that holds
+right now. Who found a defect, in which ticket, pull request or review round, how severe it was
+called and how the code behaved before the fix belong to the issue tracker and the pull request
+thread, which keep that history already and keep it searchable.
+
+So, in any comment, check title or doc under `skills/`, `runbooks/`, `context/` or `engine-tests/`:
+
+- No ticket key (`ENG-12345`), pull request number, review round, severity label or person's handle.
+- No `before the fix`, `previously`, `used to`, `no longer` or `regression` narrative.
+- Write the rule the code enforces and why it must hold. If a block says only what changed and
+  nothing about what must be true, delete it.
+
+Rewrite, do not strip: a block that carries both a rule and its history keeps the rule.
+
+`tests/test_comment_hygiene.py` enforces this on every pull request. It exempts the records whose
+subject *is* the history — `RELEASE-NOTES.md`, the decision records under `docs/` and `.ai/specs/`.
+If you add such a record, add its path to that test's `EXEMPT_PATHS`.
+
+
+## Cutting a Release
+
+Maintainers cut a release with one release preparation PR: the `RELEASE-NOTES.md` section, a banner under
+`docs/assets/` and the manifest bump from `node scripts/bump-version.js X.Y.Z`. Merging it runs the `Release`
+workflow. The step-by-step procedure is the repository skill
+[`.claude/skills/toolkit-release/SKILL.md`](.claude/skills/toolkit-release/SKILL.md): Claude Code loads it in
+this repository on "cut a release", and any other agent or person can follow the same file.
+
 ## Code of Conduct
 
 This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating you agree to uphold it. Report unacceptable behavior to **support@creatio.com**.

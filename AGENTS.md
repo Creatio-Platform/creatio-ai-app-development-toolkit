@@ -431,15 +431,16 @@ Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_d
 
 Notes for each release live in `RELEASE-NOTES.md` (canonical file at the repo root). Add a `## X.Y.Z (YYYY-MM-DD)` section at the top of the file in a separate PR before triggering the release workflow. Subsections (`###`) are free-form per release (Features, Bug Fixes, Migration Notes, etc.).
 
-<!-- BEGIN MANAGED SECTION: company-agent-policy v1.1.0 -->
-<!-- DO NOT EDIT THIS SECTION MANUALLY. -->
+<!-- BEGIN MANAGED SECTION: company-agent-policy v1.2.0 -->
+<!-- Maintained by Toolkit maintainers; update both policy blocks together and run tests/test_attribution_policy.py. -->
 
-## Required Workflow
-Attribution of AI-authored changes is handled automatically by the installed Claude Code tooling hooks (Pre/PostToolUse events) — no manual skill or marker command is required for normal work.
+## AI Change Attribution
+The public Toolkit does not bundle an AI change-attribution integration or require an attribution skill. Attribution depends on the coding host and any separately installed company tooling.
 
 The agent must:
-1. Let the installed hooks record every file the agent creates or modifies.
-2. Allow the hooks to manage the `AI agents: ...` commit trailer automatically.
-3. Avoid running manual attribution commands during normal work.
+1. Follow applicable repository-specific attribution instructions when their tooling is available.
+2. If the host has an installed attribution integration, let it record edits according to its own documented contract. Claude Code hooks apply only to Claude Code sessions with those hooks installed; do not assume they run in Codex, Cursor, or GitHub Copilot sessions.
+3. If no attribution integration is installed, continue the normal Git workflow. If a separate repository rule requires unavailable attribution tooling, report that specific gap and follow the repository's fallback or ask its maintainer; the Toolkit itself adds no attribution prerequisite.
+4. Do not invent file markers, install attribution hooks, run manual attribution commands, or add `AI agents: ...` commit trailers solely because of this Toolkit policy. A separately installed integration owns whether it emits metadata or trailers; the Toolkit makes no guarantee that it does.
 
 <!-- END MANAGED SECTION -->

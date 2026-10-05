@@ -46,8 +46,8 @@ actually running.
 | A targeted, implementation-ready edit to an existing app | `app-maintenance` | No |
 
 **Being exempt from Gate P/R is not being exempt from telemetry.** That exemption is exactly why those
-flows used to report nothing: the old event names hung off the app-creation gates, so a flow that
-skipped those gates emitted nothing at all, no matter how the instructions were worded. Their
+flows would report nothing if the event names hung off the app-creation gates: a flow that
+skipped those gates would emit nothing at all, no matter how the instructions were worded. Their
 emission points are their own gates instead, listed below.
 
 ## Where each flow's stages land
@@ -72,7 +72,7 @@ allow-list does not recognise.
 | --- | --- | --- | --- | --- |
 | `app-creation` | the BA-style Business Plan is shown in full | Gate R confirmation | per created section/page | `build_started` after Gate R, once runtime context is available |
 | `classic-to-freedom-migration` | the engine-written `plan.md`, presented verbatim | explicit approval, before the first Freedom artifact | per migrated page (`variant=page`) | `plan_blocked` with `variant=engine-gate` on each `⛔` run |
-| `mobile-page-conversion` | the plain-language conversion plan | **Gate M** | per built mobile page; also on **Gate S** registration (`variant=section`) | `plan_blocked` with `variant=feature-disabled` when the `mobile-page-converter` flag is off |
+| `mobile-page-conversion` | the plain-language conversion plan | **Gate M** | per built mobile page; also on **Gate S** registration (`variant=section`) | `plan_blocked` with `variant=converter-unavailable` when clio does not ship `get-mobile-page-conversion-guide` |
 | `branding` | the single final summary | confirmation of that summary | per applied asset (`variant=theme` / `logo`) | palette confirmation is a `user_input_received` |
 | `app-maintenance` | — (skips planning) | — | per applied change | `plan_skipped` at the start makes the skip explicit |
 

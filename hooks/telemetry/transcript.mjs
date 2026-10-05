@@ -37,7 +37,7 @@ function carryForwardBaseline(usage, previous) {
 // `transcript_path`.
 //
 // Read INCREMENTALLY. `Stop` fires per response, and the growth check only skips turns where the file
-// did not change at all, so an active session used to re-parse the whole transcript on nearly every
+// did not change at all, so an active session would re-parse the whole transcript on nearly every
 // response: measured on real transcripts from this machine, 23 ms at 5 MB and 97 ms at 35 MB, paid
 // again each turn. Only the bytes appended since the last read are parsed now, with the remembered
 // offset trusted only while a fingerprint of the file's head still matches — see `fingerprint`.
@@ -165,7 +165,7 @@ function accumulate(usage, text) {
 		}
 		// Validated against the shape clio enforces, not merely lowercased. Claude Code writes
 		// synthetic assistant messages carrying `model: "<synthetic>"`, and clio rejects the WHOLE
-		// event on a malformed token — so one such message after the last real turn used to cost the
+		// event on a malformed token — so one such message after the last real turn would cost the
 		// floor, the tier this design calls guaranteed, for the entire session. An unusable value is
 		// skipped rather than assigned, which keeps the last real model instead of overwriting it.
 		if (typeof message.model === 'string' && !MODEL_TOKEN.test(message.model.toLowerCase())) {
