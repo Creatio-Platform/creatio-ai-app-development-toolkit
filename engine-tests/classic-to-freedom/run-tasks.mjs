@@ -4282,6 +4282,26 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
       () => refusedRoute.stdout);
     fs.rmSync(path.dirname(baseU), { recursive: true, force: true });
   }
+  {
+    // A plan with GAPS and no approval of its version: the gaps refusal answers, not the approval one — approving
+    // a plan that cannot be built would send the operator the wrong way. Gaps are checked before approval.
+    const gapped = { ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] };
+    const baseG = path.join(tmp("notbuilt-route-gapped"), "mig");
+    fs.cpSync(baseO, baseG, { recursive: true });
+    const dG = path.join(baseG, "build-tasks");
+    fs.writeFileSync(path.join(baseG, "decisions.md"),
+      "# Decisions And Approvals\n\n## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n");
+    const snap = () => fs.readdirSync(baseG, { recursive: true }).sort()
+      .filter((f) => fs.statSync(path.join(baseG, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(baseG, f), "utf8")]);
+    const before = snap();
+    const gappedRoute = cliUnapproved(["--tasks", dG, "--route"], gapped);
+    check("approval gate (R5): `--tasks --route` on a plan with gaps and no matching approval exits 2 with the PLAN-level gaps refusal, never the not-approved one, and leaves every file of the migration folder byte-identical",
+      () => gappedRoute.status === 2 && /this run has PLAN-level gaps/.test(gappedRoute.stdout || "")
+        && !/not approved/.test(gappedRoute.stdout || "")
+        && repairFilesIn(dG).length === 0 && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: gappedRoute.status, stdout: (gappedRoute.stdout || "").slice(0, 600), repair: repairFilesIn(dG) }));
+    fs.rmSync(path.dirname(baseG), { recursive: true, force: true });
+  }
   const route = cliT(["--tasks", dO, "--route"], MANIFEST);
   const routeCauses = repairCausesIn(dO);
 
@@ -6437,6 +6457,19 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
       () => ({ status: drifted.status, stderr: (drifted.stderr || "").slice(0, 400),
         before: beforeA, after: fs.readdirSync(dirA).sort() }));
     fs.rmSync(baseA, { recursive: true, force: true });
+  }
+
+  {
+    // `--add` writes task files and the index, so it is gated like `--tasks`: no approval of this plan version in
+    // decisions.md means no folder, no index and no declared task.
+    const baseN = tmp("cli-add-unapproved");
+    const dirN = path.join(baseN, "build-tasks");
+    const refused = cliUnapproved(["--tasks", dirN, "--add", declFile({ ...GOOD, id: "cli-add-unapproved" }, "unapproved")], MANIFEST);
+    check("approval gate (R1): `--tasks <fresh dir> --add` with no decisions.md exits 2, names the plan version it expects, and creates no folder and no index",
+      () => refused.status === 2 && /NOTHING WRITTEN — no declared task for a plan that is not approved/.test(refused.stdout || "")
+        && (refused.stdout || "").includes(`\`${RUN.planVersion}\``) && !fs.existsSync(dirN),
+      () => ({ status: refused.status, stdout: (refused.stdout || "").slice(0, 600), stderr: (refused.stderr || "").slice(0, 300), exists: fs.existsSync(dirN) }));
+    fs.rmSync(baseN, { recursive: true, force: true });
   }
 
   const ok = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "good")], MANIFEST);

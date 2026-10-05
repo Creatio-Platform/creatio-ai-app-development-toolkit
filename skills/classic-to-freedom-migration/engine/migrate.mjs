@@ -3995,10 +3995,11 @@ export function repairRoundLines(res, dir, kind) {
 // a run still building them cannot supply. A repair task is recognised by front matter the ENGINE writes, so
 // routing is a mode and never a file a caller authors.
 function runRouteMode(result, dir, opts) {
-  const unapproved = planApprovalRefusal(result, dir, "repair tasks");
-  if (unapproved) { approvalRefusalFailure = true; return unapproved; }
+  // The read-only preflight (dispatch audit, then plan gaps) answers first, so a gapped plan keeps its own refusal.
   const refused = repairPreflight(result, dir);
   if (refused) return refused;
+  const unapproved = planApprovalRefusal(result, dir, "repair tasks");
+  if (unapproved) { approvalRefusalFailure = true; return unapproved; }
   let res;
   // A round that could not be written opened nothing, exactly like the refusal below, so it raises the same flag:
   // the banner on stdout and the exit code are one verdict.
@@ -4436,6 +4437,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
   // be a second opinion on seams the folder froze.
+  // Gated like every other task-folder write: gaps first, then approval, both before the declaration is read.
+  else if (tasksMode && addFile && (planGapRefusal(result) || planApprovalRefusal(result, tasksDir, "declared task"))) {
+    output = planGapRefusal(result);
+    if (!output) { approvalRefusalFailure = true; output = planApprovalRefusal(result, tasksDir, "declared task"); }
+  }
   else if (tasksMode && addFile) {
     let text;
     try { text = fs.readFileSync(addFile, "utf8"); }
