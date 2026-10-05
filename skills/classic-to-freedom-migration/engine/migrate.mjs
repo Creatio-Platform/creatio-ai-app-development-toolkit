@@ -3510,6 +3510,10 @@ const FIXED_REMEDIES = {
     + " Before the first dispatch, record the decision as a `manifest.deliverableStatus` entry for each related list instead.",
   [REFUSED_CUT]: " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
     + " produced it.",
+  [REFUSED_LEDGER_BUSY]: " Close whatever has that file open (an editor, a viewer, a sync client) or wait for an antivirus scan to"
+    + " finish, then re-run the same command: every file in the folder is derived again, so the re-run completes the write.",
+  [REFUSED_TIMINGS]: ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
+    + " which sub-agent closed which task, so the engine will not replace it.",
 };
 
 function refusalRemedy(set) {
@@ -3528,14 +3532,6 @@ function refusalRemedy(set) {
     return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
   }
   if (set.refusal === REFUSED_TIMINGS_LOCKED) return timingsLockedRemedy(set.lockFile);
-  if (set.refusal === REFUSED_LEDGER_BUSY) {
-    return " Close whatever has that file open (an editor, a viewer, a sync client) or wait for an antivirus scan to"
-      + " finish, then re-run the same command: every file in the folder is derived again, so the re-run completes the write.";
-  }
-  if (set.refusal === REFUSED_TIMINGS) {
-    return ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
-      + " which sub-agent closed which task, so the engine will not replace it.";
-  }
   // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
   if (set.refusal === REFUSED_UNRESOLVED) {
     const which = handedIn(set) ? `the file you passed with ${SPLIT_FLAG}` : SPLIT_FILE;
