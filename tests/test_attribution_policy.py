@@ -3,7 +3,6 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,24 +11,52 @@ POLICY_PATTERN = re.compile(
     r"[\s\S]*?<!-- END MANAGED SECTION -->"
 )
 UNAVAILABLE_SKILL = "ensure-ai-commit-attribution"
-INSTRUCTION_SUFFIXES = {".md", ".mdc", ".yaml", ".yml"}
+INSTRUCTION_SUFFIXES = {".md", ".mdc", ".yaml", ".yml", ".json", ".mjs", ".js"}
+SKILL_REFERENCE_PATTERN = re.compile(r"(?<![\w$])\$([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b")
+POLICY_SECTION_HEADING = "## Attribution Policy Maintenance"
 
 
-def shipped_instruction_paths():
-    """Read host instructions and prompts from the release manifest."""
-    manifest = json.loads((ROOT / ".release-manifest.json").read_text(encoding="utf-8"))
-    paths = {ROOT / "CLAUDE.md"}
+def is_instruction_file(path):
+    return path.suffix.lower() in INSTRUCTION_SUFFIXES
+
+
+def shipped_instruction_paths(root=ROOT):
+    """Read host instructions, prompts, manifests and hook scripts from the release manifest."""
+    manifest = json.loads((root / ".release-manifest.json").read_text(encoding="utf-8"))
+    paths = {root / "CLAUDE.md"}
     for entries in manifest.values():
         for entry in entries:
-            path = ROOT / entry
+            path = root / entry
             if path.is_dir():
                 paths.update(
                     child for child in path.rglob("*")
-                    if child.is_file() and child.suffix in INSTRUCTION_SUFFIXES
+                    if child.is_file() and is_instruction_file(child)
                 )
-            elif path.suffix in INSTRUCTION_SUFFIXES:
+            elif path.is_file() and is_instruction_file(path):
                 paths.add(path)
     return sorted(paths)
+
+
+def shipped_skill_names(root=ROOT):
+    return {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
+
+
+def find_unavailable_skill_violations(root=ROOT):
+    """List shipped files that name the unavailable skill or a `$skill` the release does not ship."""
+    shipped = shipped_skill_names(root)
+    violations = []
+    for path in shipped_instruction_paths(root):
+        text = path.read_text(encoding="utf-8")
+        unresolved = {name for name in SKILL_REFERENCE_PATTERN.findall(text) if name not in shipped}
+        if UNAVAILABLE_SKILL in text.lower() or unresolved:
+            violations.append(path.relative_to(root).as_posix())
+    return violations
+
+
+def contributing_policy_section(text):
+    start = text.index(POLICY_SECTION_HEADING)
+    end = text.find("\n## ", start + len(POLICY_SECTION_HEADING))
+    return text[start:] if end == -1 else text[start:end]
 
 
 class AttributionPolicyTests(unittest.TestCase):
@@ -39,30 +66,33 @@ class AttributionPolicyTests(unittest.TestCase):
             root = Path(directory)
             (root / "CLAUDE.md").write_text("Host instructions\n", encoding="utf-8")
             (root / ".release-manifest.json").write_text(
-                json.dumps({"plugin_runtime": ["rules", "skills"]}), encoding="utf-8",
+                json.dumps({"plugin_runtime": ["rules", "skills", "hooks", ".mcp.json"]}), encoding="utf-8",
             )
+            (root / "skills/example/SKILL.md").parent.mkdir(parents=True)
+            (root / "skills/example/SKILL.md").write_text("Use $example-shipped.\n", encoding="utf-8")
+            (root / "skills/example-shipped/SKILL.md").parent.mkdir(parents=True)
+            (root / "skills/example-shipped/SKILL.md").write_text("Shipped skill\n", encoding="utf-8")
             instruction_paths = (
-                "rules/policy.md", "rules/policy.mdc",
+                "rules/policy.md", "rules/UPPER.MD", "rules/policy.mdc",
                 "skills/example/agents/openai.yaml", "skills/example/agents/other.yml",
+                ".mcp.json", "hooks/guard.mjs", "hooks/guard.js",
             )
             for relative in instruction_paths:
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("Host instructions\n", encoding="utf-8")
+            clean = find_unavailable_skill_violations(root)
             for relative in instruction_paths:
-                with self.subTest(path=relative), patch.dict(globals(), ROOT=root):
-                    path = root / relative
-                    path.write_text(f"Before edits, use ${UNAVAILABLE_SKILL}.\n", encoding="utf-8")
-                    # Act
-                    result = unittest.TestResult()
-                    self.__class__(
-                        "test_public_instructions_do_not_reference_unavailable_attribution_skill",
-                    ).run(result)
-                    # Assert
-                    self.assertEqual(result.errors, [], "Every host fixture must be readable")
-                    self.assertEqual(len(result.failures), 1, "Every instruction format must reject the unavailable skill")
-                    self.assertIn(relative, result.failures[0][1], "The guard must identify the offending host instruction")
-                    path.write_text("Host instructions\n", encoding="utf-8")
+                for reference in (f"Before edits, use ${UNAVAILABLE_SKILL}.", "Before edits, use $renamed-attribution."):
+                    with self.subTest(path=relative, reference=reference):
+                        path = root / relative
+                        path.write_text(f"{reference}\n", encoding="utf-8")
+                        # Act
+                        violations = find_unavailable_skill_violations(root)
+                        # Assert
+                        self.assertEqual(clean, [], "Shipped skill references must pass the guard")
+                        self.assertEqual(violations, [relative], "The guard must identify the offending host file")
+                        path.write_text("Host instructions\n", encoding="utf-8")
 
     def test_managed_policy_blocks_match(self):
         # Arrange
@@ -76,14 +106,11 @@ class AttributionPolicyTests(unittest.TestCase):
             blocks.append(matches[0])
         self.assertEqual(blocks[0], blocks[1], "Both hosts must receive the same attribution contract")
 
-    def test_public_instructions_do_not_reference_unavailable_attribution_skill(self):
+    def test_public_instructions_reference_only_shipped_skills(self):
         # Arrange
         paths = shipped_instruction_paths()
         # Act
-        violations = [
-            path.relative_to(ROOT).as_posix() for path in paths
-            if UNAVAILABLE_SKILL in path.read_text(encoding="utf-8").lower()
-        ]
+        violations = find_unavailable_skill_violations()
         # Assert
         self.assertTrue(paths, "The release inventory must include public instructions")
         self.assertEqual(violations, [], "Public instructions must not route to unavailable tooling")
@@ -120,7 +147,8 @@ class AttributionPolicyTests(unittest.TestCase):
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/pr.yml").read_text(encoding="utf-8")
         # Act
-        instructions = contributing.split("## Attribution Policy Maintenance", 1)[-1]
+        self.assertIn(POLICY_SECTION_HEADING, contributing, "CONTRIBUTING.md must keep the policy section")
+        instructions = contributing_policy_section(contributing)
         # Assert
         for clause in (
             "Toolkit maintainers own",

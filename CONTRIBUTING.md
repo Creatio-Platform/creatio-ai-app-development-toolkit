@@ -38,9 +38,9 @@ policy synchronization must go through a pull request and the same CI checks as 
 The public Toolkit must not require internal attribution tooling that its release does not ship.
 Host-specific attribution integrations remain responsible for their own metadata and trailer behavior.
 
-Run `python -m unittest discover -s tests -p 'test_attribution_policy.py'` before publishing a policy
-update. The tests check matching policy blocks, conditional host integration, and shipped instruction
-files for unavailable attribution skill references. The existing PR test workflow discovers this file
+Run `python -m pytest tests/test_attribution_policy.py` before publishing a policy update. The tests
+check matching policy blocks, conditional host integration, and shipped instruction files, manifests
+and hook scripts for `$skill-name` references that the release does not ship. The existing PR test workflow discovers this file
 automatically. Verify the same rules against the assembled release before publishing it.
 
 ## Dependencies
