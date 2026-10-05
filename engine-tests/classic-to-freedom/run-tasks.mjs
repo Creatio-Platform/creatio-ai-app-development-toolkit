@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -10549,7 +10549,11 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       () => held.error?.code === "EBUSY" && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
       () => ({ error: held.error?.message, temps: tempsIn(d) }));
     let renames = 0;
-    const brief = withStub("renameSync", (real, ...args) => { renames += 1; if (renames < RENAME_ATTEMPTS) throw busy("EPERM"); return real(...args); },
+    const brief = withStub("renameSync", (real, ...args) => {
+      renames += 1;
+      if (renames < RENAME_ATTEMPTS) { throw busy("EPERM"); }
+      return real(...args);
+    },
       () => attempt(() => writeFileAtomic(f, "next ✓\n")));
     const plain = path.join(d, "plain.md");
     fs.writeFileSync(plain, "next ✓\n");
@@ -10631,6 +10635,83 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     fs.rmSync(path.dirname(d), { recursive: true, force: true });
   }
 
+  // T3b — the same late lock through the CLI, which renders `--start`'s own refusal rather than the sync's. The
+  // folder is sliced by the CLI so the id is one the CLI's own build holds. A preload in the child process takes the
+  // lock on the second `wx` create: the first is the sync's `closeClocks`, the second is `--start`'s clock write.
+  {
+    const d = path.join(tmp("late-cli"), "build-tasks");
+    cliTasksEarly(["--tasks", d], MANIFEST);
+    const tasks = readTaskDir(d);
+    const id = tasks.find((t) => t.status === "todo" && !(t.dependsOn || []).length)?.id;
+    const preload = path.join(path.dirname(d), "late-lock-preload.mjs");
+    fs.writeFileSync(preload, [
+      'import fs from "node:fs";',
+      "const real = fs.openSync;",
+      "let opens = 0;",
+      "fs.openSync = (p, ...rest) => {",
+      `  if (String(p).endsWith(${JSON.stringify(TIMINGS_LOCK_FILE)}) && rest[0] === "wx" && ++opens === 2) {`,
+      '    const fd = real(p, "wx");',
+      '    fs.writeSync(fd, "late-holder-cli");',
+      "    fs.closeSync(fd);",
+      "  }",
+      "  return real(p, ...rest);",
+      "};",
+      "",
+    ].join("\n"));
+    const timings = path.join(d, TIMINGS_FILE);
+    const before = bytesOf(timings);
+    const lateCli = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, MIGRATE, "-", "--tasks", d, "--start", id],
+      { cwd: DIR, input: JSON.stringify(MANIFEST), encoding: "utf8" });
+    const lateOut = (lateCli.stdout || "") + (lateCli.stderr || "");
+    check("lock (T3b): the CLI answers a lock taken after `--start`'s sync with exit 2 and NOTHING WAS STARTED, not the sync's NOTHING WRITTEN, naming the lock file and another engine process, with no clock opened",
+      () => !!id && lateCli.status === 2 && /NOTHING WAS STARTED/.test(lateOut) && !/NOTHING WRITTEN/.test(lateOut)
+        && lateOut.includes(lockOf(d)) && /another engine process/.test(lateOut)
+        && fs.readFileSync(lockOf(d), "utf8") === "late-holder-cli" && !readTimingsFile(d).running[id] && sameAs(timings, before)
+        && readTaskDir(d).find((t) => t.id === id)?.status === "todo",
+      () => ({ id, status: lateCli.status, out: lateOut.slice(0, 600), running: Object.keys(readTimingsFile(d).running) }));
+    fs.rmSync(lockOf(d));
+    const control = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("lock (T3b, control): with no lock taken, the same `--start` opens the clock — the refusal above is the lock's, not the id's",
+      () => control.status === 0 && !!readTimingsFile(d).running[id],
+      () => ({ status: control.status, out: (control.stdout + control.stderr).slice(0, 600) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T3c — EPERM/EACCES from the `wx` create with NO lock file is the folder refusing the write, not a holder.
+  {
+    const d = path.join(tmp("denied"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const deny = (code) => (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx") throw busy(code);
+      return real(p, ...rest);
+    };
+    for (const code of ["EPERM", "EACCES"]) {
+      const t0 = Date.now();
+      const direct = withStub("openSync", deny(code), () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+      const waited = Date.now() - t0;
+      const synced = withStub("openSync", deny(code), () => attempt(() => syncTaskDir(d, RUN, { ...OPTS, timingsLock: QUICK })));
+      check(`lock (T3c): ${code} from the lock create with no lock file rethrows the real ${code} at once — no \`timings-locked\` refusal, no wait, nothing run under the lock`,
+        () => direct.error?.code === code && direct.value === undefined && waited < QUICK.waitMs
+          && synced.error?.code === code && !fs.existsSync(lockOf(d)),
+        () => ({ direct: direct.error?.code ?? direct.value, waited, synced: synced.error?.code ?? synced.value?.refusal }));
+    }
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const held = withStub("openSync", deny("EPERM"), () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+    check("lock (T3c): EPERM while the lock file exists is still a held lock — the bounded wait ends in `TimingsLockedError` naming it",
+      () => held.error?.lockFile === lockOf(d) && held.error?.code === undefined,
+      () => ({ error: held.error?.message, code: held.error?.code }));
+    fs.rmSync(lockOf(d));
+    let denials = 0;
+    const once = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++denials === 1) throw busy("EPERM");
+      return real(p, ...rest);
+    }, () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+    check("lock (T3c): a single EPERM with no lock file (a holder's delete finishing) is retried once and the lock is then taken",
+      () => once.value === "ran" && denials === 2 && !fs.existsSync(lockOf(d)),
+      () => ({ value: once.value, error: once.error?.message, denials }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
   // T4 — a lock left behind by a killed process, and release on every path.
   {
     const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
@@ -10698,7 +10779,7 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     check("gate (T6): a repair task written by `syncRepairDir` into a fresh folder and closed with no clock is in `dispatch.failing`, and `--start` then refuses with `blockedByDispatch`",
       () => !!rep && set.dispatch.failing.some((t) => t.id === rep.id) && res?.started === null
         && res.blockedByDispatch?.failing.some((t) => t.id === rep.id) && !readTimingsFile(d).running[other.id],
-      () => ({ rep: rep?.id, failing: set.dispatch.failing.map((t) => t.id), refused: res && Object.keys(res).filter((k) => /^blocked/.test(k)) }));
+      () => ({ rep: rep?.id, failing: set.dispatch.failing.map((t) => t.id), refused: res && Object.keys(res).filter((k) => k.startsWith("blocked")) }));
     fs.rmSync(path.dirname(d), { recursive: true, force: true });
   }
 }

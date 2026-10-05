@@ -3090,8 +3090,23 @@ export const TIMINGS_LOCK = Object.freeze({ waitMs: 2000, staleMs: 30000 });
 const LOCK_POLL_MS = 20;
 const LOCK_POLL_MAX_MS = 200;
 // Codes a `wx` create raises while another process holds the lock: EEXIST on every platform, and on Windows
-// EPERM/EACCES while the previous holder's file is still being deleted.
+// EPERM/EACCES while the previous holder's file is still being deleted. EPERM/EACCES are also what a folder the
+// engine cannot write raises, with no lock file anywhere, so those two count as held only while the lock exists.
 const LOCK_HELD_CODES = new Set(["EEXIST", "EPERM", "EACCES"]);
+const LOCK_DENIED_CODES = new Set(["EPERM", "EACCES"]);
+
+// A file being deleted on Windows still answers `stat` (with EPERM), so only ENOENT means there is no lock.
+function lockFileExists(lock) {
+  try { fs.statSync(lock); return true; } catch (e) { return e?.code !== "ENOENT"; }
+}
+
+// Classifies a failed `wx` create: "held" for EEXIST, and for EPERM/EACCES while a lock file exists; "denied" for
+// EPERM/EACCES with no lock file (the folder's own error, not a holder); "other" for anything else.
+function lockFailure(lock, e) {
+  if (!LOCK_HELD_CODES.has(e?.code)) return "other";
+  if (!LOCK_DENIED_CODES.has(e.code) || lockFileExists(lock)) return "held";
+  return "denied";
+}
 
 export class TimingsLockedError extends Error {
   constructor(lockFile, waitedMs) {
@@ -3115,13 +3130,24 @@ function acquireTimingsLock(lock, { waitMs, staleMs }) {
   const token = `${process.pid}-${randomBytes(6).toString("hex")}`;
   const started = Date.now();
   let pause = LOCK_POLL_MS;
+  let denied = false;
   for (;;) {
     try {
       const fd = fs.openSync(lock, "wx");
       try { fs.writeSync(fd, token); } finally { fs.closeSync(fd); }
       return token;
     } catch (e) {
-      if (!LOCK_HELD_CODES.has(e?.code)) throw e;
+      const failure = lockFailure(lock, e);
+      if (failure === "other") throw e;
+      // A denial with no lock file is retried ONCE at once: the previous holder's delete can finish between the
+      // failed create and the check. Refused twice running, the folder itself refuses the write, and the real error
+      // goes to the caller instead of a `timings-locked` refusal naming a lock no process holds.
+      if (failure === "denied") {
+        if (denied) throw e;
+        denied = true;
+        continue;
+      }
+      denied = false;
     }
     takeOverStaleLock(lock, staleMs);
     const waited = Date.now() - started;

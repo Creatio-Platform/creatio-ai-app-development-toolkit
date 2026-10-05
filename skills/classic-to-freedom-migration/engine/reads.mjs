@@ -9,10 +9,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups } from "./designspec.mjs";
 import { slugify } from "./tasks.mjs";
-import { RENAME_ATTEMPTS, isRenameLockError, renameWithRetry, tempPathFor } from "./fsatomic.mjs";
+import { renameWithRetry, tempPathFor } from "./fsatomic.mjs";
 
 // Re-exported: the record-file merge is where the retry budget and the busy-file codes are observed from outside.
-export { RENAME_ATTEMPTS, isRenameLockError };
+export { RENAME_ATTEMPTS, isRenameLockError } from "./fsatomic.mjs";
 
 export const READS_DIR = "reads";
 export const READS_INDEX_FILE = "index.json";
