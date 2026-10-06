@@ -888,15 +888,25 @@ class ShippedWorkflowScriptTests(unittest.TestCase):
         for script in installer.discover_workflow_scripts(ROOT):
             with self.subTest(script=script.name):
                 name = declared[script.relative_to(ROOT).as_posix()]
-                skill_doc = (script.parent / "SKILL.md").read_text(encoding="utf-8")
-                self.assertIn("scriptPath", skill_doc)
-                self.assertIn(f'name: "{name}"', skill_doc)
-                self.assertLess(
-                    skill_doc.index("scriptPath"),
-                    skill_doc.index(f'name: "{name}"'),
-                    f"{script.parent.name}/SKILL.md documents name: before scriptPath — "
-                    "the named form does not resolve on a marketplace-installed Claude Code",
-                )
+                # The call form is documented in SKILL.md or in the reference the step that
+                # runs the workflow sends the agent to; whichever doc names it, scriptPath leads.
+                docs = [script.parent / "SKILL.md",
+                        *sorted((script.parent / "references").glob("*.md"))]
+                documenting = [
+                    (doc, text) for doc in docs
+                    if doc.is_file()
+                    for text in [doc.read_text(encoding="utf-8")]
+                    if f'name: "{name}"' in text
+                ]
+                self.assertTrue(documenting, f"no doc of {script.parent.name} names {name!r}")
+                for doc, text in documenting:
+                    self.assertIn("scriptPath", text, doc.name)
+                    self.assertLess(
+                        text.index("scriptPath"),
+                        text.index(f'name: "{name}"'),
+                        f"{script.parent.name}/{doc.name} documents name: before scriptPath — "
+                        "the named form does not resolve on a marketplace-installed Claude Code",
+                    )
 
 
 class RemoveTomlTableBlockTests(unittest.TestCase):
