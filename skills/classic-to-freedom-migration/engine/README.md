@@ -15,11 +15,13 @@ node migrate.mjs <manifest.json> --spec   # render just the per-page design spec
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
-node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) are startable right now, each with the exact --start command — ask this instead of picking off index.md. Before the first dispatch it (and --tasks, --start) also prints every D<N> in decisions.md that no task's `decisions:` line cites
+node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) are startable right now, each with the exact --start command — ask this instead of picking off index.md
+node migrate.mjs <manifest.json> --tasks <dir> --handoff  # WRITE <dir>/../resume.md so the build loop continues in a FRESH session (orchestrate-build.md 7.1b)
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
-node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves in decisions.md (a `## D13 — …` heading, a `| D13 | … |` table row, or a plain `D13 — …` line in a file with neither) — it never creates a decision, and that refusal IS the safeguard. It writes only the addressed rows, then lists the open rows (in the same task or another) that share a subject with a decided row, each with the `--decide … --row <task>:<n>` command that applies the same answer
-node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else
+node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves in decisions.md (a `## D13 — …` heading, a `| D13 | … |` table row, or a plain `D13 — …` line in a file with neither) — it never creates a decision, and that refusal IS the safeguard. It writes only the addressed rows
+node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --build --row <id>:<n>  # …or answer a `not-built — needs-decision` row "build it": clears its Outcome, records D13 in the task's `decisions:` (`<n>:D13!`), and puts the task back to `todo` so `--next` offers it. Same D<N> guard; built, plan-boundary, already-decided and non-needs-decision rows, and rows of a task still `todo` or `in-progress`, are skipped with a reason. No task file is edited
+node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else (a build-it entry is withdrawn: a still-blank row is `needs-decision` again, a row a builder recorded keeps its record; a row of an `in-progress` task stays blank for its builder; a cell whose `manifest.deliverableStatus` entry still cites D13 is skipped: remove the entry or set it to `build`, then re-run `--tasks`)
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
@@ -46,11 +48,12 @@ three sub-agents have failed at it, so the plan, the stand or the expectation is
 is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
 never reported stale.
 
-**`--reads <dir>` — WHICH reads the verify gate needs, and WHERE each response goes (SKILL.md step 7.4).** The
+**`--reads <dir>` — WHICH reads the verify gate needs, and WHERE each response goes (step 7.4, `../references/orchestrate-build.md`).** The
 list is DERIVED from the same `checklistGroups` walk `--checklist` and `--verify` use, so a page key the checklist
 gates can never be a key nobody was told to read. Four kinds: **two files per published page key** (`meta.json`
 for identity, `bundle.json` for the merged view), a **business-rules** read for the keys carrying a gated rule row
-only, one **reachability** read per distinct on-stand key, and — only when the plan moves any — one **dashboards**
+only, one **reachability** read per distinct on-stand key (for `relatedPage:<Entity>` the file is the `get-related-page-addon`
+response copied whole, matched by the engine against the built child page), and — only when the plan moves any — one **dashboards**
 read per run, since `DashboardMigrationLog` is a stand table no page read can reach. An on-stand key the BUILD
 agent records rather than reads (a card widget the converter placed) is listed as the builder's, not handed to the
 read-only read-back agent as a read it cannot perform.
@@ -60,8 +63,16 @@ the agent still resolves that itself, and a key read against the wrong page come
 
 `<dir>` is the MIGRATION FOLDER — the one holding `build-tasks/` — so the raw responses stay beside the run. The
 engine writes `reads/index.json` and owns every filename in it; page keys carry `:`, `@` and `#`, so the key is
-slugged and the mapping recorded, and nothing downstream parses a filename. It also writes `evidence.json` /
-`judge.json` skeletons with every published evidence id already a key, and never overwrites an existing one. Like
+slugged and the mapping recorded, and nothing downstream parses a filename. It also keeps the `evidence.json` /
+`judge.json` / `recorded.json` record files current with every published id already a key, the same merge every
+`--tasks` / `--next` / `--start` / `--handoff` runs: an id a file lacks is added, a value already filed is never changed or
+dropped, and a file that does not parse as a JSON object on two reads in a row is reported and left as it is. The
+file is replaced with a temp file renamed over it, and the merge re-reads it immediately before the rename, merging
+again onto anything a builder filed in the meantime. That narrows the window in which a builder's write can be lost
+to the gap between that re-read and the rename; it does not remove it, since a builder writes with plain file tools
+and takes no lock. A file that keeps changing, or that another process holds so the rename is refused after a few
+short retries, is reported and left to that writer. A failure to write them is a warning on a task-folder mode's
+answer, never a crash of that mode. Like
 `--tasks`, it WRITES rather than prints, so it refuses a second mode flag instead of losing to it.
 
 **`--verify --from <dir>` — the payload COMPOSED, not handed over.** The other half of that contract: it reads
@@ -95,7 +106,8 @@ writes a folder rather than printing, so silent precedence would report a plan w
 **The plan version.** `--plan` prints `**Plan version:** \`plan-<hash>\`` as the first line of the Overview. It is a
 deterministic short hash over EVERY key the manifest carries — `entity`, `schemas` (package + body CONTENT, in
 order), `planMeta`, and equally `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`,
-`signals` and `behaviourIndex`. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
+`signals` and `behaviourIndex` — except `runDiagnostics`, which describes the machine the plan was made on, so a
+plugin or clio update does not force re-approval. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
 contributes its CONTENT wherever it sits), so the same manifest always yields the same version and re-planning is
 not a new version to approve. An earlier version hashed an ALLOWLIST of three keys, and that is what this replaced:
 the unit set could change materially (a detail marked `editPage:false` drops a whole child page) while the version
@@ -117,15 +129,29 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   49 characters, or a plan row left in no item, is refused with nothing written — and an unclaimed row is named by
   page, with no owner picked for it. The mechanical cut answers to the same rule against its own output, where a
   dropped row is a defect in the slicer rather than a file anybody can correct. Items sharing a `writesTo` are
-  chained automatically. Three seams are checked rather than
+  chained automatically. Six seams are checked rather than
   trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
   (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
   that build the typed pages: routing binds each Type form by the Type column, so a form that is not built yet
   cannot be bound — a 94-item split of a real plan put it second, ahead of both. And an item carrying a page's
-  `Quality gates` rows may not precede an item that still writes that page: a verdict filed on a page that is
-  still being built is not a verdict. That review also WAITS on every writer of its page, which matters precisely
+  judged `Quality gates` row may not precede an item that still writes that page: a verdict filed on a page that is
+  still being built is not a verdict. The page's FILED `Quality gates` row (`quality:ran`) goes in the page's last
+  writer, never in a read-only item or an earlier writer: the design-pass record is filed on the finished page. When
+  an item's `writesTo` names the page, the last such item is that writer, and an item writing another page is
+  refused. When no item declares the page as
+  its `writesTo`, its rows are built inside writers of other pages, and the filed row goes in the last writing item
+  that carries the page's rows. That review also WAITS on every writer of its page, which matters precisely
   because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
+  And a page's `[attribute-virtual] X` row may not sit in a later item than a handler row on that page whose method
+  sets X: each handler row carries the attributes its own body sets (`writesAttrs`, beside the `vk`, so the row
+  digest is untouched), and a handler built before the attribute it writes is inert. The rule follows those
+  recorded writes, not every handler of the page, so an earlier item holding an unrelated handler resolves; a
+  write made any other way than `this.set("X", …)` in the handler's own body is not recorded and not checked.
+  And an item carrying `Child page wiring` rows may not sit before an item that writes a child page those rows bind
+  or the page holding the related lists: a list cannot be bound to a page that is not built yet. An item holding
+  only such rows writes `wiring:<page>`, the artifact the budget cut gives them, so nothing writing the page body
+  waits behind it, and the two `Quality gates` rules do not count it as a writer of the page.
   An item may claim a whole group (`@Form — Custom methods`) or the next N rows of one
   (`@Form — Custom methods[50]`), taken in plan order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
   hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row
@@ -168,8 +194,8 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   row with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject that
   another task also cites is withheld by `--next` and refused by `--start`, naming the source task and row. The
   task's own undecided rows count as sources, so deciding one task's row on a shared subject does not release
-  another task whose row on it is still undecided. `--decide` on the source row releases it, and so does re-opening
-  that row (its `Outcome` cell cleared, its task back to `todo`) or a repair round that builds it. A row with no
+  another task whose row on it is still undecided. `--decide` on the source row releases it — `--decide D<N> --build`
+  re-opens the row for a builder — and so does a repair round that builds it. A row with no
   subject never waits, a plan-boundary row is never open, and a subject no other task cites holds nothing.
 - **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
   exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
@@ -226,6 +252,32 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   whose clock the refresh is what closes, so the un-refreshed folder reads as a dispatch-ledger failure. For the
   same reason it refuses to combine with `--start`, `--route`, `--verify` or `--split`: each writes the folder
   before the answer would print, so one call could only describe a state the reader cannot place.
+- **`--handoff` moves the build loop to a FRESH SESSION.** Every build turn pays for the whole conversation before
+  it, so a driver that planned and built in one session carries discovery and planning into each build turn. The
+  mode writes `resume.md` into the migration folder (the parent of `<dir>`) and copies the manifest beside it as
+  `resume-manifest.json` — the fresh session re-opens the copy, never the planning session's temporary original,
+  and the step-4.2 clean-up deletes it with the other stand-sourced inputs. `resume.md` holds the absolute path of
+  that copy, the migration folder, the environment (`planMeta.environment`), the approved plan version with the
+  `decisions.md` line that approves it, the `Route:` line from `worklog.md`, the `--- progress ---` block, the next
+  task `--next` would name, and ONE copyable resume prompt ending in that `--next` command. Every value is computed
+  from the folder — none is typed by the driver, because a hand-written hand-off note is a prose-only rule. It
+  refreshes the folder as `--next` does, starts nothing and issues no token. Run again from the copy (a resumed
+  session handing off after a repair round) it leaves the copy as it is.
+  It REFUSES — exit **2**, `NOTHING WRITTEN`, no `resume.md` or manifest copy written or changed — in stages, each
+  stage naming every cause it finds, with its fix, before the next one runs:
+  1. the plan has plan-level gaps (the refusal every task-folder mode gives);
+  2. the manifest path does not exist, or the manifest came in on stdin (the copy needs a path to copy from);
+  3. together: the folder was never sliced (no `index.md`; the folder is not created), no `## ` entry of
+     `decisions.md` holds both a `Plan version:` field whose value is exactly the current plan version and a
+     non-empty `Approved by:` field, or the last `Route:` line of `worklog.md` names none of `agent` · `codex` ·
+     `copilot` · `inline` (`Route: TBD` is no route);
+  4. the folder refresh `--next` would refuse — before the first dispatch, a `D<N>` in `decisions.md` that no
+     deliverable status, task `decisions:` entry or `decisionsWithoutDeliverable` cites;
+  5. `--next` would answer `ledger` or `stuck` (it exits 2 on both): the same answer follows the header, and the
+     same stderr gate is raised.
+
+  Like `--next` it refuses to combine with any flag that moves the folder or answers about it (`--next`, `--start`,
+  `--route`, `--verify`, `--split`, `--add`, `--decide`, `--revoke`).
 - **`--start` enforces the queue, not just the ledger.** It refuses a task whose `dependsOn` has not closed, and
   refuses a second token for an artifact a dispatched task is still writing. Both are field comparisons the engine
   makes rather than rules the caller is asked to honour. The second one matters most: with
@@ -250,16 +302,17 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   the index calls it `Step`, which is the queue position and not the same fact as the `order` an
   orchestrator-authored file declares for itself. `rowsDigest` covers the verifier payload as well as the label, so
   a RENAMED field raises drift even though neither the caption nor the count moved.
-- **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
-  its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
-  `Quality gates` review is its last task. Base-field overrides sit between the layout that creates the fields and
+- **The build order is leaf-first, with declared exceptions.** Sub-pages precede `main`, a grandchild precedes
+  its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task, its filed
+  `Quality gates` row (`quality:ran`) is the last row of its last build task, and its `Quality gates` review — the
+  judged row — is its last task. Base-field overrides sit between the layout that creates the fields and
   the coverage that counts them: they are changes APPLIED ONTO the template's existing fields, so the fields must
   exist first and the counts must see the result. A page's `[attribute-virtual]` rows come before its business
   rules and `Custom methods` handlers, because a handler that writes an undeclared attribute does nothing; the rest
   of `Other declared logic worklist` stays after the handlers, since an `attribute-dependency` row wires an
   attribute to the method it triggers. Every `GROUP_PHASE` key has to be a title `checklistGroups` emits, and the
   goldens check that against designspec's source: a renamed group otherwise drops to the default phase without any
-  warning. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  warning. The run opens with the `Reference cache`, then `Scaffolding`
   (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
   and the page shells, the preconditions every other task needs.
 - **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
@@ -303,6 +356,7 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
+  // "reachability" also holds "relatedPage:<Entity>": the get-related-page-addon response, verbatim — never a flag
   "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"], "findings": ["…"], "findingsRaised": ["…"] } },
   "judge":    { "<id from --checklist>": { "convincing": true, "why": "…" } } }
 ```
@@ -367,6 +421,76 @@ into the GENERATED tables — a **Described in** cell naming the card + AC on th
 reference on a described `⚠ Imperative members` row, and a reported trigger where the engine traced none (marked
 `reported`; an engine-traced trigger is never overwritten).
 
+**Deliverable status (`manifest.deliverableStatus`).** Every deliverable `checklistGroups` emits carries `deliverableId`,
+its id on its page: the item's kind and name, never label text or a count. Ids: `page:list` · `page:entity` ·
+`page:placement` · `page:form` · `page:typed:<schema>` · `page:typed-routing` · `page:mini` · `page:mini-wiring` ·
+`page:reuse-bindings` · `page:reuse-reconcile` · `page:boundary` · `page:section` · `page:list-template` ·
+`page:list-not-built` · `page:reuse` · `page:child` · `page:child-evidence` · `list-columns` ·
+`list-<filter|action|rowaction>:<name>` · `layout:<region>` · `field-override:<field>` (a base-field override) ·
+`template:form` · `field:<element name>` · `related-list:<detail>` · `images` · `tabs` · `element:<crt type>` ·
+`card-widget:<recordId>:<widgetKey>` ·
+`feature:<feature>[:<extra type>]` · `datasource:<name>` · `dcm:bar` · `dcm:next` · `business-rules` ·
+`method:<name>` · `<kind>:<item>` (an imperative member, e.g. `attribute-virtual:Dept`) · `dashboards:<element|migrated|partials|delivery>` ·
+`card-action:<name>` · `card-actions:native` · `confirm:<kind>:<item>` · `child-page:<detail>` (a child with no page of its
+own) · `child-page-wiring:<detail>` (the related list that opens a rebuilt child page, on the page that holds the list) · `quality:ran` · `quality:judged`. The `<pageKey>#<deliverableId>` address is a stable manifest contract:
+any manifest key that names one deliverable uses it.
+
+**One row per field and per related list.** Every page's coverage carries one "Field <name>" row per field and
+one "Related list <detail>" row per related list (a rebuilt detail or a list-shaped standard feature). `--verify`
+runs the aggregate checks once per page over the rows still open (not `na`, not won't-do): one one-to-one field match,
+so a built element closes at most one field, and one `crt.DataGrid` count against the open lists. A built grid names
+no list, so a count shortfall reads unverified on each open list row and says which one is missing cannot be told;
+with no grid built, each row reads MISSING. A field whose Type
+the plan prints as `(not migrated)` (a hashed or encrypted column) is closed by the engine with that label. Both kinds
+weigh 0 in the task cut: the Layout row that places an item already carries its build weight, so a page's items pack
+as one aggregate row did. A split that claims a `Fields — N expected` /
+`Related lists — N expected` row names no row: it refuses and says to claim the per-item rows with
+`@Form — Coverage (verified)` or by their own text. A task folder whose `Fields — N expected` /
+`Related lists — N expected` row carries an Outcome cell or a `decisions:` entry is refused (`retired-aggregate`,
+exit 2, nothing written) and each such row is named: empty the cell and its entry, re-run, then record each item on
+its own row.
+
+A planning decision is one entry: `{ "<pageKey>#<id>": { "status": "wont-do", "decision": "D<N>" } }`, or
+`{ "status": "build" }` as the explicit answer a related deliverable needs. `pageGroup()` sets each row's status in
+one place: the engine's own conclusion first (it becomes `na`, with the reason the plan cell prints), else the
+manifest entry (it rides as `status` beside `vk`). The engine closes a standard Print / Run-process button when its
+on-stand signal (`cardActionSignals()` in `mapping-table.mjs`) found nothing behind it, the standard card actions of
+a child page, the `separate page?` row of a child that keeps its Classic card, is cyclic or has no edit page, and
+the rows a `pages-only-no-menu` run does not build, and the section-registration, list-template and main form
+page template rows of an `existing-section` run, whose section and pages already exist (a child or mini page keeps
+its template row). `RunProcess` and custom actions are never closed by a signal.
+
+The plan prints **Won't do** — `D<N>: <title>` or the engine's reason on the deliverable's own line (the card-action
+Layout row, the method and member tables, the child-scope row) and lists every other closed deliverable under
+`### Won't do` at its end. A run reads one `decisions.md`: from the folder above the task folder when `--tasks` is
+given, else from the `--out` folder. Only `--plan` and `--tasks` require it: any other mode (`--reads`, `--verify --built`,
+`--checklist`, `--spec`, `--stubs`) checks a `D<N>` against decisions.md when it reads one and skips that check
+when it does not. A plan gap (`deliverableStatus INVALID`, exit 2, `--tasks` writes nothing) is raised for an
+id that names no deliverable (the page's valid ids are listed), a status other than `wont-do` / `build`, a
+`wont-do` whose `D<N>` decisions.md does not hold, an entry on a deliverable the engine already closed, and a
+`wont-do` whose subject (behaviour card, confirm item, fold chain) other deliverables share without a status of
+their own. The cut writes each `wont-do` through the `--decide` row writer — `wont-do — <title> (D<N>)` with a
+`decisions:` entry marked `D<N>=` — and refuses (`deliverable-status`) when decisions.md does not hold its `D<N>`.
+On every cut, a `D<N>=` cell whose entry is gone or reads `build` is cleared and its row reopens, and one whose
+entry now cites another `D<N>` is rewritten; a `--decide` cell and an unmarked entry are never touched. A task
+whose rows are all closed computes its word on the pass that cuts it — `wont-do` when every row is `wont-do`,
+`not-applicable` when every row is `not-applicable`, `done` for any other closed mix; a `postponed` row keeps it
+`partial` — needs no dispatch
+record, and `--next` never offers it. `--revoke D<N>` skips a row whose status still cites `D<N>` and names the
+`<pageKey>#<id>` entry: remove it from `manifest.deliverableStatus` (or set it to `build`) and re-run `--tasks`,
+which clears the cell.
+
+**Decisions that close no deliverable (`manifest.decisionsWithoutDeliverable`).** A list of `D<N>`:
+`["D2", "D4"]`. The plan prints it under `### Won't do` with each title, and prints nothing when the list is empty
+or absent. A plan gap (`decisionsWithoutDeliverable INVALID`, exit 2, `--tasks` writes nothing) is raised for a
+value that is not a list, an item not shaped `D<N>`, an item decisions.md does not hold (when no decisions.md is read,
+under the same rule as `deliverableStatus`), and an item a `wont-do` status also cites. Before the first dispatch —
+no task with an `agentNonce` or a sub-agent outcome (`built`, `not-built`, or `not-applicable` on a row the plan did
+not mark `na`), and no `timings.json` record (one that does not parse counts as a dispatch) — `--tasks` (the cut, a re-sync, `--start`, `--next`) refuses (`unaccounted-decisions`, exit 2, nothing
+written) while a `D<N>` in decisions.md is cited by no `deliverableStatus` entry, no task `decisions:` entry and no
+item of this list. The refusal names each `D<N>` with its title, the entry shape for each remedy and the open
+deliverable ids per page. `Adjustment N` keys are not checked. `--decide` and `--revoke` never run the check.
+
 **Two cards, when the body lives elsewhere.** Any row whose behaviour is defined outside the scope that owns it is
 described twice — a `mixin:` member or the method wiring one in, a method assigned from another module
 (`externalRef`), a `message:` whose counterpart is in another schema, an aggregated `module-dep`, an override
@@ -428,7 +552,10 @@ the entry carries them — or, failing any caption match, by holding exactly the
 field, among containers whose type or name contains `Tab` that are a `crt.TabContainer` or a direct child of a
 `crt.TabPanel`, or for a row with no field names by the one tab whose content matches it exactly, else ☐ confirm on-stand /
 header, measured
-inside the container; a container-less payload is judged page-wide and says so) and the `cardnative` row (template button element names). A `[module-dep]` row is
+inside the container; a container-less payload is judged page-wide and says so) and the `cardnative` row (template control element names, each of the kind that control is: a reload is an
+action carrier, a tag control is a `crt.TagSelect`; ViewOptions, which the plan builds nothing for, is not in it).
+The standard `Card action — Print` / `— Process` / `— RunProcess` rows close on a built element whose `clicked.request`
+is `crt.PrintablesRequest` / `crt.RunBusinessProcessRequest`, never on any `crt.Button`. A `[module-dep]` row is
 informational (`info`, ℹ noted). The ungated `List page →` identity row is dropped when the gated `List template →`
 row exists.
 
@@ -459,6 +586,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
 - `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
+- `diagnostics.mjs` — `node diagnostics.mjs --environment <name> [--json]`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus branch/commit: from git when the install is a checkout, else from the Claude Code registry — `installed_plugins.json` for the commit, the marketplace's `source.ref` for the branch), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account. `--json` prints the same values as one object — `manifest.runDiagnostics`, which `--plan` renders as the plan's own `### Run diagnostics` block and leaves out of the plan version.
 
 ## Tests & internals
 

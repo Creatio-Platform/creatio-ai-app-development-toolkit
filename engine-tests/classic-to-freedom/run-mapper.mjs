@@ -6,19 +6,27 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_GRID } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, posCell, boundAttributeOf, nativeTabFieldNames } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
+import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+// Every root run this runner makes, so the deliverable sweeps at the end cover all of them.
+const RUNS = [];
+const runMigration = (manifest, opts) => {
+  const result = runMigrationRaw(manifest, opts);
+  RUNS.push({ manifest, result });
+  return result;
+};
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
 // Every migrate.mjs child process goes through here, so the CLI goldens see the same working directory wherever
@@ -910,6 +918,33 @@ check("migrate.mjs CLI: trailing --out (no path) exits 1 with a clear diagnostic
 const migOutFlag = runMigrate(["-", "--out", "--plan"], { input: okManifest, encoding: "utf8" });
 check("migrate.mjs CLI: --out followed by a flag (--plan) exits 1 — does not swallow the flag as a filename",
   migOutFlag.status === 1 && /--out/.test(migOutFlag.stderr || ""));
+// On macOS fd 0 is non-blocking once `process.stdin.isTTY` has been read, so a piped manifest over ~64 KB is
+// not fully available at the first read (EAGAIN). A ≥ 256 KB manifest on stdin must give the SAME stdout + exit
+// code as that manifest read from a file. The padding is multi-byte (Cyrillic) so a char split across two read chunks is exercised too.
+// `timeout` is the hang guard: a read loop that never sees EOF fails the check instead of stalling the run.
+{
+  const pad = "й".repeat(200 * 1024);
+  // `entity` goes AFTER the padded body, so it only reaches stdout when the read got past the padding.
+  const bigManifest = JSON.stringify({ schemas: [{ pkg: "P", body: `define("P",[],function(){/* ${pad} */return{entitySchemaName:"X",diff:[]};});` }], entity: "BigStdinEntity" });
+  const bigPath = path.join(os.tmpdir(), `c2f_big_manifest_${process.pid}.json`);
+  fs.writeFileSync(bigPath, bigManifest, "utf8");
+  try {
+    const viaStdin = runMigrate(["-"], { input: bigManifest, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+    const viaFile = runMigrate([bigPath], { timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+    check("migrate.mjs CLI: a ≥ 256 KB manifest piped to stdin is read in full — same exit code and stdout as the same manifest from a file",
+      Buffer.byteLength(bigManifest) >= 256 * 1024 && !/cannot read manifest/.test(viaStdin.stderr || "") && viaStdin.status === viaFile.status
+        && viaStdin.stdout === viaFile.stdout && viaStdin.stdout.includes('"entity": "BigStdinEntity"'),
+      () => ({ stdinStatus: viaStdin.status, fileStatus: viaFile.status, stdinErr: (viaStdin.stderr || "").slice(0, 200), sameStdout: viaStdin.stdout === viaFile.stdout }));
+  } finally { fs.rmSync(bigPath, { force: true }); }
+}
+const migEmpty = runMigrate(["-"], { input: "", timeout: 30000 });
+check("migrate.mjs CLI: empty stdin exits 1 with the manifest-JSON diagnostic — EOF ends the read, no hang",
+  migEmpty.status === 1 && /manifest is not valid JSON/.test(migEmpty.stderr || "") && (migEmpty.stdout || "").trim() === "",
+  () => ({ status: migEmpty.status, signal: migEmpty.signal, stderr: (migEmpty.stderr || "").slice(0, 160) }));
+const migNotJson = runMigrate(["-"], { input: "not json", timeout: 30000 });
+check("migrate.mjs CLI: `not json` on stdin exits 1 with `manifest is not valid JSON`",
+  migNotJson.status === 1 && /manifest is not valid JSON/.test(migNotJson.stderr || ""),
+  () => ({ status: migNotJson.status, stderr: (migNotJson.stderr || "").slice(0, 160) }));
 
 /* ---- gate coverage: a syntactically BROKEN schema body must propagate parseErrors -> gate.blocked -> exit 2,
    so a corrupt plan can NEVER read as gate-clean (this guards parseSchema error-propagation: a broken
@@ -998,6 +1033,20 @@ check("perf/correctness: a DIFFERENT-flavor diamond (same schema folded as child
   flavorDiamond.memoStats.hits === 0 && flavorDiamond.memoStats.misses === 2
     && /Mini page \(quick-add\)/.test(fdMiniSpec) && !/Mini page \(quick-add\)/.test(fdChildSpec),
   () => ({ memoStats: flavorDiamond.memoStats, miniHasHeading: /Mini page \(quick-add\)/.test(fdMiniSpec), childHasHeading: /Mini page \(quick-add\)/.test(fdChildSpec) }));
+// The same leak for a CHILD edit page: its sub-bundle carries the module's `section` and a
+// `planMeta.sectionSchema`. A child fold is a nested fold, never a section, so the child's own spec renders no
+// "### List page" block and no "⚠ Section schema not gathered … re-run".
+const childSecBody = `define("SharedSection",[],function(){return{entitySchemaName:"Shared",methods:{},diff:[]};});`;
+const childLeak = runMigration({ entity: "PE", noParentTemplate: true, addRecordMiniPage: false,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "SharedPage" } },
+  childPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, planMeta: { sectionSchema: "SharedSection" },
+    section: [{ pkg: "SP", body: childSecBody }], schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } } });
+const childLeakSpec = childLeak.childPages.find((c) => c.spec)?.spec || "";
+check("a child sub-bundle carrying `section` + `planMeta.sectionSchema` renders NO List-page block in the child's own spec",
+  childLeakSpec.length > 0 && !/### List page/.test(childLeakSpec) && !/Section schema not gathered/.test(childLeakSpec)
+  && !(childLeak.structure.issues || []).some((i) => /SharedPage/.test(i)),
+  () => ({ hasList: /### List page/.test(childLeakSpec), issues: childLeak.structure.issues }));
 
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
@@ -1103,6 +1152,64 @@ check("#11: *File-entity detail → Attachments feature (templateProvided, infer
   && !filecs.details.some(d => d.entity === "ApplicantFile"));
 check("#11: entity-inferred Attachments carries a 'confirm / inferred' note",
   filecs.needsDecision.some(n => n.kind === "standard-feature" && /inferred from the entity/.test(n.reason)));
+
+/* ---- a detail over a *Visa entity is recognised as Approvals when its schema name misses the VisaDetailV2 suffix, so
+   the Related-lists count does not expect a crt.DataGrid for what the builder correctly ships as a crt.ApprovalList ---- */
+const visaClient = L("Client", { entity: "X", details: {
+    Visas: { schemaName: "Schema7Detail", entitySchemaName: "UsrContractVisa", detailColumn: "UsrContract", masterColumn: "Id" },
+    Items: { schemaName: "Schema8Detail", entitySchemaName: "UsrContractItem", detailColumn: "UsrContract", masterColumn: "Id" } },
+  diff: [di({ name: "Tv", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tv" }),
+         di({ name: "Visas", parentName: "Tv", propertyName: "items", itemType: 2 }),
+         di({ name: "Items", parentName: "Tv", propertyName: "items", itemType: 2 })] });
+const visacs = mapToFreedom(mergeHierarchy([visaClient]));
+check("*Visa-entity detail → Approvals feature (component, inferred), NOT a related list; a plain detail beside it stays a list",
+  visacs.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component" && s.inferredFromEntity)
+  && !visacs.details.some(d => d.entity === "UsrContractVisa") && visacs.details.some(d => d.entity === "UsrContractItem"),
+  () => ({ features: visacs.standardFeatures.map(s => s.feature), details: visacs.details.map(d => d.entity) }));
+const visaChecklist = renderChecklist({ entity: "X", changeSet: visacs }, {});
+check("*Visa-entity detail: the checklist expects 1 related list (its own row) and gates the approval list on its own Approvals row",
+  visaChecklist.split("\n").filter((l) => /\| Related list `/.test(l)).length === 1 && /Approvals \(`crt\.ApprovalList`\)/.test(visaChecklist),
+  () => visaChecklist.split("\n").filter(l => /Related lists|Approvals/.test(l)));
+const visaRows = checklistGroups({ entity: "X", changeSet: visacs }, {}).flatMap(g => g.rows).filter(r => r.vk && /^(Approvals|Related list)/.test(r.label));
+const visaPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", viewConfig: { items } } } }, "main");
+const visaBuilt = visaPage([{ type: "crt.Approval", name: "AW" }, { type: "crt.ApprovalList", name: "AL" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
+const visaAsGrid = visaPage([{ type: "crt.DataGrid", name: "VisasGrid" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
+check("*Visa-entity detail: every Approvals / Related-lists row closes ✅ on a page with crt.Approval + crt.ApprovalList + one grid; the Approvals rows read ❌ when the visas ship as a crt.DataGrid",
+  visaRows.length === 3 && visaRows[0].label.startsWith("Related list `")
+  && visaRows.slice(1).map(r => r.label).join(" | ") === "Approvals (`crt.ApprovalList`) | Approvals — second required component (`crt.Approval`)"
+  && visaRows.every(r => resolveVk(r.vk, visaBuilt)[0] === "✅ Done")
+  && visaRows.filter(r => r.label.startsWith("Approvals")).every(r => resolveVk(r.vk, visaAsGrid)[0] === "❌ MISSING"),
+  () => visaRows.map(r => [r.label, resolveVk(r.vk, visaBuilt), resolveVk(r.vk, visaAsGrid)]));
+const visaListOnly = visaPage([{ type: "crt.ApprovalList", name: "AL" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
+check("*Visa-entity detail: a page that ships only crt.ApprovalList closes the approval-list and Related-lists rows, and the crt.Approval row reads ❌ MISSING",
+  visaRows.every(r => resolveVk(r.vk, visaListOnly)[0] === (r.vk.ftype === "crt.Approval" ? "❌ MISSING" : "✅ Done")),
+  () => visaRows.map(r => [r.label, resolveVk(r.vk, visaListOnly)]));
+
+/* ---- an entity that only ends in `Visa` (a business list of travel visas keyed by another column) stays a related list ---- */
+const bizVisaClient = L("Client", { entity: "X", details: {
+    Visas: { schemaName: "Schema9Detail", entitySchemaName: "UsrEmployeeVisa", detailColumn: "UsrOwner", masterColumn: "Id" } },
+  diff: [di({ name: "Tv", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tv" }),
+         di({ name: "Visas", parentName: "Tv", propertyName: "items", itemType: 2 })] });
+const bizVisacs = mapToFreedom(mergeHierarchy([bizVisaClient]));
+check("an entity ending in `Visa` that is not `<detailColumn>Visa` stays a related list — no Approvals row, no crt.Approval gate",
+  !bizVisacs.standardFeatures.some(s => s.feature === "Approvals") && bizVisacs.details.some(d => d.entity === "UsrEmployeeVisa"),
+  () => ({ features: bizVisacs.standardFeatures.map(s => s.feature), details: bizVisacs.details.map(d => d.entity) }));
+/* ---- `<detailColumn>Visa` is Approvals only when the detail's read columns carry an approval column ---- */
+const employeeVisaClient = L("Client", { entity: "X", details: {
+    Visas: { schemaName: "Schema9Detail", entitySchemaName: "UsrEmployeeVisa", detailColumn: "UsrEmployee", masterColumn: "Id" } },
+  diff: [di({ name: "Tv", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tv" }),
+         di({ name: "Visas", parentName: "Tv", propertyName: "items", itemType: 2 })] });
+const employeeVisacs = mapToFreedom(mergeHierarchy([employeeVisaClient]),
+  { detailSchemas: { Schema9Detail: { entity: "UsrEmployeeVisa", columns: ["UsrCountry", "UsrVisaType", "UsrValidTo"], title: "Visas" } } });
+check("`UsrEmployeeVisa` keyed by `UsrEmployee` whose read columns are all business columns stays a related list — no Approvals row, no crt.Approval gate",
+  !employeeVisacs.standardFeatures.some(s => s.feature === "Approvals") && employeeVisacs.details.some(d => d.entity === "UsrEmployeeVisa")
+  && !/crt\.Approval/.test(renderChecklist({ entity: "X", changeSet: employeeVisacs }, {})),
+  () => ({ features: employeeVisacs.standardFeatures.map(s => s.feature), details: employeeVisacs.details.map(d => d.entity) }));
+const approvalColsVisacs = mapToFreedom(mergeHierarchy([visaClient]),
+  { detailSchemas: { Schema7Detail: { entity: "UsrContractVisa", columns: ["VisaOwner", "Objective", "Status"], title: "Approvals" } } });
+check("`UsrContractVisa` keyed by `UsrContract` whose read columns carry an approval column (`VisaOwner`) is Approvals",
+  approvalColsVisacs.standardFeatures.some(s => s.feature === "Approvals") && !approvalColsVisacs.details.some(d => d.entity === "UsrContractVisa"),
+  () => ({ features: approvalColsVisacs.standardFeatures.map(s => s.feature), details: approvalColsVisacs.details.map(d => d.entity) }));
 
 /* ---- ContactCommunication → the native Communication-options component (NOT a plain grid), inferred by entity ---- */
 const commClient = L("Client", { entity: "X", details: {
@@ -1983,6 +2090,21 @@ check("an approved `pages-only-no-menu` plan publishes NO `list` key and no gate
       && !rows.some((r) => r.list); },
   () => ({ keys: [...new Set(checklistGroups(lpRun, lpNoMenuOpts).map((g) => g.pageKey))],
     listMarked: checklistGroups(lpRun, lpNoMenuOpts).flatMap((g) => g.rows).filter((r) => r.list).map((r) => r.label) }));
+// An `existing-section` plan EXTENDS the existing list page: its columns and filters stay gated work on the `list`
+// key, while the list template row is closed — the existing page keeps its own template.
+const lpExistingOpts = { ...lpOpts, sectionHostMode: "existing-section", existingSection: { listPage: "Applicant_ListPage", formPage: "Applicant_FormPage" } };
+check("existing-section: the list page's columns stay GATED on the `list` key, and a missing column is a hard MISSING — the list is extended, not dropped",
+  () => { const groups = checklistGroups(lpRun, lpExistingOpts);
+    const rows = groups.flatMap((g) => g.rows);
+    const v = renderVerify(lpRun, lpExistingOpts, LP_BUILT(LP_ALL_COLS.slice(1), LP_FILTERS));
+    return groups.some((g) => g.pageKey === "list") && rows.some((r) => r.label.startsWith("List columns") && r.vk && !r.na)
+      && lpListTally(v).missing >= 1; },
+  () => lpListTally(renderVerify(lpRun, lpExistingOpts, LP_BUILT(LP_ALL_COLS.slice(1), LP_FILTERS))));
+check("existing-section: the list template row is N/A — a list page built on another template is not a defect of an extended page (control: the same page under the default mode is flagged)",
+  () => { const row = checklistGroups(lpRun, lpExistingOpts).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:list-template");
+    const ctrl = (lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV2FreedomTemplate"))).openRows || []).some((r) => /List template/.test(r.deliverable));
+    return /existing-section/.test(row?.na || "") && ctrl; },
+  () => checklistGroups(lpRun, lpExistingOpts).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:list-template"));
 check("GATE: a list page REPORTED AS NOT BUILT (`false`) fails for that reason — not as an empty grid or a short filter bar, because the repair is to build the page rather than to add columns to one",
   () => { const v = renderVerify(lpRun, lpOpts, { pages: { list: false } });
     return lpListTally(v).missing >= 1
@@ -2243,7 +2365,31 @@ check("mini-page FOLD: manifest.addRecordMiniPage + miniPageSchemas → mini-pag
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
     return r.structure.complete === true && /### Add mini-page mapping/.test(r.plan) && /#### Mini page: ApplicantMiniPage/.test(r.plan) && r.plan.includes("QuickName") && /via mini page/.test(r.designSpec); })());
+// `get-classic-page-sources --schema-name OpportunityMiniPage` writes the module's `section` into the mini-page
+// bundle. Folding that key would make the mini page's own run fold a section and then demand an add-record mini
+// page OF THE MINI PAGE ("its OWN structure is incomplete"). A mini-page fold is never a
+// section scope — the PARENT run owns the section — so the nested run ignores it and the structure stays complete.
+check("a `section` key inside a miniPageSchemas bundle does NOT make the mini page's own structure incomplete",
+  (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: { schema: "ApplicantMiniPage" },
+    miniPageSchemas: { ApplicantMiniPage: { schemas: [{ pkg: "P", body: `define("ApplicantMiniPage",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"QF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"QuickName"}}]};});` }], seed: CLEAN_SEED,
+      section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }], listColumns: null } } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
+    return r.structure.complete === true && !r.miniPage?.structIncomplete && /#### Mini page: ApplicantMiniPage/.test(r.plan); })(),
+  () => "structure incomplete: the nested mini-page run still folded its `section`");
 // A named mini page NOT folded (no miniPageSchemas) → structure INCOMPLETE (must fold or record false).
+// The same rule for a TYPED-page fold: its bundle carries the module's `section` too, and even without
+// `addRecordMiniPage` in the sub-bundle the nested run must not report "typed page 'X': its OWN structure is
+// incomplete" (the section-leak golden sets `addRecordMiniPage: false`; this one does not).
+check("a `section` key inside a typedPageSchemas bundle (no addRecordMiniPage there) does NOT make the typed page's own structure incomplete",
+  (() => { const pg = (n) => ({ pkg: "P", body: `define("${n}",[],function(){return{entitySchemaName:"App",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` });
+    const sec = [{ pkg: "P", body: `define("AppSection",[],function(){return{entitySchemaName:"App",methods:{},diff:[]};});` }];
+    const r = runMigration({ entity: "App", addRecordMiniPage: false, noParentTemplate: true, schemas: [pg("AppPage")], section: sec,
+      typedPages: [{ schema: "AppICPage", type: "IC" }],
+      typedPageSchemas: { AppICPage: { entity: "App", noParentTemplate: true, schemas: [pg("AppICPage")], section: sec } } }, { baseDir: FIX });
+    const issues = r.structure.issues || [];
+    return !issues.some((i) => /typed page 'AppICPage'.*OWN structure is incomplete/.test(i)) && !issues.some((i) => /AppICPage/.test(i)); })(),
+  () => "typed sub-run still folded its `section`");
 check("mini-page GATE: a named mini page without miniPageSchemas → structure INCOMPLETE ('NOT folded')",
   (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: { schema: "ApplicantMiniPage" },
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
@@ -2477,14 +2623,16 @@ check("invariant: NO field carries an inline `label` (fields auto-label from the
 check("invariant: the ChangeSet exposes a resources map (page string keys → default text)",
   co.resources && typeof co.resources === "object");
 
-/* ---- #13 (detail title): detailSchemas[...].title becomes the detail's display caption ---- */
+/* ---- #13 (detail title): the detail schema's caption (`title`) is never the related list's title ---- */
 const dtCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
-    Stages: { schemaName: "StageInRecruitmentDetailV2", entitySchemaName: "RecruitmentInStage", detailColumn: "Root", masterColumn: "Id" } },
+    Orders: { schemaName: "OrderDetailV2", entitySchemaName: "Order", detailColumn: "Root", masterColumn: "Id" } },
   diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
-         di({ name: "Stages", parentName: "T", propertyName: "items", itemType: 2 })] })]),
-  { detailSchemas: { StageInRecruitmentDetailV2: { entity: "RecruitmentInStage", columns: ["Stage", "Date"], title: "Stage history" } } });
-check("#13 detail title: detailSchemas.title → the detail's caption is the human title",
-  dtCs.details.find(d => d.detailSchema === "StageInRecruitmentDetailV2")?.caption === "Stage history");
+         di({ name: "Orders", parentName: "T", propertyName: "items", itemType: 2 })] })]),
+  { detailSchemas: { OrderDetailV2: { entity: "Order", columns: ["Number", "Date"], title: "Order detail schema" } } });
+check("#13 detail title: detailSchemas.title is not a title — the list has no caption and a detail-caption Confirm is raised",
+  () => dtCs.details.find(d => d.detailSchema === "OrderDetailV2")?.caption === null
+    && dtCs.needsDecision.some(n => n.kind === "detail-caption" && n.item === "OrderDetailV2"),
+  () => ({ details: dtCs.details.map(d => d.caption), nd: dtCs.needsDecision.map(n => n.kind) }));
 
 /* ---- a tab that holds ONLY a detail (no field) must still be emitted so the related list has a home ---- */
 const dtabCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
@@ -2527,11 +2675,19 @@ check("#8c: the process-launch decision tells to READ THE BINDING and place it a
 // Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
 const caCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ViewOptionsButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
-check("card-actions: ViewOptions NOT migrated; Tag template-provided (Type '—', clear disposition)",
-  /\| ViewOptions \| — \|.*Not migrated/.test(caCs.designSpec)
+check("card-actions: ViewOptions is native (the template ships it); Tag template-provided (Type '—', clear disposition)",
+  /\| ViewOptions \| — \|.*Native — the template ships/.test(caCs.designSpec) && !/\| ViewOptions \|.*Not migrated/.test(caCs.designSpec)
   && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
 check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
   /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
+check("card-actions: the Print how-to says a step-5.1 card that shows a rebound print menu decides the button — SysModuleReport does not describe that menu",
+  /\| Print \| Action \|.*Exception: when a step-5\.1 behaviour card says a client layer binds a print button's menu to a collection its own code fills, that card decides the button/.test(caCs.designSpec),
+  () => (caCs.designSpec.match(/^\| Print \|.*$/m) || ["(no Print row)"])[0]);
+const caCsNone = runMigration({ entity: "X", signals: { printables: { resolved: true, present: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("card-actions: a Print action dropped for 'no printables' carries the same rebound-menu exception in its verdict",
+  /no printables\/reports for this section \(checked `SysModuleReport` on-stand\)\. Exception: when a step-5\.1 behaviour card/.test(caCsNone.designSpec + caCsNone.plan),
+  () => (caCsNone.designSpec.match(/^.*no printables.*$/m) || ["(no verdict line)"])[0]);
 check("card-actions: Process migrates only if a process is connected + shows how to check (ProcessInModules → VwSysProcess)",
   /\| Process \| Action \|.*Migrate ONLY if a process is connected.*ProcessInModules/.test(caCs.designSpec)
   && !/VwSysProcessEntityConnection/.test(caCs.designSpec));
@@ -2638,26 +2794,102 @@ check("placement gate: mode 'new-app' clears the gate (the build creates its own
   planWithPlacement(newAppPlacement).status === 0);
 check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
   /Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
-// (g) 'existing-section' — a RECONCILE onto an ALREADY-registered section: on a reconcile (planMeta.freedomExists) it
-// clears the gate with NO owning app, registers nothing, and KEEPS the list page live (unlike pages-only-no-menu). On
-// a rebuild (no existing Freedom page) there is no already-registered section to reconcile onto, so the gate REFUSES it.
-const existingSectionPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "existing-section" } };
-const runExistingSection = (mode, extraMeta) => runMigrate(["-", mode], { input: JSON.stringify({ ...placementBase, planMeta: { ...FULL_PLANMETA, ...extraMeta }, placement: existingSectionPlacement }), encoding: "utf8" });
-const planExistingRecon = runExistingSection("--plan", { freedomExists: true });
-check("placement gate: mode 'existing-section' on a RECONCILE (freedomExists) clears the gate with NO owning app (a reconcile registers nothing)",
-  planExistingRecon.status === 0, () => planExistingRecon.stderr);
-const planExistingRebuild = runExistingSection("--plan", {});
-check("placement gate: mode 'existing-section' on a REBUILD (no freedomExists) is REFUSED — no already-registered section to reconcile onto",
-  planExistingRebuild.status !== 0 && /existing-section/.test(planExistingRebuild.stderr || "") && /not a reconcile/.test(planExistingRebuild.stderr || ""),
-  () => planExistingRebuild.stderr);
-const clExistingSection = runExistingSection("--checklist", { freedomExists: true });
-check("placement: 'existing-section' renders the section row as already-registered / registers-nothing (no gated exactly-ONE row)",
-  /Navigable section already registered — \*\*reconcile registers nothing\*\*/.test(clExistingSection.stdout || "")
-  && !/Navigable section registered in exactly ONE workplace/.test(clExistingSection.stdout || ""),
-  () => (clExistingSection.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
-check("placement: 'existing-section' KEEPS the list page as a real deliverable (not dropped like pages-only-no-menu)",
-  !/NOT built in this run/.test(clExistingSection.stdout || "") && !/List page \(NOT built/.test(clExistingSection.stdout || ""),
-  () => (clExistingSection.stdout || "").split("\n").filter((l) => /List page|NOT built/.test(l)).join("\n"));
+// (g) 'existing-section' — a Freedom section for the object is already in the menu and the user chose to extend
+// it. Same owning-app facts as the no-primary leg above, which blocks 'existing-app': this mode registers nothing,
+// so it clears the gate, and the plan targets the two existing pages by name.
+const existingSectionPlacement = { ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "CrtVendorPkg", editable: false }, targetPackageInApplication: { resolved: true, value: false },
+  sectionHost: { resolved: true, mode: "existing-section", listPage: "SupportUnit_ListPage", formPage: "SupportUnit_FormPage" } };
+const runExistingSection = (placement, mode, planMeta = { ...FULL_PLANMETA, freedomExists: true }) => runMigrate(["-", mode], {
+  input: JSON.stringify({ ...placementBase, planMeta, placement }), encoding: "utf8" });
+const plExisting = runExistingSection(existingSectionPlacement, "--plan");
+check("placement gate: mode 'existing-section' clears the gate on an app whose primary package is locked and is not the target — nothing is registered, so no primary match is required",
+  plExisting.status === 0 && !/PLAN INCOMPLETE/.test(plExisting.stderr || ""),
+  () => plExisting.stderr);
+check("plan: 'existing-section' targets the existing list and form pages by name, calls them Update (reconcile), and says no app or section is created",
+  /\| SupportUnitSection \(list page\) \| `SupportUnit_ListPage` \(existing — extended\) \| Update \(reconcile\) \|/.test(plExisting.stdout || "")
+  && /\| SupportUnit form page \| `SupportUnit_FormPage` \(existing — extended\) \| Update \(reconcile\) \|/.test(plExisting.stdout || "")
+  && /Extend the existing section/.test(plExisting.stdout || "") && /no app or section is created/.test(plExisting.stdout || "")
+  && /into the target package `UsrSU`/.test(plExisting.stdout || "") && !/do NOT create a duplicate/.test(plExisting.stdout || ""),
+  () => (plExisting.stdout || "").split("\n").filter((l) => /list page\)|form page \||Extend the existing/.test(l)).join("\n"));
+const plExistingNoNames = runExistingSection({ ...existingSectionPlacement, sectionHost: { resolved: true, mode: "existing-section" } }, "--plan");
+check("placement gate: 'existing-section' without the existing list/form page names is INCOMPLETE — the plan cannot target pages it does not name",
+  plExistingNoNames.status === 2 && /sectionHost\.listPage \/ sectionHost\.formPage are not both named/.test(plExistingNoNames.stderr || ""),
+  () => plExistingNoNames.stderr);
+const plExistingNoFreedom = runExistingSection(existingSectionPlacement, "--plan", FULL_PLANMETA);
+check("placement gate: 'existing-section' without planMeta.freedomExists is INCOMPLETE — extending an existing section is a reconcile, never a rebuild",
+  plExistingNoFreedom.status === 2 && /planMeta\.freedomExists is not true/.test(plExistingNoFreedom.stderr || ""),
+  () => plExistingNoFreedom.stderr);
+const clExisting = runExistingSection(existingSectionPlacement, "--checklist");
+check("checklist: 'existing-section' renders the section row as already registered and closed (N/A), never the gated registration row",
+  (clExisting.stdout || "").split("\n").some((l) => /Navigable section — \*\*already registered\*\*/.test(l) && /N\/A — .*existing-section/.test(l))
+  && !/Navigable section registered in exactly ONE workplace/.test(clExisting.stdout || ""),
+  () => (clExisting.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
+check("checklist: 'existing-section' keeps the list page as work — it is extended, not dropped like pages-only-no-menu",
+  /List page → `SupportUnit_ListPage` \(existing — extended\)/.test(clExisting.stdout || "") && !/NOT built/.test(clExisting.stdout || ""),
+  () => (clExisting.stdout || "").split("\n").filter((l) => /List page/.test(l)).join("\n"));
+check("placement gate: the 'existing-app' refusal names 'existing-section' among the alternatives",
+  /existing-section/.test(plNoPrimary.stderr || ""));
+const plExistingMinimal = runExistingSection({ targetPackageEditable: existingSectionPlacement.targetPackageEditable, sectionHost: existingSectionPlacement.sectionHost }, "--plan");
+check("placement gate: 'existing-section' needs only the target package and the host decision — the owning app's facts do not bear on a mode that registers nothing",
+  plExistingMinimal.status === 0 && !/PLAN INCOMPLETE/.test(plExistingMinimal.stderr || ""),
+  () => plExistingMinimal.stderr);
+check("placement gate (control): the SAME minimal placement under 'existing-app' still names the unresolved app facts",
+  /placement\.application not resolved/.test(runExistingSection({ targetPackageEditable: existingSectionPlacement.targetPackageEditable, sectionHost: { resolved: true, mode: "existing-app" } }, "--plan").stderr || ""));
+const dcmSignals = { ...FULL_SIGNALS, dcm: { resolved: true, present: true, names: ["Contract case"] } };
+const plExistingDcm = runMigrate(["-", "--plan"], { input: JSON.stringify({ ...placementBase, signals: dcmSignals, planMeta: { ...FULL_PLANMETA, freedomExists: true }, placement: existingSectionPlacement }), encoding: "utf8" });
+check("plan: 'existing-section' with a DCM case keeps the existing page's template — the banner adds the progress bar into it and never re-templates or re-binds the page",
+  /DCM case present, existing page kept/.test(plExistingDcm.stdout || "") && !/Build it on \*\*`PageWithTabsAndProgressBarTemplate`\*\*/.test(plExistingDcm.stdout || ""),
+  () => (plExistingDcm.stdout || "").split("\n").filter((l) => /Template —/.test(l)).join("\n"));
+const { formTemplate: _noTpl, ...pmNoFormTemplate } = FULL_PLANMETA;
+const plExistingNoTpl = runExistingSection(existingSectionPlacement, "--plan", { ...pmNoFormTemplate, freedomExists: true });
+check("plan: 'existing-section' needs no planMeta.formTemplate — the existing form page keeps its own template, so there is none to choose",
+  plExistingNoTpl.status === 0 && !/PLAN INCOMPLETE/.test(plExistingNoTpl.stderr || "") && !/<FILL: Freedom form template>/.test(plExistingNoTpl.stdout || ""),
+  () => plExistingNoTpl.stderr);
+check("checklist: 'existing-section' targets the existing form page and closes its template row (N/A) even when a template was recorded",
+  /Form page → `SupportUnit_FormPage` \(existing — extended\)/.test(clExisting.stdout || "")
+  && (clExisting.stdout || "").split("\n").some((l) => /Form template →/.test(l) && /N\/A — .*existing-section/.test(l)),
+  () => (clExisting.stdout || "").split("\n").filter((l) => /Form (page|template)/.test(l)).join("\n"));
+check("plan: the 'existing-section' banner ties target-package-uid to update-page only, so the replacing schema lands in the target package",
+  /`update-page` passing `target-package-uid` of `UsrSU`/.test(plExisting.stdout || "")
+  && !/`sync-pages` passing `target-package-uid`/.test(plExisting.stdout || "")
+  && !/`update-page` \/ `sync-pages`/.test(plExisting.stdout || "")
+  && /Do not save these pages with `sync-pages`/.test(plExisting.stdout || ""));
+const plExistingTyped = runMigrate(["-", "--plan"], { input: JSON.stringify({ ...placementBase, planMeta: { ...FULL_PLANMETA, freedomExists: true }, placement: existingSectionPlacement,
+  typedPages: [{ schema: "SUTypeAPage", type: "A" }, { schema: "SUTypeBPage", type: "B" }], typedPageSchemas: {} }), encoding: "utf8" });
+check("placement gate: 'existing-section' over a TYPED entity is INCOMPLETE — the mode names one form page and cannot target a page per record type",
+  plExistingTyped.status === 2 && /typed form pages — this mode extends one list page and one form page only/.test(plExistingTyped.stderr || ""),
+  () => plExistingTyped.stderr);
+// (h) A PARALLEL section is the user's explicit choice (`planMeta.parallelSection`): the new section's pages are
+// built from the full Classic page, so the Call is Rebuild and the plan says the existing section is left alone.
+const plParallel = runExistingSection(newAppPlacement, "--plan", { ...FULL_PLANMETA, freedomExists: true, parallelSection: true });
+check("plan: 'new-app' + planMeta.freedomExists + planMeta.parallelSection is a parallel section — Call Rebuild, the existing section is NOT changed, no reconcile banner",
+  plParallel.status === 0 && /\| SupportUnit form page \| PageWithTabsFreedomTemplate \| Rebuild \|/.test(plParallel.stdout || "")
+  && /Parallel section — the user's choice/.test(plParallel.stdout || "") && !/Update \(reconcile\)/.test(plParallel.stdout || ""),
+  () => (plParallel.stdout || "").split("\n").filter((l) => /form page \||Parallel|Reconcile/.test(l)).join("\n"));
+// 'new-app' is also the section host of an EXTENDED form page that has no section yet — without the explicit flag
+// the existing form page is reconciled, never rebuilt.
+const plExtendFormNewApp = runExistingSection(newAppPlacement, "--plan");
+check("plan: 'new-app' + planMeta.freedomExists WITHOUT parallelSection reconciles the existing form page — Call Update (reconcile), no parallel banner",
+  plExtendFormNewApp.status === 0 && /\| SupportUnit form page \| PageWithTabsFreedomTemplate \| Update \(reconcile\) \|/.test(plExtendFormNewApp.stdout || "")
+  && !/Parallel section/.test(plExtendFormNewApp.stdout || ""),
+  () => (plExtendFormNewApp.stdout || "").split("\n").filter((l) => /form page \||Parallel|Reconcile/.test(l)).join("\n"));
+const plParallelWrongMode = runExistingSection(FULL_PLACEMENT, "--plan", { ...FULL_PLANMETA, freedomExists: true, parallelSection: true });
+check("placement gate: planMeta.parallelSection with a mode other than 'new-app' is INCOMPLETE — a parallel section is a new app",
+  plParallelWrongMode.status === 2 && /planMeta\.parallelSection is true but placement\.sectionHost\.mode is 'existing-app'/.test(plParallelWrongMode.stderr || ""),
+  () => plParallelWrongMode.stderr);
+// `isParallelSection` also needs `freedomExists`; without it the flag would be dropped and the plan would quietly
+// render as a plain Rebuild with no parallel-section banner — so the gate refuses it instead.
+const plParallelNoFreedom = runExistingSection(newAppPlacement, "--plan", { ...FULL_PLANMETA, parallelSection: true });
+check("placement gate: planMeta.parallelSection WITHOUT planMeta.freedomExists is INCOMPLETE — a parallel section is built next to an existing Freedom section, never silently a plain Rebuild",
+  plParallelNoFreedom.status === 2 && /planMeta\.parallelSection is true but planMeta\.freedomExists is not true/.test(plParallelNoFreedom.stderr || ""),
+  () => plParallelNoFreedom.stderr);
+// The placement banner asks for the keys the gate requires — one source (requiredPlacementKeys), so an
+// 'existing-section' plan is never sent after the three owning-app facts it does not need.
+const placementBannerKeys = (out) => ((out || "").split("\n").find((l) => /Record the answers in `manifest\.placement`/.test(l)) || "").match(/manifest\.placement` \(([^)]*)\)/)?.[1] || "";
+check("plan banner: a blocked 'existing-section' plan lists only `targetPackageEditable` · `sectionHost` (control: a blocked 'existing-app' plan lists all five keys)",
+  placementBannerKeys(plExistingNoNames.stdout) === "`targetPackageEditable` · `sectionHost`"
+  && placementBannerKeys(plNoPrimary.stdout) === "`targetPackageEditable` · `application` · `primaryPackage` · `targetPackageInApplication` · `sectionHost`",
+  () => ({ existingSection: placementBannerKeys(plExistingNoNames.stdout), existingApp: placementBannerKeys(plNoPrimary.stdout) }));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -2859,6 +3091,20 @@ try {
   check("ReDoS (structural): detectAddMode has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` run (deterministic ReDoS guard, timing-independent, refactor-tolerant)",
     daSrc.includes(String.raw`[\s\S]`) && !daSrc.includes(String.raw`[\s\S]*`) && !daSrc.includes(String.raw`[\s\S]+`),
     () => ({ usesBoundedScan: daSrc.includes(String.raw`[\s\S]`), hasUnboundedStar: daSrc.includes(String.raw`[\s\S]*`), hasUnboundedPlus: daSrc.includes(String.raw`[\s\S]+`) }));
+  // The removed-row-actions scan detectAddMode calls lives in its OWN functions, which the `toString` above does not
+  // see — so the same structural guard is pinned on each of them, plus a timing bound on a body of unterminated
+  // overrides (the brace walk is the one non-regex scan; it must stay capped per override).
+  const raSrc = ROW_ACTION_SCAN_FNS.map((f) => f.toString()).join("\n");
+  const unboundedRun = /\[\\s\\S\][*+]|\.[*+]/g;
+  check("ReDoS (structural): the removed-row-actions scan has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` / `.*` / `.+` run, and detectAddMode reaches it",
+    () => ROW_ACTION_SCAN_FNS.length >= 4 && daSrc.includes("scanRowActions") && !raSrc.match(unboundedRun),
+    () => raSrc.match(unboundedRun));
+  const unit3 = "addRecordOperationsMenuItems: function(m){ getDeleteRecordMenuItem: function(){ " + "z".repeat(60) + "\n";
+  const raAdversarial = unit3.repeat(6000);
+  const r0 = Date.now(); const raRes = detectAddMode(raAdversarial); const raMs = Date.now() - r0;
+  check(`ReDoS (timing): detectAddMode on ~${Math.round(raAdversarial.length / 1024)}KB of unterminated row-menu overrides stays linear — ${raMs}ms vs ceiling ${ceiling}ms`,
+    raAdversarial.length > 600 * 1024 && raMs < ceiling && raRes?.rowActionsUnreadable?.includes("addRecordOperationsMenuItems"),
+    () => ({ raMs, ceiling, raRes }));
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
@@ -3114,7 +3360,7 @@ const QG_EVIDENCE = {
 const rvOddResult = { changeSet: { viewConfigDiff: [{ name: "Notes", values: { control: "$Notes", type: "crt.RichTextEdit" } }], images: [], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
 const rvOdd = renderVerify(rvOddResult, {}, { ops: [{ name: "Notes", type: "crt.RichTextEdit" }], ...QG_EVIDENCE });
 check("#verify fields: a control-bound field whose built type is OUTSIDE FIELD_RE (crt.RichTextEdit) still COUNTS by name — no spurious 'fewer than expected'",
-  rvOdd.missing === 0 && rvOdd.unverified === 0 && /Fields[\s\S]*?✅ Done/.test(rvOdd.markdown),
+  rvOdd.missing === 0 && rvOdd.unverified === 0 && /Field `Notes` \| ✅ Done/.test(rvOdd.markdown),
   () => ({ missing: rvOdd.missing, unverified: rvOdd.unverified, row: rvOdd.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
 // a page where SEVERAL classic items bind the SAME column is a pattern the mapper
 // deliberately emits (resolveFieldControl → `col`, `col_2`, `col_3`, all sharing `control: "$col"`). The verify
@@ -3131,7 +3377,7 @@ const rvDup = renderVerify(rvDupResult, {}, { ops: [
   { name: "Amount", type: "crt.Input" }, { name: "Amount_2", type: "crt.Input" }, { name: "Amount_3", type: "crt.Input" },
 ], ...QG_EVIDENCE });
 check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control",
-  rvDup.missing === 0 && rvDup.unverified === 0 && /Fields — 3 expected[\s\S]*?✅ Done/.test(rvDup.markdown),
+  rvDup.missing === 0 && rvDup.unverified === 0 && ["Amount", "Amount_2", "Amount_3"].every((n) => new RegExp(`Field \`${n}\` \\| ✅ Done`).test(rvDup.markdown)),
   () => ({ missing: rvDup.missing, unverified: rvDup.unverified, row: rvDup.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
 // REPLACES the old "#verify feature drift" pin, and it had to be replaced rather than kept: that check
 // compared mapper's `FEATURE_CATALOG` against designspec's `FEATURE_TYPE`, two copies of one mapping. Now that both
@@ -3162,6 +3408,14 @@ check("feature resolution is exact-name first, then longest suffix, then the ENT
   resolveFeatureRow("VisaDetailV2")?.meta.feature === "Approvals"
   && resolveFeatureRow("ApplicantEmailDetailV2")?.meta.feature === "Emails"
   && resolveFeatureRow("ApplicantVisaDetail") === null
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract" })?.meta.feature === "Approvals"
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract" })?.meta.byEntity === true
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa") === null
+  && resolveFeatureRow("Schema9Detail", "UsrEmployeeVisa", { detailColumn: "UsrEmployee2" }) === null
+  && resolveFeatureRow("Schema7Detail", "UsrVisaReason", { detailColumn: "UsrVisa" }) === null
+  && resolveFeatureRow("Schema9Detail", "UsrEmployeeVisa", { detailColumn: "UsrEmployee", columns: ["UsrCountry", "UsrValidTo"] }) === null
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract", columns: ["Objective"] })?.meta.feature === "Approvals"
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract", columns: [] })?.meta.feature === "Approvals"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
   && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
@@ -3628,6 +3882,147 @@ check("formless: the `Inline grid` Call-legend definition renders when an inline
 check("formless: the `⚠ verify` Call-legend definition renders when an empty child is present",
   /\*\*`⚠ verify`\*\* = the child folded to 0 fields with no behaviour/.test(formlessEmpty.plan),
   () => formlessEmpty.plan.split("\n").filter((l) => /verify/.test(l)));
+// ---- Child page wiring: every child page the plan builds is wired to the related list that opens it ----
+// One parent with a related list per child resolution: a folded child (WA), a child whose Classic page exists but
+// was not folded (WB), an inline-editable grid (WG), a reused Freedom form (WR), a verified "no page" (WN) and an
+// approved section boundary (WS). Only WA and WB build a page that a list must open; WG is built as the list itself.
+const WIRE_DETAIL = (k, e) => `${k}:{schemaName:"${k}Detail",entitySchemaName:"${e}",filter:{detailColumn:"M",masterColumn:"Id"}}`;
+const WIRE_MANIFEST = { entity: "Par", targetPackage: "TgtPkg",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{${[["WA", "WAE"], ["WB", "WBE"], ["WG", "WGE"], ["WR", "WRE"], ["WN", "WNE"], ["WS", "WSE"]].map(([k, e]) => WIRE_DETAIL(k, e)).join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${["WA", "WB", "WG", "WR", "WN", "WS"].map((k) => `{operation:"insert",name:"${k}",parentName:"T",values:{itemType:2}}`).join(",")}]};});` }],
+  detailSchemas: {
+    WADetail: { entity: "WAE", editPage: "WAEPage" }, WBDetail: { entity: "WBE", editPage: "WBEPage" }, WGDetail: { entity: "WGE", editPage: "WGEPage" },
+    WRDetail: { entity: "WRE", reuseFreedomPage: "WRE_FormPage" }, WNDetail: { entity: "WNE", editPage: false },
+    WSDetail: { entity: "WSE", editPage: "WSEPage", opensClassicPage: "WSEPage" } },
+  childPageSchemas: {
+    WAEPage: { entity: "WAE", schemas: [{ pkg: "C", body: `define("WAEPage",[],function(){return{entitySchemaName:"WAE",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] },
+    WGEPage: { entity: "WGE", schemas: [{ pkg: "C", body: `define("WGEPage",[],function(){return{entitySchemaName:"WGE",methods:{getFilter:function(){return 1;}},diff:[]};});` }] } } };
+const wireRun = runMigration(WIRE_MANIFEST, { baseDir: FIX });
+const wireOpts = checklistOpts(WIRE_MANIFEST);
+const wireGroups = checklistGroups(wireRun, wireOpts);
+const wireRows = wireGroups.filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => ({ ...r, groupKey: g.pageKey })));
+const wireRow = (e) => wireRows.find((r) => r.label.includes("`" + e + "`"));
+check("child page wiring: the parent page carries ONE wiring row per related list whose child page is built — the folded child and the not-yet-folded Classic page — plus an explicit no-page row for the inline grid, and none for a reused form, a verified no-page child or a section boundary",
+  wireRows.length === 3 && wireRows.every((r) => r.groupKey === "main")
+  && wireRow("WAE")?.vk?.type === "relatedpage" && wireRow("WBE")?.vk?.type === "relatedpage"
+  && !!wireRow("WGE")?.na && !wireRow("WGE")?.vk
+  && !wireRow("WRE") && !wireRow("WNE") && !wireRow("WSE"),
+  () => wireRows.map((r) => [r.groupKey, r.deliverableId, r.vk?.type, r.na]));
+check("child page wiring: the row names the opening related list, the child page key, its template and the Classic page it replaces, and the read that closes it targets the child entity in the target package",
+  /Related list "WADetail" opens the rebuilt child page `child:WAE` \(on `BaseMiniPageTemplate`, replacing Classic `WAEPage`\) on Add and on open-record/.test(wireRow("WAE")?.label || "")
+  && /`child:WBE` \(replacing Classic `WBEPage`\)/.test(wireRow("WBE")?.label || "")
+  && wireRow("WAE").vk.evidence === "relatedPage:WAE" && wireRow("WAE").vk.entity === "WAE"
+  && wireRow("WAE").vk.package === "TgtPkg" && wireRow("WAE").vk.childKey === "child:WAE"
+  && wireRow("WBE").vk.childKey === "child:WBE" && wireRow("WAE").deliverableId === "child-page-wiring:WADetail",
+  () => wireRows.map((r) => [r.label, r.vk]));
+check("child page wiring: the wiring line is its own quoted paragraph — a bare `>` separates it from a quoted body that follows",
+  /#### Child page: WBE — opened by detail "WBDetail"\n> \*\*Wiring:\*\* [^\n]*\n>\n> ⚠ \*\*`WBEPage` is a REAL Classic edit page/.test(wireRun.plan),
+  () => wireRun.plan.split("\n").filter((l, i, a) => /Child page: WBE/.test(a[i - 1] || "") || /Child page: WBE/.test(l) || /Child page: WBE/.test(a[i - 2] || "")));
+{
+  // A reused Freedom form sets the same add-on as a rebuilt page of the same entity, so the two cannot both hold.
+  const m = { ...WIRE_MANIFEST, detailSchemas: { ...WIRE_MANIFEST.detailSchemas, WRDetail: { entity: "WAE", reuseFreedomPage: "WAE_FormPage" } } };
+  const plan = runMigration({ ...m, schemas: [{ pkg: "P", body: m.schemas[0].body.replace('entitySchemaName:"WRE"', 'entitySchemaName:"WAE"') }] }, { baseDir: FIX }).plan;
+  check("child page wiring: a reused form and a rebuilt page for ONE entity are named as a wiring conflict in the plan",
+    /⚠ \*\*Wiring conflict:\*\* 2 different pages, rebuilt or reused, are to open for `WAE` \(`child:WAE@WADetail`, `WAE_FormPage`\)/.test(plan),
+    () => plan.split("\n").filter((l) => /Wiring/.test(l)).map((l) => l.slice(0, 220)));
+}
+check("child page wiring: the plan states the same wiring under each built child's mapping, the inline grid's explicit no-page outcome, and nothing for the reused or boundary children",
+  /#### Child page: WAE — opened by detail "WADetail"\n> \*\*Wiring:\*\* Related list "WADetail" opens the rebuilt child page `child:WAE`[^\n]*Closed by `--verify` from the stand read `get-related-page-addon`[^\n]*`TgtPkg`/.test(wireRun.plan)
+  && /#### Child page: WBE — opened by detail "WBDetail"\n> \*\*Wiring:\*\* Related list "WBDetail" opens the rebuilt child page `child:WBE`/.test(wireRun.plan)
+  && /#### Child page: WGE — opened by detail "WGDetail"\n> \*\*Wiring:\*\* no page to wire — an inline-editable related list/.test(wireRun.plan)
+  && !/#### Child page: WRE[^\n]*\n> \*\*Wiring/.test(wireRun.plan) && !/#### Child page: WSE[^\n]*\n> \*\*Wiring/.test(wireRun.plan)
+  && !/#### Child page: WNE[^\n]*\n> \*\*Wiring/.test(wireRun.plan),
+  () => wireRun.plan.split("\n").filter((l) => /Child page: W|Wiring/.test(l)).map((l) => l.slice(0, 160)));
+{
+  const cl = renderChecklist(wireRun, wireOpts);
+  check("child page wiring: `--checklist` lists the wiring rows as pending work and the inline grid as N/A with its reason, never as pending",
+    /\*\*Child page wiring\*\*/.test(cl) && /\| Related list "WADetail" opens[^\n]*\| ☐ pending \|/.test(cl)
+    && /\| Related list "WGDetail" — `WGE` \| N\/A — no page to wire — an inline-editable related list/.test(cl),
+    () => cl.split("\n").filter((l) => /Related list "W/.test(l)).map((l) => l.slice(0, 200)));
+  const reads = readPlan(wireRun, wireOpts).reads.filter((r) => r.kind === "reachability" && r.reachabilityKey.startsWith("relatedPage:"));
+  check("child page wiring: the read plan asks the stand for each built child's RelatedPage add-on in the target package, copied whole, once per entity",
+    reads.map((r) => r.reachabilityKey).sort().join() === "relatedPage:WAE,relatedPage:WBE"
+    && reads.every((r) => /copied WHOLE/.test(r.what) && /`get-related-page-addon`/.test(r.what) && /`package-name` = `TgtPkg`/.test(r.what)),
+    () => reads);
+  const wired = (name, extra = {}) => ({ success: true, entitySchemaName: "WAE", packageName: "TgtPkg", pageCount: 1,
+    pages: [{ pageSchemaName: name, isDefault: true, isAdd: false, isSspDefault: false }], ...extra });
+  const wireMark = (reach, pages = { "child:WAE": { schemaName: "Tgt_WAEPage", viewConfig: { items: [] } } }) => {
+    const md = renderVerify(wireRun, wireOpts, { pages, reachability: reach }).markdown;
+    const line = md.split("\n").find((l) => /Related list "WADetail" opens/.test(l)) || "";
+    return line.split(" | ").slice(2, 4).join(" | ").replace(/ˋ/g, "`");
+  };
+  check("child page wiring: `--verify` closes the row only when the add-on's default page IS the built child page, read off the stand response",
+    /✅ Done \| Add and open-record open `Tgt_WAEPage`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") })),
+    () => wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }));
+  check("child page wiring: an add-on with no pages, a default on another page and a separate add page on another page are each ❌ MISSING, naming what opens instead",
+    /❌ MISSING \| the RelatedPage add-on for `WAE` has no default page in `TgtPkg`/.test(wireMark({ "relatedPage:WAE": { ...wired("x"), pageCount: 0, pages: [] } }))
+    && /❌ MISSING \| open-record opens `Other_Page`, Add opens `Other_Page`, the built child page is `Tgt_WAEPage`/.test(wireMark({ "relatedPage:WAE": wired("Other_Page") }))
+    && /❌ MISSING \| Add opens `Quick_Page`, the built child page is `Tgt_WAEPage`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", {
+      pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, isAdd: false }, { pageSchemaName: "Quick_Page", isDefault: false, isAdd: true }] }) })),
+    () => [wireMark({ "relatedPage:WAE": wired("Other_Page") })]);
+  check("child page wiring: a portal-only or per-type default does not decide what the related list opens — ❌ MISSING",
+    /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All external users" }] }) }))
+    && /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, typeColumnValue: "a1b2" }] }) })));
+  // clio names only the two seeded audiences: a custom-role entry reads as `roleName: null` with the role UId in `role`.
+  const customRole = { role: "7f3b2c1d-0000-4000-8000-00000000abcd", roleName: null };
+  const generalByUId = { role: "A29A3BA5-4B0D-DE11-9A51-005056C00008", roleName: null };
+  const roleMarks = () => [
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...customRole }, { pageSchemaName: "Old_Page", isDefault: true, roleName: "All employees" }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...customRole }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true, ...customRole }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All employees" }] }) }),
+    wireMark({ "relatedPage:WAE": wired("x", { pages: [
+      { pageSchemaName: "Old_Page", isDefault: true, ...customRole }, { pageSchemaName: "Tgt_WAEPage", isDefault: true, ...generalByUId }] }) })];
+  check("child page wiring: only the general entry decides — a custom-role default (role UId, `roleName: null`) is skipped in either order, and the `All employees` default is read as the general one by name or by its UId",
+    /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(roleMarks()[0])
+    && /❌ MISSING \| open-record opens `Old_Page`, Add opens `Old_Page`/.test(roleMarks()[1])
+    && /✅ Done/.test(roleMarks()[2]) && /✅ Done/.test(roleMarks()[3])
+    && /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, roleName: "All employees" }] }) })),
+    roleMarks);
+  check("child page wiring: the schema UId match ignores case — an uppercase add-on UId closes the row against a lowercase built UId even when the schema names differ",
+    /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Renamed_Page", pageSchemaUId: "33333333-AAAA-4BBB-8CCC-DDDDDDDDDDDD", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "33333333-aaaa-4bbb-8ccc-dddddddddddd", viewConfig: { items: [] } } })),
+    () => wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Renamed_Page", pageSchemaUId: "33333333-AAAA-4BBB-8CCC-DDDDDDDDDDDD", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "33333333-aaaa-4bbb-8ccc-dddddddddddd", viewConfig: { items: [] } } }));
+  check("child page wiring: when both sides carry a schema UId the entry is matched by UId, so a same-named page in another package does not close the row",
+    /❌ MISSING/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", pageSchemaUId: "11111111-1111-4111-8111-111111111111", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "22222222-2222-4222-8222-222222222222", viewConfig: { items: [] } } }))
+    && /✅ Done/.test(wireMark({ "relatedPage:WAE": wired("x", { pages: [{ pageSchemaName: "Tgt_WAEPage", pageSchemaUId: "22222222-2222-4222-8222-222222222222", isDefault: true }] }) },
+      { "child:WAE": { schemaName: "Tgt_WAEPage", schemaUId: "22222222-2222-4222-8222-222222222222", viewConfig: { items: [] } } })));
+  check("child page wiring: no read, a failed read and a read from another package are ⚠ verify — never a close, never a builder's word",
+    /⚠ verify \| the RelatedPage add-on for `WAE` was not read/.test(wireMark({}))
+    && /⚠ verify \| the RelatedPage read for `WAE` is not a `get-related-page-addon` response \(boom\)/.test(wireMark({ "relatedPage:WAE": { success: false, error: "boom" } }))
+    && /⚠ verify/.test(wireMark({ "relatedPage:WAE": true }))
+    && /⚠ verify \| the add-on was read from `Custom`, the plan targets `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "Custom" }) }))
+    && /⚠ verify \| the add-on read carries no `packageName`, so it cannot confirm the add-on is in `TgtPkg`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: undefined }) }))
+    && /⚠ verify \| the add-on read carries no `packageName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: "" }) })),
+    () => [wireMark({}), wireMark({ "relatedPage:WAE": true }), wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage", { packageName: undefined }) })]);
+  check("child page wiring: a child page reported NOT BUILT is ❌ MISSING, and one that reports no schemaName is ⚠ verify — the binding is matched against the built page, not assumed",
+    /❌ MISSING \| the child page `child:WAE` is reported as NOT BUILT/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": false }))
+    && /⚠ verify \| the built child page `child:WAE` reports no `schemaName`/.test(wireMark({ "relatedPage:WAE": wired("Tgt_WAEPage") }, { "child:WAE": { viewConfig: { items: [] } } })));
+}
+{
+  // With no target package the row and its read name "the target package", and a read from any package is matched.
+  const noPkgManifest = { ...WIRE_MANIFEST, targetPackage: undefined };
+  const npRun = runMigration(noPkgManifest, { baseDir: FIX });
+  const npOpts = checklistOpts(noPkgManifest);
+  const npRow = checklistGroups(npRun, npOpts).filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows)
+    .find((r) => r.label.includes("`WAE`"));
+  const npRead = readPlan(npRun, npOpts).reads.find((r) => r.kind === "reachability" && r.reachabilityKey === "relatedPage:WAE");
+  const npMark = () => {
+    const md = renderVerify(npRun, npOpts, { pages: { "child:WAE": { schemaName: "Tgt_WAEPage", viewConfig: { items: [] } } },
+      reachability: { "relatedPage:WAE": { success: true, entitySchemaName: "WAE", packageName: "Custom", pageCount: 1,
+        pages: [{ pageSchemaName: "Tgt_WAEPage", isDefault: true, isAdd: false }] } } }).markdown;
+    return (md.split("\n").find((l) => /Related list "WADetail" opens/.test(l)) || "").split(" | ").slice(2, 4).join(" | ").replace(/ˋ/g, "`");
+  };
+  check("child page wiring: with no target package the row and the read plan name the target package generically, and `--verify` matches a read from any package",
+    /the RelatedPage add-on for `WAE` in the target package names that page/.test(npRow?.label || "")
+    && npRow?.vk?.package === null
+    && /`package-name` = the plan's target package/.test(npRead?.what || "")
+    && /✅ Done \| Add and open-record open `Tgt_WAEPage`/.test(npMark()),
+    () => [npRow?.label, npRow?.vk, npRead?.what, npMark()]);
+}
 // `logicOnly` (the inline-grid child's logicSpec) suppresses FORM-PAGE framing: the Base-field overrides
 // section renders normally but vanishes under logicOnly (it is a build instruction on the template's fields, not logic).
 {
@@ -3856,8 +4251,8 @@ check("`--verify` renders that same row N/A too — and tallies it as neither mi
   () => ({ missing: xsVerify.missing, row: (/^\| \d+ \| Cross-section boundaries.*$/m.exec(xsVerify.markdown) || [])[0] }));
 
 // (4) THE PLAN STATES IT, in the user's terms, in both places a reader looks: the Main-scope row and the child section.
-check("the Main-scope row calls it `Reuse (Classic)` and names the page + the section it belongs to",
-  /\| InternalRequest — opened by detail "VacDetail" \| Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
+check("the Main-scope row calls it `Reuse (Classic)`, names the page + the section it belongs to, and states it is not built here",
+  /\| InternalRequest — opened by detail "VacDetail" \| \*\*Won't do\*\* — Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
   () => (xsBoundary.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
 check("the child section states the boundary concisely — the page, the owning section, and that migrating it is out of scope",
   /Reuse \(Classic\) — cross-section boundary \(approved\)/.test(xsBoundary.plan)
@@ -3959,8 +4354,8 @@ check("parseDetailSchemas: manifest `entity` wins over the body's entitySchemaNa
   chRun.childPages.some((c) => c.entity === "ManifestEntity")
   && !chRun.childPages.some((c) => c.entity === "BodyEntity"),
   () => chRun.childPages.map((c) => c.entity));
-check("parseDetailSchemas: manifest `title` reaches the Layout table as the related list's caption",
-  /\| Manifest Title \|/.test(chRun.plan), () => (chRun.plan.match(/^\|.*Related list.*$/m) || [])[0]);
+check("parseDetailSchemas: manifest `title` never reaches the Layout table as the related list's caption",
+  !/\| Manifest Title \|/.test(chRun.plan), () => (chRun.plan.match(/^\|.*Related list.*$/m) || [])[0]);
 check("parseDetailSchemas: manifest `editable:false` wins over a body that shows add-record VISIBLE",
   chRun.childPages.some((c) => c.entity === "ManifestEntity" && c.editable === false)
   && /· view\/attach-only/.test(chRun.plan),
@@ -4011,6 +4406,15 @@ check("STRUCTURE: a non-typed Rebuild form that folds to 0 FIELDS is BLOCKED (ho
   () => hollowForm.structure.issues);
 check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1 field is NOT blocked (even with details)",
   stVerifiedNone.structure.issues.every((i) => !/0 FIELDS/.test(i)));
+// The 0-field gate exempts only a reconcile, which extends a page that already has a body. A parallel section
+// rebuilds its form from the Classic page, so a hollow fold blocks it exactly like a plain Rebuild.
+const hollowManifest = { entity: "X", detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"D",parentName:"Tabs",values:{itemType:2}}]};});` }] };
+const hollowParallel = runMigration({ ...hollowManifest, planMeta: { freedomExists: true, parallelSection: true } }, { baseDir: FIX });
+const hollowReconcile = runMigration({ ...hollowManifest, planMeta: { freedomExists: true } }, { baseDir: FIX });
+check("STRUCTURE: a hollow 0-field fold BLOCKS a parallel-section Rebuild (planMeta.parallelSection) but not a reconcile of an existing page",
+  hollowParallel.structure.issues.some((i) => /0 FIELDS/.test(i)) && hollowReconcile.structure.issues.every((i) => !/0 FIELDS/.test(i)),
+  () => ({ parallel: hollowParallel.structure.issues, reconcile: hollowReconcile.structure.issues }));
 // Detail editability lives in the detail's OWN config, not on the master. When the
 // detail schema IS bundled (get-classic-migration-bundle gathers detailSchemas), editability is RESOLVED — no
 // per-detail "confirm view-only vs add/edit/delete" line. It fires ONLY when the schema was NOT bundled.
@@ -4021,9 +4425,11 @@ check("#3 detail-editability: STILL flagged when the detail schema was NOT bundl
   /detail-editability/.test(deUnbundled.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
-// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
+// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one. A child is
+// placed under it so the name is defined somewhere and the stub is kept (a merge of a name nothing defines is dropped).
 const rv4 = mergeHierarchy([L("P", { entity: "X", diff: [
-  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" })] })]);
+  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" }),
+  di({ name: "GhostKid", parentName: "GhostBtn", propertyName: "items", bindTo: "Kid" })] })]);
 const rv4i = (rv4.items || []).find((i) => i.name === "GhostBtn");
 check("RV4: merge-onto-absent stub carries visible/tip/caption (full insert shape), + a merge warning",
   !!rv4i && rv4i.visible === false && rv4i.tip === "Resources.Strings.T" && rv4i.caption === "Resources.Strings.C"
@@ -5091,6 +5497,71 @@ check("the blocked list page still RENDERS its partial reading, with the verdict
   () => renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).filter((l) => /List page|approvable/.test(l)).slice(0, 6));
 check("a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
+// A section run with NO `section.seed` reports the missing base chain through its merges onto base elements: those
+// stay correctness (the section gate has no no-seed reason of its own), so the list gate stays blocked.
+const svNoSeed = runMigration({ ...svManifest(), section: { schemas: [{ pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:${JSON.stringify([
+  { operation: "merge", parentName: "DataGridContainer", propertyName: "items", name: "DataGrid", values: { type: "tiled" } }])}};});` }],
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("a section with NO `section.seed` whose layer merges a base element keeps the list gate BLOCKED — the merge is the only report of the missing seed",
+  () => svNoSeed.listGate?.blocked === true && /correctness warning/.test((svNoSeed.listGate?.reasons || []).join(" "))
+    && /DataGridContainer/.test((svNoSeed.listGate?.reasons || []).join(" ")),
+  () => svNoSeed.listGate);
+// A section layer that merges a button no section schema defines — the record page's `PrintButton`, copied into the
+// section with the parent it has on the card. Classic ignores the merge, so the list gate stays open: the note is
+// fidelity, and the stub's `parentName` is no unresolved parent.
+const svStrayMerge = [{ pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:${JSON.stringify([
+  { operation: "merge", parentName: "RightContainer", propertyName: "items", name: "PrintButton", values: { caption: "Print" } }])}};});` }];
+const svStrayRun = runMigration({ ...svManifest(), section: { schemas: svStrayMerge, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("a section merge of an element no section schema defines leaves the list gate open — no unresolved parent from its `parentName`, and the element is not published as a section element",
+  () => svStrayRun.listGate?.blocked === false && !/RightContainer|PrintButton/.test((svStrayRun.listGate?.reasons || []).join(" "))
+    && !JSON.stringify(svStrayRun.section?.sectionView || {}).includes("PrintButton"),
+  () => ({ gate: svStrayRun.listGate, sectionView: svStrayRun.section?.sectionView }));
+
+/* --- the section path's attribution and counts ------------------------------------------
+   A button's package is the layer that declares it, not a later layer that only hides it. `activeRowActions` is the
+   slot the row actions sit in, so it is not unmodelled grid config. The command-bar count line is split by source.
+   A parse failure names only the layers that failed, and the others are still read. --- */
+const svHideLayer = { pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:[`
+  + `{"operation":"merge","name":"CreateOrderFromOpportunityButton","values":{"visible":false}},`
+  + `{"operation":"merge","name":"DataGrid","values":{"activeRowActions":[],"showPrimaryDisplayColumn":true}}`
+  + `]};});` };
+const svHideRun = runMigration({ ...svManifest(), section: { ...svManifest().section, schemas: [...svSection, svHideLayer] } },
+  { baseDir: FIX });
+const svHideBtn = (svHideRun.listChangeSet?.commandBarActions || []).find((a) => a.name === "CreateOrderFromOpportunityButton");
+check("a button's package is the layer that DECLARES it (`OrderInSales`), not a later layer that only hides it — the hiding is still visible as `staticVisible: false`",
+  () => svHideBtn?.package === "OrderInSales" && svHideBtn?.staticVisible === false,
+  () => svHideBtn);
+check("a base-owned grid a client layer reconfigures reports that FIRST client layer, not the seed package that defined the grid",
+  () => { const g = (svHideRun.section?.sectionView?.gridConfig || []).find((x) => x.name === "DataGrid");
+    return g?.package === "OrderInSales"; },
+  () => svHideRun.section?.sectionView?.gridConfig);
+check("`activeRowActions` is NOT raised as unmodelled grid config — it is the slot the row actions sit in, and they are read as `rowActions` — while a genuinely unmodelled key beside it still is",
+  () => { const g = (svHideRun.section?.sectionView?.gridConfig || []).find((x) => x.name === "DataGrid");
+    return !!g && !g.props.includes("activeRowActions") && g.props.includes("showPrimaryDisplayColumn"); },
+  () => svHideRun.section?.sectionView?.gridConfig);
+check("the command-bar count line splits the actions by SOURCE and does not say a view-`diff` button is uncaptured",
+  () => { const line = renderPlan(svRun, {}).split(String.fromCodePoint(10)).find((l) => l.startsWith("- **Command-bar actions:**")) || "";
+    return /1 found — 0 via `getSectionActions\(\)`, 1 declared in the section's view `diff`/.test(line) && !/not captured/.test(line); },
+  () => renderPlan(svRun, {}).split(String.fromCodePoint(10)).filter((l) => l.includes("Command-bar actions")));
+const svPartialRun = runMigration({ ...svManifest(), section: { ...svManifest().section,
+  schemas: [...svSection, { pkg: "WorkSalesBase", body: svBadSection[0].body }] } }, { baseDir: FIX });
+check("with ONE broken layer the list gate names that layer and says the others are still read — the other layer's button really is still in the plan",
+  () => { const r = (svPartialRun.listGate?.reasons || []).join(" ");
+    return svPartialRun.listGate?.blocked === true && /1 of 2 section layer/.test(r) && /WorkSalesBase/.test(r)
+      && !/every element/.test(r) && !/method-body signals alone/.test(r)
+      && (svPartialRun.listChangeSet?.commandBarActions || []).some((a) => a.name === "CreateOrderFromOpportunityButton"); },
+  () => ({ gate: svPartialRun.listGate, actions: svPartialRun.listChangeSet?.commandBarActions?.map((a) => a.name) }));
+check("the empty command-bar line on an incomplete section reading does not claim the view `diff` declares no button",
+  () => { const line = renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).find((l) => l.startsWith("- **Command-bar actions:**")) || "";
+    return /none found in what could be read/.test(line) && !/nor the section's view `diff` declares one/.test(line); },
+  () => renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).filter((l) => l.includes("Command-bar actions")));
+check("when EVERY section layer is broken the gate still says the list rests on the method-body signals alone",
+  () => /failed to parse in every layer/.test((svBadRun.listGate?.reasons || []).join(" "))
+    && /method-body signals alone/.test((svBadRun.listGate?.reasons || []).join(" ")),
+  () => svBadRun.listGate);
 
 /* --- the list gate has to be CONSUMED, and all four of its arms have to be pinned ------
    The gate was prose: `renderListPageBlock` printed the ⛔ paragraph and nothing else read `listGate`, so the CLI
@@ -6017,8 +6488,14 @@ check("F2 dashboards verify: a non-V3 template gets the SAME ⚠ for the same mi
      the unrelated `TestPkg`) — so the agent reports it stand-only and silently drops delivery. ---- */
 const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration");
 const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
-const skillFlat = flatten(path.join(SKILL_DIR, "SKILL.md"));
-const mappingFlat = flatten(path.join(SKILL_DIR, "references", "classic-to-freedom-mapping.md"));
+const MAPPING_REF = "classic-to-freedom-mapping.md";
+// "The skill" is SKILL.md plus the procedure references it hands out by reader (the dashboards brief, the
+// conditional manifest inputs, the orchestration reference) — every reference except the mapping one, which is
+// the other side of the one-owner rule below.
+const skillFlat = [path.join(SKILL_DIR, "SKILL.md"),
+  ...fs.readdirSync(path.join(SKILL_DIR, "references")).filter((f) => f.endsWith(".md") && f !== MAPPING_REF).sort()
+    .map((f) => path.join(SKILL_DIR, "references", f))].map(flatten).join(" ");
+const mappingFlat = flatten(path.join(SKILL_DIR, "references", MAPPING_REF));
 // One fact, one owner. The trap and its recipe are PROCEDURE, so they live in the skill that executes them;
 // the reference names the parameter and points there. Requiring BOTH documents to carry it, as this pair of
 // goldens would, locks the duplication in place - a reader then has two copies to keep in step, and the
@@ -7251,7 +7728,7 @@ const vOk = renderVerify(vResult, {}, {
     // Approvals is TWO required components — the module ABOVE the island (`crt.Approval`) AND the
     // list (`crt.ApprovalList`). A page with "all deliverables present" must build both, or this fixture is no
     // longer testing what its name says.
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "SecurityCheckProcessButton", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence: the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
@@ -7441,6 +7918,56 @@ check("detail add-mechanism: each raised as a decision + rendered in the plan (c
   dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
   && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
   () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+// OOTB selection-window wrappers the + calls directly: `PICUtilities.openProductLookupToLink` and
+// `LookupMultiAddMixin.openLookupWithMultiSelect`. Each is a lookup add, with the same decision row.
+{
+  const wrapperRun = (name, addRecord) => runMigration({
+    entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"${name}",entitySchemaName:"WChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { [name]: { body: `define("${name}",[],function(){return{entitySchemaName:"WChild",methods:{addRecord:function(){${addRecord}}}};});`, editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS,
+  });
+  for (const [name, call] of [
+    ["ProductLinkDetail", `PICUtilities.openProductLookupToLink(this, "Product", this.onProductsSelected);`],
+    ["MultiSelectDetail", `this.openLookupWithMultiSelect(true);`],
+  ]) {
+    const run = wrapperRun(name, call);
+    const det = run.changeSet.details.find((d) => d.detailSchema === name);
+    check(`detail add-mechanism: addRecord → ${call.split("(")[0]} is a lookup add with a detail-add-mechanism decision`,
+      det?.addMode?.lookup === true
+      && run.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism" && n.item.startsWith(name))
+      && /ADDS via a lookup/.test(run.plan),
+      () => ({ addMode: det?.addMode, decisions: run.changeSet.needsDecision.map((n) => n.kind) }));
+  }
+  check("detail add-mechanism: a longer identifier containing a wrapper name is NOT a lookup signal (word-bounded)",
+    detectAddMode(`define("W",[],function(){return{methods:{addRecord:function(){this.openLookupWithMultiSelectX();this.myopenProductLookupToLink();}}};});`) === null);
+}
+// get-classic-page-sources entry shape: `body` is the top layer, `bodies` is the replacing chain base→top as
+// {pkg, body}. A lookup add declared only in the base layer is detected from `bodies`; `body` alone misses it.
+{
+  const baseLayer = `define("OrderProductDetailV2",[],function(){return{entitySchemaName:"OrderProduct",methods:{addRecord:function(){PICUtilities.openProductLookupToLink(this, "Product", this.onProductsSelected);}}};});`;
+  const topLayer = `define("OrderProductDetailV2",[],function(){return{methods:{getGridDataColumns:function(){var c=this.callParent(arguments);delete c.Comment;return c;}}};});`;
+  const layerRun = (entry) => runMigration({
+    entity: "Order", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("OrderPageV2",[],function(){return{entitySchemaName:"Order",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"OrderProductDetailV2",entitySchemaName:"OrderProduct",filter:{detailColumn:"Order",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { OrderProductDetailV2: { ...entry, editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS,
+  });
+  const damLines = (run) => run.plan.split("\n").filter((l) => /\[detail-add-mechanism\]/.test(l));
+  const chainRun = layerRun({ body: topLayer, bodies: [{ pkg: "Order", body: baseLayer }, { pkg: "Custom", body: topLayer }] });
+  const chainDetail = chainRun.changeSet.details.find((d) => d.detailSchema === "OrderProductDetailV2");
+  check("detail chain (bundle shape): base-layer addRecord → PICUtilities.openProductLookupToLink in `bodies` → addMode.lookup + detail-add-mechanism line",
+    chainDetail?.addMode?.lookup === true
+    && chainRun.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism" && n.item.startsWith("OrderProductDetailV2"))
+    && damLines(chainRun).length === 1 && /ADDS via a lookup/.test(damLines(chainRun)[0]),
+    () => ({ addMode: chainDetail?.addMode, lines: damLines(chainRun) }));
+  const topRun = layerRun({ body: topLayer });
+  const topDetail = topRun.changeSet.details.find((d) => d.detailSchema === "OrderProductDetailV2");
+  check("detail chain (bundle shape) control: the top `body` alone → no lookup add and no detail-add-mechanism line",
+    topDetail !== undefined && topDetail.addMode?.lookup !== true && damLines(topRun).length === 0
+    && !topRun.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism"),
+    () => ({ addMode: topDetail?.addMode, lines: damLines(topRun) }));
+}
 // review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
 // (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
 // "attach existing" grid button, fixes the list filters) is NOW detected. It was invisible to detectAddMode before
@@ -7490,6 +8017,218 @@ const roTopOnly = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg:
 const roTopDetail = roTopOnly.changeSet.details.find((d) => d.detailSchema === "StageDetail");
 check("#12 control: the TOP layer ALONE (base not supplied) does NOT detect the read-only signal — the chain union is what surfaces it",
   !roTopDetail?.addMode?.addDisabled);
+// A detail's REMOVED ROW ACTIONS. Classic builds the row menu in `addRecordOperationsMenuItems` from the Copy / Edit /
+// Delete item getters; an override without `callParent` keeps only what it re-adds, and a getter that returns nothing
+// drops its own action. That is a different signal from add-new DISABLED (it is about EXISTING rows), and it gets its
+// OWN plan line: phrased inside the add-disabled row it is read as part of "no add button" and never built.
+{
+  const detBody = (methods) => `define("RaDetail",[],function(){return{entitySchemaName:"RaChild",methods:{${methods}}};});`;
+  const emptyMenu = detectAddMode(detBody("addRecordOperationsMenuItems:Terrasoft.emptyFn"));
+  check("`addRecordOperationsMenuItems: Terrasoft.emptyFn` alone → rowActionsRemoved [Copy, Edit, Delete] and NOT add-disabled",
+    () => emptyMenu?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete" && emptyMenu.addDisabled === false,
+    () => emptyMenu);
+  const emptyBodyMenu = detectAddMode(detBody("addRecordOperationsMenuItems:function(toolsButtonMenu){ /* no row actions */ }"));
+  check("an EMPTY `addRecordOperationsMenuItems` body removes all three row actions too",
+    () => emptyBodyMenu?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => emptyBodyMenu);
+  const noDelete = detectAddMode(detBody("getDeleteRecordMenuItem:function(){ return null; }"));
+  check("`getDeleteRecordMenuItem` returning null → rowActionsRemoved [Delete] only",
+    () => noDelete?.rowActionsRemoved?.join(",") === "Delete" && noDelete.addDisabled === false, () => noDelete);
+  const emptyGetterSpellings = ["getCopyRecordMenuItem:Terrasoft.emptyFn", "getCopyRecordMenuItem:function(){}",
+    "getCopyRecordMenuItem:function(){ return; }", "getCopyRecordMenuItem:function(){ return undefined; }"];
+  check("every empty-getter spelling (emptyFn, empty body, bare return, return undefined) removes that one action",
+    () => emptyGetterSpellings.every((m) => detectAddMode(detBody(m))?.rowActionsRemoved?.join(",") === "Copy"),
+    () => emptyGetterSpellings.map((m) => detectAddMode(detBody(m))));
+  const realGetter = detectAddMode(detBody(`getDeleteRecordMenuItem:function(){ return this.getButtonMenuItem({Caption:"Del",Click:{"bindTo":"deleteRecords"}}); }`));
+  check("a getter override that returns a real menu item removes NOTHING",
+    () => !(realGetter?.rowActionsRemoved || []).length, () => realGetter);
+  const withParent = detectAddMode(detBody("addRecordOperationsMenuItems:function(m){ this.callParent(arguments); m.addItem(this.getExtraItem()); }"));
+  check("an `addRecordOperationsMenuItems` override that calls callParent removes NO row actions (and alone is no signal at all)",
+    () => withParent === null, () => withParent);
+  check("the stage-history partial override (re-adds only getEditRecordMenuItem, BASE layer) → [Copy, Delete]",
+    () => roDetail?.addMode?.rowActionsRemoved?.join(",") === "Copy,Delete" && roDetail.addMode.addDisabled === true,
+    () => roDetail?.addMode);
+  check("a top layer that calls callParent inherits the base layer's partial menu → still [Copy, Delete]",
+    () => detectAddMode([roBaseLayer, detBody("addRecordOperationsMenuItems:function(){ this.callParent(arguments); }")].join("\n"))
+      ?.rowActionsRemoved?.join(",") === "Copy,Delete");
+  check("Applicants ApplicantRequestDetail keeps add-DISABLED (via AddTypedRecordButton) AND carries rowActionsRemoved",
+    () => vacDetail?.addMode?.addDisabled === true && vacDetail.addMode.rowActionsRemoved?.join(",") === "Copy,Edit,Delete",
+    () => vacDetail?.addMode);
+  const raLines = attachRun.plan.split("\n").filter((l) => /\[detail-row-actions\]/.test(l));
+  const addLines = attachRun.plan.split("\n").filter((l) => /\[detail-add-mechanism\]/.test(l));
+  check("the Applicants plan carries a SEPARATE detail-row-actions line naming Copy and Delete, beside the add-disabled line",
+    () => raLines.length === 1 && /Copy/.test(raLines[0]) && /Delete/.test(raLines[0])
+      && addLines.length === 1 && /add-new DISABLED/.test(addLines[0]) && !/Copy|Delete/.test(addLines[0]),
+    () => ({ raLines, addLines }));
+  check("the row-actions line says to KEEP records opening from the list, and a removed Edit is not an instruction to stop them opening",
+    () => /keep records opening from the list \(open-on-click\)/.test(raLines[0] || "")
+      && /records still open on click/.test(raLines[0] || "") && !/WITHOUT[^.]{0,40}Edit/.test(raLines[0] || ""),
+    () => raLines);
+  check("the Layout table row of the detail carries the removed-row-actions suffix",
+    () => attachRun.plan.split("\n").some((l) => /^\|/.test(l) && /Related list/.test(l) && /no row Copy\/Delete \(keep open-on-click\)/.test(l)),
+    () => attachRun.plan.split("\n").filter((l) => /^\|/.test(l) && /Related list/.test(l)));
+  const attachRows = () => checklistGroups(attachRun, checklistOpts(attachRun)).flatMap((g) => g.rows);
+  check("the row-actions decision reaches the Plan-vs-Done checklist as its own confirm row (so it is built, not just read)",
+    () => attachRows().some((r) => r.confirm?.kind === "detail-row-actions"),
+    () => attachRows().map((r) => r.confirm?.kind).filter(Boolean));
+  // R3/R4: a detail whose ONLY customization is the emptied menu is still DETECTED, raises the row-actions decision,
+  // and is NOT reported as a read-only add flow.
+  const onlyRa = runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { RaDetail: { body: detBody("addRecordOperationsMenuItems:Terrasoft.emptyFn"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const onlyRaKinds = onlyRa.changeSet.needsDecision.filter((n) => /^detail-/.test(n.kind)).map((n) => n.kind);
+  check("an emptyFn-menu-only detail → detail-row-actions and NO detail-add-mechanism (no read-only add flow claimed)",
+    () => onlyRaKinds.includes("detail-row-actions") && !onlyRaKinds.includes("detail-add-mechanism")
+      && !/add-new DISABLED/.test(onlyRa.plan) && /\[detail-row-actions\]/.test(onlyRa.plan),
+    () => onlyRaKinds);
+  const editOnly = detectAddMode(detBody("getEditRecordMenuItem:Terrasoft.emptyFn"));
+  const editOnlyCs = { details: [{ detailSchema: "S", caption: "Items", entity: "RaChild" }], needsDecision: [] };
+  attachDetailAddModes(editOnlyCs, { S: { addMode: editOnly } });
+  check("a removed Edit ALONE asks to remove nothing from the Freedom rows and keeps open-on-click",
+    () => editOnlyCs.needsDecision.length === 1 && /Nothing to remove from the Freedom list rows/.test(editOnlyCs.needsDecision[0].reason)
+      && /open-on-click/.test(editOnlyCs.needsDecision[0].reason),
+    () => editOnlyCs.needsDecision);
+  // A commented-out override is not a definition: the stock menu still provides every row action.
+  const noRa = (m) => !(detectAddMode(detBody(m))?.rowActionsRemoved || []).length;
+  check("a `//`-commented-out `addRecordOperationsMenuItems: Terrasoft.emptyFn` removes NO row actions",
+    () => noRa("// addRecordOperationsMenuItems: Terrasoft.emptyFn,\n getX: function(){}"),
+    () => detectAddMode(detBody("// addRecordOperationsMenuItems: Terrasoft.emptyFn,\n getX: function(){}")));
+  check("a `/* */`-commented-out getter emptyFn removes NO row actions",
+    () => noRa("/* getDeleteRecordMenuItem: Terrasoft.emptyFn */ getX: function(){}"),
+    () => detectAddMode(detBody("/* getDeleteRecordMenuItem: Terrasoft.emptyFn */ getX: function(){}")));
+  check("an override named only inside a string literal removes NO row actions",
+    () => noRa("getX: function(){ return 'addRecordOperationsMenuItems: Terrasoft.emptyFn'; }"));
+  const quotedKey = detectAddMode(detBody(`"addRecordOperationsMenuItems": Terrasoft.emptyFn`));
+  check("a QUOTED `\"addRecordOperationsMenuItems\"` key is still read as the override → [Copy, Edit, Delete]",
+    () => quotedKey?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => quotedKey);
+  // An override the scan cannot read claims no removal, and is reported as UNREAD so the plan still raises its row.
+  const byRef = detectAddMode(detBody("addRecordOperationsMenuItems: this.fn"));
+  check("a BY-REFERENCE `addRecordOperationsMenuItems: this.fn` override claims no removal and is reported as unreadable",
+    () => noRa("addRecordOperationsMenuItems: this.fn") && byRef?.rowActionsUnreadable?.join(",") === "addRecordOperationsMenuItems",
+    () => byRef);
+  const overCap = detectAddMode(detBody(`addRecordOperationsMenuItems: function(){ var x = 1;${" ".repeat(20001)}this.getEditRecordMenuItem(); }`));
+  check("an override body past the scan cap claims no removal and is reported as unreadable",
+    () => !(overCap?.rowActionsRemoved || []).length && overCap?.rowActionsUnreadable?.join(",") === "addRecordOperationsMenuItems",
+    () => overCap);
+  const byRefGetter = detectAddMode(detBody("getDeleteRecordMenuItem: this.makeDeleteItem"));
+  check("a by-reference getter override is reported as unreadable under the GETTER's name",
+    () => byRefGetter?.rowActionsUnreadable?.join(",") === "getDeleteRecordMenuItem" && !(byRefGetter.rowActionsRemoved || []).length,
+    () => byRefGetter);
+  const unreadCs = { details: [{ detailSchema: "S", caption: "Items", entity: "RaChild" }], needsDecision: [] };
+  attachDetailAddModes(unreadCs, { S: { addMode: byRef } });
+  check("an unreadable override still raises a detail-row-actions decision that asks for the Classic member to be read by hand",
+    () => unreadCs.needsDecision.length === 1 && unreadCs.needsDecision[0].kind === "detail-row-actions"
+      && /cannot read/.test(unreadCs.needsDecision[0].reason) && /UNKNOWN/.test(unreadCs.needsDecision[0].reason)
+      && /open-on-click/.test(unreadCs.needsDecision[0].reason),
+    () => unreadCs.needsDecision);
+  // A getter or `callParent` named only in a comment or a string is not code.
+  const commentedGetter = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ /* getCopyRecordMenuItem dropped */ m.addItem(this.getEditRecordMenuItem()); }"));
+  check("a getter named only in a comment inside the menu override is NOT re-added → [Copy, Delete]",
+    () => commentedGetter?.rowActionsRemoved?.join(",") === "Copy,Delete", () => commentedGetter);
+  const stringGetter = detectAddMode(detBody(`addRecordOperationsMenuItems: function(m){ var n = "getDeleteRecordMenuItem"; }`));
+  check("a getter named only in a string inside the menu override is NOT re-added → [Copy, Edit, Delete]",
+    () => stringGetter?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => stringGetter);
+  const commentedParent = detectAddMode(detBody("addRecordOperationsMenuItems: function(){\n // this.callParent(arguments);\n }"));
+  check("an emptied menu with a commented-out `callParent` still removes all three row actions",
+    () => commentedParent?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => commentedParent);
+  const docCommentGetter = detectAddMode(detBody("getDeleteRecordMenuItem: function(){ /** removed */ return null; }"));
+  check("a `/** */`-commented getter returning null removes that one action → [Delete]",
+    () => docCommentGetter?.rowActionsRemoved?.join(",") === "Delete", () => docCommentGetter);
+  // A lone quote the walk misreads as a string opener (here inside a regex literal) swallows its own line only.
+  const strayQuote = detectAddMode(detBody(`fmt: function(v){ return v.replace(/"/g, ""); },\naddRecordOperationsMenuItems: Terrasoft.emptyFn`));
+  check("a quote inside a regex literal before the override does not hide it → [Copy, Edit, Delete]",
+    () => strayQuote?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => strayQuote);
+  // The ES6 method shorthand is a definition like `name: function`; a call through `this.` is not.
+  const shorthand = detectAddMode(detBody("addRecordOperationsMenuItems(m) { m.addItem(this.getEditRecordMenuItem()); }"));
+  check("an ES6 shorthand `addRecordOperationsMenuItems(m) { … }` override is read → [Copy, Delete]",
+    () => shorthand?.rowActionsRemoved?.join(",") === "Copy,Delete" && !(shorthand.rowActionsUnreadable || []).length,
+    () => shorthand);
+  check("a `this.getDeleteRecordMenuItem()` CALL is not read as a getter definition",
+    () => detectAddMode(detBody("getX: function(){ return this.getDeleteRecordMenuItem(); }")) === null,
+    () => detectAddMode(detBody("getX: function(){ return this.getDeleteRecordMenuItem(); }")));
+  // The most-derived layer decides: a top override can restore what a base layer removed.
+  const restoredMenu = detectAddMode([detBody("addRecordOperationsMenuItems: Terrasoft.emptyFn"),
+    detBody("addRecordOperationsMenuItems: function(m){ m.addItem(this.getCopyRecordMenuItem()); m.addItem(this.getEditRecordMenuItem()); m.addItem(this.getDeleteRecordMenuItem()); }")].join("\n"));
+  check("a base emptyFn menu with a top override re-adding all three getters removes NO row actions",
+    () => !(restoredMenu?.rowActionsRemoved || []).length, () => restoredMenu);
+  const restoredGetter = detectAddMode([detBody("getDeleteRecordMenuItem: Terrasoft.emptyFn"),
+    detBody(`getDeleteRecordMenuItem: function(){ return this.getButtonMenuItem({Caption:"Del",Click:{"bindTo":"deleteRecords"}}); }`)].join("\n"));
+  check("a base emptyFn Delete getter with a top getter returning a real item removes NO row actions",
+    () => !(restoredGetter?.rowActionsRemoved || []).length, () => restoredGetter);
+  // An inline-editable grid that also drops a row action: the grid-only add row is dropped from ⚠ Confirm as a
+  // restatement of the Layout note, the row-actions row is not.
+  const gridRa = runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { RaDetail: { body: detBody("getCellControlsConfig: function(){ var enabledColumns = [\"Name\"]; }, getDeleteRecordMenuItem: Terrasoft.emptyFn"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const gridRaRows = checklistGroups(gridRa, checklistOpts(gridRa)).flatMap((g) => g.rows);
+  check("an editable-grid-only detail that drops Delete keeps its ⚠ Confirm row-actions line and checklist row, and drops the grid-only add row",
+    () => /\[detail-row-actions\][^\n]{0,400}Delete/.test(gridRa.plan) && !/\[detail-add-mechanism\]/.test(gridRa.plan)
+      && gridRaRows.some((r) => r.confirm?.kind === "detail-row-actions"),
+    () => ({ lines: gridRa.plan.split("\n").filter((l) => /\[detail-/.test(l)), kinds: gridRaRows.map((r) => r.confirm?.kind).filter(Boolean) }));
+  // An override that keeps the stock menu and then edits it is not "removes nothing": what survives is unknown.
+  for (const edit of ["menu.removeByKey(\"Delete\");", "var items = menu.getItems();"]) {
+    const edited = detectAddMode(detBody(`addRecordOperationsMenuItems: function(menu){ this.callParent(arguments); ${edit} }`));
+    check(`a callParent menu override that then edits the menu (\`${edit}\`) is reported as unreadable, not as removing nothing`,
+      () => edited?.rowActionsUnreadable?.join(",") === "addRecordOperationsMenuItems" && !(edited.rowActionsRemoved || []).length,
+      () => edited);
+  }
+  const longerName = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ m.addItem(this.getDeleteRecordMenuItemWithConfirm()); }"));
+  check("a longer getter name that CONTAINS a stock getter's name does not re-add that stock action → [Copy, Edit, Delete]",
+    () => longerName?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => longerName);
+  const passThroughGetter = detectAddMode([detBody("getDeleteRecordMenuItem: Terrasoft.emptyFn"),
+    detBody("getDeleteRecordMenuItem: function(){ return this.callParent(arguments); }")].join("\n"));
+  check("a top getter that passes through callParent to a base emptyFn getter still removes that action → [Delete]",
+    () => passThroughGetter?.rowActionsRemoved?.join(",") === "Delete", () => passThroughGetter);
+  check("a getter that calls callParent over the STOCK getter removes nothing",
+    () => detectAddMode(detBody("getDeleteRecordMenuItem: function(){ var item = this.callParent(arguments); return item; }")) === null);
+  // Literal edge cases of the brace walk.
+  const escapedQuote = detectAddMode(detBody(String.raw`addRecordOperationsMenuItems: function(m){ var s='it\'s }'; m.addItem(this.getEditRecordMenuItem()); }`));
+  check("an escaped quote inside a string does not end the string early → [Copy, Delete]",
+    () => escapedQuote?.rowActionsRemoved?.join(",") === "Copy,Delete", () => escapedQuote);
+  const multiLineTemplate = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ var t = `a\n}\nb`; m.addItem(this.getEditRecordMenuItem()); }"));
+  check("a template literal spanning lines with a `}` in it does not end the body early → [Copy, Delete]",
+    () => multiLineTemplate?.rowActionsRemoved?.join(",") === "Copy,Delete", () => multiLineTemplate);
+  const regexBrace = detectAddMode(detBody("addRecordOperationsMenuItems: function(m){ var r = /}/; m.addItem(this.getEditRecordMenuItem()); }"));
+  check("a `}` inside a REGEX literal ends the body there: the getter after it is not seen as re-added → [Copy, Edit, Delete]",
+    () => regexBrace?.rowActionsRemoved?.join(",") === "Copy,Edit,Delete", () => regexBrace);
+  // Mixed removed + unreadable: both Layout notes, and one decision carrying both instructions.
+  const mixed = runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+    detailSchemas: { RaDetail: { body: detBody("getDeleteRecordMenuItem: Terrasoft.emptyFn, getCopyRecordMenuItem: this.makeCopy"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const mixedLine = mixed.plan.split("\n").find((l) => /\[detail-row-actions\]/.test(l)) || "";
+  check("removed + unreadable overrides: the Layout row carries both notes joined by ' · '",
+    () => mixed.plan.split("\n").some((l) => /^\|/.test(l) && /no row Delete \(keep open-on-click\) · ⚠ row-action override unread — check by hand/.test(l)),
+    () => mixed.plan.split("\n").filter((l) => /^\|/.test(l) && /Related list/.test(l)));
+  check("removed + unreadable overrides: ONE decision line says to build WITHOUT the Delete action AND names the unread getter",
+    () => /WITHOUT the Delete/.test(mixedLine) && /It also overrides .getCopyRecordMenuItem. in a form/.test(mixedLine) && /UNKNOWN/.test(mixedLine),
+    () => mixedLine);
+  const litPartial = detectAddMode(detBody("addRecordOperationsMenuItems: function(){ var s='}'; // }\n this.getEditRecordMenuItem(); }"));
+  check("a partial override with `}` inside a string and inside a `//` comment still reads to its real end → [Copy, Delete]",
+    () => litPartial?.rowActionsRemoved?.join(",") === "Copy,Delete", () => litPartial);
+  // The typed-entity Shared section renders a detail's removed row actions as ONE suffix after the related-list text;
+  // a removed Edit alone adds no suffix there either.
+  const typedRaBase = `define("XPage",[],function(){return{entitySchemaName:"X",diff:[],details:{D1:{schemaName:"RaDetail",entitySchemaName:"RaChild",filter:{detailColumn:"X",masterColumn:"Id"}},D2:{schemaName:"EoDetail",entitySchemaName:"EoChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;
+  const typedRaForm = `define("XICPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"GT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.GenInfoCaption"}},{operation:"insert",name:"Acc",parentName:"GT",propertyName:"items",values:{bindTo:"Acc"}}]};});`;
+  const typedRa = runMigration({
+    entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: typedRaBase }], section: [{ pkg: "S", body: docSecBody }],
+    typedPages: [{ schema: "XICPage", type: "Incoming" }],
+    typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: typedRaForm }] } },
+    detailSchemas: { RaDetail: { body: detBody("addRecordOperationsMenuItems:Terrasoft.emptyFn"), editPage: false },
+      EoDetail: { body: detBody("getEditRecordMenuItem:Terrasoft.emptyFn"), editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS,
+  });
+  const sharedStart = typedRa.plan.indexOf("### Shared across all typed forms");
+  const sharedLines = sharedStart < 0 ? [] : typedRa.plan.slice(sharedStart, typedRa.plan.indexOf("### Typed page mappings")).split("\n");
+  const raBullet = sharedLines.find((l) => /^- \*\*/.test(l) && /RaChild/.test(l)) || "";
+  const eoBullet = sharedLines.find((l) => /^- \*\*/.test(l) && /EoChild/.test(l)) || "";
+  check("typed Shared section: an emptied-menu detail ends with ONE ' — ' + 'no row Copy/Delete (keep open-on-click)'",
+    () => raBullet.endsWith(" — ⚠ no row Copy/Delete (keep open-on-click)") && raBullet.split(" — ").length === 3,
+    () => sharedLines);
+  check("typed Shared section: a removed Edit ALONE adds no row-actions suffix",
+    () => eoBullet !== "" && !/no row/.test(eoBullet), () => sharedLines);
+}
 // review (Applicant #13): a DCM object with SEVERAL case versions → the On-stand signals line advises using the
 // ACTIVE/published one (both widgets auto-populate); a single case gets no such note.
 const dcmEmpty = { entity: "X", changeSet: { viewConfigDiff: [], details: [], standardFeatures: [], cardActions: [], needsDecision: [] } };
@@ -7559,6 +8298,35 @@ const hdrNone = renderDesignSpec({ entity: "H", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("header→top-area: NOT recommended when headerLayout is absent (standard left-profile page)",
   !/Template recommendation — header elements present/.test(hdrNone));
+const hdrExisting = renderDesignSpec({ entity: "H", changeSet: { headerLayout: "wide", viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, { sectionHostMode: "existing-section" });
+check("header→top-area: NOT recommended under 'existing-section' — the extended existing page keeps its own template (control: the same body under the default mode recommends it)",
+  !/Template recommendation — header elements present/.test(hdrExisting) && /Template recommendation — header elements present/.test(hdrBase));
+// Only the MAIN form page's template row closes under 'existing-section': a child or mini page of the same run is
+// still built on its own template, so its row keeps the gate.
+const esCtx = { sectionHostMode: "existing-section" };
+check("existing-section: engineStatusReason closes the MAIN form-template row and leaves a child page's template row open (control: the default mode closes neither)",
+  /existing-section/.test(engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, esCtx) || "")
+  && engineStatusReason({ deliverableId: "template:form", pageKey: "child:UsrChild" }, esCtx) == null
+  && engineStatusReason({ deliverableId: "template:form", pageKey: "main" }, {}) == null);
+// The same closure end to end: a real `runMigration` checklist for an 'existing-section' run with a folded mini page
+// closes the MAIN form-template row and keeps the mini page's own template row gated.
+{
+  const esMiniBody = (name, field) => `define("${name}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});`;
+  const esMiniRun = runMigration({
+    entity: "X", seed: CLEAN_SEED, targetPackage: "UsrX",
+    schemas: [{ pkg: "P", body: esMiniBody("XPage", "F") }],
+    addRecordMiniPage: { schema: "XMiniPage" },
+    miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: esMiniBody("XMiniPage", "MF") }] } },
+    planMeta: { ...docPlanMeta, freedomExists: true }, signals: FULL_SIGNALS,
+    placement: { targetPackageEditable: { resolved: true, value: true }, sectionHost: { resolved: true, mode: "existing-section", listPage: "X_ListPage", formPage: "X_FormPage" } },
+  });
+  const tplRows = (esMiniRun.checklist || "").split("\n").filter((l) => /\| Form template → /.test(l));
+  check("existing-section (end to end): the checklist closes the MAIN form-template row (N/A) and keeps the mini page's `BaseMiniPageTemplate` row gated",
+    tplRows.some((l) => /Form template → `PageWithTabsFreedomTemplate`/.test(l) && /N\/A — .*existing-section/.test(l))
+    && tplRows.some((l) => /Form template → `BaseMiniPageTemplate`/.test(l) && /☐ pending/.test(l) && !/N\/A/.test(l)),
+    () => tplRows);
+}
 const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",
@@ -7568,8 +8336,8 @@ check("#7 the TOP-LEVEL record page (not a child) never gets the small-form reco
 // these; none → NOT migrated), and the full 'go check on-stand' how-to is kept ONLY for the unresolved fallback.
 const paResolved = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] },
   signals: { printables: { resolved: true, present: false }, processes: { resolved: true, present: true, names: ["Approve order"] } } }, {});
-check("#8 Print, signals resolved present:false → concrete 'Not migrated', drops the SysModuleReport how-to",
-  /Not migrated.*no printables/.test(paResolved) && !/SysModuleReport filtered/.test(paResolved));
+check("#8 Print, signals resolved present:false → concrete **Won't do** with the stand check's reason, drops the SysModuleReport how-to",
+  /\*\*Won't do\*\* — no printables/.test(paResolved) && !/SysModuleReport filtered/.test(paResolved));
 check("#8 Process, signals resolved present:true → names the process + 'Run process', drops the how-to",
   /Approve order/.test(paResolved) && /Run process/.test(paResolved) && !/Check on-stand with/.test(paResolved));
 const paUnres = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton"] }, signals: {} }, {});
@@ -7584,6 +8352,20 @@ check("#8 the STANDARD card actions are DROPPED from a CHILD edit page (inherite
 const paChildCustom = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "calculateSaaSMetricsButton"] }, signals: {} }, { isChildPage: true });
 check("#8 a child's OWN custom card action still renders on a CHILD page (only the standard base ones are dropped)",
   /\| calculateSaaSMetrics \|/.test(paChildCustom) && !/\| Print \|/.test(paChildCustom));
+{
+  // Only `unresolved` and `present` get a signal note; `absent` and `child` get none, so no other verdict reads as
+  // "present → wire".
+  const names = (s) => (s?.names || []).join(", ");
+  const notesOf = (v) => [processActionNote(v, names), printActionNote(v, names)];
+  const present = notesOf({ key: "x", kind: "present", sig: { names: ["A"] } });
+  const unresolved = notesOf({ key: "x", kind: "unresolved" });
+  const others = ["absent", "child", "other"].map((kind) => notesOf({ key: "x", kind, reason: "r" }));
+  check("#8 the Print / Run-process signal notes: `present` wires, `unresolved` keeps the how-to, any other verdict kind gets no note",
+    /Connected process: A → wire/.test(present[0]?.note) && /Printable: A → wire/.test(present[1]?.note)
+    && /ProcessInModules/.test(unresolved[0]?.note) && /SysModuleReport/.test(unresolved[1]?.note)
+    && others.every((pair) => pair.every((n) => n === null)),
+    () => ({ present, unresolved, others }));
+}
 
 
 /* ---- inverse call graph: a body-called method is not an orphan ---- */
@@ -8388,6 +9170,17 @@ const PG_MANIFEST = {
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
 const pgOpts = checklistOpts(PG_MANIFEST);
+// Two related lists on `main` open the SAME physical child page: one add-on, one page, so there is no conflict to
+// report, while each list keeps its own wiring row and the stand is read once.
+{
+  const rows = checklistGroups(pgRun, pgOpts).filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows)
+    .filter((r) => r.vk?.type === "relatedpage" && r.vk.entity === "C1");
+  const reads = readPlan(pgRun, pgOpts).reads.filter((r) => r.reachabilityKey === "relatedPage:C1");
+  check("child page wiring (one page reached by two lists): each list has its own wiring row, the add-on is read ONCE, and the plan reports no conflict",
+    rows.length === 2 && new Set(rows.map((r) => r.vk.childKey)).size === 1 && reads.length === 1
+      && !/Wiring conflict/.test(pgRun.plan),
+    () => ({ rows: rows.map((r) => [r.deliverableId, r.vk.childKey]), reads: reads.length }));
+}
 // The page keys the ROWS are stamped with — derived, never hardcoded, so this stays honest under a key-format change.
 const pgRowKeys = [];
 for (const g of checklistGroups(pgRun, pgOpts)) for (const r of g.rows) pgRowKeys.push(r.pageKey || g.pageKey || "main");
@@ -8412,8 +9205,8 @@ check("--checklist: the group key set is EXACTLY the LITERAL key set this fixtur
 
 /* ---- THE CORE DEFECT, both directions: one page's components must never close another page's row ---- */
 const pgChildKey = pgUnitKeys.find((k) => k.startsWith("child:C1@"));
-const pgFieldsRow = (v, key) => {          // this page's `Fields — N expected` row, read off its own tally + text
-  const lines = v.markdown.split("\n").filter((l) => /Fields — \d+ expected/.test(l));
+const pgFieldsRow = (v, key) => {          // the per-field rows, read off their own tally + text
+  const lines = v.markdown.split("\n").filter((l) => /^\| \d+ \| Field `/.test(l));
   return { lines, page: v.pages[key] };
 };
 // (i) the PARENT is over-built: its merged bundle carries every field name in the whole tree. The children's rows
@@ -8436,7 +9229,7 @@ const pgParentHoardsAll = renderVerify(pgRun, pgOpts, { pages: {
 check("CORE: a CHILD page's fields are NOT counted from the PARENT's components — the parent's bundle carrying `C1F`/`G1F` leaves both child pages short (the exact false green this ticket closes)",
   () => pgParentHoardsAll.pages.main.missing === 0
   && pgParentHoardsAll.pages[pgChildKey].complete === false && pgParentHoardsAll.pages["child:G1"].complete === false
-  && pgFieldsRow(pgParentHoardsAll, pgChildKey).lines.filter((l) => /0\/1 expected fields present/.test(l)).length === 2
+  && pgFieldsRow(pgParentHoardsAll, pgChildKey).lines.filter((l) => /Field `(C1F|G1F)`.*0\/1 expected fields present/.test(l)).length === 2
   && pgParentHoardsAll.complete === false,
   () => ({ pages: pgParentHoardsAll.pages, fieldRows: pgFieldsRow(pgParentHoardsAll, pgChildKey).lines.map((l) => l.slice(0, 120)) }));
 // (ii) the mirror image: the CHILD is over-built and the PARENT is empty. `main`'s row must not be closed by a
@@ -8447,7 +9240,7 @@ const pgChildHoardsAll = renderVerify(pgRun, pgOpts, { pages: {
     { name: "MainF", type: "crt.Input" }, { name: "C1F", type: "crt.Input" }, { name: "DG", type: "crt.DataGrid" }] } },
 } });
 // Groups render main FIRST, then the deduped sub-page walk — so row 0 of the Fields rows is the main page's.
-const pgMirrorFieldRows = pgChildHoardsAll.markdown.split("\n").filter((l) => /Fields — \d+ expected/.test(l));
+const pgMirrorFieldRows = pgChildHoardsAll.markdown.split("\n").filter((l) => /^\| \d+ \| Field `(MainF|C1F)`/.test(l));
 check("CORE (mirror): the MAIN page's fields are NOT counted from a CHILD's components — isolation is symmetric, not a one-way filter",
   () => pgChildHoardsAll.pages.main.complete === false && pgChildHoardsAll.pages[pgChildKey].missing === 0
   && /⚠ verify \| 0\/1 expected fields present/.test(pgMirrorFieldRows[0])   // main: its `MainF` sits in the CHILD's bundle → still short
@@ -8502,6 +9295,122 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   && checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).find((r) => r.vk?.id === "child:U1#childpage").vk.requires.join("+") === "referencePage+components",
   () => ({ junk: pgJunkNoEvidence.pages["child:U1"], withEv: pgJunkWithEvidence.pages["child:U1"],
     ids: checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type === "evidence" && r.pageKey === "child:U1").map((r) => r.vk) }));
+
+/* ---- `get-page`'s merged `bundle.viewConfig` nests components under MORE than `items` — `crt.Button`
+   holds its `crt.MenuItem`s in `menuItems`, panels their header buttons in `tools`, grids their actions in
+   `bulkActions` / `rowToolbarItems`. The walk descends into every one of these slots, so a built `ReloadDataMenuItem`
+   under a card's `menuItems` counts as a `crt.MenuItem` rather than reading as "missing: ReloadData". Asserted on the
+   RENDERED count the `childpage` row prints ("N component(s) returned by get-page"), which is the walk's length,
+   and on the ops a name-matching resolver reads. ---- */
+{
+  const cardMenu = { viewConfig: { items: [{ name: "CardToolsContainer", type: "crt.FlexContainer", items: [
+    { name: "ActionButton", type: "crt.Button", menuItems: [
+      { name: "ReloadDataMenuItem", type: "crt.MenuItem" },
+      { name: "ViewOptionsMenuItem", type: "crt.MenuItem", menuItems: [{ name: "TagMenuItem", type: "crt.MenuItem" }] },
+    ] },
+  ] }] } };
+  const menuOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": cardMenu }, ...U1_EVIDENCE });
+  const menuNames = verifyCtx({ pages: { main: cardMenu } }, "main").ops.map((o) => o.name);
+  check("the native card-action menu items under a crt.Button's `menuItems` (nested too) are flattened — ReloadData/ViewOptions/Tag are on the built page and the rendered count includes them",
+    /page built — 5 component\(s\) returned by get-page/.test(menuOut.markdown)
+    && ["ReloadDataMenuItem", "ViewOptionsMenuItem", "TagMenuItem"].every((n) => menuNames.includes(n))
+    && verifyCtx({ pages: { main: cardMenu } }, "main").typeCount("crt.MenuItem") === 3,
+    () => ({ names: menuNames, row: menuOut.markdown.split("\n").filter((l) => /child:U1/.test(l)).map((l) => l.slice(-160)) }));
+  // `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` reach the walk as well, and
+  // grid `columns` stay OUT of it — a column carrying a `name` is DATA read by the list-column resolver on its own,
+  // never a component (it would otherwise pad the counts and let a column named like a field close the fields row).
+  const nested = { viewConfig: { items: [
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "PanelAddButton", type: "crt.Button" }], items: [
+      { name: "Grid", type: "crt.DataGrid",
+        columns: [{ code: "PDS_Name", name: "Name", caption: "Name" }, { code: "PDS_Owner", name: "Owner" }],
+        bulkActions: [{ name: "BulkDelete", type: "crt.MenuItem" }],
+        rowToolbarItems: [{ name: "RowOpen", type: "crt.MenuItem" }],
+        headerToolbarItems: [{ name: "GridExport", type: "crt.Button" }] },
+      { name: "Lookup", type: "crt.ComboBox", listActions: [{ name: "AddNewRecord", type: "crt.ComboboxAction" }] },
+    ] },
+  ] } };
+  const nestedCtx = verifyCtx({ pages: { main: nested } }, "main");
+  const nestedNames = nestedCtx.ops.map((o) => o.name);
+  const nestedOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": nested }, ...U1_EVIDENCE });
+  check("components under `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` are flattened exactly once; grid `columns` are NOT",
+    ["PanelAddButton", "BulkDelete", "RowOpen", "GridExport", "AddNewRecord"].every((n) => nestedNames.includes(n))
+    && !nestedNames.includes("Name") && !nestedNames.includes("Owner")
+    && nestedNames.length === 8 && new Set(nestedNames).size === 8
+    && /page built — 8 component\(s\) returned by get-page/.test(nestedOut.markdown)
+    /* the columns are still read — by their own resolver, off the grid node */
+    && [...nestedCtx.gridColumns.codes].sort().join(",") === "PDS_Name,PDS_Owner",
+    () => ({ names: nestedNames, cols: [...nestedCtx.gridColumns.codes] }));
+  // The action slots the component contracts declare for child view elements really reach the walk — FeedItem's item menu, a ComboBox's inline control
+  // actions, a rich-text editor's clip menu, a list widget's header menu, the communication options' row menu and a
+  // message editor's toolbar/input slots.
+  const actionSlots = { viewConfig: { items: [
+    { name: "Feed", type: "crt.FeedItem", itemActionItems: [{ name: "FeedEdit", type: "crt.MenuItem" }, { name: "FeedDelete", type: "crt.MenuItem" }] },
+    { name: "Owner", type: "crt.ComboBox", controlActions: [{ name: "OwnerGoTo", type: "crt.MenuItem" }] },
+    { name: "Notes", type: "crt.RichTextEditor", attachmentMenuItems: [{ name: "NotesAttach", type: "crt.MenuItem" }] },
+    { name: "Widget", type: "crt.ListWidget", widgetToolbarItems: [{ name: "WidgetExport", type: "crt.MenuItem" }] },
+    { name: "Comm", type: "crt.CommunicationOptions", optionActions: [{ name: "CommCall", type: "crt.MenuItem" }] },
+    { name: "Body", type: "crt.MessageEditorBody", toolbarItems: [{ name: "AttachFileButton", type: "crt.Button" }],
+      inputs: [{ name: "BodyInput", type: "crt.MessageEditorInput" }] },
+    { name: "Pipeline", type: "crt.FullPipelineWidget", toolbarMenuItems: [{ name: "PipelineRefresh", type: "crt.MenuItem" }] },
+  ] } };
+  const slotCtx = verifyCtx({ pages: { main: actionSlots } }, "main");
+  const slotNames = slotCtx.ops.map((o) => o.name);
+  check("components under `itemActionItems` / `controlActions` / `attachmentMenuItems` / `widgetToolbarItems` / `optionActions` / `toolbarItems` / `inputs` / `toolbarMenuItems` are flattened exactly once",
+    ["FeedEdit", "FeedDelete", "OwnerGoTo", "NotesAttach", "WidgetExport", "CommCall", "AttachFileButton", "BodyInput", "PipelineRefresh"].every((n) => slotNames.includes(n))
+    && slotNames.length === 16 && new Set(slotNames).size === 16 && slotCtx.typeCount("crt.MenuItem") === 7,
+    () => ({ names: slotNames }));
+}
+
+/* ---- A table-emitted element row is closed by IDENTITY, not by a global type count.
+   The walk sees every `crt.Button` in `tools` / `menuItems` / `items`, so counting the type would let a panel's
+   `tools` `AddRelatedRecord` or a template's Save button close a row that expects the custom `Recalculate` button;
+   the row therefore matches the expected element by name and type. ---- */
+{
+  const recalcRes = { entity: "X", changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+    tableElements: [{ classic: "RecalculateButton", element: "Recalculate", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.RecalculateClicked" }] }, signals: {} };
+  const recalcRow = (md) => md.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | ");
+  const unrelated = { viewConfig: { items: [
+    { name: "SaveButton", type: "crt.Button" },
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
+  ] } };
+  const unrelatedOut = renderVerify(recalcRes, {}, { pages: { main: unrelated } });
+  check("an unrelated toolbar button under `tools` (and a template button under `items`) does NOT close a row that expects the `Recalculate` button — ❌ MISSING naming it",
+    /❌ MISSING/.test(recalcRow(unrelatedOut.markdown)) && /no crt\.Button built \(1 expected\)/.test(unrelatedOut.markdown)
+    && /missing: Recalculate/.test(unrelatedOut.markdown) && /2 other crt\.Button on the page/.test(unrelatedOut.markdown)
+    && unrelatedOut.complete === false,
+    () => recalcRow(unrelatedOut.markdown));
+  const builtOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
+    { name: "Recalculate", type: "crt.Button" },
+  ] } } } });
+  check("the `Recalculate` button built under its emitted name closes the row ✅ Done, matched BY NAME",
+    /✅ Done/.test(recalcRow(builtOut.markdown)) && /matched BY NAME \(Recalculate\)/.test(builtOut.markdown),
+    () => recalcRow(builtOut.markdown));
+  const wrongTypeOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate", type: "crt.Label" }] } } } });
+  check("the expected name built as the WRONG type is not a match — ❌ MISSING saying what it was built as",
+    /❌ MISSING/.test(recalcRow(wrongTypeOut.markdown)) && /Recalculate is built as .crt\.Label./.test(wrongTypeOut.markdown),
+    () => recalcRow(wrongTypeOut.markdown));
+  const untypedOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate" }] } } } });
+  check("the expected name built with NO type says so in prose — no code span around a non-type",
+    /Recalculate is built as an untyped component/.test(untypedOut.markdown),
+    () => recalcRow(untypedOut.markdown));
+  const namelessOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ type: "crt.Button" }] } } } });
+  check("components present but NONE named → ⚠ identity NOT checked, never ✅ off the type count",
+    /⚠/.test(recalcRow(namelessOut.markdown)) && /identity NOT checked/.test(recalcRow(namelessOut.markdown)),
+    () => recalcRow(namelessOut.markdown));
+  const twoRes = { ...recalcRes, changeSet: { ...recalcRes.changeSet, tableElements: [
+    { classic: "A", element: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+    { classic: "B", element: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  ] } };
+  const partialOut = renderVerify(twoRes, {}, { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Button" }] } } } });
+  check("2 expected / 1 built under its name → ⚠ partial naming the missing one",
+    /⚠/.test(recalcRow(partialOut.markdown)) && /1\/2 crt\.Button built \(matched by name\) — missing: B/.test(partialOut.markdown),
+    () => recalcRow(partialOut.markdown));
+  const absentOut = renderVerify(recalcRes, {}, { pages: {} });
+  check("no `--built.pages` entry keeps the D6 tri-state — ⚠ unverified, never ❌",
+    /⚠/.test(recalcRow(absentOut.markdown)) && !/❌ MISSING/.test(recalcRow(absentOut.markdown)),
+    () => recalcRow(absentOut.markdown));
+}
 
 // SCOPE: the `components: [] + noChangesReason` concession is `#quality-gates`-ONLY. A `#childpage`
 // record proves a page was BUILT, which an empty answer never can — "nothing to fix" is not a meaningful outcome
@@ -8725,6 +9634,36 @@ check("the `--plan` artifact PRINTS the engine's version (one string, recorded v
 check("a result with no engine-computed version renders NO version line — never the string 'undefined'",
   !renderPlan({ entity: "X", changeSet: {} }, {}).includes("Plan version"));
 
+// The plan repeats the run-diagnostics block, so a plan file alone names the skill build, clio and stand. The block
+// describes the machine, not the plan, so it stays outside the plan version: a plugin or clio update between plan and
+// build must not ask for re-approval.
+const RUN_DIAG = { skillVersion: "1.12.0", git: { branch: "feature/x", commit: "a5d7e1f", registry: true },
+  clioVersion: "8.1.0.134", gateVersion: "2.0.0.53", environment: "demo", uri: "https://demo.example",
+  stand: { coreVersion: "10.0.0.941", productName: "unknown (cliogate not installed)", dbEngine: "PostgreSql", framework: ".NET 8" } };
+const pvDiag = runMigration({ ...PG_MANIFEST, runDiagnostics: RUN_DIAG }, { baseDir: FIX });
+check("`runDiagnostics` prints the `### Run diagnostics` block in the plan: skill build, clio and stand, one line each",
+  pvDiag.plan.includes("### Run diagnostics")
+    && pvDiag.plan.includes("classic-to-freedom-migration `1.12.0` · branch `feature/x` (marketplace ref) · commit `a5d7e1f`")
+    && pvDiag.plan.includes("**clio:** `8.1.0.134` (CLI on PATH) · bundled cliogate `2.0.0.53`")
+    && pvDiag.plan.includes("**Environment:** `demo` · `https://demo.example`")
+    && pvDiag.plan.includes("Creatio `10.0.0.941` · product unknown (cliogate not installed) · DB `PostgreSql` · `.NET 8`"),
+  () => pvDiag.plan.split("\n").slice(0, 24).join(" ⏎ "));
+check("`runDiagnostics` is NOT part of the plan version — the same plan produced with another skill build or clio keeps its version",
+  pvDiag.planVersion === pvA
+    && runMigration({ ...PG_MANIFEST, runDiagnostics: { ...RUN_DIAG, clioVersion: "8.2.0.1" } }, { baseDir: FIX }).planVersion === pvA,
+  () => ({ base: pvA, withDiagnostics: pvDiag.planVersion }));
+check("a plan with no `runDiagnostics` says the block was not supplied, and the plan is still produced",
+  pgRun.plan.includes("### Run diagnostics") && pgRun.plan.includes("- unknown (not supplied — put the `diagnostics.mjs --json` output into `manifest.runDiagnostics`)"),
+  () => pgRun.plan.split("\n").slice(0, 24).join(" ⏎ "));
+check("a stand error in `runDiagnostics` reads `unknown (<error>)` on the plan's Stand line",
+  runMigration({ ...PG_MANIFEST, runDiagnostics: { ...RUN_DIAG, stand: { error: "timeout" } } }, { baseDir: FIX }).plan.includes("- **Stand:** unknown (timeout)"));
+check("a registry branch is labelled as the marketplace ref in the plan",
+  pvDiag.plan.includes("branch `feature/x` (marketplace ref) · commit `a5d7e1f`"), () => pvDiag.plan.split("### Run diagnostics")[1]?.slice(0, 300));
+const pvDiagOdd = runMigration({ ...PG_MANIFEST, runDiagnostics: { skillVersion: "1.0`\n## Boom", git: { commit: 42 }, stand: "down" } }, { baseDir: FIX }).plan;
+check("`runDiagnostics` values cannot break out of their code span or add a heading, and a field of the wrong type reads `unknown (not supplied)` instead of throwing",
+  !pvDiagOdd.includes("\n## Boom") && pvDiagOdd.includes("**clio:** unknown (not supplied)") && !/commit/.test(pvDiagOdd.split("**Skill:**")[1].split("\n")[0]),
+  () => pvDiagOdd.split("### Run diagnostics")[1]?.slice(0, 400));
+
 /* ==================================================================================================
    Defects three adversarial checkers DEMONSTRATED against the first engine.
    Each block below reproduces one of them and pins the fix.
@@ -8772,6 +9711,32 @@ check("a page key identifies exactly ONE physical page — two same-entity child
   // …and the disambiguator is derived, not invented: it names the resolved Classic schema of the colliding page.
   && kcXKeys.includes("child:X") && kcXKeys.includes("child:X@XAltPage"),
   () => ({ kcKeys }));
+// A grandchild's related list lives on the CHILD page, so its wiring row is the child page's, and it names the
+// grandchild by its final key even when that key moved after the child's rows were first rendered.
+{
+  const kcWire = kcGroups.filter((g) => g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => [g.pageKey, r.vk?.childKey]));
+  check("child page wiring: each row sits on the page that holds the related list — the grandchild `X` page's row is on `child:B` and names its final, disambiguated key",
+    kcWire.length === 3
+    && kcWire.some(([k, c]) => k === "main" && c === "child:X") && kcWire.some(([k, c]) => k === "main" && c === "child:B")
+    && kcWire.some(([k, c]) => k === "child:B" && c === "child:X@XAltPage"),
+    () => kcWire);
+  // Without a person's answer the conflict stays open: the add-on opens one of the two pages, so the other row is ❌.
+  {
+    const altRow = kcGroups.flatMap((g) => g.rows).find((r) => r.vk?.type === "relatedpage" && r.vk.childKey === "child:X@XAltPage");
+    const md = renderVerify(kcRun, kcOpts, {
+      pages: { "child:X": { schemaName: "Built_X", viewConfig: { items: [] } }, "child:X@XAltPage": { schemaName: "Built_XAlt", viewConfig: { items: [] } } },
+      reachability: { "relatedPage:X": { success: true, entitySchemaName: "X", packageName: "TgtPkg", pages: [{ pageSchemaName: "Built_X", isDefault: true }] } } }).markdown;
+    const line = (md.split("\n").find((l) => altRow && l.includes(altRow.label.slice(0, 40)) && /child:X@XAltPage/.test(l)) || "").replace(/ˋ/g, "`");
+    check("child page wiring: with no recorded answer the conflicting row stays ❌ MISSING, naming the page the add-on opens instead",
+      !!altRow && /❌ MISSING \| open-record opens `Built_X`, Add opens `Built_X`, the built child page is `Built_XAlt`/.test(line),
+      () => line);
+    check("child page wiring: two pages of ONE entity are still ONE stand read — the add-on is per entity",
+      readPlan(kcRun, kcOpts).reads.filter((r) => r.reachabilityKey === "relatedPage:X").length === 1);
+  }
+  check("child page wiring: two different rebuilt pages for ONE entity share its single RelatedPage add-on, and the plan names the conflict and both pages",
+    (kcRun.plan.match(/⚠ \*\*Wiring conflict:\*\* 2 different pages, rebuilt or reused, are to open for `X` \(`child:X`, `child:X@XAltPage`\)/g) || []).length === 2,
+    () => kcRun.plan.split("\n").filter((l) => /Wiring/.test(l)).map((l) => l.slice(0, 200)));
+}
 check("the DIAMOND still collapses — the same physical page reached along two paths keeps ONE key (the fix must not turn shared pages into duplicates)",
   new Set(pgUnitKeys).size === pgUnitKeys.length && pgUnitKeys.filter((k) => k.startsWith("child:C1")).length === 1
   && new Set(pgRun.childPages.filter((c) => c.entity === "C1").map((c) => c.pageKey)).size === 1,
@@ -8793,7 +9758,13 @@ const kcManifestPath = path.join(os.tmpdir(), `c2f_kc_manifest_${process.pid}.js
 const kcBuiltFull = path.join(os.tmpdir(), `c2f_kc_built_full_${process.pid}.json`);
 const kcBuiltPart = path.join(os.tmpdir(), `c2f_kc_built_part_${process.pid}.json`);
 try {
-  fs.writeFileSync(kcManifestPath, JSON.stringify(KC_MANIFEST));
+  // Two different `X` pages share ONE RelatedPage add-on, so its default can open only one of them: the honest build
+  // binds the first and a person records an answer for the other wiring row, which this manifest carries.
+  const kcWiring = kcGroups.flatMap((g) => g.rows).filter((r) => r.vk?.type === "relatedpage");
+  // Only the second `X` row conflicts; every other wiring row closes from its own stand read.
+  const kcWiringAnswered = kcWiring.filter((r) => r.vk.entity === "X" && r.vk.childKey !== kcXKeys[0]);
+  fs.writeFileSync(kcManifestPath, JSON.stringify({ ...KC_MANIFEST, deliverableStatus: Object.fromEntries(kcWiringAnswered
+    .map((r) => [`${r.pageKey}#${r.deliverableId}`, { status: "wont-do", decision: "D1" }])) }));
   const kcCli = (args) => runMigrate([...args], { encoding: "utf8" });
   const kcRows = kcGroups.flatMap((g) => g.rows);
   // Everything the checklist asks for, filed honestly: every evidence id gets a complete record and a judge verdict,
@@ -8805,6 +9776,11 @@ try {
   }
   const kcReach = {};
   for (const r of kcRows.filter((x) => x.vk?.type === "onstand")) kcReach[r.vk.evidence] = r.vk.expectCount ? { workplaces: r.vk.expectCount, names: ["Recruiting"] } : true;
+  const kcSchemaName = (k) => `Built_${k.replace(/[^A-Za-z0-9]/g, "_")}`;
+  for (const r of kcWiring.filter((x) => !kcWiringAnswered.includes(x))) {
+    kcReach[r.vk.evidence] = { success: true, entitySchemaName: r.vk.entity, packageName: r.vk.package, pageCount: 1,
+      pages: [{ pageSchemaName: kcSchemaName(r.vk.childKey), isDefault: true, isAdd: false, isSspDefault: false }] };
+  }
   // `schemaUId` is the PROVENANCE field: the plan publishes no GUID, so it can only come from a real get-page.
   // One distinct, well-formed GUID per key here — a payload reusing one across keys is rejected by the CLI (a
   // dedicated check below proves that), and this fixture is the honest case.
@@ -8813,7 +9789,7 @@ try {
   // `entitySchemaName` is the object the page's data source is bound to — the migration invariant. Taken from the
   // page's `entity` vk, i.e. the same string the gate compares against, so a correct build is expressible.
   const kcEntry = (k) => ({ parentSchemaName: kcVk(k, "template")?.exp || "FormPageTemplate", packageName: kcVk(k, "placement")?.exp || undefined,
-    schemaUId: kcUid(), entitySchemaName: kcVk(k, "entity")?.exp,
+    schemaUId: kcUid(), schemaName: kcSchemaName(k), entitySchemaName: kcVk(k, "entity")?.exp,
     viewConfig: { items: [...(kcVk(k, "fields")?.names || []).map((n) => ({ name: n, type: "crt.Input" })),
       ...Array.from({ length: kcVk(k, "details")?.n || 0 }, (_, i) => ({ name: `DG${i}`, type: "crt.DataGrid" }))] } });
   const kcPagesFull = {};
@@ -8828,6 +9804,14 @@ try {
   for (const k of kcDropped) delete kcPagesPart[k];
   const kcFull = kcVerify(kcBuiltFull, kcPagesFull);
   const kcPart = kcVerify(kcBuiltPart, kcPagesPart);
+  check("F1 (real CLI, end to end): exactly one wiring row — the conflicting second `X` page — carries a recorded answer, and every other wiring row closes ✅ Done from its stand read",
+    kcWiringAnswered.length === 1 && kcWiring.length - kcWiringAnswered.length >= 2
+    && kcWiring.filter((r) => !kcWiringAnswered.includes(r)).every((r) => {
+      const re = new RegExp(String.raw`✅ Done \| Add and open-record open .${kcSchemaName(r.vk.childKey)}.`);
+      return re.test(kcFull.out);
+    }),
+    () => ({ wiring: kcWiring.map((r) => [r.pageKey, r.vk.entity, r.vk.childKey]), answered: kcWiringAnswered.map((r) => r.vk.childKey),
+      rows: kcFull.out.split("\n").filter((l) => /Related list/.test(l)).map((l) => l.slice(0, 260)) }));
   check("F1 (real CLI, end to end): with the second X page NEVER built the run does NOT close — publishing no key for it would let the SAME payload read ✅ 'all machine-checkable deliverables present' with a page that does not exist",
     kcDropped.length === 1                                   // the key exists to be dropped (not vacuous)
     && /✅ \*\*All machine-checkable deliverables present/.test(kcFull.verdict)   // control: an honest full build closes
@@ -9110,13 +10094,21 @@ const rcNewApp = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "new-app" }, 
 // `☐ confirm on-stand` — outcome `skip`, which is tallied into neither `missing` nor `unverified`. That is what
 // makes the mode usable: the executor loops on `--verify` until green, and a machine-gated row for a deliverable
 // the plan deliberately dropped would never close.
-check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but un-gated — it adds nothing to missing/unverified, so `--verify` can still reach green",
-  allEq(marksFor(rcPagesOnly.markdown, SECTION_RE), "☐ confirm on-stand") && /deliberately NOT built/.test(rcPagesOnly.markdown)
+check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but closed (`N/A` with the host-mode reason) — it adds nothing to missing/unverified, so `--verify` can still reach green",
+  rcPagesOnly.markdown.split("\n").some((l) => SECTION_RE.test(l) && /N\/A — .*pages-only-no-menu/.test(l)) && /deliberately NOT built/.test(rcPagesOnly.markdown)
   && rcPagesOnly.missing === rcNewApp.missing && rcPagesOnly.unverified === rcNewApp.unverified - 1,
   () => ({ marks: marksFor(rcPagesOnly.markdown, SECTION_RE), pagesOnly: { missing: rcPagesOnly.missing, unverified: rcPagesOnly.unverified }, newApp: { missing: rcNewApp.missing, unverified: rcNewApp.unverified } }));
 check("placement verify (control): the SAME payload under 'new-app' still leaves the section row OPEN — the drop is the approved mode's doing, not a hole in the gate",
   allEq(marksFor(rcNewApp.markdown, SECTION_RE), "⚠ verify"),
   () => marksFor(rcNewApp.markdown, SECTION_RE));
+// An 'existing-section' run registers nothing either: the section row stays visible but closed, so `--verify` can
+// reach green with no `sectionRegistered` evidence.
+const EXISTING_SECTION_RE = /Navigable section — \*\*already registered\*\*/;
+const rcExisting = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "existing-section" }, { pages: rcPages, reachability: {}, miniPageWired: true });
+check("placement verify: an approved 'existing-section' run keeps the section row VISIBLE but closed (`N/A` with the host-mode reason) — one fewer unverified row than the same payload under 'new-app'",
+  rcExisting.markdown.split("\n").some((l) => EXISTING_SECTION_RE.test(l) && /N\/A — .*existing-section/.test(l))
+  && rcExisting.missing === rcNewApp.missing && rcExisting.unverified === rcNewApp.unverified - 1,
+  () => ({ marks: marksFor(rcExisting.markdown, EXISTING_SECTION_RE), existing: { missing: rcExisting.missing, unverified: rcExisting.unverified }, newApp: { missing: rcNewApp.missing, unverified: rcNewApp.unverified } }));
 // PRECEDENCE, the rule that was asserted only in a comment: the payload carries BOTH, and they disagree.
 const rcConflict = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: false }, miniPageWired: true });
 check("reachability PRECEDENCE: `reachability.miniPageWired = false` is a HARD ❌ MISSING EVEN THOUGH the payload root also carries `miniPageWired: true` — the verifier's considered answer is never overturned by a stale root-level boolean",
@@ -9360,11 +10352,11 @@ check("preconditions: `main` really emits a `fields` vk WITH expected names AND 
    performed. Now: no names on the built page ⇒ `unverified`, and the text says why. ---- */
 const m1Nameless = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMELESS)));
 check("a built page carrying the right COUNT of the right TYPE but NO element names cannot close a `fields` row that expects NAMES — ⚠ unverified, and the text never claims an identity match it did not perform (pre-fix: ✅ Done + exit 0)",
-  () => /Fields — 1 expected \| ⚠ verify/.test(m1Nameless.markdown)
-  && /identity NOT checked/.test(m12Row(m1Nameless, "Fields — 1 expected"))
-  && !/expected fields (present on the built page|matched BY NAME)/.test(m12Row(m1Nameless, "Fields — 1 expected"))
+  () => /Field `MainF` \| ⚠ verify/.test(m1Nameless.markdown)
+  && /identity NOT checked/.test(m12Row(m1Nameless, "Field `MainF`"))
+  && !/expected fields (present on the built page|matched BY NAME)/.test(m12Row(m1Nameless, "Field `MainF`"))
   && m1Nameless.unverified >= 1 && m1Nameless.pages.main.complete === false && m1Nameless.complete === false,
-  () => ({ row: m12Row(m1Nameless, "Fields — 1 expected").slice(0, 220), pages: m1Nameless.pages, complete: m1Nameless.complete }));
+  () => ({ row: m12Row(m1Nameless, "Field `MainF`").slice(0, 220), pages: m1Nameless.pages, complete: m1Nameless.complete }));
 // The complement — the fix must not make ✅ unreachable. The SAME components, now carrying names, with the one
 // expected name present, close the row. (`n` and `names` come from the same `fieldOps` array at the emission site,
 // so `n === names.length` and a fully built page always can reach ✅.)
@@ -9421,19 +10413,19 @@ check("entity: an entry that reports NO entity is ⚠ unverified, never ❌ MISS
   () => m12Row(renderVerify(m12Run, m12Opts, m12Built({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items: M12_NAMED } })), "Bound to the EXISTING object"));
 
 check("fields: the identity path still CLOSES — a build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
-  () => /Fields — 1 expected \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Fields — 1 expected"))
+  () => /Field `MainF` \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Field `MainF`"))
   && m1Named.pages.main.missing === 0 && m1Named.pages.main.unverified === 0 && m1Named.complete === true,
-  () => ({ row: m12Row(m1Named, "Fields — 1 expected").slice(0, 200), pages: m1Named.pages }));
+  () => ({ row: m12Row(m1Named, "Field `MainF`").slice(0, 200), pages: m1Named.pages }));
 // And the three inputs stay DISTINGUISHABLE. A page that was fetched and returned NOTHING is not "nameless" — it
 // is empty, and the honest report names the field it is short of. A page never fetched is neither (D6 tri-state).
 const m1Empty = renderVerify(m12Run, m12Opts, m12Built(m12Page([])));
 const m1NoEntry = renderVerify(m12Run, m12Opts, m12Built(undefined));
 check("the fields row tells the three inputs APART — fetched-and-empty reports the missing NAME, never-fetched reports the missing ENTRY, and neither borrows the nameless wording (a false statement about a page that returned no components at all)",
-  () => /0\/1 expected fields present — missing: MainF/.test(m12Row(m1Empty, "Fields — 1 expected"))
-  && !/identity NOT checked/.test(m12Row(m1Empty, "Fields — 1 expected"))
-  && /no .--built\.pages\["main"\]. entry/.test(m12Row(m1NoEntry, "Fields — 1 expected"))
-  && !/identity NOT checked/.test(m12Row(m1NoEntry, "Fields — 1 expected")),
-  () => ({ empty: m12Row(m1Empty, "Fields — 1 expected").slice(0, 200), noEntry: m12Row(m1NoEntry, "Fields — 1 expected").slice(0, 200) }));
+  () => /0\/1 expected fields present — missing: MainF/.test(m12Row(m1Empty, "Field `MainF`"))
+  && !/identity NOT checked/.test(m12Row(m1Empty, "Field `MainF`"))
+  && /no .--built\.pages\["main"\]. entry/.test(m12Row(m1NoEntry, "Field `MainF`"))
+  && !/identity NOT checked/.test(m12Row(m1NoEntry, "Field `MainF`")),
+  () => ({ empty: m12Row(m1Empty, "Field `MainF`").slice(0, 200), noEntry: m12Row(m1NoEntry, "Field `MainF`").slice(0, 200) }));
 
 /* ---- WHAT COUNTS AS THE SAME FIELD. Measured on the Applicants run (2026-09-17): all 19 expected
    fields on the stand, each element named `<Column>Field` and bound `control: "$<Column>"`, and the row read
@@ -9442,7 +10434,7 @@ check("the fields row tells the three inputs APART — fetched-and-empty reports
    the Interface Designer binds `$PDS_<Column>_<hash>`. All three are the same field. ---- */
 {
   const named = (name, control) => [{ name, type: "crt.Input", ...(control ? { control } : {}) }, ...M12_NAMED.slice(1)];
-  const rowOf = (items) => m12Row(renderVerify(m12Run, m12Opts, m12Built(m12Page(items))), "Fields — 1 expected");
+  const rowOf = (items) => m12Row(renderVerify(m12Run, m12Opts, m12Built(m12Page(items))), "Field `MainF`");
   check("fields: an element named `<Column>Field` (the builder convention) satisfies the expected bare column name — ✅, not `0/1 present` (the measured false negative)",
     () => /\| ✅ Done \|/.test(rowOf(named("MainFField"))) && /matched BY NAME/.test(rowOf(named("MainFField"))),
     () => rowOf(named("MainFField")));
@@ -10788,6 +11780,12 @@ try {
   // an editable cleartext input, and the only reader-facing surface must not call it ordinary text. Both were true
   // before this: `scalarControl` withheld the control on purpose and the caller undid that one line later with
   // `ctl || { type: "crt.Input" }`, while `fieldTypeLabel` had no arm for either type.
+  const secRows = checklistGroups(secRun, checklistOpts({ entity: "X" })).flatMap((g) => g.rows);
+  const secRow = (n) => secRows.find((r) => r.deliverableId === `field:${n}`);
+  check("T2: a hashed / encrypted field — the plan's `(not migrated)` type — is its own row, closed `na` with that type label; an ordinary field beside it stays open",
+    () => /^Hashed text \(not migrated\) — /.test(secRow("H")?.na || "") && /^Encrypted text \(not migrated\) — /.test(secRow("S")?.na || "")
+      && secRow("I") && !secRow("I").na && secRow("I").vk?.type === "fields",
+    () => ["H", "S", "I"].map((n) => [n, secRow(n)?.na, secRow(n)?.vk]));
   const secOwn = secRun.changeSet.needsDecision.find((d) => d.kind === "secret-column");
   check("a HASH_TEXT / SECURE_TEXT column is NOT emitted as an editable cleartext input — it is read-only in the ChangeSet, which is the technical control the aggregated decision row could not be",
     secVals("H")?.readOnly === true && secVals("S")?.readOnly === true,
@@ -11027,7 +12025,7 @@ try {
 
 // --- THE NAMING. Two children of one entity are disambiguated by their detail CAPTION — customer-authored,
 // localizable — so the page KEY has to carry the caption verbatim: two captions that differ only outside
-// `[A-Za-z0-9_.-]` are two pages and must publish two distinct keys. `title` is what makes the caption resolve, and an
+// `[A-Za-z0-9_.-]` are two pages and must publish two distinct keys. The detail's own `Caption` string is what makes the caption resolve, and an
 // unanswered `editPage` is what keeps each child published as its own key.
 const n2TreeManifest = (titleA, titleB) => ({
   entity: "Applicant",
@@ -11042,8 +12040,8 @@ const n2TreeManifest = (titleA, titleB) => ({
   };
 });` }],
   detailSchemas: {
-    EduADetail: { title: titleA, entity: "Education" },
-    EduBDetail: { title: titleB, entity: "Education" },
+    EduADetail: { resourceStrings: { Caption: { "en-US": titleA } }, entity: "Education" },
+    EduBDetail: { resourceStrings: { Caption: { "en-US": titleB } }, entity: "Education" },
   },
 });
 {
@@ -11054,6 +12052,561 @@ const n2TreeManifest = (titleA, titleB) => ({
       () => k.length === 3 && k.includes("main") && pair.every((t) => k.includes(`child:Education@${t}`)),
       () => k);
   }
+}
+
+// ===== Classic texts in every culture: related-list titles, detail texts, per-culture design and verification =====
+// The Contract layers (fixtures/contract) with the strings `get-classic-page-sources` returns: page `resourceStrings`,
+// and per detail its body plus `resourceStrings`. `withCultures: false` is the manifest a clio without
+// `resourceStrings` writes: flat en-US page `resources` and no detail strings.
+{
+  const CO_TEXT_FILES = ["CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
+    "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js"];
+  const DOC_DETAIL_BODY = `define("DocumentDetailV2", [], function() {
+  return {
+    entitySchemaName: "Document",
+    methods: {
+      addGridOperationsMenuItems: function(toolsButtonMenu) {
+        toolsButtonMenu.addItem(this.getButtonMenuItem({
+          Caption: {"bindTo": "Resources.Strings.LinkDocumentCaption"},
+          Click: {"bindTo": "linkDocument"}
+        }));
+        this.callParent(arguments);
+      },
+      linkDocument: function() {
+        if (!this.getActiveRow()) {
+          this.showInformationDialog(this.get("Resources.Strings.SelectDocumentMessage"));
+        }
+      }
+    }
+  };
+});`;
+  const PAGE_STRINGS = {
+    GeneralInfoTabCaption: { "en-US": "General information", "fr-FR": "Informations générales" },
+    ContractVisaTabCaption: { "en-US": "Approvals", "fr-FR": "Validations" },
+    InvoiceDetailCaptionOnPage: { "en-US": "Contract invoices", "fr-FR": "Factures du contrat" },
+  };
+  const DOC_STRINGS = {
+    Caption: { "en-US": "Documents", "fr-FR": "Documents contractuels" },
+    LinkDocumentCaption: { "en-US": "Link document", "fr-FR": "Lier le document" },
+    SelectDocumentMessage: { "en-US": "Select a document first", "fr-FR": "Sélectionnez d'abord un document" },
+    AddButtonCaption: { "en-US": "Add", "fr-FR": "Ajouter" },
+  };
+  const enUS = (map) => Object.fromEntries(Object.entries(map).map(([k, c]) => [k, c["en-US"]]));
+  const withStrings = (entry, strings, withCultures) => (withCultures ? { ...entry, resourceStrings: strings } : entry);
+  const coTextsManifest = ({ withCultures = true, planMeta } = {}) => ({
+    entity: "Contract",
+    seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: CO_TEXT_FILES.map((f) => ({ pkg: f.replace(/\.js$/, ""), file: "contract/" + f })),
+    resources: enUS(PAGE_STRINGS),
+    ...(withCultures ? { resourceStrings: PAGE_STRINGS } : {}),
+    detailSchemas: {
+      DocumentDetailV2: withStrings({ body: DOC_DETAIL_BODY, entity: "Document", editPage: false, title: "Document detail schema" }, DOC_STRINGS, withCultures),
+      InvoiceDetailV2: withStrings({ entity: "Invoice", editPage: false, title: "Invoice detail schema" },
+        { Caption: { "en-US": "Invoices", "fr-FR": "Factures" } }, withCultures),
+      ContractProductDetailV2: withStrings({ entity: "OrderProduct", editPage: false, title: "Product detail schema" },
+        { Caption: { "en-US": "Products", "fr-FR": "Produits" } }, withCultures),
+      ContractDetailV2: { entity: "Contract", editPage: false, title: "Subordinate contracts detail schema" },
+    },
+    ...(planMeta ? { planMeta } : {}),
+  });
+  const coTexts = runMigration(coTextsManifest(), { baseDir: FIX });
+  const coTextsOld = runMigration(coTextsManifest({ withCultures: false }), { baseDir: FIX });
+  const tcs = coTexts.changeSet;
+  const detailOf = (cs, schema) => (cs.details || []).find((d) => d.detailSchema === schema);
+  const layoutRow = (plan, title) => plan.split("\n").find((l) => l.startsWith("| ") && l.includes(`| ${title} | Related list |`)) || "";
+
+  // T3 / R5 — the related-list title follows Classic's order; the schema caption (`title`) is never used.
+  check("texts T3: a related list is titled with its detail's own Caption string, never the detail schema's caption",
+    () => detailOf(tcs, "DocumentDetailV2")?.caption === "Documents" && detailOf(tcs, "ContractProductDetailV2")?.caption === "Products"
+      && !/(Document|Invoice|Product|Subordinate contracts) detail schema/.test(coTexts.plan),
+    () => ({ details: tcs.details.map((d) => [d.detailSchema, d.caption]), hit: coTexts.plan.split("\n").filter((l) => /(Document|Invoice|Product|Subordinate contracts) detail schema/.test(l)) }));
+  check("texts T3: the page string `<Key>DetailCaptionOnPage` titles the list ahead of the detail's own Caption",
+    () => detailOf(tcs, "InvoiceDetailV2")?.caption === "Contract invoices" && detailOf(tcs, "InvoiceDetailV2")?.captionSource === "page · InvoiceDetailCaptionOnPage",
+    () => detailOf(tcs, "InvoiceDetailV2"));
+  // T4 / R6 — a detail whose strings cannot be read is a Confirm item, never a title of the engine's making.
+  check("texts T4: a detail with no readable title has no caption and is listed in ⚠ Confirm as `detail-caption`",
+    () => detailOf(tcs, "ContractDetailV2")?.caption === null
+      && tcs.needsDecision.some((n) => n.kind === "detail-caption" && n.item === "ContractDetailV2")
+      && /\*\*\[detail-caption\]\*\* ContractDetailV2/.test(coTexts.plan),
+    () => coTexts.plan.split("\n").filter((l) => /detail-caption/.test(l)));
+  check("texts T4: the migration result does not report a `detail-caption` Confirm row as done",
+    () => {
+      const v = renderVerify(coTexts, checklistOpts(coTextsManifest()), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      const line = v.markdown.split("\n").find((l) => l.includes("[detail-caption] ContractDetailV2")) || "";
+      return line !== "" && !line.includes("✅");
+    });
+  // T3 / R7 — the texts a detail body shows are quoted word for word, each under a key that keeps its Classic source.
+  check("texts R7: the Layout row quotes the detail's action caption and message word for word, each with its Classic source",
+    () => {
+      const row = layoutRow(coTexts.plan, "Documents");
+      return row.includes('`Document_LinkDocumentCaption` "Link document" ← DocumentDetailV2 · LinkDocumentCaption')
+        && row.includes('`Document_SelectDocumentMessage` "Select a document first" ← DocumentDetailV2 · SelectDocumentMessage')
+        && row.includes("title `Document_Caption` ← DocumentDetailV2 · Caption");
+    },
+    () => layoutRow(coTexts.plan, "Documents"));
+  check("texts R7: a detail string the body never shows is not registered (base-template `AddButtonCaption`)",
+    () => !Object.keys(tcs.resources).some((k) => k.endsWith("_AddButtonCaption")), () => Object.keys(tcs.resources));
+  // T6 / R8 — every culture's value travels as the form-page row's data; localization is never a plan item of its own.
+  const formRowData = (run, m) => checklistGroups(run, checklistOpts(m)).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:form");
+  check("texts T6: the form-page row carries each text's key, Classic source and value in every culture as row data",
+    () => {
+      const row = formRowData(coTexts, coTextsManifest());
+      const doc = row?.vk.texts.find((t) => t.key === "Document_Caption");
+      return !!doc && doc.cultures["fr-FR"] === "Documents contractuels" && doc.source === "DocumentDetailV2 · Caption"
+        && row.vk.texts.some((t) => t.key === "InvoiceDetailCaptionOnPage" && t.cultures["fr-FR"] === "Factures du contrat");
+    });
+  // A standard list (Activities) is titled through the plan and checked by the form-page row like a rebuilt detail.
+  const stdManifest = () => {
+    const m = coTextsManifest();
+    return { ...m, detailSchemas: { ...m.detailSchemas,
+      ActivityDetailV2: { entity: "Activity", editPage: false, title: "Activity detail schema",
+        resourceStrings: { Caption: { "en-US": "Activities", "fr-FR": "Activités" } } } } };
+  };
+  const stdRun = runMigration(stdManifest(), { baseDir: FIX });
+  check("texts standard list: the Layout row titles Activities with its Classic Caption and names its source",
+    () => layoutRow(stdRun.plan, "Activities").includes("title `Activities_Caption` ← ActivityDetailV2 · Caption"),
+    () => layoutRow(stdRun.plan, "Activities"));
+  check("texts standard list: the form-page row carries the Activities title in every culture",
+    () => formRowData(stdRun, stdManifest())?.vk.texts.some((t) => t.key === "Activities_Caption" && t.cultures["fr-FR"] === "Activités"),
+    () => formRowData(stdRun, stdManifest())?.vk.texts.map((t) => t.key));
+  check("texts standard list: a built Activities title whose fr-FR text differs from Classic fails the form-page row",
+    () => {
+      const row = renderVerify(stdRun, checklistOpts(stdManifest()), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }],
+        resources: { strings: { Activities_Caption: { "en-US": "Activities", "fr-FR": "Tâches" } } } } } })
+        .rows.find((r) => r.pageKey === "main" && r.deliverable.startsWith("Form page"));
+      return row?.outcome === "missing" && row.evidence.includes("Activities_Caption");
+    });
+  check("texts T6: neither the plan nor the form-page row label lists the other cultures",
+    () => !coTexts.plan.includes("fr-FR") && formRowData(coTexts, coTextsManifest()).label === formRowData(coTextsOld, coTextsManifest({ withCultures: false })).label,
+    () => ({ label: formRowData(coTexts, coTextsManifest()).label, fr: coTexts.plan.split("\n").filter((l) => l.includes("fr-FR")).slice(0, 3) }));
+  check("texts T6: the reconcile save instruction names no localization tool",
+    () => {
+      const run = runMigration(coTextsManifest({ planMeta: { ...FULL_PLANMETA, freedomExists: true } }), { baseDir: FIX });
+      const line = run.plan.split("\n").find((l) => l.startsWith("> **Reconcile:**")) || "";
+      return line.includes("and save with `update-page`. Procedure:") && !/localize/.test(run.plan);
+    });
+  check("texts T6: the ChangeSet echoes the other-culture values on `changeSet.resourceCultures` with their sources",
+    () => tcs.resourceCultures.GeneralInfoTabCaption["fr-FR"] === "Informations générales"
+      && tcs.resourceSources.GeneralInfoTabCaption === "page · GeneralInfoTabCaption");
+  check("texts T6: a folded child page's texts reach the root result as `changeSet.resourceCultures`",
+    () => {
+      const m = coTextsManifest();
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, editPage: "DocumentPageV2" };
+      m.childPageSchemas = { DocumentPageV2: { entity: "Document", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: `define("DocumentPageV2",[],function(){return{entitySchemaName:"Document",diff:[{operation:"insert",name:"DocTab",parentName:"Tabs",propertyName:"tabs",values:{caption:{bindTo:"Resources.Strings.DocTabCaption"},items:[]}},{operation:"insert",name:"Number",parentName:"DocTab",propertyName:"items",values:{bindTo:"Number"}}]};});` }],
+        resources: { DocTabCaption: "Document" }, resourceStrings: { DocTabCaption: { "en-US": "Document", "fr-FR": "Pièce" } } } };
+      const run = runMigration(m, { baseDir: FIX });
+      const child = run.childPages.find((c) => c.resolvedFrom === "DocumentPageV2");
+      return child?.changeSet?.resourceCultures?.DocTabCaption?.["fr-FR"] === "Pièce"
+        && child.changeSet.resourceSources.DocTabCaption === "page · DocTabCaption";
+    });
+  // A sub-page bundle may carry `resourceStrings` alone (no flat `resources`): its en-US texts come from them.
+  const DOC_PAGE_BODY = `define("DocumentPageV2",[],function(){return{entitySchemaName:"Document",diff:[{operation:"insert",name:"DocTab",parentName:"Tabs",propertyName:"tabs",values:{caption:{bindTo:"Resources.Strings.DocTabCaption"},items:[]}},{operation:"insert",name:"Number",parentName:"DocTab",propertyName:"items",values:{bindTo:"Number"}}]};});`;
+  const DOC_PAGE_STRINGS = { DocTabCaption: { "en-US": "Document", "fr-FR": "Pièce" } };
+  const stringsOnly = (cs) => cs?.resources?.DocTabCaption === "Document" && cs.resourceCultures?.DocTabCaption?.["fr-FR"] === "Pièce";
+  check("texts: a child page bundle with `resourceStrings` and no `resources` keeps its en-US texts and its other cultures",
+    () => {
+      const m = coTextsManifest();
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, editPage: "DocumentPageV2" };
+      m.childPageSchemas = { DocumentPageV2: { entity: "Document", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+      const run = runMigration(m, { baseDir: FIX });
+      return stringsOnly(run.childPages.find((c) => c.resolvedFrom === "DocumentPageV2")?.changeSet) && !/Translations not migrated/.test(run.plan);
+    });
+  check("texts: a typed page bundle with `resourceStrings` and no `resources` keeps its en-US texts and its other cultures",
+    () => {
+      const m = coTextsManifest();
+      m.typedPages = [{ schema: "DocumentPageV2", type: "Doc" }];
+      m.typedPageSchemas = { DocumentPageV2: { entity: "Contract", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+      return stringsOnly(runMigration(m, { baseDir: FIX }).typedPages?.[0]?.changeSet);
+    });
+  check("texts: a mini page bundle with `resourceStrings` and no `resources` keeps its en-US texts and its other cultures",
+    () => {
+      const m = coTextsManifest();
+      m.addRecordMiniPage = { schema: "DocumentPageV2" };
+      m.miniPageSchemas = { DocumentPageV2: { entity: "Contract", seed: m.seed,
+        schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+      m.section = [{ pkg: "CoreContracts", body: `define("ContractSectionV2",[],function(){return{entitySchemaName:"Contract",methods:{},diff:[]};});` }];
+      const run = runMigration(m, { baseDir: FIX });
+      return stringsOnly(run.miniPage?.changeSet);
+    }, () => "mini page changeSet lacks the en-US / fr-FR texts");
+  // T5 / R4 / R11 — a manifest without `resourceStrings` still plans, in en-US, and says translations need a newer clio.
+  check("texts T5: without `resourceStrings` the plan is still produced from the flat en-US `resources`",
+    () => typeof coTextsOld.plan === "string" && coTextsOld.changeSet.resources.GeneralInfoTabCaption === "General information"
+      && Object.keys(coTextsOld.changeSet.resourceCultures).length === 0);
+  check("texts T5: without `resourceStrings` the plan states that translations need a newer clio; with them it does not",
+    () => coTextsOld.plan.includes("- Translations not migrated: requires a newer clio version\n")
+      && !coTexts.plan.includes("Translations not migrated"));
+  check("texts T5: without detail strings every related-list title and detail text becomes a Confirm item",
+    () => ["DocumentDetailV2", "InvoiceDetailV2", "ContractProductDetailV2", "ContractDetailV2"]
+      .filter((s) => s !== "InvoiceDetailV2").every((s) => coTextsOld.changeSet.needsDecision.some((n) => n.kind === "detail-caption" && n.item === s))
+      && coTextsOld.changeSet.needsDecision.some((n) => n.kind === "detail-text" && n.item === "DocumentDetailV2 · SelectDocumentMessage")
+      && detailOf(coTextsOld.changeSet, "InvoiceDetailV2")?.caption === "Contract invoices",
+    () => coTextsOld.changeSet.needsDecision.filter((n) => /detail-(caption|text)/.test(n.kind)).map((n) => n.item));
+  // R9 — list columns bound to an entity column carry no page caption key; the platform titles them.
+  {
+    const m = coTextsManifest();
+    m.detailSchemas.ContractProductDetailV2 = { ...m.detailSchemas.ContractProductDetailV2, body: `define("ContractProductDetailV2",[],function(){return{entitySchemaName:"OrderProduct",diff:[{operation:"insert",name:"DataGrid",values:{}},{operation:"insert",name:"ProductCol",parentName:"DataGrid",propertyName:"items",values:{bindTo:"Product"}},{operation:"insert",name:"QtyCol",parentName:"DataGrid",propertyName:"items",values:{bindTo:"Quantity"}}]};});` };
+    const cs = runMigration(m, { baseDir: FIX }).changeSet;
+    const cols = detailOf(cs, "ContractProductDetailV2")?.columns || [];
+    const colKey = (k) => cols.some((c) => [c, c + "Caption"].some((n) => k === n || k.endsWith("_" + n)));
+    check("texts R9: every registered key comes from a page string or a detail string — no key for an entity-bound list column",
+      () => cols.length === 2 && cols.includes("Product") && cols.includes("Quantity")
+        && Object.entries(cs.resourceSources).every(([, src]) => /^page · /.test(src) || /^\w+ · \w+$/.test(src))
+        && !Object.keys(cs.resources).some(colKey),
+      () => ({ cols, keys: Object.keys(cs.resources) }));
+  }
+  // T7 / R10 — verification compares the built text with the Classic value in every culture.
+  const builtWith = (mutate) => {
+    const strings = JSON.parse(JSON.stringify(tcs.resourceCultures));
+    mutate(strings);
+    return { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } };
+  };
+  const formRowOf = (built) => renderVerify(coTexts, checklistOpts(coTextsManifest()), built).markdown.split("\n")
+    .find((l) => l.includes("Form page")) || "";
+  check("texts T7: a form page whose texts match Classic in every culture closes its row",
+    () => formRowOf(builtWith(() => {})).includes("✅"), () => formRowOf(builtWith(() => {})));
+  check("texts T7: a fr-FR text that differs from Classic fails the form-page row and names the key, culture and both values",
+    () => {
+      const row = formRowOf(builtWith((s) => { s.GeneralInfoTabCaption["fr-FR"] = "Infos"; }));
+      return row.includes("❌") && row.includes("GeneralInfoTabCaption") && row.includes("fr-FR") && row.includes("Informations générales");
+    },
+    () => formRowOf(builtWith((s) => { s.GeneralInfoTabCaption["fr-FR"] = "Infos"; })));
+  check("texts T7: a Classic culture the built page does not carry leaves the row unverified, not done",
+    () => {
+      const row = formRowOf(builtWith((s) => { delete s.Document_Caption["fr-FR"]; }));
+      return row.includes("⚠") && !row.includes("✅") && row.includes("Document_Caption");
+    },
+    () => formRowOf(builtWith((s) => { delete s.Document_Caption["fr-FR"]; })));
+  check("texts T7: without `resourceStrings` only en-US is compared, so an en-US-only built page closes the row",
+    () => {
+      const strings = Object.fromEntries(Object.entries(coTextsOld.changeSet.resources).map(([k, t]) => [k, { "en-US": t }]));
+      const v = renderVerify(coTextsOld, checklistOpts(coTextsManifest({ withCultures: false })),
+        { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } });
+      return (v.markdown.split("\n").find((l) => l.includes("Form page")) || "").includes("✅");
+    });
+  check("texts T7: a Classic key the built page does not carry is absent in every culture and leaves the row unverified",
+    () => {
+      const row = formRowOf(builtWith((s) => { delete s.Document_Caption; }));
+      return row.includes("⚠") && !row.includes("✅") && row.includes("Document_Captionˋ en-US") && row.includes("Document_Captionˋ fr-FR");
+    },
+    () => formRowOf(builtWith((s) => { delete s.Document_Caption; })));
+  check("texts T7: a built page read without `resources` leaves a row with Classic texts unverified, not done",
+    () => {
+      const row = formRowOf({ pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      return row.includes("⚠") && !row.includes("✅") && row.includes("carries no ˋresourcesˋ");
+    },
+    () => formRowOf({ pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } }));
+  // T4 / R6 — a detail text that cannot be read is a Confirm item the migration result never reports as done.
+  check("texts T4: an unreadable detail text is listed in ⚠ Confirm as `detail-text`, and the migration result does not report it as done",
+    () => {
+      const planHit = /\*\*\[detail-text\]\*\* DocumentDetailV2 · SelectDocumentMessage/.test(coTextsOld.plan);
+      const v = renderVerify(coTextsOld, checklistOpts(coTextsManifest({ withCultures: false })), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      const line = v.markdown.split("\n").find((l) => l.includes("[detail-text] DocumentDetailV2 · SelectDocumentMessage")) || "";
+      return planHit && line !== "" && !line.includes("✅");
+    },
+    () => coTextsOld.plan.split("\n").filter((l) => /detail-text/.test(l)));
+  // A detail string inherited from a base schema arrives in the detail's `resourceStrings` and resolves like its own.
+  check("texts: a detail text the body reads from an inherited string resolves from the detail's strings — no `detail-text` Confirm",
+    () => {
+      const m = coTextsManifest();
+      const body = DOC_DETAIL_BODY.replace("this.callParent(arguments);", "this.callParent(arguments);\n        this.set(\"AddCaption\", this.get(\"Resources.Strings.AddButtonCaption\"));");
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, body };
+      const cs = runMigration(m, { baseDir: FIX }).changeSet;
+      return cs.resources.Document_AddButtonCaption === "Add" && cs.resourceCultures.Document_AddButtonCaption?.["fr-FR"] === "Ajouter"
+        && !cs.needsDecision.some((n) => n.kind === "detail-text");
+    });
+  // A readable detail that lacks one referenced string: only that text is a Confirm item; its other texts and title resolve.
+  check("texts T4: a detail whose strings lack one referenced key raises one `detail-text` item and keeps its other texts and title",
+    () => {
+      const m = coTextsManifest();
+      const partial = Object.fromEntries(Object.entries(DOC_STRINGS).filter(([k]) => k !== "SelectDocumentMessage"));
+      m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, resourceStrings: partial };
+      const run = runMigration(m, { baseDir: FIX });
+      const cs = run.changeSet;
+      const texts = cs.needsDecision.filter((n) => n.kind === "detail-text").map((n) => n.item);
+      const v = renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] } } });
+      const line = v.markdown.split("\n").find((l) => l.includes("[detail-text] DocumentDetailV2 · SelectDocumentMessage")) || "";
+      return texts.length === 1 && texts[0] === "DocumentDetailV2 · SelectDocumentMessage"
+        && cs.resources.Document_LinkDocumentCaption === "Link document" && cs.resources.Document_Caption === "Documents"
+        && layoutRow(run.plan, "Documents").includes('`Document_LinkDocumentCaption` "Link document"')
+        && !cs.needsDecision.some((n) => n.kind === "detail-caption" && n.item === "DocumentDetailV2")
+        && line !== "" && !line.includes("✅");
+    });
+  // One source per key: a key `resourceStrings` carries takes its en-US text from them, not from the flat `resources`.
+  check("texts: a key whose flat en-US text differs from its `resourceStrings` en-US takes both from `resourceStrings`, and a built page with those texts closes the row",
+    () => {
+      const m = coTextsManifest();
+      m.resources = { ...m.resources, GeneralInfoTabCaption: "General info (flat)" };
+      const run = runMigration(m, { baseDir: FIX });
+      const strings = JSON.parse(JSON.stringify(run.changeSet.resourceCultures));
+      const row = renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }], resources: { strings } } } })
+        .markdown.split("\n").find((l) => l.includes("Form page")) || "";
+      return run.changeSet.resources.GeneralInfoTabCaption === "General information"
+        && run.changeSet.resourceCultures.GeneralInfoTabCaption["en-US"] === "General information" && row.includes("✅");
+    });
+  // A folded child page and a mini page check their own texts in every culture, like the typed page.
+  {
+    const m = coTextsManifest();
+    m.detailSchemas.DocumentDetailV2 = { ...m.detailSchemas.DocumentDetailV2, editPage: "DocumentPageV2" };
+    m.childPageSchemas = { DocumentPageV2: { entity: "Document", seed: m.seed, schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY }], resourceStrings: DOC_PAGE_STRINGS } };
+    m.addRecordMiniPage = { schema: "ContractMiniPage" };
+    m.miniPageSchemas = { ContractMiniPage: { entity: "Contract", seed: m.seed,
+      schemas: [{ pkg: "CoreContracts", body: DOC_PAGE_BODY.replace('"DocumentPageV2"', '"ContractMiniPage"').replace('"Document"', '"Contract"') }],
+      resourceStrings: { DocTabCaption: { "en-US": "Main", "fr-FR": "Principal" } } } };
+    m.section = [{ pkg: "CoreContracts", body: `define("ContractSectionV2",[],function(){return{entitySchemaName:"Contract",methods:{},diff:[]};});` }];
+    const run = runMigration(m, { baseDir: FIX });
+    const childKey = run.childPages.find((c) => c.resolvedFrom === "DocumentPageV2")?.pageKey;
+    const miniKey = run.miniPage?.pageKey;
+    const subPage = (en, fr) => ({ viewConfig: [{ name: "DocTab", type: "crt.TabContainer", caption: "#ResourceString(DocTabCaption)#",
+      items: [{ name: "Number", type: "crt.Input", control: "$Number" }] }], resources: { strings: { DocTabCaption: { "en-US": en, "fr-FR": fr } } } });
+    const subVerify = (childFr, miniFr) => renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] },
+      [childKey]: subPage("Document", childFr), [miniKey]: subPage("Main", miniFr) } }).rows;
+    const formOutcome = (rows, key) => rows.find((r) => r.pageKey === key && r.deliverable.startsWith("Form page"));
+    for (const [label, key, wrong] of [["folded child", childKey, (fr) => subVerify(fr, "Principal")], ["mini", miniKey, (fr) => subVerify("Pièce", fr)]]) {
+      check(`texts ${label}: a ${label} page whose fr-FR text differs from Classic fails its own form-page row, once; a matching one closes it`,
+        () => {
+          const bad = wrong("Autre");
+          return !!key && formOutcome(bad, key)?.outcome === "missing" && formOutcome(bad, key).evidence.includes("fr-FR")
+            && bad.filter((r) => String(r.evidence).includes("\"Autre\"")).length === 1
+            && formOutcome(subVerify("Pièce", "Principal"), key)?.outcome === "ok";
+        },
+        () => ({ key, bad: formOutcome(wrong("Autre"), key), right: formOutcome(subVerify("Pièce", "Principal"), key) }));
+    }
+  }
+}
+
+// A typed page is a page like the form page: its own form-page row carries its texts and is checked against that
+// page's built strings in every culture.
+{
+  const TYPED_BODY = `define("ContractTermsPage", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    diff: [{ "operation": "insert", "name": "TermsTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.TermsTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Number", "parentName": "TermsTab", "propertyName": "items", "values": { "bindTo": "Number" } }]
+  };
+});`;
+  const typedStrings = { TermsTabCaption: { "en-US": "Terms", "fr-FR": "Conditions" } };
+  const typedManifest = {
+    entity: "Contract",
+    seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", file: "contract/CoreContracts.js" }],
+    typedPages: [{ schema: "ContractTermsPage", type: "Terms" }],
+    typedPageSchemas: { ContractTermsPage: { entity: "Contract", seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+      schemas: [{ pkg: "CoreContracts", body: TYPED_BODY }], resources: { TermsTabCaption: "Terms" }, resourceStrings: typedStrings } },
+  };
+  const typedRun = runMigration(typedManifest, { baseDir: FIX });
+  const typedRows = checklistGroups(typedRun, checklistOpts(typedManifest)).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })));
+  const typedFormRow = typedRows.find((r) => r.pageKey === "typed:ContractTermsPage" && r.deliverableId === "page:form");
+  check("texts typed: the typed page's own form-page row carries its texts; the main page's `page:typed:<schema>` row does not",
+    () => typedFormRow?.vk.texts?.some((t) => t.key === "TermsTabCaption" && t.cultures["fr-FR"] === "Conditions" && t.source === "page · TermsTabCaption")
+      && !typedRows.find((r) => r.deliverableId === "page:typed:ContractTermsPage")?.vk.texts,
+    () => typedFormRow?.vk);
+  const typedVerify = (frText) => renderVerify(typedRun, checklistOpts(typedManifest), {
+    typedFormsBuilt: true,
+    pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }] },
+      "typed:ContractTermsPage": { viewConfig: [{ name: "TermsTab", type: "crt.TabContainer", caption: "#ResourceString(TermsTabCaption)#",
+        items: [{ name: "Number", type: "crt.Input", control: "$Number" }] }],
+        resources: { strings: { TermsTabCaption: { "en-US": "Terms", "fr-FR": frText } } } } },
+  }).rows;
+  const typedFormOutcome = (frText) => typedVerify(frText).find((r) => r.pageKey === "typed:ContractTermsPage" && r.deliverable.startsWith("Form page built"));
+  check("texts typed: the typed page's texts reach the root result as `changeSet.resourceCultures`",
+    () => typedRun.typedPages[0]?.changeSet?.resourceCultures?.TermsTabCaption?.["fr-FR"] === "Conditions");
+  check("texts typed: a typed page whose fr-FR text differs from Classic fails its own form-page row, once; a matching one closes it",
+    () => typedFormOutcome("Termes")?.outcome === "missing" && typedFormOutcome("Termes").evidence.includes("TermsTabCaption")
+      && typedVerify("Termes").filter((r) => String(r.evidence).includes("TermsTabCaption")).length === 1
+      && typedFormOutcome("Conditions")?.outcome === "ok",
+    () => ({ wrong: typedFormOutcome("Termes"), right: typedFormOutcome("Conditions") }));
+}
+
+// A typed entity whose bind-only type reuses the base form builds that form, so its form-page row carries the base
+// page's texts; with only own-fold types there is no base form and no such row.
+{
+  const BASE_BODY = `define("ContractPageV2", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    diff: [{ "operation": "insert", "name": "GeneralTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.GeneralTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Number", "parentName": "GeneralTab", "propertyName": "items", "values": { "bindTo": "Number" } }]
+  };
+});`;
+  const baseManifest = (typedPages) => ({
+    entity: "Contract",
+    seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", body: BASE_BODY }],
+    resources: { GeneralTabCaption: "General" },
+    resourceStrings: { GeneralTabCaption: { "en-US": "General", "fr-FR": "Général" } },
+    typedPages,
+  });
+  const bindOnlyManifest = baseManifest([{ schema: "ContractTermsPage", type: "Terms", bindOnly: true }]);
+  const bindOnlyRun = runMigration(bindOnlyManifest, { baseDir: FIX });
+  const mainFormRow = (run, manifest) => checklistGroups(run, checklistOpts(manifest))
+    .flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })))
+    .find((r) => r.pageKey === "main" && r.deliverableId === "page:form");
+  check("texts typed base: with a bind-only type, the shared base form's form-page row carries the base page's texts",
+    () => mainFormRow(bindOnlyRun, bindOnlyManifest)?.vk.texts?.some((t) => t.key === "GeneralTabCaption" && t.cultures["fr-FR"] === "Général"),
+    () => mainFormRow(bindOnlyRun, bindOnlyManifest));
+  const baseVerify = (frText) => renderVerify(bindOnlyRun, checklistOpts(bindOnlyManifest), {
+    typedFormsBuilt: true, typedRouting: true,
+    pages: { main: { viewConfig: [{ name: "GeneralTab", type: "crt.TabContainer", caption: "#ResourceString(GeneralTabCaption)#",
+      items: [{ name: "Number", type: "crt.Input", control: "$Number" }] }],
+      resources: { strings: { GeneralTabCaption: { "en-US": "General", "fr-FR": frText } } } } },
+  }).rows.find((r) => r.pageKey === "main" && r.deliverable.startsWith("Form page"));
+  check("texts typed base: a shared base form whose fr-FR text differs from Classic fails its form-page row; a matching one does not",
+    () => baseVerify("Généralités")?.outcome === "missing" && baseVerify("Généralités").evidence.includes("GeneralTabCaption")
+      && baseVerify("Général")?.outcome !== "missing",
+    () => ({ wrong: baseVerify("Généralités"), right: baseVerify("Général") }));
+  const ownFoldManifest = baseManifest([{ schema: "ContractTermsPage", type: "Terms" }]);
+  check("texts typed base: with only own-fold types there is no base form, so no main form-page row",
+    () => !mainFormRow(runMigration(ownFoldManifest, { baseDir: FIX }), ownFoldManifest));
+}
+
+// `captionName` parsed from a Classic body's `details` block titles the related list.
+{
+  const ORDERS_BODY = `define("ContractPageV2", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    details: /**SCHEMA_DETAILS*/{
+      "Orders": { "schemaName": "OrderDetailV2", "entitySchemaName": "Order", "captionName": "OrdersListCaption",
+        "filter": { "masterColumn": "Id", "detailColumn": "Contract" } }
+    }/**SCHEMA_DETAILS*/,
+    diff: [{ "operation": "insert", "name": "OrdersTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.OrdersTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Orders", "parentName": "OrdersTab", "propertyName": "items", "values": { "itemType": 2 } }]
+  };
+});`;
+  const ordersRun = runMigration({ entity: "Contract", seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", body: ORDERS_BODY }],
+    resources: { OrdersTabCaption: "Orders", OrdersListCaption: "Open orders" },
+    detailSchemas: { OrderDetailV2: { entity: "Order", editPage: false, resourceStrings: { Caption: { "en-US": "Orders" } } } } }, { baseDir: FIX });
+  const orders = (ordersRun.changeSet.details || []).find((d) => d.detailSchema === "OrderDetailV2");
+  check("title order: a `captionName` read from the Classic body's `details` block titles the list from that page string",
+    () => orders?.caption === "Open orders" && orders?.captionSource === "page · OrdersListCaption",
+    () => orders);
+}
+
+// The related-list title order, one step at a time, including a `captionName` a higher layer does not restate.
+{
+  const titleOf = (details, resources, strings) => mapToFreedom(mergeHierarchy([L("Base", { entity: "X", details: {
+      Orders: { schemaName: "OrderDetailV2", entitySchemaName: "Order", detailColumn: "X", masterColumn: "Id", ...details } },
+    diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+           di({ name: "Orders", parentName: "T", propertyName: "items", itemType: 2 })] })]),
+    { resources, detailSchemas: { OrderDetailV2: { entity: "Order", columns: [], strings } } }).details[0]?.caption;
+  const page = { OrdersListCaption: "Open orders", OrdersDetailCaptionOnPage: "Orders on this page" };
+  const own = { Caption: { "en-US": "Orders", "fr-FR": "Commandes" } };
+  check("title order: `captionName` names the page string that titles the list, ahead of the other two",
+    () => titleOf({ captionName: "OrdersListCaption" }, page, own) === "Open orders");
+  check("title order: without `captionName`, the page string `<Key>DetailCaptionOnPage` titles the list",
+    () => titleOf({}, page, own) === "Orders on this page");
+  check("title order: without either page string, the detail's own Caption titles the list",
+    () => titleOf({}, {}, own) === "Orders");
+  check("title order: a `captionName` naming a string the page does not have falls through to the next step",
+    () => titleOf({ captionName: "Missing" }, { OrdersDetailCaptionOnPage: "Orders on this page" }, own) === "Orders on this page");
+  const layered = mergeHierarchy([
+    L("Base", { entity: "X", details: { Orders: { schemaName: "OrderDetailV2", captionName: "OrdersListCaption" } } }),
+    L("Top", { entity: "X", details: { Orders: { schemaName: "OrderDetailV2", entitySchemaName: "Order" } } }),
+  ]);
+  check("title order: a layer that restates a detail without `captionName` keeps the lower layer's",
+    () => layered.details.find((d) => d.key === "Orders")?.captionName === "OrdersListCaption",
+    () => layered.details);
+}
+
+// A list-shaped standard feature (Activities, Emails) is titled like any related list: its Classic title in every
+// culture, or a `detail-caption` decision when none is readable.
+{
+  const featureCs = (details, opts) => mapToFreedom(mergeHierarchy([L("Base", { entity: "Contract", details: {
+      Activities: { schemaName: "ActivityDetailV2", entitySchemaName: "Activity", detailColumn: "Contract", masterColumn: "Id" },
+      Emails: { schemaName: "EmailDetailV2", entitySchemaName: "Activity", detailColumn: "Contract", masterColumn: "Id" },
+      ...details },
+    diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+           di({ name: "Activities", parentName: "T", propertyName: "items", itemType: 2 }),
+           di({ name: "Emails", parentName: "T", propertyName: "items", itemType: 2 })] })]), opts);
+  const activityStrings = { Caption: { "en-US": "Activities", "fr-FR": "Activités" } };
+  const own = featureCs({}, { detailSchemas: { ActivityDetailV2: { entity: "Activity", columns: [], strings: activityStrings } } });
+  const feature = (cs, name) => (cs.standardFeatures || []).find((s) => s.feature === name);
+  check("standard list title: Activities is titled with its detail's own Caption, in every culture",
+    () => feature(own, "Activities")?.caption === "Activities" && feature(own, "Activities")?.captionSource === "ActivityDetailV2 · Caption"
+      && own.resourceCultures?.[feature(own, "Activities").captionKey]?.["fr-FR"] === "Activités",
+    () => ({ feature: feature(own, "Activities"), cultures: own.resourceCultures }));
+  const renamed = featureCs({}, {
+    resources: { ActivitiesDetailCaptionOnPage: "Contract activities" },
+    resourceStrings: { ActivitiesDetailCaptionOnPage: { "en-US": "Contract activities", "fr-FR": "Activités du contrat" } },
+    detailSchemas: { ActivityDetailV2: { entity: "Activity", columns: [], strings: activityStrings } } });
+  check("standard list title: the page's rename (`<Key>DetailCaptionOnPage`) titles a standard list ahead of the detail's Caption",
+    () => feature(renamed, "Activities")?.caption === "Contract activities"
+      && renamed.resourceCultures?.ActivitiesDetailCaptionOnPage?.["fr-FR"] === "Activités du contrat",
+    () => feature(renamed, "Activities"));
+  const captionDecided = (cs, schema) => cs.needsDecision.some((n) => n.kind === "detail-caption" && n.item === schema);
+  check("standard list title: with no strings supplied and no `captionName`, a standard list keeps its standard title and raises no decision",
+    () => feature(own, "Emails")?.caption === null && !captionDecided(own, "EmailDetailV2"),
+    () => ({ feature: feature(own, "Emails"), decisions: own.needsDecision.filter((n) => n.kind === "detail-caption") }));
+  const noCaption = featureCs({}, { detailSchemas: { EmailDetailV2: { entity: "Activity", columns: [], strings: { Other: { "en-US": "Other" } } } } });
+  check("standard list title: supplied strings with no `Caption` leave a standard list untitled and raise a `detail-caption` decision",
+    () => feature(noCaption, "Emails")?.caption === null && captionDecided(noCaption, "EmailDetailV2"),
+    () => noCaption.needsDecision.filter((n) => n.kind === "detail-caption"));
+  const unreadable = featureCs({ Emails: { schemaName: "EmailDetailV2", entitySchemaName: "Activity", detailColumn: "Contract", masterColumn: "Id", captionName: "MissingCaption" } }, {});
+  check("standard list title: a `captionName` the page does not have raises a `detail-caption` decision even with no strings supplied",
+    () => feature(unreadable, "Emails")?.caption === null && captionDecided(unreadable, "EmailDetailV2"),
+    () => unreadable.needsDecision.filter((n) => n.kind === "detail-caption"));
+}
+
+// A field with no entity column behind it is labelled by its Classic page string, in every culture; a column-bound
+// field writes no label and auto-labels from the column title.
+{
+  const labelCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+    di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
+    di({ name: "Dept", parentName: "Header", propertyName: "items", bindTo: "Department" }),
+  ] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } },
+    resources: { Department: "Department" },
+    resourceStrings: { Department: { "en-US": "Department", "fr-FR": "Service" } } });
+  const valuesOf = (name) => labelCs.viewConfigDiff.find((o) => o.name === name)?.values;
+  check("field label: a field with no column binds its label to the Classic page string",
+    () => valuesOf("Department")?.label === "$Resources.Strings.Department" && valuesOf("Department")?.labelSource === "page · Department",
+    () => valuesOf("Department"));
+  check("field label: the page string travels in every culture",
+    () => labelCs.resourceCultures?.Department?.["fr-FR"] === "Service",
+    () => labelCs.resourceCultures);
+  check("field label: a column-bound field writes no label",
+    () => valuesOf("InternalRequest") && valuesOf("InternalRequest").label === undefined,
+    () => valuesOf("InternalRequest"));
+  const captionCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+    di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
+    di({ name: "Unit", parentName: "Header", propertyName: "items", bindTo: "StaffUnit", caption: "Resources.Strings.JobTitleCaption" }),
+  ] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } },
+    resources: { JobTitleCaption: "Job title", StaffUnit: "Staff unit" },
+    resourceStrings: { JobTitleCaption: { "en-US": "Job title", "fr-FR": "Poste" }, StaffUnit: { "en-US": "Staff unit" } } });
+  const unit = captionCs.viewConfigDiff.find((o) => o.name === "StaffUnit")?.values;
+  check("field label: a field with no column is labelled by the page string its own caption names, ahead of the one named after the field",
+    () => unit?.label === "$Resources.Strings.JobTitleCaption" && unit?.labelSource === "page · JobTitleCaption"
+      && captionCs.resourceCultures?.JobTitleCaption?.["fr-FR"] === "Poste",
+    () => ({ unit, cultures: captionCs.resourceCultures }));
+  const labelOnly = (opts) => mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+    di({ name: "Dept", parentName: "Header", propertyName: "items", bindTo: "Department" }),
+  ] })]), opts).viewConfigDiff.find((o) => o.name === "Department")?.values;
+  const suffixed = labelOnly({ entityColumns: { InternalRequest: { type: "Lookup" } },
+    resources: { DepartmentCaption: "Department" }, resourceStrings: { DepartmentCaption: { "en-US": "Department", "fr-FR": "Service" } } });
+  check("field label: a field with no column and no page string of its name falls back to `<Field>Caption`",
+    () => suffixed?.label === "$Resources.Strings.DepartmentCaption" && suffixed?.labelSource === "page · DepartmentCaption", () => suffixed);
+  const unknownColumns = labelOnly({ resources: { Department: "Department" } });
+  check("field label: with the entity columns unknown, no field writes a page label",
+    () => unknownColumns && unknownColumns.label === undefined, () => unknownColumns);
+  const LABEL_BODY = `define("ContractPageV2", [], function() {
+  return {
+    entitySchemaName: "Contract",
+    diff: [{ "operation": "insert", "name": "Dept", "parentName": "Header", "propertyName": "items", "values": { "bindTo": "Department" } }]
+  };
+});`;
+  const labelManifest = { entity: "Contract", seed: [{ pkg: "BaseModulePageV2", file: "_base/BaseModulePageV2_skeleton.js" }],
+    schemas: [{ pkg: "CoreContracts", body: LABEL_BODY }], entityColumns: { Number: { type: "Text" } },
+    resources: { Department: "Department" }, resourceStrings: { Department: { "en-US": "Department", "fr-FR": "Service" } } };
+  const labelRun = runMigration(labelManifest, { baseDir: FIX });
+  check("field label: the plan's Layout row names the label's page string, and the form-page row carries it in every culture",
+    () => labelRun.plan.split("\n").some((l) => l.startsWith("| ") && l.includes("label `Department` ← page · Department"))
+      && checklistGroups(labelRun, checklistOpts(labelManifest)).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:form")
+        ?.vk.texts?.some((t) => t.key === "Department" && t.cultures["fr-FR"] === "Service"),
+    () => labelRun.plan.split("\n").filter((l) => l.includes("Department")));
 }
 
 // ===== N1: make --verify trustworthy (business rules gated, component role/analog) ================
@@ -11208,7 +12761,7 @@ const n2TreeManifest = (titleA, titleB) => ({
   check("a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged on BOTH axes — not skip, not pass",
     () => { const p = pageOf({ pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE });
       return p.complete === false && p.buildComplete === false && p.missing >= 1
-        && p.openRows.some((r) => /Related lists/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)); },
+        && p.openRows.some((r) => /^Related list `/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)); },
     () => pageOf({ pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE }).openRows);
   // The BUILDER-OWNED `unverified` class: `resolveCountVk` maps a PARTIAL count to `unverified`
   // and `resolveFieldsByIdentity` maps every short field set — `0/N` included — to `unverified`, so the label axis
@@ -11249,7 +12802,7 @@ const n2TreeManifest = (titleA, titleB) => ({
       const openText = p.openRows.map((r) => r.deliverable + " :: " + r.evidence).join(" | ");
       return p.complete === false
         && /Communication options/.test(openText) && /crt\.CommunicationOptions/.test(openText)
-        && /Related lists/.test(openText) && /3\/4 crt\.DataGrid built/.test(openText); },
+        && /Related list `/.test(openText) && /3\/4 crt\.DataGrid built/.test(openText); },
     () => pageOf({ pages: { main: { viewConfig: a3Body(3, { comm: false }), businessRules: a3Rules } }, ...QG_EVIDENCE }).openRows);
   // The boundary the axis exists for: a genuinely complete build whose ONLY open row is the unfiled quality-gates
   // record (evidence the builder is contractually forbidden to file itself) is `buildComplete: true`, while the
@@ -11288,9 +12841,11 @@ const n2TreeManifest = (titleA, titleB) => ({
     /fidelity note\(s\)/.test(fid.plan) && /KEPT \(correct\)/.test(fid.plan) && /warningDispositions/.test(fid.plan),
     () => (fid.plan.match(/^>.*fidelity.*$/m) || ["(no advisory line)"])[0]);
 
-  // CORRECTNESS: a merge onto an item no lower schema defined. Still a hard block — and the reason now QUOTES the
-  // warning that actually fired instead of the one summary string that sent the remedy search to the wrong file.
-  const corr = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }]);
+  // CORRECTNESS: a merge onto an item no lower schema defined, whose name a child placed under it still expects. A hard
+  // block — and the reason QUOTES the warning that actually fired, not one summary string pasted onto every producer.
+  const ghostDiff = [{ operation: "merge", name: "Ghost", values: { caption: "x" } },
+    { operation: "insert", name: "Kid", parentName: "Ghost", propertyName: "items", values: { bindTo: "Kid" } }];
+  const corr = mkRun(ghostDiff);
   const corrReason = (corr.gate.reasons || []).find((r) => r.startsWith("warnings ")) || "";
   check("a CORRECTNESS warning still blocks the gate",
     corr.gate.blocked === true && /correctness/.test(corrReason), () => corr.gate.reasons);
@@ -11311,12 +12866,112 @@ const n2TreeManifest = (titleA, titleB) => ({
     !(typo.effective.warnings || [])[0].accepted && /fidelity note\(s\)/.test(typo.plan),
     () => (typo.effective.warnings || [])[0]);
   // And the hatch is fidelity-ONLY: a correctness warning names a real missing item, which no operator can decide away.
-  const refused = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }],
+  const refused = mkRun(ghostDiff,
     { warningDispositions: { "merge:Ghost": { resolved: true, disposition: "accepted" } } });
   check("(item 5): a disposition aimed at a CORRECTNESS warning is REFUSED — the gate still blocks and the refusal is rendered, never silently honoured",
     refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
+
+  // A `remove` of a name NO layer and NO seed ever defines (a stray
+  // `remove "e"`). Classic ignores it, and neither F1 nor F2 can clear it, so it must not block the plan: it renders
+  // as a ⚠ fidelity advisory that says it has no effect, and `warningDispositions` can close it.
+  const noOpDiff = [
+    { operation: "insert", name: "Header", values: { itemType: 15 } },
+    { operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F" } },
+    { operation: "remove", name: "e" },
+  ];
+  const noOp = mkRun(noOpDiff);
+  const noOpWarn = (noOp.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
+  check("a remove of a never-defined name does NOT block the gate — gate.blocked is false",
+    noOp.gate.blocked === false && noOpWarn?.severity === "fidelity", () => ({ reasons: noOp.gate.reasons, warning: noOpWarn }));
+  check("the plan renders it as a ⚠ fidelity advisory whose hint says it has no effect in Classic",
+    /fidelity note\(s\)/.test(noOp.plan) && /no effect in Classic unless the chain is incomplete: 'e' is not defined anywhere in the supplied chain/.test(noOp.plan)
+    && /\*\*e\*\* @`P`/.test(noOp.plan), () => (noOp.plan.match(/^>.*\*\*e\*\*.*$/m) || ["(no advisory line)"])[0]);
+  const noOpDisp = mkRun(noOpDiff, { warningDispositions: { "remove:e:P": { resolved: true, disposition: "n/a", note: "stray remove of a name no schema defines" } } });
+  const noOpDispWarn = (noOpDisp.effective.warnings || []).find((w) => w.name === "e");
+  check("`warningDispositions` CLOSES the no-op remove note (it is fidelity, so the hatch is open to it)",
+    noOpDisp.gate.blocked === false && noOpDispWarn?.accepted === true && !noOpDispWarn.dispositionRefused
+    && /CLOSED by a recorded disposition/.test(noOpDisp.plan), () => noOpDispWarn);
+  // A real remove next to the stray one: the plan's removal count carries the real element only.
+  const noOpWithReal = runMigration({ entity: "E", noParentTemplate: true, schemas: [
+    { pkg: "P1", body: `define("P1",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(noOpDiff.slice(0, 2))}};});` },
+    { pkg: "P2", body: `define("P2",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "F" }, { operation: "remove", name: "e" }])}};});` },
+  ] }, { baseDir: FIX });
+  check("the removal count carries the real remove (F) and omits the no-op name (e)",
+    noOpWithReal.gate.blocked === false && noOpWithReal.effective.removed === 1,
+    () => ({ removed: noOpWithReal.effective.removed, reasons: noOpWithReal.gate.reasons }));
+  // A `remove` carrying `properties` patches an element, like a merge, so on a name nothing defines it keeps blocking.
+  const ghostProps = mkRun([{ operation: "remove", name: "Ghost", properties: ["labelConfig"] }]);
+  const ghostPropsW = (ghostProps.effective.warnings || []).find((w) => w.op === "remove" && w.name === "Ghost");
+  check("a `remove … properties` on a never-defined name stays CORRECTNESS and blocks, and counts as no removal",
+    ghostProps.gate.blocked === true && ghostPropsW?.severity === "correctness" && !ghostPropsW.accepted
+    && (ghostProps.gate.reasons || []).some((r) => /remove 'Ghost' @P/.test(r))
+    && ghostProps.effective.removed === 0,
+    () => ({ w: ghostPropsW, reasons: ghostProps.gate.reasons }));
+  // A `merge` of a name NO layer and NO seed defines is the same no-op in Classic: it does not block, and it closes.
+  const noOpMergeRun = mkRun([...noOpDiff.slice(0, 2), { operation: "merge", name: "SaaSMetricsTab", values: { order: 2 } }]);
+  const noOpMergeW = (noOpMergeRun.effective.warnings || []).find((w) => w.op === "merge" && w.name === "SaaSMetricsTab");
+  check("a merge of a never-defined name does NOT block the gate, renders as a fidelity advisory, and `warningDispositions` closes it",
+    noOpMergeRun.gate.blocked === false && noOpMergeW?.severity === "fidelity"
+    && /no effect in Classic unless the chain is incomplete: 'SaaSMetricsTab'/.test(noOpMergeRun.plan)
+    && mkRun([...noOpDiff.slice(0, 2), { operation: "merge", name: "SaaSMetricsTab", values: { order: 2 } }],
+      { warningDispositions: { "merge:SaaSMetricsTab:P": { resolved: true, disposition: "n/a", note: "copied merge of a tab no layer inserts" } } })
+      .effective.warnings.find((w) => w.name === "SaaSMetricsTab")?.accepted === true,
+    () => ({ reasons: noOpMergeRun.gate.reasons, warning: noOpMergeW }));
+  // …while a remove whose name a LATER layer defines is still the ordering signal, and still blocks.
+  const late = runMigration({ entity: "E", noParentTemplate: true, schemas: [
+    { pkg: "Early", body: `define("Early",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "Late" }])}};});` },
+    { pkg: "Later", body: `define("Later",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "Header", values: { itemType: 15 } }, { operation: "insert", name: "Late", parentName: "Header", propertyName: "items", values: { bindTo: "Late" } }])}};});` },
+  ] }, { baseDir: FIX });
+  check("a remove of a name a LATER layer inserts still BLOCKS the gate as correctness (schema order F1)",
+    late.gate.blocked === true && (late.gate.reasons || []).some((r) => /remove 'Late' @Early/.test(r) && /referenced by Later/.test(r)),
+    () => late.gate.reasons);
+  // `noParentTemplate: true` switches the no-seed gate reason off, so the no-op verdict is the only
+  // place that can say the parent chain went unchecked: the plan line must say so.
+  check("under `noParentTemplate: true` the rendered no-op advisory says the unchecked parent chain may define the name",
+    /\*\*e\*\* @`P` — .*noParentTemplate is declared, so the parent chain was not checked — a base element named 'e' may exist there \(F2\)/.test(noOp.plan)
+    && !/confirm the page really has no parent template/.test(noOp.plan),
+    () => (noOp.plan.match(/^>.*\*\*e\*\*.*$/m) || ["(no advisory line)"])[0]);
+  // …and over a possiblyPartial seed (CLEAN_SEED defines 6 methods) the plan names the partial seed as a possible cause.
+  const noOpPartial = runMigration({ entity: "E", seed: CLEAN_SEED, schemas: [
+    { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } }, { operation: "remove", name: "e" }])}};});` }] }, { baseDir: FIX });
+  const noOpPartialW = (noOpPartial.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
+  check("over a possiblyPartial seed the no-op remove stays advisory but its plan line says the PARTIAL seed may lack the name",
+    noOpPartial.effective.seedQuality.possiblyPartial === true && noOpPartialW?.severity === "fidelity"
+    && noOpPartial.gate.blocked === false && !(noOpPartial.gate.reasons || []).some((r) => /remove 'e'/.test(r))
+    && /\*\*e\*\* @`P` — .*base seed looks PARTIAL \(seedQuality\.possiblyPartial\), so it may lack 'e' \(F2\)/.test(noOpPartial.plan),
+    () => ({ w: noOpPartialW, reasons: noOpPartial.gate.reasons }));
+  // With NO seed and no `noParentTemplate`, the gate blocks for the missing seed — never for the no-op remove itself.
+  const noOpNoSeed = runMigration({ entity: "E", schemas: [
+    { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(noOpDiff)}};});` }] }, { baseDir: FIX });
+  const noOpNoSeedW = (noOpNoSeed.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
+  check("with no seed the gate blocks on the missing seed only; the no-op remove stays fidelity and adds no gate reason",
+    noOpNoSeed.gate.blocked === true && noOpNoSeedW?.severity === "fidelity"
+    && (noOpNoSeed.gate.reasons || []).some((r) => /no parent-template seed/.test(r))
+    && !(noOpNoSeed.gate.reasons || []).some((r) => /remove 'e'/.test(r)),
+    () => ({ w: noOpNoSeedW, reasons: noOpNoSeed.gate.reasons }));
+  // A stray remove inside a COMPLETE seed is pre-closed by the ENGINE as the base
+  // template's own no-op (`fromTemplate`). No operator recorded anything, so the plan must not say "CLOSED by a
+  // recorded disposition": it has its own "CLOSED by the engine" line. 150 real-bodied methods = not possiblyPartial.
+  const fullSeedMethods = Array.from({ length: 160 }, (_, i) => `m${i}:function(){return ${i};}`).join(",");
+  const fullSeed = [{ pkg: "BaseModulePageV2", body: `define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"remove",name:"tplStray"}],methods:{getActions:function(){return 1;},${fullSeedMethods}}};});` }];
+  const tplNoOp = runMigration({ entity: "E", seed: fullSeed, schemas: [
+    { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } }])}};});` }] }, { baseDir: FIX });
+  const tplNoOpW = (tplNoOp.effective.warnings || []).find((w) => w.op === "remove" && w.name === "tplStray");
+  check("a seed-owned no-op remove renders as CLOSED by the ENGINE, not as CLOSED by a recorded disposition",
+    tplNoOp.effective.seedQuality.possiblyPartial === false && tplNoOpW?.fromTemplate === true && tplNoOpW.accepted === true
+    && /fidelity note\(s\) CLOSED by the engine — the base template's own no-op, not a client decision: `remove:tplStray`/.test(tplNoOp.plan)
+    && !/CLOSED by a recorded disposition/.test(tplNoOp.plan) && !/\*\*tplStray\*\* @/.test(tplNoOp.plan),
+    () => ({ w: tplNoOpW, lines: tplNoOp.plan.split("\n").filter((l) => /CLOSED|tplStray/.test(l)) }));
+  // An operator disposition aimed at an engine-closed note is ignored: the engine's own closure and note stand.
+  const tplNoOpDisp = runMigration({ entity: "E", seed: fullSeed, warningDispositions: { "remove:tplStray": { resolved: true, disposition: "accepted", note: "operator note" } }, schemas: [
+    { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } }])}};});` }] }, { baseDir: FIX });
+  const tplNoOpDispW = (tplNoOpDisp.effective.warnings || []).find((w) => w.op === "remove" && w.name === "tplStray");
+  check("a `warningDispositions` answer does not overwrite an engine-closed (`fromTemplate`) note — disposition n/a and the engine's note stand",
+    tplNoOpDispW?.fromTemplate === true && tplNoOpDispW.disposition === "n/a" && /not a client decision/.test(tplNoOpDispW.note)
+    && !/operator note/.test(tplNoOpDisp.plan) && !/CLOSED by a recorded disposition/.test(tplNoOpDisp.plan),
+    () => ({ w: tplNoOpDispW, lines: tplNoOpDisp.plan.split("\n").filter((l) => /CLOSED|tplStray/.test(l)) }));
 }
 
 // --- stubIndex fan-in ------------------------------------------------------
@@ -12211,7 +13866,7 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ type: "crt.ComboBox", control: "$ConnCaseCol" }] }] } } } };
   check("verify: a Connected-to lookup identified only by `bound` (no name) is exempt from EXTRA",
     () => !/❌ EXTRA/.test(renderVerify(rnB, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtBound).markdown),
-    () => (renderVerify(rnB, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtBound).markdown.split("\n").find((l) => /Fields —/.test(l)) || ""));
+    () => (renderVerify(rnB, { planMeta: { freedomExists: true }, reconcileMode: "classic-layout" }, builtBound).markdown.split("\n").find((l) => /EXTRA|Field `A`/.test(l)) || ""));
 }
 
 /* KNOWN LIMITATION (pinned): recognition of a kept connection lookup requires the connections-named GROUP CONTAINER.
@@ -12291,7 +13946,7 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Foo",parentName:"Header",propertyName:"items",values:{bindTo:"Foo"}}]};});` }] }, { baseDir: FIX });
   const builtPds = { pages: { main: { viewConfig: { items: [{ name: "NumberInput_XFoo", type: "crt.NumberInput", control: "$PDS_Foo" }] } } } };
   const vP = renderVerify(rnP, { reconcileMode: "classic-layout" }, builtPds);
-  const fLine = vP.markdown.split("\n").find((l) => /Fields —/.test(l)) || "";
+  const fLine = vP.markdown.split("\n").find((l) => /Field `Foo`/.test(l)) || "";
   check("verify: a field bound to `$PDS_<Column>` (no Designer hash) matches by column — not missing, not EXTRA",
     () => /✅/.test(fLine) && !/❌ EXTRA/.test(vP.markdown) && !/missing:/.test(fLine), () => fLine);
 }
@@ -12319,7 +13974,7 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
   const rnRb = runMigration({ entity: "X", entityColumns: { Foo: { type: "Text" } },
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Foo",parentName:"Header",propertyName:"items",values:{bindTo:"Foo"}}]};});` }] }, { baseDir: FIX });
   const builtRb = { pages: { main: { viewConfig: { items: [{ name: "NumberInput_XFoo", type: "crt.NumberInput", control: "$PDS_Foo" }] } } } };
-  const fRb = renderVerify(rnRb, {}, builtRb).markdown.split("\n").find((l) => /Fields —/.test(l)) || "";
+  const fRb = renderVerify(rnRb, {}, builtRb).markdown.split("\n").find((l) => /Field `Foo`/.test(l)) || "";
   check("verify (REBUILD, no mode): a field bound to `$PDS_<Column>` still matches the plan column by identity",
     () => /✅/.test(fRb) && !/missing:/.test(fRb), () => fRb);
 }
@@ -12741,7 +14396,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_skel_"));
   try {
     const plan = readPlan(lpRun, checklistOpts({}));
-    const wrote = writeEvidenceSkeletons(d, plan);
+    const { written: wrote } = ensureRecordFiles(d, plan);
     const ev = JSON.parse(fs.readFileSync(path.join(d, "evidence.json"), "utf8"));
     const ju = JSON.parse(fs.readFileSync(path.join(d, "judge.json"), "utf8"));
     check("`--reads` writes `evidence.json` / `judge.json` with EVERY published id already a key — the filer supplies values and never types an id",
@@ -12760,7 +14415,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
       () => ({ gnarly }));
     // These hold the run's own answers. Regenerating one would delete them.
     fs.writeFileSync(path.join(d, "evidence.json"), JSON.stringify({ mine: 1 }));
-    writeEvidenceSkeletons(d, plan);
+    ensureRecordFiles(d, plan);
     check("an existing `evidence.json` is never overwritten — it holds the run's own answers, and a second `--reads` must not delete them",
       () => JSON.parse(fs.readFileSync(path.join(d, "evidence.json"), "utf8")).mine === 1,
       () => ({ back: fs.readFileSync(path.join(d, "evidence.json"), "utf8").slice(0, 60) }));
@@ -13188,8 +14843,8 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   }
 }
 {
-  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what SKILL.md 7.5 and step 8 tell the
-  // orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
+  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what step 7.5
+  // (`references/orchestrate-build.md`) and SKILL.md step 8 tell the orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
   // report replaces the table as the artifact, and the repair round reads the same open rows. An unread page
   // makes those rows untrustworthy, so no round may be written from them.
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_ft_"));
@@ -13271,6 +14926,341 @@ check("every rendered read row is ONE table row — four cells, no embedded newl
     .every((l) => l.split("|").length === 6),
   () => ({ bad: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").split("\n")
     .filter((l) => /^\| /.test(l) && !/^\| ---/.test(l) && l.split("|").length !== 6).slice(0, 2) }));
+
+/* ---- Field and rule identity, against pages real runs recorded ----------------------------------------------
+   Two recorded main-page payloads of the same section and plan, checked against one `expected.json` (19 field
+   columns, 5 rule targets). Provenance and what was trimmed: each fixture's README.
+     · `applicants-recorded`   — five elements whose NAME drops the column, every binding an unhashed `$PDS_<Col>`,
+                                 so the binding is the only identity those five have;
+     · `applicants-post-rename` — every element named for its column, bindings kept, five bindings that DIFFER from
+                                 the name (`MobilePhone` bound `$PDS_ContactMobilePhone`), so the name decides. */
+const REC_DIR = path.join(FIX, "applicants-recorded");
+const recBuilt = JSON.parse(fs.readFileSync(path.join(REC_DIR, "built-main.json"), "utf8"));
+const postBuilt = JSON.parse(fs.readFileSync(path.join(FIX, "applicants-post-rename", "built-main.json"), "utf8"));
+const recExp = JSON.parse(fs.readFileSync(path.join(REC_DIR, "expected.json"), "utf8"));
+const recCtxOf = (b) => verifyCtx({ pages: { main: b } }, "main");
+const recFieldsOf = (b) => resolveVk({ type: "fields", n: recExp.fields.length, names: recExp.fields }, recCtxOf(b));
+const recRulesOf = (b) => resolveRuleVk({ type: "rule", n: recExp.rules.length, names: recExp.rules }, recCtxOf(b));
+const clone = (x) => JSON.parse(JSON.stringify(x));
+// Every node of a JSON tree, reached through every object-valued key — the same reach as the engine's own walk, so
+// a fixture self-check cannot see a different set of nodes from the one the gate reads.
+const eachNode = (tree, fn) => (function walk(n) {
+  if (Array.isArray(n)) return n.forEach(walk);
+  if (!n || typeof n !== "object") return;
+  fn(n);
+  for (const v of Object.values(n)) if (v && typeof v === "object") walk(v);
+})(tree);
+const rawBindingOf = (n) => [n.control, n.value, n.checked].find((x) => typeof x === "string" && x.startsWith("$"));
+// Components only (a node with a `name` or `type`), the engine's own test: a button's `clicked.params.defaultValues`
+// entries also carry `value: "$Id"`, and they are request parameters, not fields.
+const rawBindings = (b) => { const out = []; eachNode(b.viewConfig, (n) => { const v = rawBindingOf(n); if (v && (n.name != null || n.type != null)) out.push(v); }); return out; };
+const rulesOf = (b) => b.businessRules?.rules || b.businessRules;
+// The unbound post-rename shape: every bound element renamed to its bare column, its binding removed.
+const recRenamedUnbound = () => {
+  const b = clone(recBuilt);
+  eachNode(b.viewConfig, (n) => {
+    const v = rawBindingOf(n);
+    if (v && n.name) { n.name = v.slice(1).replace(/^PDS_/i, ""); delete n.control; delete n.value; delete n.checked; }
+  });
+  return b;
+};
+// One field moved to a column the plan does not expect.
+const recWrongColumn = () => {
+  const b = clone(recBuilt);
+  eachNode(b.viewConfig, (n) => { if (n.name === "ContactField") { n.name = "SomethingElse"; n.control = "$PDS_NotAColumnWeExpect"; } });
+  return b;
+};
+// Every rule that targeted `RejectReason` re-pointed at an element that is not on the page.
+const recGhostRule = () => {
+  const b = clone(recBuilt);
+  const rules = rulesOf(b);
+  for (let i = 0; i < rules.length; i++) rules[i] = JSON.parse(JSON.stringify(rules[i]).replace(/RejectReason/g, "GhostElement"));
+  return b;
+};
+
+// Fixture self-checks: if these drift, the goldens below stop meaning what they say.
+check("identity fixture: the first recorded payload carries no `viewModelConfig` — its bindings are resolved off the"
+  + " node itself",
+  () => recBuilt.viewModelConfig === undefined,
+  () => ({ keys: Object.keys(recBuilt) }));
+// The predicate is the IMPLEMENTATION's hashed-unwrap shape, not a loose "ends in _word": `PDS_CurrentWageLevel` ends
+// in `_CurrentWageLevel` and would trip a naive test, while the real pattern needs a SECOND `_` before the hash.
+check("identity fixture: the first payload's 19 bindings are exactly the gate's bound ops, and none of them is the"
+  + " Designer's hashed `PDS_<Col>_<hash>` — the unhashed leg is the one that decides",
+  () => rawBindings(recBuilt).length === 19
+    && recCtxOf(recBuilt).ops.filter((o) => o.bound).length === 19
+    && !rawBindings(recBuilt).some((x) => /^PDS_(.+)_[0-9a-z]{6,}$/i.test(x.slice(1))),
+  () => ({ raw: rawBindings(recBuilt).length, ops: recCtxOf(recBuilt).ops.filter((o) => o.bound).length }));
+check("identity fixture: the post-rename payload names every bound element for its column and keeps its binding,"
+  + " with five bindings that differ from the name",
+  () => {
+    const pairs = recCtxOf(postBuilt).ops.filter((o) => o.name && o.bound);
+    const differ = pairs.filter((o) => o.name !== o.bound);
+    return pairs.length === 19 && pairs.every((o) => recExp.fields.includes(o.name)) && differ.length === 5;
+  },
+  () => recCtxOf(postBuilt).ops.filter((o) => o.name && o.bound).map((o) => `${o.name}->${o.bound}`));
+
+// T1 / T1b — the recorded payload whose names drop the column, with nothing renamed.
+check("identity T1: the recorded payload reports 19/19 fields — `Job`, `Market`, `Segment`, `InternalRequest` and"
+  + " `Owner` sit on elements whose name drops the column, and close through their unhashed `$PDS_<Col>` binding",
+  () => recFieldsOf(recBuilt)[2] === "ok",
+  () => recFieldsOf(recBuilt).slice(0, 2));
+check("identity T1b: the same payload reports 5/5 business rules — a rule targeting `RequestField` or"
+  + " `RoleInCompanyField` reaches `InternalRequest` / `Job` through that element's binding",
+  () => recRulesOf(recBuilt)[2] === "ok",
+  () => recRulesOf(recBuilt).slice(0, 2));
+
+// T2 — the post-rename shapes. The binding leg only ADDS a way to close a row; the name leg must stand unchanged.
+check("identity T2: the recorded POST-RENAME payload reports 19/19 fields and 5/5 rules — elements named for their"
+  + " column, bindings kept, five of them bound through a related record under a different attribute name",
+  () => recFieldsOf(postBuilt)[2] === "ok" && recRulesOf(postBuilt)[2] === "ok",
+  () => ({ fields: recFieldsOf(postBuilt).slice(0, 2), rules: recRulesOf(postBuilt).slice(0, 2) }));
+check("identity T2b: the same page with every binding REMOVED still reports 19/19 — element-name matching closes"
+  + " the row on its own",
+  () => recFieldsOf(recRenamedUnbound())[2] === "ok",
+  () => recFieldsOf(recRenamedUnbound()).slice(0, 2));
+
+// T3 / T3b — anti-vacuity. A widened matcher must not close a row it cannot evidence.
+check("identity T3: a field bound to the WRONG column is not counted and is named in the shortfall — and the"
+  + " verdict stays ⚠ unverified, never a hard ❌ (a by-identity shortfall is deliberately soft)",
+  () => {
+    const [status, text, kind] = recFieldsOf(recWrongColumn());
+    return kind === "unverified" && status === "⚠ verify" && /\bContact\b/.test(text) && /18\/19/.test(text);
+  },
+  () => recFieldsOf(recWrongColumn()).slice(0, 2));
+check("identity T3b: a rule whose target element is not on the page leaves its expected column in the shortfall —"
+  + " the element map cannot close a rule it cannot follow",
+  () => { const [, text, kind] = recRulesOf(recGhostRule()); return kind === "unverified" && /RejectReason/.test(text); },
+  () => recRulesOf(recGhostRule()).slice(0, 2));
+
+// T4 — `boundAttributeOf`, each leg pinned independently of any fixture.
+check("identity T4: `boundAttributeOf` unwraps a Designer-minted `PDS_<Col>_<hash>` to the bare column",
+  () => boundAttributeOf({ control: "$PDS_Contact_a1b2c3" }) === "Contact");
+check("identity T4: it unwraps a hash-less `PDS_<Col>` too — the shape an agent-built page carries",
+  () => boundAttributeOf({ control: "$PDS_Job" }) === "Job");
+check("identity T4: a binding with no `PDS_` prefix is compared as written — the builder chose that name",
+  () => boundAttributeOf({ control: "$StaffUnit" }) === "StaffUnit");
+check("identity T4: a node with no `$` binding resolves to null rather than to a spurious column",
+  () => boundAttributeOf({ name: "SomeContainer" }) === null);
+
+// T5 — `elementColumnsOf`, the rules check's element -> column map, on hand-built ops.
+check("identity T5: each named, bound op maps its element to the column it binds",
+  () => {
+    const m = elementColumnsOf([{ name: "RequestField", bound: "InternalRequest" }, { name: "Contact", bound: "Contact" }]);
+    return m.size === 2 && m.get("RequestField") === "InternalRequest" && m.get("Contact") === "Contact";
+  });
+check("identity T5: an element name bound to two DIFFERENT columns maps to nothing — ambiguous is not evidence,"
+  + " so neither column can be credited to a rule that names it",
+  () => {
+    const m = elementColumnsOf([{ name: "Twin", bound: "Job" }, { name: "Twin", bound: "Owner" }, { name: "Solo", bound: "Office" }]);
+    return !m.has("Twin") && m.get("Solo") === "Office";
+  });
+check("identity T5: a name repeated with the SAME column still maps (a duplicate op is not a conflict), and an op"
+  + " with no name or no binding contributes nothing",
+  () => {
+    const m = elementColumnsOf([{ name: "Twin", bound: "Job" }, { name: "Twin", bound: "Job" }, { name: "NoBind" }, { bound: "Orphan" }, null]);
+    return m.size === 1 && m.get("Twin") === "Job";
+  });
+check("identity T5b: through the resolver, a rule on an element whose name is bound to two columns does NOT close"
+  + " a row expecting either column",
+  () => {
+    const page = { viewConfig: { items: [
+      { name: "Twin", type: "crt.ComboBox", control: "$PDS_Job" },
+      { name: "Twin", type: "crt.ComboBox", control: "$PDS_Owner" },
+    ] }, businessRules: { rules: [{ name: "R1", actions: [{ type: "make-required", items: ["Twin"] }] }] } };
+    // Both columns, because a last-write-wins map credits exactly one of them — asking about one could pass by luck.
+    return ["Job", "Owner"].every((col) => resolveRuleVk({ type: "rule", n: 1, names: [col] }, recCtxOf(page))[2] === "unverified");
+  });
+
+// T6 — the unhashed unwrap on the smallest page, and its isolation from the list-column code match.
+check("identity T6: a single expected field closes on an element whose name drops the column, through a hash-less"
+  + " `$PDS_<Col>` binding",
+  () => {
+    const page = { viewConfig: { items: [{ name: "RoleInCompanyField", type: "crt.ComboBox", control: "$PDS_Job" }] } };
+    return resolveVk({ type: "fields", n: 1, names: ["Job"] }, recCtxOf(page))[2] === "ok";
+  });
+check("identity T6b: the list-column verdict is untouched by the unwrap — a grid column is matched by its exact"
+  + " `PDS_<Col>` code, so a bound `$PDS_Job` field never stands in for a missing column code",
+  () => {
+    const listPage = (codes) => ({ viewConfig: { items: [
+      { name: "JobField", type: "crt.ComboBox", control: "$PDS_Job" },
+      { name: LIST_GRID, type: "crt.DataGrid", columns: codes.map((code) => ({ id: code, code })) },
+    ] } });
+    const vk = { type: "listcolumns", n: 1, columns: [{ name: "Job", code: "PDS_Job" }] };
+    const ok = resolveVk(vk, recCtxOf(listPage(["PDS_Job"])));
+    const miss = resolveVk(vk, recCtxOf(listPage(["PDS_Owner"])));
+    return ok[2] === "ok" && miss[2] === "missing" && /PDS_Job/.test(miss[1]);
+  },
+  () => ["PDS_Job", "PDS_Owner"].map((c) => resolveVk({ type: "listcolumns", n: 1, columns: [{ name: "Job", code: "PDS_Job" }] },
+    recCtxOf({ viewConfig: { items: [{ name: "JobField", type: "crt.ComboBox", control: "$PDS_Job" },
+      { name: LIST_GRID, type: "crt.DataGrid", columns: [{ id: c, code: c }] }] } })).slice(0, 2)));
+
+// T7 — the same two legs end to end through `migrate.mjs --verify`, on the gate-clean SupportUnit manifest. Its
+// expected names are read from the plan it produces, and every built element is named so that it CANNOT match by
+// name: only the unhashed binding and the element map can close these rows.
+{
+  const suManifest = JSON.parse(verifyManifest);
+  const suRows = checklistGroups(runMigration(suManifest, { baseDir: DIR }), checklistOpts(suManifest)).flatMap((g) => g.rows);
+  const suFields = suRows.filter((r) => r.vk?.type === "fields").flatMap((r) => r.vk.names);
+  const suRules = suRows.find((r) => r.vk?.type === "rule")?.vk.names || [];
+  const elementFor = (col) => `W${suFields.indexOf(col)}Widget`;
+  const cliPage = (withBinding) => ({
+    viewConfig: { items: suFields.map((c) => ({ name: elementFor(c), type: "crt.Input", ...(withBinding ? { control: `$PDS_${c}` } : {}) })) },
+    parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111",
+    businessRules: { rules: suRules.map((c, i) => ({ name: `BusinessRule_${i}`, caption: "rule", actions: [{ type: "make-required", items: [elementFor(c)] }] })) },
+  });
+  const cliVerify = (page) => {
+    const p = path.join(os.tmpdir(), `c2f_identity_cli_${process.pid}.json`);
+    fs.writeFileSync(p, JSON.stringify({ pages: { main: page } }));
+    try { return runMigrate(["-", "--verify", "--built", p], { input: verifyManifest, encoding: "utf8" }).stdout || ""; }
+    finally { fs.rmSync(p, { force: true }); }
+  };
+  const rowOf = (out, re) => out.split("\n").find((l) => re.test(l)) || "";
+  const FIELDS_ROW = /^\| \d+ \| Field `/, RULES_ROW = /^\| \d+ \| Business rules/;
+  const bound = cliVerify(cliPage(true)), unbound = cliVerify(cliPage(false));
+  check("identity T7: through `migrate.mjs --verify`, the Fields and Business-rules rows close on unhashed"
+    + " `$PDS_<Col>` bindings alone, every element named so it cannot match by name",
+    suFields.length > 1 && suRules.length > 0 && bound.split("\n").filter((l) => FIELDS_ROW.test(l)).length === suFields.length
+      && bound.split("\n").filter((l) => FIELDS_ROW.test(l)).every((l) => /✅ Done/.test(l)) && /✅ Done/.test(rowOf(bound, RULES_ROW)),
+    () => ({ fields: suFields, rules: suRules, fieldsRow: rowOf(bound, FIELDS_ROW), rulesRow: rowOf(bound, RULES_ROW) }));
+  check("identity T7: the same page with the bindings removed does NOT close either row — the binding is what closed them",
+    unbound.split("\n").filter((l) => FIELDS_ROW.test(l)).every((l) => !/✅ Done/.test(l)) && !/✅ Done/.test(rowOf(unbound, RULES_ROW)),
+    () => ({ fieldsRow: rowOf(unbound, FIELDS_ROW), rulesRow: rowOf(unbound, RULES_ROW) }));
+}
+
+/* ---- deliverable status: the engine's own "nothing to build" conclusions ---- */
+{
+  const ABSENT = { resolved: true, present: false };
+  const PRESENT = { resolved: true, present: true, names: ["Contract"] };
+  const rowsOf = (result, opts = {}) => checklistGroups(result, opts).flatMap((g) => g.rows);
+  const byId = (rows, deliverableId) => rows.find((r) => r.deliverableId === deliverableId);
+  const acts = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "RunProcess", "printContract"] },
+    signals: { printables: ABSENT, processes: ABSENT } });
+  check("T2: a Print / Process row the on-stand check found nothing behind arrives `na` with that reason; RunProcess and a custom `printContract` stay open",
+    () => /no printables/.test(byId(acts, "card-action:Print")?.na || "") && /no process connected/.test(byId(acts, "card-action:Process")?.na || "")
+      && !byId(acts, "card-action:RunProcess").na && byId(acts, "card-action:RunProcess").vk?.type === "card"
+      && !byId(acts, "card-action:printContract").na && byId(acts, "card-action:printContract").vk?.type === "card",
+    () => acts);
+  const open = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] }, signals: { printables: PRESENT } });
+  check("T2: an unresolved or present signal leaves Print / Process open",
+    () => open.filter((r) => r.deliverableId?.startsWith("card-action:")).every((r) => !r.na && r.vk?.type === "card"), () => open);
+  const child = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "RunProcess", "ViewOptionsButton", "TagButton"] }, signals: { printables: PRESENT } },
+    { isChildPage: true, pageKey: "child:X" });
+  check("T2: the standard card actions on a child page (Print, Process, the native row) arrive `na`; RunProcess stays open",
+    () => ["card-action:Print", "card-action:Process", "card-actions:native"].every((d) => /child edit page/.test(byId(child, d)?.na || ""))
+      && !byId(child, "card-action:RunProcess").na, () => child);
+  const kids = rowsOf({ entity: "X", changeSet: {}, childPages: [
+    { entity: "C1", via: "D1", editPage: false }, { entity: "C2", via: "D2", cyclic: true },
+    { entity: "C3", via: "D3", opensClassicPage: "C3Page" }, { entity: "C4", via: "D4" }] });
+  check("T2: the `separate page?` row of a child with no edit page, a cyclic child and a child that keeps its Classic card arrives `na`; an unresolved child stays open",
+    () => ["child-page:D1", "child-page:D2", "child-page:D3"].every((d) => !!byId(kids, d)?.na) && byId(kids, "child-page:D4") && !byId(kids, "child-page:D4").na,
+    () => kids.filter((r) => r.deliverableId?.startsWith("child-page:")));
+  const pagesOnly = checklistGroups({ entity: "X", changeSet: {}, section: {}, listChangeSet: { columns: [{ name: "Name", code: "PDS_Name" }] } },
+    { sectionHostMode: "pages-only-no-menu", planMeta: { sectionSchema: "XSection", listTemplate: "ListPageV3Template" } }).flatMap((g) => g.rows);
+  check("T2: the deliberately-NOT-built rows of a pages-only-no-menu run (section entry, list page rows) arrive `na` with the host-mode reason",
+    () => ["page:section", "list-columns", "page:list-not-built"].every((d) => /pages-only-no-menu/.test(byId(pagesOnly, d)?.na || "")),
+    () => pagesOnly.map((r) => [r.deliverableId, r.na]));
+}
+
+// Per-item rows keep the aggregate's strength: one one-to-one field match and one grid count per page, over the
+// page's OPEN rows only.
+{
+  const res = (details = []) => ({ changeSet: { viewConfigDiff: [
+    { name: "Amount", values: { control: "$Amount", type: "crt.Input" } },
+    { name: "AmountField", values: { control: "$AmountField", type: "crt.Input" } }], images: [], standardFeatures: [], details, cardActions: [] }, signals: {} });
+  const line = (v, label) => v.markdown.split("\n").find((l) => l.includes(`| ${label} |`)) || "";
+  const shared = renderVerify(res(), {}, { ops: [{ name: "AmountField", type: "crt.Input" }], ...QG_EVIDENCE });
+  const okRows = ["Field `Amount`", "Field `AmountField`"].filter((l) => /✅ Done/.test(line(shared, l)));
+  check("per-item verify: two expected fields and ONE built element that matches both — exactly one row passes and the other fails, and the page stays open",
+    () => okRows.length === 1 && ["Field `Amount`", "Field `AmountField`"].some((l) => /⚠ verify.*0\/1 expected fields present/.test(line(shared, l)))
+      && shared.unverified >= 1 && shared.complete === false,
+    () => ({ a: line(shared, "Field `Amount`"), b: line(shared, "Field `AmountField`"), unverified: shared.unverified }));
+  const dropOpts = { deliverableStatus: { "main#field:AmountField": { status: "wont-do", decision: "D3" } } };
+  const dropped = renderVerify(res(), dropOpts, { ops: [{ name: "AmountField", type: "crt.Input" }], ...QG_EVIDENCE });
+  check("per-item verify: a won't-do field is not expected by the page-level match — its sibling closes and the dropped row reads Won't do",
+    () => /✅ Done/.test(line(dropped, "Field `Amount`")) && /Won't do — D3/.test(line(dropped, "Field `AmountField`")) && dropped.complete === true,
+    () => ({ a: line(dropped, "Field `Amount`"), b: line(dropped, "Field `AmountField`"), complete: dropped.complete, unverified: dropped.unverified }));
+  const LISTS = [{ detailSchema: "D1", entity: "E1" }, { detailSchema: "D2", entity: "E2" }];
+  const both = { ops: [{ name: "Amount", type: "crt.Input" }, { name: "AmountField", type: "crt.Input" }] };
+  const oneGrid = renderVerify(res(LISTS), {}, { ops: [...both.ops, { name: "G1", type: "crt.DataGrid" }], ...QG_EVIDENCE });
+  const noGrid = renderVerify(res(LISTS), {}, { ops: both.ops, ...QG_EVIDENCE });
+  check("per-item verify: a related-list shortfall still fails the page — 1 grid for 2 lists reads unverified on both rows saying which one is missing cannot be told; 0 grids reads MISSING",
+    () => ["D1", "D2"].every((d) => /⚠ verify.*1\/2 crt\.DataGrid built.*cannot be told/.test(line(oneGrid, `Related list \`${d}\``)))
+      && oneGrid.complete === false && ["D1", "D2"].every((d) => /❌ MISSING/.test(line(noGrid, `Related list \`${d}\``))) && noGrid.missing >= 1,
+    () => ({ one: ["D1", "D2"].map((d) => line(oneGrid, `Related list \`${d}\``)), none: ["D1", "D2"].map((d) => line(noGrid, `Related list \`${d}\``)) }));
+  const listDropped = renderVerify(res(LISTS), { deliverableStatus: { "main#related-list:D2": { status: "wont-do", decision: "D3" } } },
+    { ops: [...both.ops, { name: "G1", type: "crt.DataGrid" }], ...QG_EVIDENCE });
+  check("per-item verify: a won't-do related list is not expected by the page-level count — one grid closes the remaining list",
+    () => /✅ Done/.test(line(listDropped, "Related list `D1`")) && /Won't do — D3/.test(line(listDropped, "Related list `D2`")) && listDropped.complete === true,
+    () => ({ d1: line(listDropped, "Related list `D1`"), d2: line(listDropped, "Related list `D2`"), complete: listDropped.complete }));
+  const SAME = [1, 2, 3].map(() => ({ detailSchema: "D1", entity: "E1" }));
+  const IDS = ["D1", "D1@E1", "D1@E1#3"];
+  const threeGrids = { ops: [...both.ops, ...[1, 2].map((i) => ({ name: `G${i}`, type: "crt.DataGrid" }))], ...QG_EVIDENCE };
+  const sameDropped = renderVerify(res(SAME), { deliverableStatus: { "main#related-list:D1@E1": { status: "wont-do", decision: "D3" } } }, threeGrids);
+  check("per-item verify: three related lists with the same detail schema and entity get three distinct ids — a won't-do on one closes only that one",
+    () => IDS.every((id) => line(sameDropped, `Related list \`${id}\``))
+      && /Won't do — D3/.test(line(sameDropped, "Related list `D1@E1`"))
+      && ["D1", "D1@E1#3"].every((id) => /✅ Done/.test(line(sameDropped, `Related list \`${id}\``))) && sameDropped.complete === true,
+    () => IDS.map((id) => line(sameDropped, `Related list \`${id}\``)));
+}
+
+// Every deliverable of every run above has an id, unique on its page.
+{
+  const missing = [], dupes = [];
+  for (const { manifest, result } of RUNS) {
+    if (!result?.plan) continue;
+    for (const g of checklistGroups(result, checklistOpts(manifest))) for (const r of g.rows) if (!r.deliverableId) missing.push({ page: g.pageKey, group: g.baseTitle, label: r.label.slice(0, 80) });
+    const seen = new Map();
+    for (const g of checklistGroups(result, checklistOpts(manifest))) for (const r of g.rows) {
+      const k = `${g.pageKey}#${r.deliverableId}`;
+      if (seen.has(k) && seen.get(k) !== r.label) dupes.push({ key: k, a: seen.get(k).slice(0, 60), b: r.label.slice(0, 60) });
+      seen.set(k, r.label);
+    }
+  }
+  check(`ids: every deliverable of all ${RUNS.length} runs has a \`deliverableId\`, and no two different deliverables of one page share one`,
+    () => RUNS.length > 50 && missing.length === 0 && dupes.length === 0,
+    () => ({ missing: missing.slice(0, 8), dupes: dupes.slice(0, 8) }));
+}
+
+// T3 — across every run above, a plan table line that says there is nothing to build has a closed row behind it.
+{
+  const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const named = (name, label) => new RegExp(`(^|[^A-Za-z0-9_])${escRe(name)}([^A-Za-z0-9_]|$)`).test(label.replace(/`/g, ""));
+  const NOTHING = /\*\*Won't do\*\*|\*\*Not migrated\*\*|Not migrated —|\(not migrated\)/;
+  const lines = (plan) => String(plan || "").split("\n").filter((l) => l.startsWith("| ") && NOTHING.test(l));
+  // The line's first two cells, multi-word ones included: one names the item, the other may name its region.
+  const itemsOf = (line) => line.split("|").slice(1, 3).map((c) => c.trim().split(" — ")[0].replace(/`/g, "").trim())
+    .filter((c) => c && c !== "—" && c !== "Header");
+  const isClosed = (r) => !!r.na || r.status?.kind === "wont-do";
+  // A line drifts when no cell names a closed row and a cell names an open one.
+  const lineDrifts = (line, rows) => {
+    const items = itemsOf(line);
+    const names = (closed) => rows.filter(({ r }) => isClosed(r) === closed && items.some((it) => named(it, r.label)));
+    return names(true).length ? [] : names(false);
+  };
+  const drift = [], itemless = [];
+  let cells = 0;
+  for (const { manifest, result } of RUNS) {
+    if (!result?.plan) continue;
+    const rows = checklistGroups(result, checklistOpts(manifest)).flatMap((g) => g.rows.map((r) => ({ page: g.pageKey, r })));
+    for (const line of lines(result.plan)) {
+      cells++;
+      if (!itemsOf(line).length) itemless.push({ entity: manifest?.entity, planLine: line.slice(0, 160) });
+      for (const { page, r } of lineDrifts(line, rows)) drift.push({ entity: manifest?.entity, page, planLine: line.slice(0, 160), label: r.label.slice(0, 100) });
+    }
+  }
+  check(`T3: across all ${RUNS.length} runs, every plan line saying there is nothing to build (${cells} of them) yields an item, and none names an open row without a closed one`,
+    () => cells > 0 && drift.length === 0 && itemless.length === 0, () => ({ cells, drift: drift.slice(0, 10), itemless: itemless.slice(0, 10) }));
+  const multi = "| Card actions | Run report | Action | — | — | **Won't do** — none |";
+  const at = (label, closed) => ({ page: "main", r: { label, ...(closed ? { na: "closed" } : {}) } });
+  check("T3 (anti-vacuity): the matcher ties a closed plan line to the row it names, and not to a longer name; a multi-word item is matched, and a line naming only open rows drifts",
+    () => lines("| Card actions | Print | Action | — | — | **Won't do** — none |").length === 1
+      && itemsOf("| Card actions | Print | Action | — | — | **Won't do** — none |").includes("Print")
+      && named("Print", "Card action — Print") && !named("Print", "Card action — printContract")
+      && itemsOf(multi).includes("Run report") && lineDrifts(multi, [at("Card action — Run report", true)]).length === 0
+      && lineDrifts(multi, [at("Card action — Run report", false)]).length === 1
+      && itemsOf("| — | — | **Won't do** — none |").length === 0);
+}
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
