@@ -1299,6 +1299,38 @@ console.log("\n===== run diagnostics (offline, injected runner) =====");
         { encoding: "utf8", env: { PATH: "" } });
       return r.status === 0 && r.stdout.startsWith("### Run diagnostics") && r.stdout.includes("unknown (clio not found on PATH)");
     });
+
+  // The checks above inject a runner or empty PATH, so they reach only the not-found branch of the PATH lookup.
+  // These give the lookup a real directory tree, with env and platform injected, so a hit is exercised on every OS.
+  const bin = (rel) => { const d = path.join(tmp, "bin", rel); mkdirSync(d, { recursive: true }); return d; };
+  const posixDir = bin("posix");
+  writeFileSync(path.join(posixDir, "clio"), "");
+  check("diagnostics: findOnPath returns the tool's absolute path from a POSIX PATH hit",
+    () => diag.findOnPath("clio", { PATH: [bin("empty"), posixDir].join(path.delimiter) }, "linux") === path.join(posixDir, "clio"));
+  const shadowDir = bin("shadow");
+  mkdirSync(path.join(shadowDir, "clio"));
+  check("diagnostics: findOnPath skips a directory named like the tool and keeps searching PATH",
+    () => diag.findOnPath("clio", { PATH: [shadowDir, posixDir].join(path.delimiter) }, "linux") === path.join(posixDir, "clio"));
+  const winDir = bin("win");
+  writeFileSync(path.join(winDir, "clio.exe"), "");
+  check("diagnostics: on win32 findOnPath reads `Path` when `PATH` is absent and tries PATHEXT extensions lowercased",
+    () => diag.findOnPath("clio", { Path: winDir, PATHEXT: ".EXE;.CMD" }, "win32") === path.join(winDir, "clio.exe"));
+  check("diagnostics: on win32 findOnPath does not take an extensionless file for the tool",
+    () => diag.findOnPath("clio", { Path: posixDir, PATHEXT: ".EXE;.CMD" }, "win32") === null);
+  // defaultRun reads the real process PATH; node itself is the child, so no extra tool has to be installed.
+  const nodeName = path.basename(process.execPath, path.extname(process.execPath));
+  const savedPath = process.env.PATH;
+  process.env.PATH = [path.dirname(process.execPath), savedPath].filter(Boolean).join(path.delimiter);
+  try {
+    const answered = diag.defaultRun(nodeName, ["-e", "process.stdout.write('hi')"]);
+    check("diagnostics: defaultRun spawns a tool found on PATH and returns its output",
+      () => answered.ok === true && answered.out === "hi" && answered.status === 0, () => answered);
+    const silent = diag.defaultRun(nodeName, ["-e", "setTimeout(() => {}, 10000)"], 300);
+    check("diagnostics: defaultRun maps a timed-out child to `no answer in N s`",
+      () => silent.ok === false && silent.error === "no answer in 0.3 s", () => silent);
+  } finally {
+    process.env.PATH = savedPath;
+  }
   rmSync(tmp, { recursive: true, force: true });
 }
 
