@@ -129,7 +129,13 @@ sub-agents apply it. The flag is rejected on `--plan`/`--spec` and on a rebuild 
 onto). Per-mode placement procedure: `./references/existing-freedom-reconcile.md`.
 
 1. Record the approval in `decisions.md`, naming the **plan version** string `plan.md` prints
-   (`**Plan version:**`). Build only against the plan that entry names.
+   (`**Plan version:**`). Build only against the plan that entry names. The engine enforces it: an
+   approval is a `## ` entry holding both `Plan version: <the version>` and a non-empty
+   `Approved by:` field, and without one for the version the manifest renders now, `--tasks`
+   (with or without `--split`), `--tasks --start` and `--tasks --route` write nothing and **exit
+   `2`** — the refusal names the version it expected and any earlier version `decisions.md`
+   approves. A plan that changed after its approval is re-presented and re-approved; never record an
+   approval the user did not give to get past the refusal.
 2. **Decide where the seams go, ONCE.** Write `split.json` — the plan cut into work items, each
    claiming the plan rows it absorbs. This is a judgement and it is yours: put work that must be
    done together in one item (a related list and the handler that filters it; a folded handler chain
@@ -692,8 +698,8 @@ and cannot ask Creatio whether a GUID exists).
 **Exit 2 is SEVEN different verdicts — do not treat them alike.** `⛔ NOTHING WRITTEN` (the repair
 round words it `NO REPAIR TASKS WRITTEN`, `--start` words it `NOTHING WAS STARTED`) is a REFUSAL:
 the engine declined to touch the folder, so nothing it names was cut, started or routed. Its cause
-is on stdout under the banner — a plan-level gap, a split that claims a row twice or names a row the
-plan does not have, a frozen cut that does not resolve against the plan, or one of the `--start`
+is on stdout under the banner — a plan-level gap, a plan version `decisions.md` does not approve,
+a split that claims a row twice or names a row the plan does not have, a frozen cut that does not resolve against the plan, or one of the `--start`
 holds above. Fix the cause named there and re-run; **every mode that prints it answers this same
 code** (`--tasks`, `--tasks --next`, `--tasks --route`, `--tasks --start`, `--tasks --handoff`, `--verify --tasks`), so
 the verdict does not depend on which command asked. `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete`

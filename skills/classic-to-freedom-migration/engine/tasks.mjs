@@ -4588,6 +4588,23 @@ function entryField(line) {
   const name = colon > 0 ? plain.slice(0, colon) : "";
   return /^[A-Za-z][A-Za-z ]*$/.test(name) ? [name.toLowerCase(), plain.slice(colon + 1).trim()] : null;
 }
+// The `## ` entries of `decisions.md` that carry a non-empty `Approved by:` field, each as the `Plan version:`
+// fields it holds (`[line, value]`). The text before the first `## ` heading counts as an entry.
+// ONE reader for both questions below, so `--handoff` and the build gate cannot disagree on what an approval is.
+function approvedEntries(decisionsText) {
+  const entries = [[]];
+  for (const line of String(decisionsText || "").split(/\r?\n/)) {
+    if (/^##\s/.test(line)) entries.push([]);
+    entries.at(-1).push(line);
+  }
+  const approved = [];
+  for (const lines of entries) {
+    const fields = lines.map((line) => [line, entryField(line)]).filter(([, f]) => f);
+    if (!fields.some(([, [name, value]]) => name === "approved by" && value !== "")) continue;
+    approved.push(fields.filter(([, [name]]) => name === "plan version").map(([line, [, value]]) => [line, value]));
+  }
+  return approved;
+}
 // The `decisions.md` line that approves THIS plan version, read per `## ` entry: the entry must hold a
 // `Plan version:` field whose value IS the version (so `plan-4f9c` does not pass for `plan-4f9c2ab17e03`) AND a
 // non-empty `Approved by:` field. A line that only mentions the version, or a scope-change entry that records the
@@ -4595,18 +4612,21 @@ function entryField(line) {
 // list marker, or null.
 export function planApprovalLine(decisionsText, planVersion) {
   if (!planVersion) return null;
-  const entries = [[]];
-  for (const line of String(decisionsText || "").split(/\r?\n/)) {
-    if (/^##\s/.test(line)) entries.push([]);
-    entries.at(-1).push(line);
-  }
-  for (const lines of entries) {
-    const fields = lines.map((line) => [line, entryField(line)]).filter(([, f]) => f);
-    const approved = fields.some(([, [name, value]]) => name === "approved by" && value !== "");
-    const versionLine = fields.find(([, [name, value]]) => name === "plan version" && value === planVersion);
-    if (approved && versionLine) return versionLine[0].replace(/^\s*[-*]\s*/, "").trim();
+  for (const versions of approvedEntries(decisionsText)) {
+    const versionLine = versions.find(([, value]) => value === planVersion);
+    if (versionLine) return versionLine[0].replace(/^\s*[-*]\s*/, "").trim();
   }
   return null;
+}
+// Every plan version `decisions.md` records an approval of, in file order and without repeats. Read by the same
+// rule as `planApprovalLine`, so a version listed here is one that call would accept. The build gate names them
+// when it refuses, so an operator can tell a plan nobody approved from one approved at an earlier version.
+export function approvedPlanVersions(decisionsText) {
+  const out = [];
+  for (const versions of approvedEntries(decisionsText)) {
+    for (const [, value] of versions) if (value !== "" && !out.includes(value)) out.push(value);
+  }
+  return out;
 }
 
 // The `Route:` line step 7.0 writes into `worklog.md`, bold and list marker dropped, or null. The LAST one wins:

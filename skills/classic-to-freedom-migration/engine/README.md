@@ -116,6 +116,13 @@ built plans were computed from the same manifest — it is not a checksum of the
 `decisions.md` approval entry names. `plan.md` is engine-WRITTEN, so nothing else can put a version in it and
 survive the next `--plan --out`.
 
+**The approval gate.** `--tasks <dir>` (with or without `--split`), `--tasks <dir> --start <id>` and
+`--tasks <dir> --route` write nothing unless `decisions.md` in the migration folder (the folder above `<dir>`) holds
+a `## ` entry with both `Plan version: <the version this manifest renders>` and a non-empty `Approved by:` —
+`planApprovalLine` in `tasks.mjs`, the same rule `--handoff` applies. The refusal exits 2 after the plan-gap check
+and before the folder is read, and names the expected version plus every version `decisions.md` does approve
+(`approvedPlanVersions`), so a plan that changed after its approval reads as exactly that.
+
 **`--tasks <dir>` — the plan as a FOLDER of one-task files (SKILL.md step 7).** Same rows as `--checklist`, cut one
 task per ARTIFACT so a caller can dispatch one sub-agent per task instead of holding every deliverable in one
 context. The properties that decide its behaviour are stated in full in `tasks.mjs`:
