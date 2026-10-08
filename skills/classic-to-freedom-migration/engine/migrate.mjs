@@ -67,7 +67,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -3380,6 +3380,10 @@ let startRefusalFailure = false;
 // `--next` would refuse the folder. A hand-off the fresh session cannot resume from is a refusal, and it exits like
 // one.
 let handoffRefusalFailure = false;
+// ⛔ `--tasks` / `--start` / `--route` WROTE NOTHING — decisions.md records no approval of the plan version this
+// manifest renders. Its own flag because none of the modes above owns it: it is the one refusal all three share,
+// and it fires before any of their own checks runs.
+let approvalRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -3475,6 +3479,36 @@ function planGapRefusal(result) {
   if (!gaps.length) return null;
   return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
     + ". None of the three is buildable-out-of: fix the manifest / the stand, re-run `--plan`, re-approve if the plan changed, and slice tasks only then.\n";
+}
+// NO BUILD OR REPAIR TASK FOR A PLAN NOBODY APPROVED. The approval of THIS plan version is read off decisions.md
+// in the migration folder (the folder above `dir`) by `planApprovalLine`, the rule `--handoff` applies, so the two
+// gates agree on what an approval is. Checked BEFORE anything is read from or written to the task folder: a refused
+// run leaves no task file, no index, no frozen split, no record file and no repair task behind. Returns the refusal
+// text, or null when the plan is approved. `written` names what the refused mode would have written.
+function planApprovalRefusal(result, dir, written) {
+  const folder = path.dirname(path.resolve(dir));
+  const decisions = readTextOr(path.join(folder, "decisions.md"));
+  if (planApprovalLine(decisions, result.planVersion)) return null;
+  const recorded = approvedPlanVersions(decisions);
+  const why = recorded.length
+    ? `decisions.md in ${folder} approves plan version(s) ${recorded.map((v) => "`" + v + "`").join(", ")}, but this`
+      + ` manifest renders \`${result.planVersion}\` — the plan changed after it was approved.`
+    : `decisions.md in ${folder} records no approval of plan version \`${result.planVersion}\`.`;
+  return `migrate.mjs: ⛔ NOTHING WRITTEN — no ${written} for a plan that is not approved: ${why}`
+    + ` An approval is a \`## \` entry holding both \`Plan version: ${result.planVersion}\` and a non-empty`
+    + " `Approved by:` field. Present the plan, record the user's approval naming that version and who approved it"
+    + " (orchestrate-build.md 7.1 step 1), then re-run.\n";
+}
+
+// BOTH GATES OF A TASK-FOLDER WRITE, in their order: plan gaps first, then plan approval. Returns the refusal text,
+// or null when the plan passes both. An approval refusal raises its own exit flag here, so the banner on stdout and
+// the exit code stay one verdict.
+function taskWriteRefusal(result, dir, written) {
+  const gapRefusal = planGapRefusal(result);
+  if (gapRefusal) return gapRefusal;
+  const unapproved = planApprovalRefusal(result, dir, written);
+  if (unapproved) approvalRefusalFailure = true;
+  return unapproved;
 }
 
 // WHAT WAS REFUSED, AND WHAT CLEARS IT — one pair of writers, because the build leg, `--route` and `--verify`
@@ -3601,8 +3635,8 @@ function recordFileLines(records) {
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
-  const gapRefusal = planGapRefusal(result);
-  if (gapRefusal) return gapRefusal;
+  const gated = taskWriteRefusal(result, dir, "task folder");
+  if (gated) return gated;
   // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
@@ -3987,8 +4021,11 @@ export function repairRoundLines(res, dir, kind) {
 // a run still building them cannot supply. A repair task is recognised by front matter the ENGINE writes, so
 // routing is a mode and never a file a caller authors.
 function runRouteMode(result, dir, opts) {
+  // The read-only preflight (dispatch audit, then plan gaps) answers first, so a gapped plan keeps its own refusal.
   const refused = repairPreflight(result, dir);
   if (refused) return refused;
+  const unapproved = planApprovalRefusal(result, dir, "repair tasks");
+  if (unapproved) { approvalRefusalFailure = true; return unapproved; }
   let res;
   // A round that could not be written opened nothing, exactly like the refusal below, so it raises the same flag:
   // the banner on stdout and the exit code are one verdict.
@@ -4426,6 +4463,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
   // be a second opinion on seams the folder froze.
+  // Gated like every other task-folder write: gaps first, then approval, both before the declaration is read.
+  else if (tasksMode && addFile && (planGapRefusal(result) || planApprovalRefusal(result, tasksDir, "declared task"))) {
+    output = planGapRefusal(result);
+    if (!output) { approvalRefusalFailure = true; output = planApprovalRefusal(result, tasksDir, "declared task"); }
+  }
   else if (tasksMode && addFile) {
     let text;
     try { text = fs.readFileSync(addFile, "utf8"); }
@@ -4652,7 +4694,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
     || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
-    || startRefusalFailure || handoffRefusalFailure;
+    || startRefusalFailure || handoffRefusalFailure || approvalRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";

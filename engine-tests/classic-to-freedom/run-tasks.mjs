@@ -22,7 +22,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, worklogRoute,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
@@ -30,6 +30,7 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { approvePlan } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -167,12 +168,36 @@ const SET6 = buildTaskSet(runMigration(MANIFEST6), optsOf(MANIFEST6));
 // The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
 const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
 const keysOf = (set) => [...new Set(pageTasks(set).map((t) => t.pageKey))];
-const cliTasksEarly = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+const cliTasksEarly = (args, manifest) => cliApproved(args, manifest);
 const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === pageKey && t.group === group);
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
 const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
+// The user's approval of the plan a manifest renders, recorded in the migration folder above `dir` — `--tasks`,
+// `--start` and `--route` write nothing without it. The version is computed once per manifest.
+const PLAN_VERSIONS = new Map();
+const planVersionOf = (manifest, baseDir = DIR) => {
+  const key = JSON.stringify([baseDir, manifest]);
+  if (!PLAN_VERSIONS.has(key)) PLAN_VERSIONS.set(key, runMigration(manifest, { baseDir }).planVersion);
+  return PLAN_VERSIONS.get(key);
+};
+const approve = (dir, manifest = MANIFEST, baseDir = DIR) => approvePlan(dir, planVersionOf(manifest, baseDir));
+const approveTasksArg = (args, manifest, baseDir) => {
+  const at = args.indexOf("--tasks");
+  if (at >= 0 && args[at + 1]) approve(args[at + 1], manifest, baseDir);
+};
+// THE BUILD LOOP OF AN APPROVED PLAN: `migrate.mjs` on a manifest piped to stdin, run the way the orchestrator runs
+// it once the user approved the plan — so a `--tasks <dir>` run first records that approval for the manifest it
+// pipes. Every refusal for a MISSING approval is exercised with a raw spawn instead.
+const cliUnapproved = (args, manifest) =>
+  spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+const cliApproved = (args, manifest) => { approveTasksArg(args, manifest, DIR); return cliUnapproved(args, manifest); };
+// The same, for a manifest read from a FILE: its bodies resolve against the file's own folder.
+const cliFileApproved = (manifestPath, ...args) => {
+  approveTasksArg(args, JSON.parse(fs.readFileSync(manifestPath, "utf8")), path.dirname(path.resolve(manifestPath)));
+  return spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+};
 // The (file, id) pairs actually on disk — what the regenerated index has to keep describing.
 const readExistingMeta = (dir) => fs.readdirSync(dir)
   .filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE)
@@ -2436,8 +2461,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     // ---- the recorded-run shapes, end to end through the CLI ----
     {
       // Defined locally: the shared `cliTasks` below is declared after this block.
-      const cli = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
-        { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+      const cli = cliApproved;
       // The folder is cut BY THE CLI, which slices with the real default budget — a folder cut in-process with the
       // test's own budget carries different ids, and every closure written into it would read as stale instead.
       // "services": closures with no clock. Exit 2, every file named.
@@ -2577,7 +2601,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
 }
 
 console.log("\n===== migrate.mjs --tasks <dir> (CLI) =====");
-const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+const cliTasks = cliApproved;
 // The CLI has no `run: 0` to hand it, so it slices this small fixture with the REAL default budget — which
 // collapses it. Everything the CLI block asserts about counts and file names has to be read off that set.
 const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
@@ -2630,7 +2654,7 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
     planGaps(gapRun).length > 0, () => planGaps(gapRun));
   const base = tmp("gap");
   const dir = path.join(base, "build-tasks");
-  const run = cliTasks(["--tasks", dir], skeletal);
+  const run = cliUnapproved(["--tasks", dir], skeletal);
   check("migrate.mjs --tasks: a plan-level gap writes NOTHING and exits 2 — the directory is never created, so a sub-agent cannot be dispatched with write access to a stand against a plan that is not buildable-out-of",
     run.status === 2 && !fs.existsSync(dir) && fs.readdirSync(base).length === 0,
     () => ({ status: run.status, exists: fs.existsSync(dir), ls: fs.readdirSync(base), stdout: run.stdout }));
@@ -2640,6 +2664,128 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
       && /re-run `--plan`/.test(run.stdout || ""),
     () => run.stdout);
   fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== migrate.mjs --tasks / --start (CLI): the plan approval gate =====");
+{
+  // No build task is written for a plan nobody approved at the version this manifest renders. The approval is read
+  // off decisions.md in the migration folder by the rule `--handoff` applies (`planApprovalLine`).
+  const V = RUN.planVersion;
+  const snapOf = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { recursive: true }).sort()
+    .filter((f) => fs.statSync(path.join(d, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(d, f), "utf8")]) : null);
+  const NOT_APPROVED = /⛔ NOTHING WRITTEN — no task folder for a plan that is not approved/;
+
+  // T1 — no decisions.md at all.
+  {
+    const base = tmp("approval-none");
+    const dir = path.join(base, "build-tasks");
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T1 (R1): `--tasks` with no decisions.md exits 2, creates no task folder and writes nothing into the migration folder",
+      () => run.status === 2 && NOT_APPROVED.test(run.stdout || "") && !fs.existsSync(dir) && fs.readdirSync(base).length === 0,
+      () => ({ status: run.status, ls: fs.readdirSync(base), stdout: run.stdout }));
+    check("approval gate T1 (R1): the refusal names the plan version it expected an approval of, and the fields an approval holds",
+      () => (run.stdout || "").includes(`\`${V}\``) && /Approved by:/.test(run.stdout || "") && /7\.1 step 1/.test(run.stdout || ""),
+      () => run.stdout);
+    check("approval gate T1 (R1): the refusal is not mistaken for a plan gap — it names no gap and no other banner",
+      () => !/plan with gaps/.test(run.stdout || "") && !/GATE BLOCKED|STRUCTURE INCOMPLETE|COVERAGE INCOMPLETE/.test(run.stderr || ""),
+      () => ({ stdout: run.stdout, stderr: run.stderr }));
+    // A frozen split is a write too: refused before it is copied in.
+    const splitPath = path.join(base, "split.json");
+    fs.writeFileSync(splitPath, JSON.stringify({ planVersion: V, items: FULL_SPLIT.items }, null, 2));
+    const split = cliUnapproved(["--tasks", dir, "--split", splitPath], MANIFEST);
+    check("approval gate T1 (R1): `--tasks --split` with no approval exits 2 and freezes no split — the folder does not exist afterwards",
+      () => split.status === 2 && NOT_APPROVED.test(split.stdout || "") && !fs.existsSync(dir),
+      () => ({ status: split.status, stdout: split.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // T2 — an approval of a different (stale) version.
+  {
+    const base = tmp("approval-stale");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"), "# Decisions And Approvals\n\n"
+      + "## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n\n"
+      + "## Plan re-approved\n- Approved by: user\n- Plan version: `plan-111111111111`\n");
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T2 (R2): `--tasks` over an approval of a different plan version exits 2 and writes no task folder",
+      () => run.status === 2 && NOT_APPROVED.test(run.stdout || "") && !fs.existsSync(dir),
+      () => ({ status: run.status, stdout: run.stdout }));
+    check("approval gate T2 (R2): the refusal names every version decisions.md approves AND the version this manifest renders, so the operator sees the plan changed after it was approved",
+      () => (run.stdout || "").includes("`plan-000000000000`") && (run.stdout || "").includes("`plan-111111111111`")
+        && (run.stdout || "").includes(`\`${V}\``) && /plan changed after it was approved/.test(run.stdout || ""),
+      () => run.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // T3 — the version is named but nobody approved it.
+  {
+    const base = tmp("approval-unsigned");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"),
+      `# Decisions And Approvals\n\n## Scope change\n- Decision: drop a page\n- Approved by:\n- Plan version: \`${V}\`\n`);
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T3 (R4): an entry holding the plan version with an EMPTY `Approved by:` is no approval — exit 2, no task folder, and it is not reported as an approval of any version",
+      () => run.status === 2 && NOT_APPROVED.test(run.stdout || "") && !fs.existsSync(dir)
+        && /records no approval of plan version/.test(run.stdout || ""),
+      () => ({ status: run.status, stdout: run.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // T4 — a matching approval: the mode runs and prints as it does on any approved folder.
+  {
+    const base = tmp("approval-ok");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"),
+      `# Decisions And Approvals\n\n## Plan approved\n- **Approved by:** user\n- **Plan version:** \`${V}\`\n`);
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T4 (R3): with an approval of THIS plan version `--tasks` exits 0, writes every task file plus the index and prints the slice note — no approval wording",
+      () => run.status === 0 && CLI_SET.tasks.every((t) => fs.existsSync(path.join(dir, t.file)))
+        && fs.existsSync(path.join(dir, TASK_INDEX_FILE))
+        && new RegExp(String.raw`wrote ${CLI_SET.tasks.length} build task\(s\)`).test(run.stdout || "")
+        && !/not approved/.test((run.stdout || "") + (run.stderr || "")),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 600), stderr: run.stderr }));
+
+    // `--start` over that same folder once the approval is gone: no clock, no status change, nothing written.
+    const id = CLI_SET.tasks.find((t) => !t.dependsOn?.length)?.id;
+    const copy = path.join(tmp("approval-start"), "mig");
+    fs.cpSync(base, copy, { recursive: true });
+    const cdir = path.join(copy, "build-tasks");
+    fs.writeFileSync(path.join(copy, "decisions.md"), "# Decisions And Approvals\n");
+    const before = snapOf(copy);
+    const start = cliUnapproved(["--tasks", cdir, "--start", id], MANIFEST);
+    check("approval gate T1 (R1): `--tasks --start <id>` with no approval exits 2, opens no clock, issues no dispatch token and leaves the folder byte-identical",
+      () => !!id && start.status === 2 && NOT_APPROVED.test(start.stdout || "") && !/DISPATCH TOKEN/.test(start.stdout || "")
+        && JSON.stringify(snapOf(copy)) === JSON.stringify(before),
+      () => ({ id, status: start.status, stdout: start.stdout }));
+    fs.writeFileSync(path.join(copy, "decisions.md"), `## Plan approved\n- Approved by: user\n- Plan version: ${V}\n`);
+    const started = cliUnapproved(["--tasks", cdir, "--start", id], MANIFEST);
+    check("approval gate T4 (R3, anti-vacuity): the same `--start` with the approval restored starts the task — the refusal above is the gate, not a task that could not start",
+      () => started.status === 0 && /DISPATCH TOKEN/.test(started.stdout || ""),
+      () => ({ status: started.status, stdout: (started.stdout || "").slice(0, 600) }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+{
+  // `approvedPlanVersions` reads decisions.md by the same rule as `planApprovalLine`: every version it lists is one
+  // that call accepts, and an entry with no (or an empty) `Approved by:` lists nothing.
+  const A = "plan-aaaaaaaaaaaa", B = "plan-bbbbbbbbbbbb", C = "plan-cccccccccccc";
+  const text = "# Decisions And Approvals\n\n"
+    + `## Plan approved\n- Approved by: user\n- Plan version: \`${A}\`\n\n`
+    + `## Scope change\n- Decision: drop a page\n- Plan version: \`${C}\`\n\n`
+    + `## Unsigned\n- Approved by:\n- Plan version: ${C}\n\n`
+    + `## Plan re-approved\n- **Approved by:** user\n- **Plan version:** \`${B}\`\n\n`
+    + `## Plan approved again\n- Approved by: user\n- Plan version: ${A}\n`;
+  check("approvedPlanVersions: lists each approved version once, in file order, and skips an entry nobody approved",
+    () => JSON.stringify(approvedPlanVersions(text)) === JSON.stringify([A, B]),
+    () => approvedPlanVersions(text));
+  check("approvedPlanVersions: agrees with planApprovalLine on every version — listed ones are accepted, the unapproved one is not",
+    () => [A, B].every((v) => planApprovalLine(text, v) !== null) && planApprovalLine(text, C) === null,
+    () => [A, B, C].map((v) => [v, planApprovalLine(text, v)]));
+  check("approvedPlanVersions: an empty or missing decisions.md approves nothing, and an `Approved by:` with an empty `Plan version:` names no version",
+    () => approvedPlanVersions("").length === 0 && approvedPlanVersions(undefined).length === 0
+      && approvedPlanVersions("## Plan approved\n- Approved by: user\n- Plan version:\n").length === 0,
+    () => approvedPlanVersions("## Plan approved\n- Approved by: user\n- Plan version:\n"));
 }
 
 console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then frozen =====");
@@ -4014,8 +4160,7 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
 
 console.log("\n===== end to end through the CLI: the run FAILS and the list is generated, not summarised =====");
 {
-  const cliT = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
-    { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+  const cliT = cliApproved;
   const dP = path.join(tmp("notbuilt-cli"), "build-tasks");
   cliT(["--tasks", dP], MANIFEST);
   const victim = readTaskDir(dP).find((t) => t.rows.length >= 2);
@@ -4118,6 +4263,47 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
   const vfO = path.join(dO, vicO.file);
   fs.writeFileSync(vfO, setOutcome(allBuilt(fs.readFileSync(vfO, "utf8")), 1, NOT_BUILT_BLOCKED));
   const unroutedO = cliT(["--tasks", dO], MANIFEST);
+  {
+    // The SAME folder state the routed run below opens a round on, with decisions.md approving an EARLIER plan
+    // version: `--route` schedules sub-agents too, so it writes nothing for a plan nobody approved at this version.
+    const baseU = path.join(tmp("notbuilt-route-unapproved"), "mig");
+    fs.cpSync(baseO, baseU, { recursive: true });
+    const dU = path.join(baseU, "build-tasks");
+    fs.writeFileSync(path.join(baseU, "decisions.md"),
+      "# Decisions And Approvals\n\n## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n");
+    const snap = () => fs.readdirSync(baseU, { recursive: true }).sort()
+      .filter((f) => fs.statSync(path.join(baseU, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(baseU, f), "utf8")]);
+    const before = snap();
+    const refusedRoute = cliUnapproved(["--tasks", dU, "--route"], MANIFEST);
+    check("approval gate T5 (R1): `--tasks --route` over a folder whose plan version is not approved exits 2, writes NO repair task and leaves every file of the migration folder byte-identical",
+      () => refusedRoute.status === 2 && /NOTHING WRITTEN — no repair tasks for a plan that is not approved/.test(refusedRoute.stdout || "")
+        && repairFilesIn(dU).length === 0 && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: refusedRoute.status, stdout: (refusedRoute.stdout || "").slice(0, 600), repair: repairFilesIn(dU) }));
+    check("approval gate T5 (R2): the `--route` refusal names the version decisions.md approves and the version this manifest renders",
+      () => (refusedRoute.stdout || "").includes("`plan-000000000000`") && (refusedRoute.stdout || "").includes(`\`${RUN.planVersion}\``),
+      () => refusedRoute.stdout);
+    fs.rmSync(path.dirname(baseU), { recursive: true, force: true });
+  }
+  {
+    // A plan with GAPS and no approval of its version: the gaps refusal answers, not the approval one — approving
+    // a plan that cannot be built would send the operator the wrong way. Gaps are checked before approval.
+    const gapped = { ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] };
+    const baseG = path.join(tmp("notbuilt-route-gapped"), "mig");
+    fs.cpSync(baseO, baseG, { recursive: true });
+    const dG = path.join(baseG, "build-tasks");
+    fs.writeFileSync(path.join(baseG, "decisions.md"),
+      "# Decisions And Approvals\n\n## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n");
+    const snap = () => fs.readdirSync(baseG, { recursive: true }).sort()
+      .filter((f) => fs.statSync(path.join(baseG, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(baseG, f), "utf8")]);
+    const before = snap();
+    const gappedRoute = cliUnapproved(["--tasks", dG, "--route"], gapped);
+    check("approval gate (R5): `--tasks --route` on a plan with gaps and no matching approval exits 2 with the PLAN-level gaps refusal, never the not-approved one, and leaves every file of the migration folder byte-identical",
+      () => gappedRoute.status === 2 && /this run has PLAN-level gaps/.test(gappedRoute.stdout || "")
+        && !/not approved/.test(gappedRoute.stdout || "")
+        && repairFilesIn(dG).length === 0 && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: gappedRoute.status, stdout: (gappedRoute.stdout || "").slice(0, 600), repair: repairFilesIn(dG) }));
+    fs.rmSync(path.dirname(baseG), { recursive: true, force: true });
+  }
   const route = cliT(["--tasks", dO, "--route"], MANIFEST);
   const routeCauses = repairCausesIn(dO);
 
@@ -4961,7 +5147,7 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
    ================================================================================================ */
 console.log("\n===== the migration result report — one artifact, computed from the ledger AND the built pages =====");
 {
-  const cliR = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+  const cliR = cliApproved;
   const closeAll = (dir) => {
     for (;;) {
       const tasks = readTaskDir(dir);
@@ -5485,7 +5671,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
         const cdir = path.join(cbase, "tasks");
         const cman = path.join(cbase, "manifest.json");
         fs.writeFileSync(cman, JSON.stringify(MANIFEST));
-        const cli = (...args) => spawnSync(process.execPath, [MIGRATE, cman, ...args], { encoding: "utf8" });
+        const cli = (...args) => cliFileApproved(cman, ...args);
         cli("--tasks", cdir);
         const busy = readTaskDir(cdir).find((t) => t.writesTo);
         cli("--tasks", cdir, "--start", busy.id);
@@ -5734,7 +5920,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   const dir = path.join(base, "build & tasks");
   const manifestPath = path.join(base, "the $manifest.json");
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
-  const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+  const cliFile = (...args) => cliFileApproved(manifestPath, ...args);
   cliFile("--tasks", dir);
 
   const fresh = cliFile("--tasks", dir, "--next");
@@ -5816,7 +6002,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   const dir = path.join(base, "build-tasks");
   const manifestPath = path.join(base, "m.json");
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
-  const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+  const cliFile = (...args) => cliFileApproved(manifestPath, ...args);
   cliFile("--tasks", dir);
   const CLI_OPTS = checklistOpts(MANIFEST);
   for (const t of [...buildTaskSet(RUN, CLI_OPTS).tasks].sort((a, b) => a.order - b.order)) {
@@ -5954,12 +6140,14 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
   const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
-  cliFile(manifestPath, "--tasks", dir);
   const APPROVAL = `- Plan version: \`${RUN.planVersion}\``;
   const decisionsOk = `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Decision: build the plan\n- Approved by: user\n${APPROVAL}\n`;
   const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n";
+  // Recorded BEFORE the cut: `--tasks` slices only a plan whose version decisions.md approves.
+  fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "decisions.md"), decisionsOk);
   fs.writeFileSync(path.join(folder, "worklog.md"), worklogOk);
+  cliFile(manifestPath, "--tasks", dir);
   const RESUME = path.join(folder, "resume.md");
   const COPY = path.join(folder, RESUME_MANIFEST_FILE);
   const snapOf = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { recursive: true }).sort()
@@ -6171,10 +6359,11 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
   const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
-  cliFile(manifestPath, "--tasks", dir);
+  fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "decisions.md"),
     `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Approved by: user\n- Plan version: ${RUN.planVersion}\n`);
   fs.writeFileSync(path.join(folder, "worklog.md"), "# Worklog\n\nRoute: agent\n");
+  cliFile(manifestPath, "--tasks", dir);
   for (let moved = true; moved;) {
     moved = false;
     for (const t of readTaskDir(dir).filter((x) => x.status === "todo")) {
@@ -6270,6 +6459,19 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
       () => ({ status: drifted.status, stderr: (drifted.stderr || "").slice(0, 400),
         before: beforeA, after: fs.readdirSync(dirA).sort() }));
     fs.rmSync(baseA, { recursive: true, force: true });
+  }
+
+  {
+    // `--add` writes task files and the index, so it is gated like `--tasks`: no approval of this plan version in
+    // decisions.md means no folder, no index and no declared task.
+    const baseN = tmp("cli-add-unapproved");
+    const dirN = path.join(baseN, "build-tasks");
+    const refused = cliUnapproved(["--tasks", dirN, "--add", declFile({ ...GOOD, id: "cli-add-unapproved" }, "unapproved")], MANIFEST);
+    check("approval gate (R1): `--tasks <fresh dir> --add` with no decisions.md exits 2, names the plan version it expects, and creates no folder and no index",
+      () => refused.status === 2 && /NOTHING WRITTEN — no declared task for a plan that is not approved/.test(refused.stdout || "")
+        && (refused.stdout || "").includes(`\`${RUN.planVersion}\``) && !fs.existsSync(dirN),
+      () => ({ status: refused.status, stdout: (refused.stdout || "").slice(0, 600), stderr: (refused.stderr || "").slice(0, 300), exists: fs.existsSync(dirN) }));
+    fs.rmSync(baseN, { recursive: true, force: true });
   }
 
   const ok = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "good")], MANIFEST);
@@ -7555,13 +7757,13 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => ({ started: refused.started?.id, keys: Object.keys(refused).filter((k) => k.startsWith("blocked")) }));
   const manifestPath = path.join(base, "manifest.json");
   fs.writeFileSync(manifestPath, JSON.stringify(CARD_MANIFEST));
-  const cliCopy = tmp("decision-hold-cli");
+  const cliCopy = path.join(tmp("decision-hold-cli"), "build-tasks");
   fs.cpSync(dir, cliCopy, { recursive: true });
-  const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", cliCopy, ...args], { encoding: "utf8" });
+  const cli = (...args) => cliFileApproved(manifestPath, "--tasks", cliCopy, ...args);
   const nextCli = cli("--next");
   const nextOut = nextCli.stdout || "";
   const startCli = cli("--start", "dec-waiting");
-  fs.rmSync(cliCopy, { recursive: true, force: true });
+  fs.rmSync(path.dirname(cliCopy), { recursive: true, force: true });
   check("--next (CLI): the decision hold names the source task and row",
     () => /\[dec-waiting\] — every open row waits on a decision/.test(nextOut) && new RegExp(`dec-source row ${n}:`).test(nextOut),
     () => nextOut);
@@ -8465,7 +8667,7 @@ console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drif
 for (const flag of ["--plan", "--spec", "--checklist", "--stubs"]) {
   // `--tasks` WRITES a folder; every other mode prints. Both at once would silently skip one of them.
   const d = tmp(`cli-tasks-mutex${flag.replaceAll("-", "_")}`);
-  const r = cliTasks(["--tasks", d, flag], MANIFEST);
+  const r = cliUnapproved(["--tasks", d, flag], MANIFEST);
   check(`cli: \`--tasks\` with \`${flag}\` exits 1 and names the flag — one of the two would otherwise silently not happen`,
     () => r.status === 1 && (r.stderr || "").includes(`\`--tasks\` cannot be combined with ${flag}`)
       && !fs.existsSync(path.join(d, TASK_INDEX_FILE)),
@@ -8672,7 +8874,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
   const BUILD_DECISIONS = new Map([["D5", "build the typed forms"]]);
   const NEEDS_DECISION = "not-built — needs-decision";
   const MANIFEST_FILE = (base) => { const f = path.join(base, "m.json"); fs.writeFileSync(f, JSON.stringify(MANIFEST)); return f; };
-  const cliB = (base, ...args) => spawnSync(process.execPath, [MIGRATE, MANIFEST_FILE(base), ...args], { encoding: "utf8" });
+  const cliB = (base, ...args) => cliFileApproved(MANIFEST_FILE(base), ...args);
   const closeEverything = (dir) => {
     for (const t of [...buildTaskSet(RUN, BO).tasks].sort((a, b) => a.order - b.order)) runTask(dir, t.id, RUN, BO, t.order * 2);
   };
@@ -9339,7 +9541,7 @@ const locateRow = (dir, label) => {
       fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(m));
       fs.writeFileSync(path.join(base, "built.json"), JSON.stringify({ pages: { main: { schemaUId: "0b6f86b8-8f5e-4770-9462-b75ee2394b81",
         viewConfig: [{ name: "MainF", type: "crt.Input", control: "$MainF" }, { name: "G1", type: "crt.DataGrid" }] } } }));
-      const cli = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), ...args], { encoding: "utf8" });
+      const cli = (...args) => cliFileApproved(path.join(base, "manifest.json"), ...args);
       // Recorded after the cut: before the first dispatch a cut refuses decisions no deliverable accounts for.
       const cutRun = cli("--tasks", dir);
       fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
@@ -9463,7 +9665,7 @@ const locateRow = (dir, label) => {
       const m = stManifest(status);
       fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ ...m, signals: { ...m.signals, dashboards: manifestOf().signals.dcm } }));
       fs.writeFileSync(path.join(dir, "built.json"), JSON.stringify({ pages: {} }));
-      const cliOf = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(dir, "manifest.json"), ...args], { encoding: "utf8" });
+      const cliOf = (...args) => cliFileApproved(path.join(dir, "manifest.json"), ...args);
       const runs = { reads: cliOf("--reads", dir), verify: cliOf("--verify", "--built", path.join(dir, "built.json")), checklist: cliOf("--checklist"), plan: cliOf("--plan") };
       fs.rmSync(dir, { recursive: true, force: true });
       return runs;
@@ -9480,7 +9682,7 @@ const locateRow = (dir, label) => {
       fs.writeFileSync(path.join(a, "decisions.md"), DEC_MD);
       fs.writeFileSync(path.join(a, "manifest.json"), JSON.stringify(M1));
       fs.writeFileSync(path.join(a, "built.json"), JSON.stringify({ pages: {} }));
-      const cliA = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(a, "manifest.json"), ...args], { encoding: "utf8" });
+      const cliA = (...args) => cliFileApproved(path.join(a, "manifest.json"), ...args);
       const cutA = cliA("--tasks", path.join(a, "build-tasks"));
       const verified = cliA("--verify", "--built", path.join(a, "built.json"), "--tasks", path.join(a, "build-tasks"), "--out", path.join(b, "report.md"));
       const report = fs.existsSync(path.join(b, "report.md")) ? fs.readFileSync(path.join(b, "report.md"), "utf8") : "";
@@ -9631,7 +9833,7 @@ const locateRow = (dir, label) => {
       if (!r.outcomeKind) fs.writeFileSync(fpOpen, setOutcome(fs.readFileSync(fpOpen, "utf8"), i + 1, i === open.i ? "not-built — needs-decision" : "built"));
     });
     syncTaskDir(dir, RUN_ST, { ...cliOpts, now: AT(910) });
-    const cliS = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, ...args], { encoding: "utf8" });
+    const cliS = (...args) => cliFileApproved(path.join(base, "manifest.json"), "--tasks", dir, ...args);
     const decided = cliS("--decide", "D6", "--build", "--row", `${open.t.id}:${open.i + 1}`);
     fs.writeFileSync(fpOpen, setOutcome(fs.readFileSync(fpOpen, "utf8"), open.i + 1, "built"));
     const cli = cliS("--revoke", "D6");
@@ -9705,7 +9907,7 @@ const locateRow = (dir, label) => {
       fs.writeFileSync(path.join(base, "decisions.md"), md);
       fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(manifest));
       const dir = path.join(base, "build-tasks");
-      const cli = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, ...args], { encoding: "utf8" });
+      const cli = (...args) => cliFileApproved(path.join(base, "manifest.json"), "--tasks", dir, ...args);
       return { base, dir, cli };
     };
     const snapDir = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).sort((a, b) => a.localeCompare(b)).map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]) : null);
@@ -9940,7 +10142,7 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
   const FIX = path.join(DIR, "fixtures", "tasks-aggregate-rows");
   const m = JSON.parse(fs.readFileSync(path.join(FIX, "manifest.json"), "utf8"));
   const copy = (label) => { const base = tmp(label); fs.cpSync(FIX, base, { recursive: true }); return { base, dir: path.join(base, "build-tasks") }; };
-  const cliIn = (base, ...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", path.join(base, "build-tasks"), ...args], { encoding: "utf8" });
+  const cliIn = (base, ...args) => cliFileApproved(path.join(base, "manifest.json"), "--tasks", path.join(base, "build-tasks"), ...args);
   const snapOf = (dir) => fs.readdirSync(dir).sort().map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]);
   const FILE = "task-run-whole-migration-89143b68.md";
   const edit = (dir, fn) => { const f = path.join(dir, FILE); fs.writeFileSync(f, fn(fs.readFileSync(f, "utf8"))); };
@@ -10131,11 +10333,12 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   fs.mkdirSync(path.dirname(hoManifest), { recursive: true });
   fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
   const cliHo = (...args) => spawnSync(process.execPath, [MIGRATE, hoManifest, ...args], { encoding: "utf8" });
-  cliHo("--tasks", hoDir);
   const hoFolder = path.dirname(hoDir);
+  fs.mkdirSync(hoFolder, { recursive: true });
   fs.writeFileSync(path.join(hoFolder, "decisions.md"), "# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n"
     + `- Decision: build the plan\n- Approved by: user\n- Plan version: \`${RUN.planVersion}\`\n`);
   fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n");
+  cliHo("--tasks", hoDir);
   for (const f of RECORD_FILES) fs.rmSync(path.join(hoFolder, f), { force: true });
   const handedOff = cliHo("--tasks", hoDir, "--handoff");
   check("record files: `--handoff` recreates deleted record files with EVERY published id — the fresh session's first builder files into a file that exists",
