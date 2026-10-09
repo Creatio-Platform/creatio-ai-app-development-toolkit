@@ -220,6 +220,18 @@ wait for the user to ask for a UI review.
      but never run through `creatio-ui-guidelines`, or run only as a surface review, is NOT done —
      real runs keep deferring the gate and shipping unreviewed "smart-default" layouts, then fixing
      `toggleType`/`title`/island-style defects only after the user points at them.
+   - **On `classic-layout` mode, the UI-guidelines review ALSO checks region parity.** For every
+     field/detail in the plan, confirm on the built page (`get-page` merged view) that it sits in the
+     container matching its plan **`Region`** (tab / group / island) and, where it matters, its
+     **`Position`** cell — a field the plan puts in the side island but that stayed in the Overview
+     content is a **region mismatch**. Also confirm every base layout element NOT in the plan is gone
+     and every Freedom-only value-add component (charts, DCM bar, compact profile cards, Next steps) is
+     still present. **Region parity does NOT apply to the standard Freedom components** (Feed,
+     Attachments, Connected to, Timeline): they are kept exactly where the Freedom page already has
+     them, never re-laid to a Classic slot, and their Classic counterpart is not migrated. A mismatch is
+     a defect: fix it, or record it in `## Notes` + `decisions.md` if the plan itself is wrong.
+     (In `overlay` mode this parity check does not apply — base elements keep their Freedom positions
+     by design.)
 2. Compile only when C# / SQL / runtime-compiled artifacts changed, or Creatio reports a missing
    runtime schema.
 3. Keep the implementation scoped to the approved plan. New analysis that changes scope/strategy →
