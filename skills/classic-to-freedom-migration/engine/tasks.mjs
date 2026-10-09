@@ -38,6 +38,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
@@ -80,6 +81,13 @@ export const REFUSED_CUT = "engine-cut";
 // `timings.json` is present but does not parse. It holds the dispatch evidence, so reading it as empty would
 // report every closed task as never dispatched and the next write would replace the samples for good.
 export const REFUSED_TIMINGS = "timings-unreadable";
+// `timings.json.lock` is held by another engine process for longer than the bounded wait, so this run could not
+// read and rewrite the clocks without racing it.
+export const REFUSED_TIMINGS_LOCKED = "timings-locked";
+// A ledger file (a task file, `index.md`, `timings.json`) stayed busy — held open by an antivirus scan, an editor,
+// a sync client — through the whole rename budget of `writeFileAtomic`. Unlike the refusals above, files written
+// before it keep their new bytes; every one is derived again on the next run, so a re-run finishes the write.
+export const REFUSED_LEDGER_BUSY = "ledger-busy";
 // A `wont-do` deliverable status whose D<N> decisions.md does not hold: the cut has no title to write for it.
 export const REFUSED_STATUS = "deliverable-status";
 // A recorded Outcome cell or `decisions:` entry on a `Fields — N expected` / `Related lists — N expected` row. The
@@ -2842,7 +2850,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -2901,7 +2909,7 @@ export function readFrozenSplit(dir) {
 
 export function freezeSplit(dir, text) {
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
+  writeFileAtomic(path.join(dir, SPLIT_FILE), text);
 }
 
 // The RECONCILE MODE is a build-time choice for an existing-Freedom reconcile, frozen in the folder exactly like the
@@ -2933,7 +2941,7 @@ export function readFrozenModeState(dir) {
 
 export function freezeMode(dir, mode) {
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, RECONCILE_MODE_FILE), mode + "\n");
+  writeFileAtomic(path.join(dir, RECONCILE_MODE_FILE), mode + "\n");
 }
 
 // The mode this folder is built in: the one just handed in (`opts.reconcileMode`, from `--reconcile-mode`) wins,
@@ -3170,22 +3178,167 @@ export function readTimingsFile(dir) {
 }
 export const readTimings = (dir) => usableSamples(readTimingsFile(dir).samples);
 // Written to a temporary file and renamed over the old one, so a killed write leaves the previous file whole.
+// Called only under `withTimingsLock`: the state it writes is the state read under the same lock.
 const writeTimings = (dir, state) => {
   if (state.malformed) throw new Error(`${TIMINGS_FILE} could not be read, so it is not overwritten`);
-  const file = path.join(dir, TIMINGS_FILE);
-  const tmpFile = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
-  fs.renameSync(tmpFile, file);
+  writeFileAtomic(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
 };
+
+// ONE WRITER OF THE CLOCKS AT A TIME. Every write of `timings.json` is a read-modify-write: read the clocks, decide
+// (close the finished ones, or check that no open clock writes the same artifact), write them back. Two engine
+// processes doing that at once each write the state THEY read, so the later write drops the earlier one's clock,
+// and a dropped open clock is how `--start` admits a second sub-agent onto an artifact that already has a writer.
+// An atomic write alone does not prevent that; only one process holding the read-to-write span does.
+// The lock is a file created with `wx` (O_CREAT | O_EXCL), which exactly one process can create on NTFS and POSIX.
+// A contender waits a bounded time and then refuses rather than proceeding unlocked. A lock older than the stale
+// threshold was left by a killed process (a held span takes milliseconds) and is taken over.
+export const TIMINGS_LOCK_FILE = `${TIMINGS_FILE}.lock`;
+export const TIMINGS_LOCK = Object.freeze({ waitMs: 2000, staleMs: 30000 });
+const LOCK_POLL_MS = 20;
+const LOCK_POLL_MAX_MS = 200;
+// Codes a `wx` create raises while another process holds the lock: EEXIST on every platform, and on Windows
+// EPERM/EACCES while the previous holder's file is still being deleted. EPERM/EACCES are also what a folder the
+// engine cannot write raises, with no lock file anywhere, so those two count as held only while the lock exists.
+const LOCK_HELD_CODES = new Set(["EEXIST", "EPERM", "EACCES"]);
+const LOCK_DENIED_CODES = new Set(["EPERM", "EACCES"]);
+
+// A file being deleted on Windows still answers `stat` (with EPERM), so only ENOENT means there is no lock.
+function lockFileExists(lock) {
+  try { fs.statSync(lock); return true; } catch (e) { return e?.code !== "ENOENT"; }
+}
+
+// Classifies a failed `wx` create: "held" for EEXIST, and for EPERM/EACCES while a lock file exists; "denied" for
+// EPERM/EACCES with no lock file (the folder's own error, not a holder); "other" for anything else.
+function lockFailure(lock, e) {
+  if (!LOCK_HELD_CODES.has(e?.code)) return "other";
+  if (!LOCK_DENIED_CODES.has(e.code) || lockFileExists(lock)) return "held";
+  return "denied";
+}
+
+export class TimingsLockedError extends Error {
+  constructor(lockFile, waitedMs) {
+    super(`${lockFile} is held by another engine process (waited ${waitedMs} ms)`);
+    this.lockFile = lockFile;
+  }
+}
+
+// Removes a lock whose mtime is older than `staleMs`. It is renamed aside first, so of two processes that both saw
+// it stale only one takes it over; the other's rename fails and it goes back to waiting.
+function takeOverStaleLock(lock, staleMs) {
+  let age;
+  try { age = Date.now() - fs.statSync(lock).mtimeMs; } catch { return; }
+  if (age <= staleMs) return;
+  const aside = tempPathFor(lock);
+  try { fs.renameSync(lock, aside); } catch { return; }
+  fs.rmSync(aside, { force: true });
+}
+
+// Writes this holder's token into the lock it just created. A write that fails leaves a lock with no token, which
+// every process, this one included, would read as another holder's for the whole stale threshold; so the lock is
+// closed and removed, and the write's own error is thrown. It is thrown outside `createLock`'s classification, so
+// an EPERM / EACCES from the write is never mistaken for a held lock.
+function writeLockToken(lock, fd, token) {
+  try {
+    fs.writeSync(fd, token);
+  } catch (e) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // The write's error is the one the caller needs; a close failing after it adds nothing.
+    }
+    fs.rmSync(lock, { force: true });
+    throw e;
+  }
+  fs.closeSync(fd);
+}
+
+// One `wx` create: the fd once this process holds the lock, null while another process does. Any other failure is
+// thrown. A denial with no lock file is retried ONCE at once: the previous holder's delete can finish between the
+// failed create and the check. Refused twice running, the folder itself refuses the write, and the real error goes
+// to the caller instead of a `timings-locked` refusal naming a lock no process holds.
+function createLock(lock, retryDenied = true) {
+  try {
+    return fs.openSync(lock, "wx");
+  } catch (e) {
+    const failure = lockFailure(lock, e);
+    if (failure === "held") {
+      return null;
+    }
+    if (failure === "denied" && retryDenied) {
+      return createLock(lock, false);
+    }
+    throw e;
+  }
+}
+
+function acquireTimingsLock(lock, { waitMs, staleMs }) {
+  const token = `${process.pid}-${randomBytes(6).toString("hex")}`;
+  const started = Date.now();
+  let pause = LOCK_POLL_MS;
+  for (;;) {
+    const fd = createLock(lock);
+    if (fd !== null) {
+      writeLockToken(lock, fd, token);
+      return token;
+    }
+    takeOverStaleLock(lock, staleMs);
+    const waited = Date.now() - started;
+    if (waited >= waitMs) {
+      throw new TimingsLockedError(lock, waited);
+    }
+    pauseSync(Math.min(pause, waitMs - waited));
+    pause = Math.min(pause * 2, LOCK_POLL_MAX_MS);
+  }
+}
+
+// Removed only while it still holds this holder's token: a holder that outlived the stale threshold has had its
+// lock taken over, and removing the new holder's file would let a third process in beside it.
+function releaseTimingsLock(lock, token) {
+  let held;
+  try { held = fs.readFileSync(lock, "utf8"); } catch { return; }
+  if (held === token) fs.rmSync(lock, { force: true });
+}
+
+// Runs `fn` while holding the folder's clock lock and returns its result; the lock is released however `fn` ends.
+// Throws `TimingsLockedError` when the lock could not be taken within `waitMs`. Not re-entrant: a caller holding it
+// must not call another function that takes it.
+export function withTimingsLock(dir, fn, limits = TIMINGS_LOCK) {
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, TIMINGS_LOCK_FILE);
+  const token = acquireTimingsLock(lock, { ...TIMINGS_LOCK, ...limits });
+  try { return fn(); } finally { releaseTimingsLock(lock, token); }
+}
+const lockedRefusal = (e) => ({ refused: true, refusal: REFUSED_TIMINGS_LOCKED, problems: [e.message], lockFile: e.lockFile });
+const busyRefusal = (e) => ({ refused: true, refusal: REFUSED_LEDGER_BUSY, problems: [e.message], busyFile: e.file });
+// The refusal for an error a ledger write raised, or null when the error is not one this module refuses over and
+// has to reach the caller as it is.
+function ledgerRefusal(e) {
+  if (e instanceof TimingsLockedError) {
+    return lockedRefusal(e);
+  }
+  return e instanceof FileBusyError ? busyRefusal(e) : null;
+}
 
 // CLOSE the clocks of every task that finished since the last pass. A task closed with no open clock records
 // nothing — it was never dispatched through the engine, and a duration nobody measured would poison the forecast.
-function closeClocks(dir, tasks, now) {
+// `seen` is the open clocks as they stood BEFORE the caller read the task files that `tasks` was built from. The
+// statuses in `tasks` were read outside the lock, so a task read as finished may have been re-opened and started
+// again by another process since; that new clock is not the one the finished file answers for. Only a clock
+// already open before the read is closed. A clock opened after it stays running, and the next pass, which reads
+// the file again, closes it once its task is finished.
+function closeClocks(dir, tasks, now, seen, limits) {
+  return withTimingsLock(dir, () => closeClocksLocked(dir, tasks, now, seen), limits);
+}
+// The same clock: opened at the same moment with the same token. A re-start always opens a new clock.
+const sameClock = (a, b) => !!b && a.startedAt === b.startedAt && (a.token || "") === (b.token || "");
+function closeClocksLocked(dir, tasks, now, seen) {
   const state = readTimingsFile(dir);
   let changed = false;
   for (const t of tasks) {
     const clock = state.running[t.id];
-    if (!SETTLED.has(t.status) || !clock?.startedAt) continue;
+    if (!SETTLED.has(t.status) || !clock?.startedAt || !sameClock(clock, seen[t.id])) {
+      continue;
+    }
     delete state.running[t.id];
     changed = true;
     const minutes = (new Date(now) - new Date(clock.startedAt)) / 60000;
@@ -3364,6 +3517,39 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   if (merged.refused) return { ...merged, started: null };
   const t = merged.tasks.find((x) => x.id === id);
   if (!t) return { ...merged, started: null, unknownId: id };
+  // THE CLOCKS ARE READ, CHECKED AND WRITTEN UNDER ONE LOCK. A clock another `--start` opened after the sync above
+  // is in the state read here, so the overlap check sees it, and the write below cannot drop it. Every refusal
+  // returns from inside the lock and writes nothing; the regeneration after a start runs once the lock is released.
+  let opened;
+  try { opened = withTimingsLock(dir, () => openClock(dir, t, merged, opts, now), opts.timingsLock); }
+  catch (e) {
+    if (e instanceof TimingsLockedError) {
+      return { ...merged, started: null, timingsLocked: e.lockFile };
+    }
+    if (!(e instanceof FileBusyError)) {
+      throw e;
+    }
+    return { ...merged, ...busyRefusal(e), started: null };
+  }
+  if (opened.refusal) return { ...merged, started: null, ...opened.refusal };
+  // Re-read the clocks AFTER this task's own was stamped, so the index it writes shows the task it just started
+  // as started rather than as never dispatched.
+  attachDispatch(merged, dir);
+  // `in-progress` is a derived status like any other, so it is persisted by the one writer. A busy file here comes
+  // after the clock opened; its token is never handed out, and the re-run's `--start` stamps a new clock over it.
+  try { persistTaskSet(dir, merged); }
+  catch (e) {
+    if (!(e instanceof FileBusyError)) {
+      throw e;
+    }
+    return { ...merged, ...busyRefusal(e), started: null };
+  }
+  return { ...merged, started: t, dispatchToken: opened.token };
+}
+
+// The gate and the clock of `startTask`, run under the clock lock: `{ refusal }` with the refusal fields
+// `startTask` returns, or `{ token }` once the clock is written.
+function openClock(dir, t, merged, opts, now) {
   const state = readTimingsFile(dir);
   // ⛔ THE GATE REFUSES THROUGH THE SHARED PREDICATE — the same one `startableTasks` reports through, so the
   // answer to "which task may I start?" cannot disagree with what this call then does with that id. The four
@@ -3374,35 +3560,35 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
   if (blocker?.cause === HOLD_UNREAD) {
-    return { ...merged, started: null, unread: blocker.file };
+    return { refusal: { unread: blocker.file } };
   }
   // An ADOPTED file is updated one line at a time, so it has to carry that line. A file problem like the one above,
   // so it is answered before any scheduling reason — and before the clock opens, since refusing after
   // `writeTimings` would leave a running clock behind the refusal.
   const adopted = t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR;
-  if (adopted && !statusLineWritable(dir, t.file)) return { ...merged, started: null, statusUnwritable: t.file };
+  if (adopted && !statusLineWritable(dir, t.file)) return { refusal: { statusUnwritable: t.file } };
   // A SETTLED TASK WITH FILLED CELLS CANNOT BE RE-OPENED BY ITS STATUS LINE. The cells outrank the carried word,
   // so the next sync would derive the closed status again while the new sub-agent is still working, close its
   // clock early and fail the ledger. Refused before any clock opens, naming the cells to clear.
   if (SETTLED.has(t.status)) {
     const filled = (t.rows || []).map((r, i) => (r.outcome ? i + 1 : 0)).filter(Boolean);
-    if (filled.length) return { ...merged, started: null, filledCells: { file: t.file, status: t.status, rows: filled } };
+    if (filled.length) return { refusal: { filledCells: { file: t.file, status: t.status, rows: filled } } };
   }
   // A DECISION, NOT A SCHEDULE — refused in the same shape the query withholds it in, so "which task may I
   // start?" and "may I start this task?" cannot answer differently for the same file.
   if (blocker?.cause === HOLD_STATUS) {
-    return { ...merged, started: null, blockedByStatus: t.status };
+    return { refusal: { blockedByStatus: t.status } };
   }
   // ⛔ THE RUN STOPS AT THE NEXT DISPATCH, not at the end. A folder holding a closure nobody was dispatched for
   // gets no new clock: the books are repaired BEFORE another sub-agent is sent out on top of them, so the cost of
   // a broken ledger is one task rather than a whole run. Checked HERE rather than inside the predicate: it is one
   // fact about the FOLDER, not about this id, and the query states it once for the same reason.
   if (merged.dispatch?.failing.length) {
-    return { ...merged, started: null, blockedByDispatch: merged.dispatch };
+    return { refusal: { blockedByDispatch: merged.dispatch } };
   }
-  if (blocker?.cause === HOLD_DEPS) return { ...merged, started: null, blockedByDeps: blocker.tasks };
-  if (blocker?.cause === HOLD_DECISION) return { ...merged, started: null, blockedByDecision: blocker };
-  if (blocker?.cause === HOLD_OVERLAP) return { ...merged, started: null, blockedByOverlap: blocker.tasks };
+  if (blocker?.cause === HOLD_DEPS) return { refusal: { blockedByDeps: blocker.tasks } };
+  if (blocker?.cause === HOLD_DECISION) return { refusal: { blockedByDecision: blocker } };
+  if (blocker?.cause === HOLD_OVERLAP) return { refusal: { blockedByOverlap: blocker.tasks } };
   t.status = S_IN_PROGRESS;
   // THE SIGNATURE THE AGENT CANNOT MINT. The orchestrator hands this token to the sub-agent it dispatches and the
   // sub-agent echoes it into `agentNonce`. A value the agent chooses for itself is distinct on every file it
@@ -3411,12 +3597,7 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   const token = opts.dispatchToken || `${t.id}-${randomBytes(6).toString("hex")}`;
   state.running[t.id] = { startedAt: now, token };
   writeTimings(dir, state);
-  // Re-read the clocks AFTER this task's own was stamped, so the index it writes shows the task it just started
-  // as started rather than as never dispatched.
-  attachDispatch(merged, dir);
-  // `in-progress` is a derived status like any other, so it is persisted by the one writer.
-  persistTaskSet(dir, merged);
-  return { ...merged, started: t, dispatchToken: token };
+  return { token };
 }
 
 // WHETHER `setFrontMatterStatus` COULD WRITE THIS FILE, asked without writing it. `--start` asks first: it opens a
@@ -3723,7 +3904,7 @@ function attachDispatch(set, dir) {
 // whole folder on every call. A read to compare costs less than the write it saves.
 function writeIfChanged(full, next) {
   if (fs.existsSync(full) && fs.readFileSync(full, "utf8") === next) return false;
-  fs.writeFileSync(full, next);
+  writeFileAtomic(full, next);
   return true;
 }
 
@@ -3879,6 +4060,41 @@ export function addTasks(dir, result, declarations, opts = {}) {
   }
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
+  try {
+    mintDeclared(dir, result, decls, written);
+  } catch (e) {
+    const refusal = ledgerRefusal(e);
+    if (!refusal) {
+      throw e;
+    }
+    return { ...refusal, problems: [...refusal.problems, ...unmint(dir, written)], written: [] };
+  }
+  // Back through the ordinary pass, so minted files are merged, ordered and indexed like any other. A pass that
+  // refused (the clock lock held, a ledger file busy) left `index.md` without the new tasks, so the files minted
+  // above are removed again: `--add` then wrote nothing, as its other refusals do, and the same declaration can be
+  // re-run, the ids it claims being free again.
+  const set = syncTaskDir(dir, result, opts);
+  if (set.refused) {
+    return { refused: true, refusal: set.refusal, lockFile: set.lockFile, busyFile: set.busyFile,
+      problems: [...(set.problems || []), ...unmint(dir, written)], written: [] };
+  }
+  return { refused: false, problems: [], written, set };
+}
+
+// Removes the task files `addTasks` minted in this call. A file that cannot be removed is named, so the refusal
+// never claims nothing was written while a minted file is still in the folder.
+function unmint(dir, written) {
+  const left = [];
+  for (const t of written) {
+    try { fs.rmSync(path.join(dir, t.file), { force: true }); }
+    catch (e) { left.push(`${t.file} was minted and could not be removed again (${e.message}); delete it by hand before re-running`); }
+  }
+  return left;
+}
+
+// Writes one task file per declaration, pushing each onto `written` once it is on disk, so a write that throws
+// part-way leaves `written` naming exactly the files that exist.
+function mintDeclared(dir, result, decls, written) {
   const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
@@ -3892,11 +4108,9 @@ export function addTasks(dir, result, declarations, opts = {}) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
     written.push(task);
   }
-  // Back through the ordinary pass, so minted files are merged, ordered and indexed like any other.
-  return { refused: false, problems: [], written, set: syncTaskDir(dir, result, opts) };
 }
 
 // ---8<--- WHAT IS STARTABLE NOW ---8<---
@@ -4540,6 +4754,8 @@ function applyPlanStatuses(merged, decisions) {
   return [];
 }
 export function syncTaskDir(dir, result, opts = {}, split = null) {
+  // Read before any task file is, so every clock in it was open when the statuses below were read.
+  const seenClocks = readTimingsFile(dir).running;
   const fresh = taskSetFor(dir, result, opts, split);
   // A refused split writes NOTHING. Half a folder schedules half a plan and silently drops the rest, which is the
   // failure the coverage check exists to prevent.
@@ -4550,15 +4766,27 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const unaccounted = decisionRefusal(merged, dir, opts);
   if (unaccounted) return { ...fresh, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
-  merged.reconcileMode = resolveFrozenMode(dir, opts);
-  // Close the clocks of everything that finished since the last pass, before the files are written.
-  closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());
-  attachDispatch(merged, dir);
-  // AFTER both: a residual only closes its task if somebody was dispatched for it, which is what `attachDispatch`
-  // reads off the clocks. The parent's own clock is untouched — `partial` already settled it, and `done` is the
-  // same side of `SETTLED`.
-  resolvePartials(merged);
-  persistTaskSet(dir, merged);
+  // Close the clocks of everything that finished since the last pass, before the files are written. A lock another
+  // process keeps is a refusal like the others above: nothing is written, and the caller re-runs.
+  // A ledger file kept busy past the rename budget is a refusal too, with the difference `REFUSED_LEDGER_BUSY`
+  // states: what was written before it stays written, and the re-run derives every file again.
+  try {
+    // Freezing the mode writes `.reconcile-mode`, a ledger file like the others, so a busy one is the same refusal.
+    merged.reconcileMode = resolveFrozenMode(dir, opts);
+    closeClocks(dir, merged.tasks, opts.now || new Date().toISOString(), seenClocks, opts.timingsLock);
+    attachDispatch(merged, dir);
+    // AFTER both: a residual only closes its task if somebody was dispatched for it, which is what `attachDispatch`
+    // reads off the clocks. The parent's own clock is untouched — `partial` already settled it, and `done` is the
+    // same side of `SETTLED`.
+    resolvePartials(merged);
+    persistTaskSet(dir, merged);
+  } catch (e) {
+    const refusal = ledgerRefusal(e);
+    if (!refusal) {
+      throw e;
+    }
+    return { ...fresh, ...refusal, tasks: [], stale: [], blocked: [] };
+  }
   return merged;
 }
 

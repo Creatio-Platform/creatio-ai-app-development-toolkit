@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -23,8 +23,10 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
+  withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
@@ -10812,6 +10814,9 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   check("record files: a rename refused on every try reports the file as contended — the file keeps its bytes, no temp file is left, and nothing throws",
     () => held.result.contended.includes("evidence.json") && fs.readFileSync(evFile, "utf8") === seededBytes && tempsLeft().length === 0,
     () => ({ result: held.result, calls: held.calls, temps: tempsLeft() }));
+  check("record files: the merge keeps its own short budget — RENAME_ATTEMPTS renames per contended file, not the ledger's longer LEDGER_RENAME",
+    () => held.result.contended.length > 0 && held.calls === RENAME_ATTEMPTS * held.result.contended.length,
+    () => ({ calls: held.calls, contended: held.result.contended }));
   // The rename stub patches this process's `fs`, so the merge runs in-process through `ensureRecordFiles`, the call
   // every mode makes, `--reads` included.
   check("record files: …and that contended result renders the warning line every mode prints, `--reads` included, rather than an exception",
@@ -11061,6 +11066,532 @@ console.log("\n===== a split must give the filed gate row to the page's last wri
     () => listRest.length > 1 && listEarly.refused && listEarly.problems.some((p) => /quality:ran/.test(p)
       && p.includes(`of \`${LIST_PAGE_KEY}\``) && p.includes("list-first") && p.includes(`\`list-second\`, the last item that writes \`${LIST_PAGE_KEY}\``)),
     () => ({ rest: listRest.length, problems: listEarly.problems }));
+}
+
+/* ================================================================================================
+   LEDGER DURABILITY. Every ledger file is replaced through a temp file and a rename, so a write killed
+   halfway leaves the previous file whole; and every read-modify-write of `timings.json` holds an
+   exclusive lock, so two engine processes cannot each write the clocks THEY read and drop the other's.
+   ================================================================================================ */
+console.log("\n===== ledger durability: atomic writes and the clock lock =====");
+{
+  const tempsIn = (d) => fs.readdirSync(d).filter((f) => f.endsWith(".tmp"));
+  const busy = (code) => Object.assign(new Error(`${code}: simulated`), { code });
+  // Swaps one `fs` function for the duration of `fn`. The engine and this runner share the one `node:fs` object, so
+  // the stub reaches every call the engine makes.
+  const withStub = (name, stub, fn) => {
+    const real = fs[name];
+    fs[name] = (...args) => stub(real, ...args);
+    try { return fn(); } finally { fs[name] = real; }
+  };
+  const attempt = (fn) => { try { return { value: fn() }; } catch (e) { return { error: e }; } };
+  const lockOf = (d) => path.join(d, TIMINGS_LOCK_FILE);
+  // The file's bytes, or null when there is none: a folder nobody dispatched from yet has no `timings.json`.
+  const bytesOf = (f) => (fs.existsSync(f) ? fs.readFileSync(f) : null);
+  const sameAs = (f, b) => { const now = bytesOf(f); return now === null || b === null ? now === b : now.equals(b); };
+  const QUICK = { waitMs: 120, staleMs: 30000 };
+
+  // T1 — the primitive itself.
+  {
+    const d = tmp("atomic");
+    const f = path.join(d, "ledger.md");
+    fs.writeFileSync(f, "previous ✓ bytes\n");
+    const before = fs.readFileSync(f);
+    const failed = withStub("renameSync", () => { throw busy("ENOSPC"); }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    check("atomic (T1): a rename that fails with a non-retryable error throws, leaves the previous file byte-identical and leaves no temp file in the folder",
+      () => failed.error?.code === "ENOSPC" && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+      () => ({ error: failed.error?.message, temps: tempsIn(d), now: fs.readFileSync(f, "utf8") }));
+    const held = withStub("renameSync", () => { throw busy("EBUSY"); }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    check("atomic (T1): a target kept busy through every retry throws rather than returning as if written, and the previous file and the folder are unchanged",
+      () => held.error?.code === "EBUSY" && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+      () => ({ error: held.error?.message, temps: tempsIn(d) }));
+    let renames = 0;
+    const brief = withStub("renameSync", (real, ...args) => {
+      renames += 1;
+      if (renames < RENAME_ATTEMPTS) { throw busy("EPERM"); }
+      return real(...args);
+    },
+      () => attempt(() => writeFileAtomic(f, "next ✓\n")));
+    const plain = path.join(d, "plain.md");
+    fs.writeFileSync(plain, "next ✓\n");
+    check("atomic (T1): a rename refused fewer times than the retry budget succeeds, and the file holds exactly the bytes a plain write of the same text holds",
+      () => !brief.error && renames === RENAME_ATTEMPTS && fs.readFileSync(f).equals(fs.readFileSync(plain)) && tempsIn(d).length === 0,
+      () => ({ error: brief.error?.message, renames, now: fs.readFileSync(f, "utf8") }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // T2 — a ledger write killed mid-way. The stub writes half the bytes and throws, the way a killed process leaves a
+  // file; written straight to `index.md` that half would BE the index.
+  {
+    const d = path.join(tmp("torn"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const idx = path.join(d, TASK_INDEX_FILE);
+    fs.writeFileSync(idx, readIndex(d) + "\nhand-edited, so the next sync rewrites it\n");
+    const before = fs.readFileSync(idx);
+    let halfWritten = false;
+    const torn = withStub("writeFileSync", (real, p, data, ...rest) => {
+      if (String(p).includes(TASK_INDEX_FILE)) {
+        real(p, String(data).slice(0, 20), ...rest);
+        halfWritten = true;
+        throw busy("EIO");
+      }
+      return real(p, data, ...rest);
+    }, () => attempt(() => syncTaskDir(d, RUN, OPTS)));
+    check("atomic (T2): a sync whose `index.md` write dies halfway leaves the previous `index.md` byte-identical, not a fragment, and no temp file behind",
+      () => halfWritten && torn.error?.code === "EIO" && fs.readFileSync(idx).equals(before) && tempsIn(d).length === 0,
+      () => ({ halfWritten, error: torn.error?.message, head: fs.readFileSync(idx, "utf8").slice(0, 80), temps: tempsIn(d) }));
+    check("atomic (T2): …and the next sync, with nothing failing, regenerates it",
+      () => { syncTaskDir(d, RUN, OPTS); return !fs.readFileSync(idx).equals(before) && !/hand-edited/.test(readIndex(d)); });
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  check("atomic: no bare `fs.writeFileSync` remains in tasks.mjs — every ledger file it writes goes through `writeFileAtomic`",
+    () => !/fs\.writeFileSync\(/.test(fs.readFileSync(path.join(ENGINE_DIR, "tasks.mjs"), "utf8")));
+
+  // T3 — a lock another process holds.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("locked"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    clearDepsOf(d, id, RUN, OPTS);
+    const timings = path.join(d, TIMINGS_FILE);
+    const before = bytesOf(timings);
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const t0 = Date.now();
+    const synced = syncTaskDir(d, RUN, { ...OPTS, timingsLock: QUICK });
+    const waited = Date.now() - t0;
+    const started = startTask(d, id, RUN, { ...OPTS, timingsLock: QUICK }, null, at(50));
+    check("lock (T3): while another process holds `timings.json.lock`, a sync WAITS the bounded time and then refuses as `timings-locked`, naming the lock — and `timings.json` is byte-identical",
+      () => synced.refused === true && synced.refusal === REFUSED_TIMINGS_LOCKED && waited >= QUICK.waitMs
+        && synced.problems.some((p) => p.includes(TIMINGS_LOCK_FILE)) && sameAs(timings, before),
+      () => ({ refusal: synced.refusal, problems: synced.problems, waited }));
+    check("lock (T3): `--start` under the same held lock opens no clock and leaves `timings.json` byte-identical",
+      () => started.started === null && started.refused === true && !readTimingsFile(d).running[id] && sameAs(timings, before),
+      () => ({ started: started.started?.id, refusal: started.refusal, running: Object.keys(readTimingsFile(d).running) }));
+    check("lock (T3): the holder's lock file is left alone — only its owner removes it",
+      () => fs.readFileSync(lockOf(d), "utf8") === "another-holder");
+    const cli = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("lock (T3): the CLI answers the held lock with exit 2 and NOTHING WRITTEN, naming the lock file and the wait remedy",
+      () => cli.status === 2 && /NOTHING WRITTEN/.test(cli.stdout + cli.stderr) && (cli.stdout + cli.stderr).includes(TIMINGS_LOCK_FILE)
+        && /another engine process/.test(cli.stdout + cli.stderr) && sameAs(timings, before),
+      () => ({ status: cli.status, out: (cli.stdout + cli.stderr).slice(0, 600) }));
+    // The lock taken AFTER `--start`'s sync and before its own clock write: the refusal is `--start`'s own shape.
+    fs.rmSync(lockOf(d));
+    let lockOpens = 0;
+    const late = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 2) {
+        const fd = real(p, "wx");
+        fs.writeSync(fd, "late-holder");
+        fs.closeSync(fd);
+      }
+      return real(p, ...rest);
+    }, () => startTask(d, id, RUN, { ...OPTS, timingsLock: QUICK }, null, at(51)));
+    check("lock (T3): a lock taken between `--start`'s sync and its clock write refuses as `timingsLocked`, naming the lock, with no clock opened",
+      () => lockOpens >= 2 && late.started === null && late.timingsLocked === lockOf(d) && !readTimingsFile(d).running[id],
+      () => ({ lockOpens, timingsLocked: late.timingsLocked, started: late.started?.id }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T3b — the same late lock through the CLI, which renders `--start`'s own refusal rather than the sync's. The
+  // folder is sliced by the CLI so the id is one the CLI's own build holds. A preload in the child process takes the
+  // lock on the second `wx` create: the first is the sync's `closeClocks`, the second is `--start`'s clock write.
+  {
+    const d = path.join(tmp("late-cli"), "build-tasks");
+    cliTasksEarly(["--tasks", d], MANIFEST);
+    const tasks = readTaskDir(d);
+    const id = tasks.find((t) => t.status === "todo" && !(t.dependsOn || []).length)?.id;
+    const preload = path.join(path.dirname(d), "late-lock-preload.mjs");
+    fs.writeFileSync(preload, [
+      'import fs from "node:fs";',
+      "const real = fs.openSync;",
+      "let opens = 0;",
+      "fs.openSync = (p, ...rest) => {",
+      `  if (String(p).endsWith(${JSON.stringify(TIMINGS_LOCK_FILE)}) && rest[0] === "wx" && ++opens === 2) {`,
+      '    const fd = real(p, "wx");',
+      '    fs.writeSync(fd, "late-holder-cli");',
+      "    fs.closeSync(fd);",
+      "  }",
+      "  return real(p, ...rest);",
+      "};",
+      "",
+    ].join("\n"));
+    const timings = path.join(d, TIMINGS_FILE);
+    const before = bytesOf(timings);
+    const lateCli = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, MIGRATE, "-", "--tasks", d, "--start", id],
+      { cwd: DIR, input: JSON.stringify(MANIFEST), encoding: "utf8" });
+    const lateOut = (lateCli.stdout || "") + (lateCli.stderr || "");
+    check("lock (T3b): the CLI answers a lock taken after `--start`'s sync with exit 2 and NOTHING WAS STARTED, not the sync's NOTHING WRITTEN, naming the lock file and another engine process, with no clock opened",
+      () => !!id && lateCli.status === 2 && /NOTHING WAS STARTED/.test(lateOut) && !/NOTHING WRITTEN/.test(lateOut)
+        && lateOut.includes(lockOf(d)) && /another engine process/.test(lateOut)
+        && fs.readFileSync(lockOf(d), "utf8") === "late-holder-cli" && !readTimingsFile(d).running[id] && sameAs(timings, before)
+        && readTaskDir(d).find((t) => t.id === id)?.status === "todo",
+      () => ({ id, status: lateCli.status, out: lateOut.slice(0, 600), running: Object.keys(readTimingsFile(d).running) }));
+    fs.rmSync(lockOf(d));
+    const control = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("lock (T3b, control): with no lock taken, the same `--start` opens the clock — the refusal above is the lock's, not the id's",
+      () => control.status === 0 && !!readTimingsFile(d).running[id],
+      () => ({ status: control.status, out: (control.stdout + control.stderr).slice(0, 600) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T3c — EPERM/EACCES from the `wx` create with NO lock file is the folder refusing the write, not a holder.
+  {
+    const d = path.join(tmp("denied"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const deny = (code) => (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx") throw busy(code);
+      return real(p, ...rest);
+    };
+    for (const code of ["EPERM", "EACCES"]) {
+      const t0 = Date.now();
+      const direct = withStub("openSync", deny(code), () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+      const waited = Date.now() - t0;
+      const synced = withStub("openSync", deny(code), () => attempt(() => syncTaskDir(d, RUN, { ...OPTS, timingsLock: QUICK })));
+      check(`lock (T3c): ${code} from the lock create with no lock file rethrows the real ${code} at once — no \`timings-locked\` refusal, no wait, nothing run under the lock`,
+        () => direct.error?.code === code && direct.value === undefined && waited < QUICK.waitMs
+          && synced.error?.code === code && !fs.existsSync(lockOf(d)),
+        () => ({ direct: direct.error?.code ?? direct.value, waited, synced: synced.error?.code ?? synced.value?.refusal }));
+    }
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const held = withStub("openSync", deny("EPERM"), () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+    check("lock (T3c): EPERM while the lock file exists is still a held lock — the bounded wait ends in `TimingsLockedError` naming it",
+      () => held.error?.lockFile === lockOf(d) && held.error?.code === undefined,
+      () => ({ error: held.error?.message, code: held.error?.code }));
+    fs.rmSync(lockOf(d));
+    let denials = 0;
+    const once = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++denials === 1) throw busy("EPERM");
+      return real(p, ...rest);
+    }, () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+    check("lock (T3c): a single EPERM with no lock file (a holder's delete finishing) is retried once and the lock is then taken",
+      () => once.value === "ran" && denials === 2 && !fs.existsSync(lockOf(d)),
+      () => ({ value: once.value, error: once.error?.message, denials }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T4 — a lock left behind by a killed process, and release on every path.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("stale"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    clearDepsOf(d, id, RUN, OPTS);
+    fs.writeFileSync(lockOf(d), "killed-holder");
+    const old = new Date(Date.now() - (TIMINGS_LOCK.staleMs + 5000));
+    fs.utimesSync(lockOf(d), old, old);
+    const started = startTask(d, id, RUN, OPTS, null, at(60));
+    check("lock (T4): a lock older than the stale threshold is taken over — the start succeeds, its clock is written, and no lock file is left",
+      () => started.started?.id === id && readTimingsFile(d).running[id]?.startedAt === at(60) && !fs.existsSync(lockOf(d))
+        && tempsIn(d).length === 0,
+      () => ({ started: started.started?.id, refusal: started.refusal, lock: fs.existsSync(lockOf(d)), temps: tempsIn(d) }));
+    const thrown = attempt(() => withTimingsLock(d, () => { throw new Error("inside the lock"); }));
+    check("lock (T4): the lock is released when the work under it throws, and the error reaches the caller",
+      () => thrown.error?.message === "inside the lock" && !fs.existsSync(lockOf(d)));
+    withTimingsLock(d, () => fs.writeFileSync(lockOf(d), "taken-over-by-another"));
+    check("lock (T4): a holder whose lock was taken over does not remove the new holder's lock on release",
+      () => fs.readFileSync(lockOf(d), "utf8") === "taken-over-by-another");
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5 — the race the lock closes. A clock for the engine's `page:main` writer is opened by "another process" at the
+  // last moment before `--start` takes the lock for an orchestrator task that writes the same page. The overlap check
+  // has to read that clock, and the write has to keep it.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("race"), "build-tasks");
+    const writer = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.writesTo === "page:main");
+    fs.writeFileSync(path.join(d, "zz-orchestrator-main.md"),
+      "---\nid: orch0005\nstatus: todo\norigin: orchestrator\npageKey: main\ngroup: Extra main work\norder: 0\nwritesTo: page:main\n---\n\n## Notes\nAdded by the orchestrator.\n");
+    const orch = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === "orch0005");
+    check("race (T5, anti-vacuity): the orchestrator task writes the same artifact as the engine's writer and does not wait on it — otherwise `deps` would answer before the overlap check",
+      () => !!writer && !!orch && orch.writesTo === writer.writesTo && !(orch.dependsOn || []).includes(writer.id),
+      () => ({ writer: writer?.id, orch: orch && { writesTo: orch.writesTo, dependsOn: orch.dependsOn } }));
+    let lockOpens = 0;
+    const res = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 2) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { version: 1, samples: [], running: {} };
+        doc.running = { ...doc.running, [writer.id]: { startedAt: at(70), token: "tok-other-process" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => startTask(d, "orch0005", RUN, OPTS, null, at(71)));
+    const running = readTimingsFile(d).running;
+    check("race (T5): a clock opened between `--start`'s sync and its lock is seen under the lock — the overlapping task is refused with `blockedByOverlap` naming the writer, and the other process's clock survives",
+      () => lockOpens >= 2 && res.started === null && (res.blockedByOverlap || []).some((x) => x.id === writer.id)
+        && running[writer.id]?.token === "tok-other-process" && !running.orch0005,
+      () => ({ lockOpens, started: res.started?.id, overlap: (res.blockedByOverlap || []).map((x) => x.id), running }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T6 — a repair task in a FRESH folder (not a pre-gate one) is held to a dispatch record like any other task.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("repair-gate"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const rep = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written[0];
+    closeCells(d, rep.id);
+    const set = syncTaskDir(d, RUN, { ...OPTS, now: at(80) });
+    const other = set.tasks.find((t) => t.status === "todo" && t.id !== rep.id);
+    const res = other && startTask(d, other.id, RUN, OPTS, null, at(81));
+    check("gate (T6): a repair task written by `syncRepairDir` into a fresh folder and closed with no clock is in `dispatch.failing`, and `--start` then refuses with `blockedByDispatch`",
+      () => !!rep && set.dispatch.failing.some((t) => t.id === rep.id) && res?.started === null
+        && res.blockedByDispatch?.failing.some((t) => t.id === rep.id) && !readTimingsFile(d).running[other.id],
+      () => ({ rep: rep?.id, failing: set.dispatch.failing.map((t) => t.id), refused: res && Object.keys(res).filter((k) => k.startsWith("blocked")) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+  // T1, ledger budget — the ledger's own busy budget. A ledger write has no fallback the way the record-file merge has, so it
+  // waits much longer for a file an antivirus scan or an editor holds, and its final refusal names the file.
+  {
+    const d = tmp("ledger-busy");
+    const f = path.join(d, TASK_INDEX_FILE);
+    fs.writeFileSync(f, "previous\n");
+    const before = fs.readFileSync(f);
+    let renames = 0;
+    const t0 = Date.now();
+    const held = withStub("renameSync", () => {
+      renames += 1;
+      throw busy("EBUSY");
+    }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    const waited = Date.now() - t0;
+    check("atomic (T1, ledger budget): a ledger file busy on every rename is tried LEDGER_RENAME.attempts times over at least 1 s — far past the merge's RENAME_ATTEMPTS — and then refused as `FileBusyError` naming the file and the re-run, the file unchanged",
+      () => held.error instanceof FileBusyError && held.error.code === "EBUSY" && held.error.file === f
+        && held.error.message === `rename refused (EBUSY) after ${LEDGER_RENAME.attempts} attempts replacing ${f}; re-run`
+        && LEDGER_RENAME.attempts > RENAME_ATTEMPTS && renames === LEDGER_RENAME.attempts && waited >= 1000
+        && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+      () => ({ error: held.error?.message, renames, waited, temps: tempsIn(d) }));
+    // A target the OS refuses for good (read-only, no delete right) raises the same codes a busy file does. The
+    // error has to carry the code the OS gave, not a synthetic EBUSY, and the LAST attempt's error as its cause.
+    for (const code of ["EPERM", "EACCES"]) {
+      const raised = [];
+      const refused = withStub("renameSync", () => {
+        const e = busy(code);
+        raised.push(e);
+        throw e;
+      }, () => attempt(() => writeFileAtomic(f, "next\n")));
+      check(`atomic (T1, real code): a rename refused with ${code} on every attempt throws \`FileBusyError\` keeping ${code} as its code and the last rename error as its cause, its message naming the code, the attempts, the file and the re-run`,
+        () => refused.error instanceof FileBusyError && refused.error.code === code && refused.error.cause === raised.at(-1)
+          && raised.length === LEDGER_RENAME.attempts
+          && refused.error.message === `rename refused (${code}) after ${LEDGER_RENAME.attempts} attempts replacing ${f}; re-run`
+          && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+        () => ({ error: refused.error?.message, code: refused.error?.code, raised: raised.length, temps: tempsIn(d) }));
+    }
+    let tries = 0;
+    const longer = withStub("renameSync", (real, ...args) => {
+      tries += 1;
+      if (tries <= RENAME_ATTEMPTS + 1) {
+        throw busy("EPERM");
+      }
+      return real(...args);
+    }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    check("atomic (T1, ledger budget): a file held for longer than the merge budget but within the ledger budget is written — the in-place write this replaced would have succeeded there too",
+      () => !longer.error && tries === RENAME_ATTEMPTS + 2 && fs.readFileSync(f, "utf8") === "next\n" && tempsIn(d).length === 0,
+      () => ({ error: longer.error?.message, tries }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // T7 — a ledger file kept busy past the budget, through every caller that writes the folder. The stub refuses
+  // only the rename onto one named file, so everything else in the call behaves as it does for real.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const busyOnto = (name) => (real, from, to, ...rest) => {
+      if (String(to).endsWith(name)) {
+        throw busy("EBUSY");
+      }
+      return real(from, to, ...rest);
+    };
+    const d = path.join(tmp("busy-ledger"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    clearDepsOf(d, id, RUN, OPTS);
+    const idx = path.join(d, TASK_INDEX_FILE);
+    fs.writeFileSync(idx, readIndex(d) + "\nhand-edited, so the next sync rewrites it\n");
+    const idxBefore = fs.readFileSync(idx);
+    const synced = withStub("renameSync", busyOnto(TASK_INDEX_FILE), () => attempt(() => syncTaskDir(d, RUN, OPTS)));
+    check("busy (T7): a sync whose `index.md` stays busy returns the named `ledger-busy` refusal instead of throwing, naming the file — and `index.md` keeps its previous bytes",
+      () => !synced.error && synced.value?.refused === true && synced.value.refusal === REFUSED_LEDGER_BUSY
+        && synced.value.busyFile === idx && synced.value.problems.some((p) => p.includes(idx) && p.includes("re-run"))
+        && fs.readFileSync(idx).equals(idxBefore) && tempsIn(d).length === 0,
+      () => ({ error: synced.error?.message, refusal: synced.value?.refusal, busyFile: synced.value?.busyFile, problems: synced.value?.problems }));
+    check("busy (T7): …and the re-run with the file released finishes the write",
+      () => { const again = syncTaskDir(d, RUN, OPTS); return !again.refused && !/hand-edited/.test(readIndex(d)); });
+    const timings = path.join(d, TIMINGS_FILE);
+    const timingsBefore = bytesOf(timings);
+    const started = withStub("renameSync", busyOnto(TIMINGS_FILE), () => attempt(() => startTask(d, id, RUN, OPTS, null, at(40))));
+    check("busy (T7): `--start` whose clock write finds `timings.json` busy returns the `ledger-busy` refusal with nothing started — no clock, `timings.json` unchanged, the task still `todo`",
+      () => !started.error && started.value?.refusal === REFUSED_LEDGER_BUSY && started.value.started === null
+        && started.value.busyFile === timings && !readTimingsFile(d).running[id] && sameAs(timings, timingsBefore)
+        && readTaskDir(d).find((t) => t.id === id)?.status === "todo",
+      () => ({ error: started.error?.message, refusal: started.value?.refusal, running: Object.keys(readTimingsFile(d).running) }));
+    const cliDir = path.join(path.dirname(d), "cli-tasks");
+    cliTasksEarly(["--tasks", cliDir], MANIFEST);
+    const cliIdx = path.join(cliDir, TASK_INDEX_FILE);
+    fs.writeFileSync(cliIdx, readIndex(cliDir) + "\nhand-edited, so the next sync rewrites it\n");
+    const cliBefore = fs.readFileSync(cliIdx);
+    const preload = path.join(path.dirname(d), "busy-index-preload.mjs");
+    fs.writeFileSync(preload, [
+      'import fs from "node:fs";',
+      "const real = fs.renameSync;",
+      "fs.renameSync = (from, to, ...rest) => {",
+      `  if (String(to).endsWith(${JSON.stringify(TASK_INDEX_FILE)})) {`,
+      '    throw Object.assign(new Error("EBUSY: simulated"), { code: "EBUSY" });',
+      "  }",
+      "  return real(from, to, ...rest);",
+      "};",
+      "",
+    ].join("\n"));
+    const cli = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, MIGRATE, "-", "--tasks", cliDir],
+      { cwd: DIR, input: JSON.stringify(MANIFEST), encoding: "utf8" });
+    const cliOut = (cli.stdout || "") + (cli.stderr || "");
+    check("busy (T7): the CLI answers a busy `index.md` with exit 2 and the named refusal — not fully written, which file another process holds, and the re-run — rather than a stack trace or a NOTHING WRITTEN it cannot claim",
+      () => cli.status === 2 && /THE TASK FOLDER WAS NOT FULLY WRITTEN/.test(cliOut) && !/NOTHING WRITTEN/.test(cliOut)
+        && cliOut.includes(`another process holds ${cliIdx}`) && /re-run the same command/.test(cliOut)
+        && fs.readFileSync(cliIdx).equals(cliBefore),
+      () => ({ status: cli.status, out: cliOut.slice(0, 800) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T8 — the held lock through the callers of `syncTaskDir` other than `--start`: `addTasks` (`--add`) and `--next`.
+  {
+    const d = path.join(tmp("add-locked"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const listing = () => fs.readdirSync(d).filter((f) => f !== TIMINGS_LOCK_FILE).sort();
+    const filesBefore = listing();
+    const idxBefore = fs.readFileSync(path.join(d, TASK_INDEX_FILE));
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const added = addTasks(d, RUN, DECL, { ...OPTS, timingsLock: QUICK });
+    check("lock (T8): `addTasks` under a held lock refuses as `timings-locked` naming the lock, reports nothing written, and leaves no minted file behind — the folder listing and `index.md` are as they were",
+      () => added.refused === true && added.refusal === REFUSED_TIMINGS_LOCKED && added.lockFile === lockOf(d)
+        && added.written.length === 0 && JSON.stringify(listing()) === JSON.stringify(filesBefore)
+        && fs.readFileSync(path.join(d, TASK_INDEX_FILE)).equals(idxBefore) && !readTaskDir(d).some((t) => t.id === DECL.id)
+        && fs.readFileSync(lockOf(d), "utf8") === "another-holder",
+      () => ({ refusal: added.refusal, written: added.written.map((t) => t.file), extra: listing().filter((f) => !filesBefore.includes(f)) }));
+    fs.rmSync(lockOf(d));
+    const again = addTasks(d, RUN, DECL, OPTS);
+    check("lock (T8): …and the same declaration, re-run once the lock is gone, is minted and indexed — the refusal freed the id it claimed",
+      () => !again.refused && again.written[0]?.id === DECL.id && fs.existsSync(path.join(d, again.written[0].file))
+        && readIndex(d).includes(again.written[0].file),
+      () => ({ refused: again.refused, problems: again.problems, written: again.written.map((t) => t.file) }));
+
+    const cliDir = path.join(path.dirname(d), "cli-tasks");
+    cliTasksEarly(["--tasks", cliDir], MANIFEST);
+    const decl = path.join(path.dirname(d), "add.json");
+    fs.writeFileSync(decl, JSON.stringify({ ...DECL, id: "cli-orch-locked", order: 9, deliverables: ["A minimal page proven to render"] }));
+    const cliListing = () => fs.readdirSync(cliDir).filter((f) => f !== TIMINGS_LOCK_FILE).sort();
+    const cliBefore = cliListing();
+    const cliIdxBefore = fs.readFileSync(path.join(cliDir, TASK_INDEX_FILE));
+    fs.writeFileSync(lockOf(cliDir), "another-holder");
+    const cliAdd = cliTasksEarly(["--tasks", cliDir, "--add", decl], MANIFEST);
+    const cliNext = cliTasksEarly(["--tasks", cliDir, "--next"], MANIFEST);
+    check("lock (T8): `--add` under a held lock exits 1 with `--add wrote nothing`, naming another engine process and the lock file, and no minted file stays in the folder",
+      () => cliAdd.status === 1 && /--add wrote nothing/.test(cliAdd.stderr) && /another engine process/.test(cliAdd.stderr)
+        && cliAdd.stderr.includes(lockOf(cliDir)) && JSON.stringify(cliListing()) === JSON.stringify(cliBefore)
+        && fs.readFileSync(path.join(cliDir, TASK_INDEX_FILE)).equals(cliIdxBefore),
+      () => ({ status: cliAdd.status, err: (cliAdd.stderr || "").slice(0, 600), extra: cliListing().filter((f) => !cliBefore.includes(f)) }));
+    check("lock (T8): `--next` under a held lock exits 2 with NOTHING WRITTEN naming the lock file and names no task to start — `index.md` unchanged",
+      () => cliNext.status === 2 && /NOTHING WRITTEN/.test(cliNext.stdout + cliNext.stderr)
+        && (cliNext.stdout + cliNext.stderr).includes(lockOf(cliDir)) && !/--start/.test(cliNext.stdout)
+        && fs.readFileSync(path.join(cliDir, TASK_INDEX_FILE)).equals(cliIdxBefore),
+      () => ({ status: cliNext.status, out: (cliNext.stdout + cliNext.stderr).slice(0, 600) }));
+    fs.rmSync(lockOf(cliDir));
+    const cliControl = cliTasksEarly(["--tasks", cliDir, "--add", decl], MANIFEST);
+    check("lock (T8, control): with the lock gone the same `--add` exits 0 — the refusal above was the lock's, not the declaration's",
+      () => cliControl.status === 0 && readTaskDir(cliDir).some((t) => t.id === "cli-orch-locked"),
+      () => ({ status: cliControl.status, err: (cliControl.stderr || "").slice(0, 600) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5b — `closeClocks` against a concurrent `--start`. Another process opens a clock at the last moment before this
+  // sync takes the lock to close a finished task's clock. The close reads the clocks under the lock, so the clock the
+  // other process wrote is in the state it rewrites, and survives it.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("close-race"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    const m = clearDepsOf(d, id, RUN, OPTS);
+    const started = startTask(d, id, RUN, OPTS, null, at(m + 10));
+    closeCells(d, id);
+    const other = readTaskDir(d).find((t) => t.id !== id && t.status === "todo");
+    const samplesBefore = readTimingsFile(d).samples.length;
+    let lockOpens = 0;
+    const synced = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 1) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = JSON.parse(fs.readFileSync(f, "utf8"));
+        doc.running = { ...doc.running, [other.id]: { startedAt: at(m + 11), token: "tok-concurrent-start" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => syncTaskDir(d, RUN, { ...OPTS, now: at(m + 15) }));
+    const after = readTimingsFile(d);
+    check("race (T5b): a clock another process opens just before a sync's `closeClocks` takes the lock survives the close — the finished task's clock is closed into a sample beside it",
+      () => started.started?.id === id && !!other && lockOpens >= 1 && !synced.refused
+        && after.running[other.id]?.token === "tok-concurrent-start" && !after.running[id]
+        && after.samples.length === samplesBefore + 1 && after.samples.at(-1).id === id,
+      () => ({ started: started.started?.id, other: other?.id, lockOpens, running: after.running, samples: after.samples.map((s) => s.id) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5c — `closeClocks` decides from task files read BEFORE it takes the lock. A task this sync read as finished can
+  // be re-opened and re-started by another process between that read and the lock (its cells cleared, then
+  // `--start`). That clock is not the one the finished file answers for, so the close must leave it running; the
+  // clock of a task that genuinely finished while it ran is still closed into a sample.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("close-stale-read"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    const m = clearDepsOf(d, id, RUN, OPTS);
+    const started = startTask(d, id, RUN, OPTS, null, at(m + 10));
+    closeCells(d, id);
+    const reopened = readTaskDir(d).find((t) => t.id !== id && t.status === "todo");
+    closeCells(d, reopened.id);
+    const samplesBefore = readTimingsFile(d).samples.length;
+    let lockOpens = 0;
+    const synced = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 1) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = JSON.parse(fs.readFileSync(f, "utf8"));
+        doc.running = { ...doc.running, [reopened.id]: { startedAt: at(m + 12), token: "tok-reopened-start" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => syncTaskDir(d, RUN, { ...OPTS, now: at(m + 15) }));
+    const after = readTimingsFile(d);
+    check("race (T5c, anti-vacuity): the sync read the re-opened task as finished — the clock below is one a stale read would close",
+      () => synced.tasks?.find((t) => t.id === reopened.id)?.status === "done",
+      () => ({ status: synced.tasks?.find((t) => t.id === reopened.id)?.status, refusal: synced.refusal }));
+    check("race (T5c): a clock another process opens after the sync read the task files, before `closeClocks` takes the lock, survives the close although the sync read that task as finished — and the genuinely finished task's clock is still closed into a sample",
+      () => started.started?.id === id && lockOpens >= 1 && !synced.refused
+        && after.running[reopened.id]?.token === "tok-reopened-start" && !after.samples.some((x) => x.id === reopened.id)
+        && !after.running[id] && after.samples.length === samplesBefore + 1 && after.samples.at(-1).id === id,
+      () => ({ lockOpens, running: after.running, samples: after.samples.map((x) => x.id) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T4b — the token write fails after the lock was created. The lock this process just made must not outlive the
+  // failure: left behind, it reads as another process's lock for the whole stale threshold, and every run in that
+  // window waits and refuses, this one included.
+  {
+    const d = path.join(tmp("token-write"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    for (const code of ["EPERM", "ENOSPC"]) {
+      let writes = 0;
+      const t0 = Date.now();
+      const failed = withStub("writeSync", () => {
+        writes += 1;
+        throw busy(code);
+      }, () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+      const waited = Date.now() - t0;
+      check(`lock (T4b): a token write that fails with ${code} after the lock create rethrows the real ${code} at once — not a \`timings-locked\` refusal, nothing run under the lock — and removes the lock it created`,
+        () => failed.error?.code === code && failed.error.lockFile === undefined && failed.value === undefined
+          && writes === 1 && waited < QUICK.waitMs && !fs.existsSync(lockOf(d)),
+        () => ({ error: failed.error?.message, writes, waited, lock: fs.existsSync(lockOf(d)) }));
+    }
+    const t1 = Date.now();
+    const next = attempt(() => withTimingsLock(d, () => "ran", QUICK));
+    check("lock (T4b): the next run takes the lock at once — no orphaned lock to wait out",
+      () => next.value === "ran" && Date.now() - t1 < QUICK.waitMs && !fs.existsSync(lockOf(d)),
+      () => ({ error: next.error?.message }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

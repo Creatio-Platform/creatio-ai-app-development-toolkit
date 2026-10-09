@@ -9,6 +9,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups } from "./designspec.mjs";
 import { slugify } from "./tasks.mjs";
+import { renameWithRetry, tempPathFor } from "./fsatomic.mjs";
+
+// Re-exported: the record-file merge is where the retry budget and the busy-file codes are observed from outside.
+export { RENAME_ATTEMPTS, isRenameLockError } from "./fsatomic.mjs";
 
 export const READS_DIR = "reads";
 export const READS_INDEX_FILE = "index.json";
@@ -163,10 +167,6 @@ const MERGE_CONTENDED = "contended";
 const MERGE_RACED = "raced";
 // How many times a merge re-reads a file that changed under it before it leaves the file to the other writer.
 export const MERGE_ATTEMPTS = 3;
-// How many times a rename the OS refused because another process holds the file is tried, with a short pause
-// growing by RENAME_BACKOFF_MS each time, before the file is left to that process.
-export const RENAME_ATTEMPTS = 4;
-const RENAME_BACKOFF_MS = 25;
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 // The parsed record, or null when the text is not a JSON object. Only the PARSE is caught: a file the process
 // cannot read at all (a directory in its place, no permission) throws to the caller.
@@ -207,7 +207,7 @@ function mergeOnce(full, keys, empty) {
 // takes no lock. The temp file never outlives the call.
 function replaceIfUnchanged(full, seen, text) {
   fs.mkdirSync(path.dirname(full), { recursive: true });
-  const temp = path.join(path.dirname(full), `.${path.basename(full)}.${process.pid}.${Date.now()}.tmp`);
+  const temp = tempPathFor(full);
   try {
     fs.writeFileSync(temp, text);
     if (!sameBytes(readBytes(full), seen)) return MERGE_RACED;
@@ -215,24 +215,6 @@ function replaceIfUnchanged(full, seen, text) {
   } finally {
     fs.rmSync(temp, { force: true });
   }
-}
-// The rename errors Windows raises while another process has the target open (an editor, an indexer, a builder
-// mid-write). They are a busy file, not a broken folder, so the rename is tried again rather than failing the mode.
-const RENAME_LOCK_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
-export const isRenameLockError = (e) => RENAME_LOCK_CODES.has(e?.code);
-const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-// Whether the rename happened. Any other error is thrown to the caller.
-function renameWithRetry(temp, full) {
-  for (let attempt = 1; attempt <= RENAME_ATTEMPTS; attempt++) {
-    try {
-      fs.renameSync(temp, full);
-      return true;
-    } catch (e) {
-      if (!isRenameLockError(e)) throw e;
-      if (attempt < RENAME_ATTEMPTS) pauseSync(RENAME_BACKOFF_MS * attempt);
-    }
-  }
-  return false;
 }
 // The line every mode prints for the record files it left as they were, or null when it left none.
 export function recordFilesWarning(dir, { unreadable = [], contended = [] } = {}) {
