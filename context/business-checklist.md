@@ -15,10 +15,11 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | 5 | Business Logic | yes |
 | 6 | UX Expectations | yes |
 | 7 | Analytics | yes |
-| 8 | Edge Cases and Exceptions | yes |
+| 8 | Portal section | conditional — only when the app exposes sections to external / portal users; when present it renumbers Edge Cases to 9 |
+| 8 (or 9) | Edge Cases and Exceptions | yes |
 
 The checklist groups below are discovery buckets, not an alternate final document structure.
-The plan body shown for Gate R approval must map the checklist outcome into the canonical 8-section Business Plan above.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 8-section Business Plan above (plus the conditional `## 8. Portal section`, which renumbers Edge Cases to 9, when external access is in scope).
 A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
 Section mapping rules:
@@ -85,6 +86,11 @@ If restrictions are not essential, explicitly state:
 - `No specific access restrictions are required by default.`
 
 Do not suggest optional restrictions without a business reason.
+
+Also decide external-user (portal) access — the audience OUTSIDE the company: customers, partners, vendors, suppliers, applicants, citizens, or any self-service / client audience ("external users" is the concept, not the literal word "portal"). Two paths put it in the plan:
+- PROACTIVELY, as a domain expert — when the app's domain plausibly serves an external audience (a customer/partner/self-service scenario), ASK the developer in this discovery batch whether part of the app should be exposed to external users. Do not wait for them to raise it, and do not assume it silently either.
+- EXPLICITLY — when the request already says external / portal / self-service access is needed, take it as decided.
+When external access is in scope, carry the external audience (`All external users`) in `## 2. Roles and Permissions` and describe the exposed sections in the conditional top-level section `## 8. Portal section` (structured like §6; labels in `runbooks/02-requirements-gathering.md`), which renumbers Edge Cases to `## 9`. When it is out of scope, say nothing about a portal — omit `## 8. Portal section` and Edge Cases stays `## 8`. Keep the external field set DELIBERATELY SMALL — significantly fewer fields than the internal page — so internal-only information (assigned agent/owner, internal notes, costs, internal status) is never shown to external users. For each exposed section also ASK which records external users may see — only their own (`own contact`), their company's (`own account`), or all (`all`, shared reference data) — and carry it as `external record scope:`; there is no default. The build mechanics belong to clio — see `get-guidance name=portal-sections`; the checklist only secures the developer's decision.
 
 Also required, and NOT covered by the sentence above — navigation placement and audience:
 - where the app belongs in the left navigation: a NEW workplace named for the app (recommend this when
