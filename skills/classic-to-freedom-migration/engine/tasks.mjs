@@ -41,6 +41,7 @@ import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
+import { RECONCILE_MODES } from "./reconcile-modes.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -931,6 +932,13 @@ function renderFrontMatter(task, set) {
     decisions: renderDecisionsMap(task.decisions),
   };
   const keys = [...FRONT_MATTER_KEYS];
+  // The build-time reconcile mode, stamped so the ONE sub-agent handed this file self-describes how to
+  // place elements (overlay vs classic-layout). Emitted only for an existing-Freedom reconcile (set.reconcileMode
+  // is null for a rebuild, which always builds fresh), so a rebuild's task files are byte-for-byte unchanged.
+  if (set.reconcileMode) {
+    v.reconcileMode = set.reconcileMode;
+    keys.push("reconcileMode");
+  }
   if (task.kind === REPAIR_KIND) {
     Object.assign(v, { kind: task.kind, cause: task.cause, repairRound: String(task.repairRound),
       covers: (task.covers || []).join(" ") });
@@ -2076,10 +2084,13 @@ export function renderTaskIndex(set) {
   // Named in the headline, not only in a column — the first line is the count a reader takes away.
   const partial = counts.partial ? ` · **⚠ Partial:** ${counts.partial}` : "";
   const entityNote = set.entity ? ` — ${set.entity}` : "";
+  // The frozen reconcile mode, named in the headline so the orchestrator carries it into every build
+  // brief. Present only for an existing-Freedom reconcile; a rebuild renders no such line.
+  const modeNote = set.reconcileMode ? ` · **Reconcile mode:** \`${set.reconcileMode}\`` : "";
   const L = [
     `# Migration build tasks${entityNote}`,
     "",
-    `**Plan version:** \`${set.planVersion || "—"}\` · **Tasks:** ${set.tasks.length} · **Done:** ${counts.done} · **Open:** ${counts.open}${partial}${other}`,
+    `**Plan version:** \`${set.planVersion || "—"}\` · **Tasks:** ${set.tasks.length} · **Done:** ${counts.done} · **Open:** ${counts.open}${partial}${other}${modeNote}`,
     "",
     "> DERIVED FILE — regenerated from the task files by `migrate.mjs <manifest> --tasks <dir>`. It carries no fact",
     "> of its own: a task's OWN file records its status, so editing this table changes nothing. Run the mode again",
@@ -2823,16 +2834,20 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   const { tasks, parked, pending } = buildRepairTasks(result, gated, opts, existing);
   const onDisk = new Set(existing.map((e) => e.file));
   fs.mkdirSync(dir, { recursive: true });
+  // A repair round is over an already-cut folder, so its reconcile mode is the one frozen there; carry
+  // it into the repair task files and the index the same way syncTaskDir does for the plan tasks.
+  const reconcileMode = effectiveFrozenMode(dir);
   const written = [];
   for (const t of tasks) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null }));
+    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = reconcileMode;
   // The Dispatched column is folder-derived like the rest of the index: without this every row would render as
   // "not known" and a repair round would quietly erase what the build rounds recorded. It also feeds
   // `resolvePartials`, which only lets a DISPATCHED closure resolve a residual.
@@ -2868,6 +2883,7 @@ export function readMergedTaskDir(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts);
   if (fresh.refused) return { ...fresh, tasks: [] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = effectiveFrozenMode(dir); // the index refresh reads `merged`; keep the frozen stamp on it
   attachDispatch(merged, dir);
   resolvePartials(merged);
   return merged;
@@ -2886,6 +2902,93 @@ export function readFrozenSplit(dir) {
 export function freezeSplit(dir, text) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
+}
+
+// The RECONCILE MODE is a build-time choice for an existing-Freedom reconcile, frozen in the folder exactly like the
+// split: chosen once with `--reconcile-mode` at the first `--tasks` run, then read back on every re-slice so the
+// orchestrator does not have to re-pass it. It changes HOW build sub-agents place elements, not the plan — so it
+// never touches `--plan`/`--spec`, only the task files (front matter) and the index header. The mode values live in
+// `reconcile-modes.mjs` (dependency-free, shared with designspec.mjs) and are re-exported here for existing callers.
+export { RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_LIST, RECONCILE_MODE_DEFAULT } from "./reconcile-modes.mjs";
+export { RECONCILE_MODES };
+const RECONCILE_MODE_FILE = ".reconcile-mode";
+
+// The mode frozen in the folder, or null when none was ever set (a legacy folder, or a non-reconcile build). A value
+// the current engine does not recognise is treated as absent rather than trusted — the same "strict about values"
+// rule parseTaskFile follows for a status it cannot read.
+export function readFrozenMode(dir) {
+  const st = readFrozenModeState(dir);
+  return st.valid ? st.mode : null;
+}
+
+// The `.reconcile-mode` state, so the CLI can tell three cases apart that `readFrozenMode` collapses to null:
+// `{ present:false }` (no mode was ever frozen), `{ present:true, valid:true, mode }`, and `{ present:true,
+// valid:false, raw }` (a corrupted dotfile — refused rather than silently overwritten).
+export function readFrozenModeState(dir) {
+  const p = path.join(dir, RECONCILE_MODE_FILE);
+  if (!fs.existsSync(p)) return { present: false };
+  const raw = fs.readFileSync(p, "utf8").trim();
+  return RECONCILE_MODES.has(raw) ? { present: true, valid: true, mode: raw } : { present: true, valid: false, raw };
+}
+
+export function freezeMode(dir, mode) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, RECONCILE_MODE_FILE), mode + "\n");
+}
+
+// The mode this folder is built in: the one just handed in (`opts.reconcileMode`, from `--reconcile-mode`) wins,
+// else the one frozen in the folder, else none — and none means the implicit `overlay` default (current behavior,
+// unstamped, so a reconcile that never chose a mode keeps its files byte-for-byte). When a mode IS in play it is
+// frozen, so a later re-slice without the flag reads it back. `--reconcile-mode` is validated + scope-gated by the
+// CLI before it ever reaches here, so any value present is already one of RECONCILE_MODES on a reconcile plan.
+export function resolveFrozenMode(dir, opts = {}) {
+  if (opts.reconcileMode) { freezeMode(dir, opts.reconcileMode); return opts.reconcileMode; }
+  const st = readFrozenModeState(dir);
+  if (st.valid) { freezeMode(dir, st.mode); return st.mode; }
+  // A corrupted dotfile is refused by the CLI before we get here; still, never trust an unrecognised value.
+  if (st.present) return null;
+  // The dotfile is ABSENT. If existing task files still carry a `reconcileMode:` stamp, the dotfile was lost (e.g. a
+  // copy dropped it) — restore it from the stamp rather than silently re-slicing every task back to overlay. An
+  // UNRECOGNISED or DISAGREEING stamp is ambiguous: THROW so a LIBRARY caller (a direct `syncTaskDir`) fails closed
+  // instead of silently re-slicing the folder to overlay. A CLI caller is already refused, with a friendlier message,
+  // by `guardFrozenModeState` before reaching here.
+  const unknown = rawStampedValues(dir).filter((m) => !RECONCILE_MODES.has(m));
+  if (unknown.length) throw new Error(`the folder's .reconcile-mode is absent and its task files carry an unrecognised mode stamp (${unknown.join(", ")}); fix the stamps or start a fresh folder`);
+  const stamps = stampedModes(dir);
+  if (stamps.length > 1) throw new Error(`the folder's .reconcile-mode is absent and its task files carry disagreeing modes (${stamps.join(", ")}); fix the stamps or start a fresh folder`);
+  if (stamps.length === 1) { freezeMode(dir, stamps[0]); return stamps[0]; }
+  return null;
+}
+// The DISTINCT valid reconcile modes stamped across the folder's existing task files. The cut stamps EVERY task file
+// with the one frozen mode, so a valid folder yields exactly one; zero (none stamped) or more than one (a task file
+// adopted from another folder, a hand edit — the stamps DISAGREE) both mean the mode cannot be trusted from the stamps.
+export function stampedModes(dir) {
+  return [...new Set(readExisting(dir).map((e) => e.meta?.reconcileMode).filter((m) => RECONCILE_MODES.has(m)))];
+}
+// Every DISTINCT non-empty reconcileMode value stamped across the folder's task files, valid OR not — so the CLI can
+// refuse an UNRECOGNISED stamp (e.g. `Classic-Layout`) when the dotfile is dropped, rather than silently reading it as
+// overlay the way `stampedModes` (which drops unrecognised values) would. A corrupted dotfile is refused the same way.
+export function rawStampedValues(dir) {
+  return [...new Set(readExisting(dir).map((e) => e.meta?.reconcileMode).filter((m) => typeof m === "string" && m.trim()))];
+}
+// The reconcile mode stamped on the folder's existing task files, or null — the source for restoring a lost `.reconcile-mode`.
+// A single distinct stamp restores; zero or an ambiguous DISAGREEMENT returns null so the caller treats it like a corrupted
+// dotfile (refused / unstamped) rather than trusting whichever file happens to scan first.
+function frozenModeFromTasks(dir) {
+  const stamped = stampedModes(dir);
+  return stamped.length === 1 ? stamped[0] : null;
+}
+// The effective frozen mode of a folder, read-only: the dotfile when valid, else the mode the existing task files
+// still carry when the dotfile was dropped, else null. Unlike `resolveFrozenMode` it never re-freezes. Used wherever
+// the folder's mode must be honoured without a cut — stamping a rewrite (the index refresh, a `--decide`/`--revoke`,
+// a repair round) and carrying the mode into `--verify`. Reading the dotfile alone (`readFrozenMode`) would map a
+// lost-but-stamped mode to null and silently reset the folder to overlay, turning the classic-layout removal gate
+// off for good. A corrupted dotfile returns null here; the CLI refuses it before either use reaches this point.
+export function effectiveFrozenMode(dir) {
+  const st = readFrozenModeState(dir);
+  if (st.valid) return st.mode;
+  if (st.present) return null;
+  return frozenModeFromTasks(dir);
 }
 
 // EVERY PLAN ROW IS CLAIMED BY EXACTLY ONE TASK ROW. Matching is scoped PER PAGE, the way `planIndex` scopes the
@@ -3776,6 +3879,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   }
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
+  const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
     const rows = d.deliverables.map((label) => ({ label: String(label).trim(), group: d.group, vk: null, na: null }));
@@ -3788,7 +3892,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null }));
+    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
     written.push(task);
   }
   // Back through the ordinary pass, so minted files are merged, ordered and indexed like any other.
@@ -4090,6 +4194,7 @@ export function applyDecision(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
   if (mode === BUILD_MODE) return applyBuildDecision(dir, merged, picked, decision);
@@ -4307,6 +4412,7 @@ export function revokeDecision(dir, result, opts = {}) {
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
 
   const cleared = [];
   const skipped = [];
@@ -4444,6 +4550,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const unaccounted = decisionRefusal(merged, dir, opts);
   if (unaccounted) return { ...fresh, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
+  merged.reconcileMode = resolveFrozenMode(dir, opts);
   // Close the clocks of everything that finished since the last pass, before the files are written.
   closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());
   attachDispatch(merged, dir);

@@ -27,6 +27,52 @@ clio-safety rules apply to every write.
    scaffolding is its own task, ahead of every page, and a switch-over happens only when the user
    approved one.) The existence re-check before every create (`build-task-execution.md`) holds for
    each subtask here too.
+   - **On a RECONCILE (existing Freedom page), apply the `reconcileMode:` in your task's front matter.**
+     `overlay` (or no key) — add the client delta onto the existing Freedom layout, keeping base
+     positions and base "extra" elements. `classic-layout` — re-lay the page so every FIELD and DETAIL
+     sits at its plan **`Position`** cell (`r · c · w`, the last column of the Layout table): **`move`**
+     a base field the plan places elsewhere (do NOT skip it as "already native": a base field the plan
+     puts in a different region must be moved there, not left where the base page renders it),
+     **insert** a plan field that is absent, and **`remove`** a base LAYOUT element that is NOT in the
+     plan (the on-page control only — never the entity column or its data), while **KEEPING** every
+     Freedom-only value-add component with no Classic analog (charts, DCM progress bar, Account/Contact
+     compact profile cards, Next steps) AND every standard Freedom component the page already ships
+     (Feed, Attachments, Connected to, Timeline). The standard components are kept as-is (not re-laid),
+     and their Classic counterparts (`ESNTab` / `FileDetailV2` / `EntityConnectionsDetailV2` /
+     `TimelineTab`) are NOT migrated — close that row with `--decide <rowKey> --wont-do` (reason:
+     `standard Freedom component kept — counterpart not migrated`), which the engine records as a
+     decision and `--verify --tasks` reads back (both modes). Field status (read-only / hidden) follows
+     the plan's `Rule` cell; a Classic field whose `Position` is held by a kept value-add element goes
+     in the nearest container and is recorded in `decisions.md`. Full procedure (both modes) →
+     `references/existing-freedom-reconcile.md`.
+     - **Remove base extras by ACTUALLY diffing — asserting it is not doing it.** In `classic-layout`,
+       do NOT write "base non-plan elements removed" in `## Notes` without the ops that do it:
+       `get-page` the Freedom page, list every FIELD control it renders (the input components —
+       `crt.Input`/`crt.ComboBox`/`crt.DateTimePicker`/`crt.NumberInput`/`crt.Checkbox`/…), then match
+       each against the plan the SAME way the `--verify` gate does — NOT by element label alone. A built
+       control is "in the plan" when its element name, its `<Name>Field` form, OR its **bound column**
+       matches a plan field: compare the control's `$PDS_<Column>` / `$PDS_<Column>_<hash>` binding
+       against the plan's **Source** cell (`PDS.<Column>` in the Layout table), because the Element cell
+       is only a display label — a base control such as `ComboBox_ab12cd` bound to a column the plan
+       keeps matches by column, never by label. A base control that matches a plan field by ANY of these
+       is **MOVED** to its plan `Position`, never removed. Emit a `remove` op in your `update-page` ONLY
+       for a base field control that matches NO plan field AND sits in a region the plan manages
+       (Overview / side profile / a plan group). **Never remove a field that lives inside a native
+       Freedom TAB** (Products, Opportunity Insights, History, …): native tabs and their content are
+       KEPT — they are standard functionality the user relied on, often a reimagined analog of a Classic
+       tab (names differ), so enumerate every native tab from `get-page`, keep them all, and confirm the
+       list with the user; remove a native tab only on an explicit `--decide`. Three kinds of component
+       are NOT in this field diff: value-add widgets with no Classic analog (Feed, Dashboards,
+       ApprovalList, compact profile, DCM bar) — kept as-is; details / related lists (their
+       `crt.DataGrid`) — reconciled on their OWN plan rows (moved/removed per the plan's detail rows),
+       not here; and anything inside a native tab — kept. The `--verify` gate (run with `--tasks`, which
+       carries the frozen mode) enforces the FIELD diff only: it flags a FIELD control in a plan-managed
+       region that is not in the plan as **❌ EXTRA** and blocks completion, so an
+       asserted-but-not-emitted field removal fails the gate rather than shipping the base fields. It
+       does NOT flag fields inside a native (non-plan) tab — those are kept. Detail/related-list and
+       value-add removal, and which native tabs to keep, are NOT machine-decided — diff and reconcile
+       them by hand against the plan, confirm native tabs with the user, and the UI-guidelines
+       region-parity review is what confirms placement.
    - **Build every native feature UP FRONT as its native component — never build a generic
      Expanded-list/DataGrid first and "switch" it later.** A Visa = Approvals *because it is an
      Approval* — and Approvals is **TWO** components (`get-component-info` returns both): the

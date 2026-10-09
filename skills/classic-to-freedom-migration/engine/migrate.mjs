@@ -68,7 +68,8 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, renderResume,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
+  RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3190,6 +3191,10 @@ const START_FLAG = "--start";
 // Takes no value: it says WHAT `--tasks <dir>` does with that folder, not where anything is.
 const ADD_FLAG = "--add";
 const ROUTE_FLAG = "--route";
+// `--reconcile-mode <overlay|classic-layout>`: the build-time reconcile mode, chosen once at the first
+// `--tasks` cut and frozen in the folder (tasks.mjs). It changes HOW build sub-agents place elements, never the
+// plan, so it is a `--tasks`-only value flag and is rejected on `--plan`/`--spec` and on a non-reconcile plan.
+const RECONCILE_MODE_FLAG = "--reconcile-mode";
 // `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
@@ -3226,20 +3231,20 @@ const READS_FLAG = "--reads";
 // same folder.
 const FROM_FLAG = "--from";
 const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG, READS_FLAG, FROM_FLAG, ADD_FLAG,
-  DECIDE_FLAG, REVOKE_FLAG, TO_FLAG, PAGES_FLAG, TASK_FLAG, ROW_FLAG]);
+  DECIDE_FLAG, REVOKE_FLAG, TO_FLAG, PAGES_FLAG, TASK_FLAG, ROW_FLAG, RECONCILE_MODE_FLAG]);
 // EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
 // for, so the flag that produced them has to be the thing that fails.
 const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG, HANDOFF_FLAG,
   WONT_DO_FLAG, POSTPONED_FLAG, BUILD_FLAG, ...VALUE_FLAGS]);
-function valueFlagArg(argv, flag, example, onBad) {
+function valueFlagArg(argv, flag, example, onBad, noun = "a path") {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
   const next = argv[i + 1];
   if (next === undefined || next.startsWith("--")) {
     const got = next === undefined ? "no argument" : `the flag '${next}'`;
-    onBad(`\`${flag}\` needs a path (e.g. \`${example}\`) — got ${got}; nothing was written`);
+    onBad(`\`${flag}\` needs ${noun} (e.g. \`${example}\`) — got ${got}; nothing was written`);
   }
   return next;
 }
@@ -4188,6 +4193,26 @@ function outFileNote(label, outFile, notReady, verifyMode) {
   return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
 }
 
+// The reconcile mode is FROZEN at the FIRST `--tasks` cut and guarded on every later `--tasks` run (cut, re-slice,
+// route, decide, verify) so it can never be collapsed to null and silently rewritten/verified as overlay. A corrupted
+// `.reconcile-mode` is refused. When the dotfile is ABSENT but the task files carry a stamp, the dotfile was dropped:
+// a single stamp is the folder's true mode (restored later by `resolveFrozenMode`), an UNRECOGNISED or DISAGREEING
+// stamp is refused the same way a corrupted dotfile is. Re-passing the flag is refused when it would change what a
+// built folder means: a different frozen mode (dotfile or stamp), or a folder truly cut WITHOUT a mode. The guard keys
+// off the TASK FILES, not the derived/regenerable `index.md`, so a folder that lost both still cannot slip through.
+function guardFrozenModeState(tasksDir, reconcileModeArg, fail) {
+  const st = readFrozenModeState(tasksDir);
+  if (st.present && !st.valid) fail(`this folder's \`.reconcile-mode\` holds an unrecognised value ${JSON.stringify(st.raw)} — refusing rather than overwriting it or verifying as overlay. Fix or delete it, then re-run.`);
+  if (reconcileModeArg && st.valid && st.mode !== reconcileModeArg) fail(`this folder was cut in \`${st.mode}\` mode; re-passing \`${RECONCILE_MODE_FLAG} ${reconcileModeArg}\` would change how every task is built. Keep \`${st.mode}\` (drop the flag — a re-slice reads it back), or start a fresh folder for the other mode.`);
+  if (st.present || readTaskDir(tasksDir).length === 0) return;
+  const unknown = rawStampedValues(tasksDir).filter((m) => !RECONCILE_MODES.has(m));
+  if (unknown.length) fail(`this folder's \`.reconcile-mode\` is absent and its task files carry an UNRECOGNISED mode stamp (${unknown.join(", ")}) — refusing to read it as overlay, the same way a corrupted dotfile is refused. Fix the stamps or start a fresh folder.`);
+  const stamps = stampedModes(tasksDir);
+  if (stamps.length > 1) fail(`this folder's \`.reconcile-mode\` is absent and its task files carry DISAGREEING modes (${stamps.join(", ")}) — refusing to pick one silently or verify as overlay. Fix the stamps or start a fresh folder.`);
+  if (reconcileModeArg && stamps.length === 1 && stamps[0] !== reconcileModeArg) fail(`this folder was cut in \`${stamps[0]}\` mode (its \`.reconcile-mode\` was lost but the task files still carry it); re-passing \`${RECONCILE_MODE_FLAG} ${reconcileModeArg}\` would change how every task is built. Keep \`${stamps[0]}\` (drop the flag — a re-slice restores it from the stamps), or start a fresh folder for the other mode.`);
+  if (reconcileModeArg && stamps.length === 0) fail(`this folder was already cut WITHOUT a reconcile mode; the mode is chosen on the FIRST \`${TASKS_FLAG}\` cut and frozen. Start a fresh folder for \`${reconcileModeArg}\`, or re-slice without the flag to keep the implicit overlay.`);
+  // a single stamp equal to the arg (or no arg) is a dropped dotfile — resolveFrozenMode restores + re-freezes it.
+}
 // Reading `process.stdin.isTTY` (the guard above the manifest read) puts fd 0 into non-blocking mode, so on
 // macOS `fs.readFileSync(0)` throws EAGAIN whenever the pipe holds less than the whole manifest (over ~64 KB
 // from `spawnSync(…, { input })`). Read fd 0 chunk by chunk instead: on EAGAIN wait a few ms (still synchronous)
@@ -4363,6 +4388,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (handoffMode && others.length) fail(`\`${HANDOFF_FLAG}\` cannot be combined with ${others.join(" / ")} — the resume must describe ONE folder state, and each of those moves the folder or answers about it. Run it first, then \`${HANDOFF_FLAG}\` on its own.`);
   }
   if (tasksMode && !verifyMode && !decideMode && !revokeMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
+  // `--reconcile-mode <mode>`: chosen when the plan is CUT into tasks and frozen in the folder. Value-validated and
+  // scope-gated here; a re-slice without it reads the frozen mode back (tasks.mjs resolveFrozenMode).
+  const reconcileModeArg = valueFlagArg(argv, RECONCILE_MODE_FLAG, `${RECONCILE_MODE_FLAG} ${RECONCILE_MODE_LIST.join("|")}`, fail, "one of " + RECONCILE_MODE_LIST.join(" | "));
+  if (reconcileModeArg && !tasksMode) fail(`\`${RECONCILE_MODE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it is chosen when the plan is cut into tasks, not on \`--plan\`/\`--spec\`.`);
+  if (reconcileModeArg && (verifyMode || routeMode || nextMode || decideMode || revokeMode)) fail(`\`${RECONCILE_MODE_FLAG}\` is set once at the \`${TASKS_FLAG}\` cut and frozen in the folder; \`--verify\` / \`${ROUTE_FLAG}\` read it back from there. Drop it from this call.`);
+  if (reconcileModeArg && !RECONCILE_MODES.has(reconcileModeArg)) fail(`\`${RECONCILE_MODE_FLAG}\` must be one of ${RECONCILE_MODE_LIST.join(" | ")} — got \`${reconcileModeArg}\`.`);
+  // The mode is FROZEN at the FIRST cut — guarded on ANY `--tasks` run (cut, re-slice, route, decide, verify).
+  if (tasksMode) guardFrozenModeState(tasksDir, reconcileModeArg, fail);
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // A HAND-OFF COPIES THE MANIFEST FOR THE FRESH SESSION, so a missing file (a cleaned temporary input folder) or a
@@ -4388,6 +4421,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.schemas) || manifest.schemas.length === 0) {
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
+  // The reconcile mode only means something when a Freedom page for this entity already exists (a
+  // reconcile). A rebuild always builds fresh, so the flag on one is a mistake worth naming, not silently ignoring.
+  if (reconcileModeArg && !manifest.planMeta?.freedomExists) fail(`\`${RECONCILE_MODE_FLAG}\` applies only to an existing-Freedom reconcile (planMeta.freedomExists); this plan rebuilds the page from scratch, where there is nothing to reconcile onto.`);
   let result;
   const decisions = planDecisions(outFile, tasksDir);
   const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
@@ -4559,7 +4595,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, taskOpts(), split, splitText, startId); }
+    try { output = runTaskMode(result, tasksDir, { ...taskOpts(), reconcileMode: reconcileModeArg }, split, splitText, startId); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {
@@ -4607,7 +4643,29 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     }
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
-    verifyRes = renderVerify(result, checklistOpts(manifest), built, decidedKeys);
+    // On `--verify --tasks <dir>` carry the folder's frozen reconcile mode into verify, so the classic-layout
+    // EXTRA-field gate (a base field still on the page but not in the plan) actually fires. Resolve it the SAME
+    // restore-aware way the `--tasks` cut does: a corrupted `.reconcile-mode` must NOT collapse to null and silently
+    // verify a classic-layout folder as overlay (which would turn the gate off and pass a page that still carries
+    // base controls), and an ABSENT dotfile whose task files still carry the stamp is a dropped dotfile — restore
+    // the mode from the stamp rather than reading the folder as overlay. Without `--tasks` there is no folder to
+    // read it from, so the gate is legitimately off.
+    let verifyMode2 = null;
+    if (tasksMode) {
+      const st = readFrozenModeState(tasksDir);
+      if (st.present && !st.valid) fail(`--verify: this folder's \`.reconcile-mode\` holds an unrecognised value ${JSON.stringify(st.raw)}. Refusing to verify it as overlay and silently skip the classic-layout EXTRA-field gate — fix or delete the file, then re-verify.`);
+      verifyMode2 = effectiveFrozenMode(tasksDir);
+    }
+    // On a reconcile plan, name which mode applied so a run that verifies without the classic-layout gate is visible,
+    // never silently un-gated — and the reason distinguishes "no --tasks folder" from "the folder is on overlay".
+    if (manifest.planMeta?.freedomExists) {
+      let why;
+      if (verifyMode2 === RECONCILE_MODE_CLASSIC) why = "classic-layout — EXTRA-field gate ON";
+      else if (tasksMode) why = "overlay — classic-layout EXTRA-field gate NOT applied";
+      else why = "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
+      process.stderr.write(`migrate.mjs: reconcile verify mode = ${why}.\n`);
+    }
+    verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2 }, built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
