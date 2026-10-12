@@ -7,17 +7,37 @@ in this context``), so each header is parsed with PyYAML's safe loader here.
 """
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = {".git", "node_modules", "vendor", "coverage"}
+SKIP_DIRS = {
+    ".git", ".worktrees", ".venv", "__pycache__", ".tmp-tests",
+    "node_modules", "vendor", "coverage", "dist", "build", "output",
+}
 FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 
 
+def _tracked_files():
+    """Paths git tracks, so only shipped files are checked; None when git is unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return [ROOT / line for line in out.splitlines()]
+
+
+_TRACKED = _tracked_files()
+
+
 def _walk(pattern):
+    if _TRACKED is not None:
+        return sorted(p for p in _TRACKED if p.match(pattern) and p.is_file())
     return sorted(
         p for p in ROOT.rglob(pattern) if not SKIP_DIRS.intersection(p.relative_to(ROOT).parts)
     )
@@ -47,10 +67,7 @@ class FrontmatterYamlTests(unittest.TestCase):
             with self.subTest(file=rel):
                 match = FRONTMATTER.match(path.read_text(encoding="utf-8"))
                 self.assertIsNotNone(match, f"{rel}: missing '---' frontmatter block")
-                try:
-                    data = yaml.safe_load(match.group(1))
-                except yaml.YAMLError as exc:
-                    self.fail(f"{rel}: invalid YAML frontmatter: {exc}")
+                data = yaml.safe_load(match.group(1))
                 self.assertIsInstance(data, dict, f"{rel}: frontmatter is not a mapping")
                 if path.name == "SKILL.md":
                     for key in ("name", "description"):
@@ -66,10 +83,7 @@ class FrontmatterYamlTests(unittest.TestCase):
             with self.subTest(file=rel):
                 text = path.read_text(encoding="utf-8")
                 wrapped = FRONTMATTER.match(text)  # these files are fenced by '---' lines
-                try:
-                    yaml.safe_load(wrapped.group(1) if wrapped else text)
-                except yaml.YAMLError as exc:
-                    self.fail(f"{rel}: invalid YAML: {exc}")
+                yaml.safe_load(wrapped.group(1) if wrapped else text)
 
 
 if __name__ == "__main__":

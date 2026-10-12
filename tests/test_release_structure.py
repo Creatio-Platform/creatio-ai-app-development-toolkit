@@ -88,7 +88,7 @@ def parse_fenced_flat_mapping(text):
 
     The skill openai.yaml manifests are a fixed, self-authored shape — a few flat
     string keys between ``---`` fences — so a small line parser is enough and
-    keeps the test suite dependency-free (CI installs only pytest). Only
+    keeps these structural checks free of a YAML library. Only
     TOP-LEVEL (non-indented) keys are collected, so a divergent nested shape
     (e.g. keys under an ``interface:`` wrapper) is NOT silently flattened — it
     surfaces as a missing required key.
