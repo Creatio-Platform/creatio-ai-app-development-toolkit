@@ -25,11 +25,11 @@ def _tracked_files():
     """Paths git tracks, so only shipped files are checked; None when git is unavailable."""
     try:
         out = subprocess.run(
-            ["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True, check=True
+            ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
-    return [ROOT / line for line in out.splitlines()]
+    return [ROOT / name for name in out.decode("utf-8").split("\0") if name]
 
 
 _TRACKED = _tracked_files()
@@ -62,28 +62,42 @@ class FrontmatterYamlTests(unittest.TestCase):
         self.assertTrue(_yaml_files())
 
     def test_markdown_frontmatter_parses_strictly(self):
+        problems = []
         for path in _markdown_files():
             rel = path.relative_to(ROOT).as_posix()
-            with self.subTest(file=rel):
-                match = FRONTMATTER.match(path.read_text(encoding="utf-8"))
-                self.assertIsNotNone(match, f"{rel}: missing '---' frontmatter block")
+            match = FRONTMATTER.match(path.read_text(encoding="utf-8"))
+            if match is None:
+                problems.append(f"{rel}: missing '---' frontmatter block")
+                continue
+            try:
                 data = yaml.safe_load(match.group(1))
-                self.assertIsInstance(data, dict, f"{rel}: frontmatter is not a mapping")
-                if path.name == "SKILL.md":
-                    for key in ("name", "description"):
-                        value = data.get(key)
-                        self.assertTrue(
-                            isinstance(value, str) and value.strip(),
-                            f"{rel}: '{key}' must be a non-empty string",
-                        )
+            except yaml.YAMLError as error:
+                problems.append(f"{rel}: {error}")
+                continue
+            if not isinstance(data, dict):
+                problems.append(f"{rel}: frontmatter is not a mapping")
+                continue
+            if path.name == "SKILL.md":
+                for key in ("name", "description"):
+                    value = data.get(key)
+                    if not (isinstance(value, str) and value.strip()):
+                        problems.append(f"{rel}: '{key}' must be a non-empty string")
+        self.assertEqual(problems, [], "\n".join(problems))
 
     def test_agent_yaml_parses_strictly(self):
+        problems = []
         for path in _yaml_files():
             rel = path.relative_to(ROOT).as_posix()
-            with self.subTest(file=rel):
-                text = path.read_text(encoding="utf-8")
-                wrapped = FRONTMATTER.match(text)  # these files are fenced by '---' lines
-                yaml.safe_load(wrapped.group(1) if wrapped else text)
+            text = path.read_text(encoding="utf-8")
+            wrapped = FRONTMATTER.match(text)  # these files are fenced by '---' lines
+            try:
+                data = yaml.safe_load(wrapped.group(1) if wrapped else text)
+            except yaml.YAMLError as error:
+                problems.append(f"{rel}: {error}")
+                continue
+            if not isinstance(data, dict):
+                problems.append(f"{rel}: content is not a mapping")
+        self.assertEqual(problems, [], "\n".join(problems))
 
 
 class DependencyPinsTests(unittest.TestCase):
