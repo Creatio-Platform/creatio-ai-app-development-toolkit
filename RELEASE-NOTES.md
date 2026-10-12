@@ -12,7 +12,7 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ![A customized Classic section reconciled onto its existing Freedom page in two ways, overlay and Classic layout, next to a build that starts only on an approved plan version](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.16.0-banner.png)
 
-**A customized out-of-the-box Classic section now migrates onto its existing Freedom page — on top of its layout or in the Classic one — and the build no longer starts on a plan you have not approved.** You pick at the start of the build whether the client's Classic changes are added into the Freedom page as it is, or the page is re-laid so fields and details sit where they were in Classic. The standard Freedom Feed, Attachments, Connected to and Timeline stay as they are. The engine itself now checks the plan approval before it writes any build task, and keeps the task ledger intact when a run is killed or two runs start at once.
+**A customized out-of-the-box Classic section now migrates onto its existing Freedom page — on top of its layout or in the Classic one — and the build no longer starts on a plan you have not approved.** You pick at the start of the build whether the client's Classic changes are added into the Freedom page as it is, or the page is re-laid so fields and details sit where they were in Classic. The standard Freedom Feed, Attachments, Connected to and Timeline stay as they are. The engine itself now refuses to cut, split, start, add or route build tasks until the exact plan version is approved, and keeps the task ledger intact when a run is killed or two runs start at once.
 
 ### 🧩 Customized out-of-the-box sections
 
