@@ -1,0 +1,76 @@
+"""Every shipped skill, rule and agent file carries frontmatter a strict YAML parser accepts.
+
+GitHub Copilot CLI parses frontmatter with a strict YAML parser and drops a skill whose
+header does not parse; Claude Code is lenient and hides the same defect. An unquoted
+``description:`` containing ": " is the usual offender (``mapping values are not allowed
+in this context``), so each header is parsed with PyYAML's safe loader here.
+"""
+
+import re
+import unittest
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+SKIP_DIRS = {".git", "node_modules", "vendor", "coverage"}
+FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+
+
+def _walk(pattern):
+    return sorted(
+        p for p in ROOT.rglob(pattern) if not SKIP_DIRS.intersection(p.relative_to(ROOT).parts)
+    )
+
+
+def _markdown_files():
+    files = _walk("SKILL.md") + _walk("*.mdc")
+    for folder in ("agents", "commands"):
+        files += [p for p in _walk("*.md") if folder in p.relative_to(ROOT).parts[:-1]]
+    return sorted(set(files))
+
+
+def _yaml_files():
+    return [p for p in _walk("*.yaml") if "agents" in p.relative_to(ROOT).parts[:-1]]
+
+
+class FrontmatterYamlTests(unittest.TestCase):
+    def test_discovery_finds_the_shipped_files(self):
+        names = {p.relative_to(ROOT).as_posix() for p in _markdown_files()}
+        self.assertIn("skills/creatio-app-orchestrator/SKILL.md", names)
+        self.assertIn("rules/creatio-app-orchestrator.mdc", names)
+        self.assertTrue(_yaml_files())
+
+    def test_markdown_frontmatter_parses_strictly(self):
+        for path in _markdown_files():
+            rel = path.relative_to(ROOT).as_posix()
+            with self.subTest(file=rel):
+                match = FRONTMATTER.match(path.read_text(encoding="utf-8"))
+                self.assertIsNotNone(match, f"{rel}: missing '---' frontmatter block")
+                try:
+                    data = yaml.safe_load(match.group(1))
+                except yaml.YAMLError as exc:
+                    self.fail(f"{rel}: invalid YAML frontmatter: {exc}")
+                self.assertIsInstance(data, dict, f"{rel}: frontmatter is not a mapping")
+                if path.name == "SKILL.md":
+                    for key in ("name", "description"):
+                        value = data.get(key)
+                        self.assertTrue(
+                            isinstance(value, str) and value.strip(),
+                            f"{rel}: '{key}' must be a non-empty string",
+                        )
+
+    def test_agent_yaml_parses_strictly(self):
+        for path in _yaml_files():
+            rel = path.relative_to(ROOT).as_posix()
+            with self.subTest(file=rel):
+                text = path.read_text(encoding="utf-8")
+                wrapped = FRONTMATTER.match(text)  # these files are fenced by '---' lines
+                try:
+                    yaml.safe_load(wrapped.group(1) if wrapped else text)
+                except yaml.YAMLError as exc:
+                    self.fail(f"{rel}: invalid YAML: {exc}")
+
+
+if __name__ == "__main__":
+    unittest.main()

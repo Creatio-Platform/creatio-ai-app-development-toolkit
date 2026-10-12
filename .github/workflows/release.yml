@@ -129,7 +129,7 @@ jobs:
 
       - name: Gate 4 — run tests
         run: |
-          pip install pytest
+          pip install pytest pyyaml
           pytest tests/
 
       - name: Audit — warn on undeclared files containing the new version
