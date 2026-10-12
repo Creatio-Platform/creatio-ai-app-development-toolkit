@@ -128,9 +128,10 @@ jobs:
         run: node scripts/bump-version.js --check
 
       - name: Gate 4 — run tests
-        run: |
-          pip install pytest pyyaml
-          pytest tests/
+        # Same hardened install as pr.yml: wheels only, pinned (S8541/S8544). Quoted: `:all: ` would parse as a mapping.
+        run: "pip install --only-binary :all: pytest==8.3.4 pyyaml==6.0.2"
+      - name: Gate 4 — run tests (execute)
+        run: pytest tests/
 
       - name: Audit — warn on undeclared files containing the new version
         run: node scripts/bump-version.js --audit
