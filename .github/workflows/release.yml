@@ -128,9 +128,9 @@ jobs:
         run: node scripts/bump-version.js --check
 
       - name: Gate 4 — run tests
-        # Wheels only, pinned in tests/requirements.txt, so no source-dist setup scripts run (S8541/S8544).
+        # Wheels only, pinned (kept equal to tests/requirements.txt), so no source-dist setup scripts run (S8541/S8544).
         run: |
-          pip install --only-binary :all: -r tests/requirements.txt
+          pip install --only-binary :all: pytest==8.3.4 pyyaml==6.0.2
           pytest tests/
 
       - name: Audit — warn on undeclared files containing the new version

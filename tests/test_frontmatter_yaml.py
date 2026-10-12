@@ -86,5 +86,22 @@ class FrontmatterYamlTests(unittest.TestCase):
                 yaml.safe_load(wrapped.group(1) if wrapped else text)
 
 
+class DependencyPinsTests(unittest.TestCase):
+    """The CI workflows install exactly the versions tests/requirements.txt declares."""
+
+    def test_workflow_installs_match_requirements(self):
+        pins = sorted(
+            line.strip()
+            for line in (ROOT / "tests" / "requirements.txt").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+        for workflow in ("pr.yml", "release.yml"):
+            with self.subTest(workflow=workflow):
+                text = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+                installs = re.findall(r"pip install --only-binary :all: ([^\n\"]+)", text)
+                self.assertEqual(len(installs), 1, f"{workflow}: expected one pinned pip install")
+                self.assertEqual(sorted(installs[0].split()), pins)
+
+
 if __name__ == "__main__":
     unittest.main()
