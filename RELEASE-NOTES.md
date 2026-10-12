@@ -8,6 +8,23 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.16.0 (2026-10-12)
+
+![A customized Classic section reconciled onto its existing Freedom page in two ways, overlay and Classic layout, next to a build that starts only on an approved plan version](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.16.0-banner.png)
+
+**A customized out-of-the-box Classic section now migrates onto its existing Freedom page — on top of its layout or in the Classic one — and the build no longer starts on a plan you have not approved.** You pick at the start of the build whether the client's Classic changes are added into the Freedom page as it is, or the page is re-laid so fields and details sit where they were in Classic. The standard Freedom Feed, Attachments, Connected to and Timeline stay as they are. The engine itself now checks the plan approval before it writes any build task, and keeps the task ledger intact when a run is killed or two runs start at once.
+
+### 🧩 Customized out-of-the-box sections
+
+- **Two ways to reconcile onto the existing Freedom page** ([#238](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/238)). On the first task cut, `--reconcile-mode overlay` (the default) keeps the Freedom layout and adds the client's Classic delta into it; `--reconcile-mode classic-layout` moves base fields and details to their Classic positions, inserts the planned ones and removes base layout controls that are not in the plan, while keeping Freedom-only additions. The plan is the same for both modes; the choice is frozen in the task folder and stamped on every task, and verify flags any leftover element in `classic-layout`.
+- **Standard Freedom components are kept, not migrated again** ([#238](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/238)). When the Freedom page already has Feed, Attachments, Connected to or Timeline, their Classic counterparts close as "standard Freedom component kept" instead of being rebuilt next to them.
+- **Verify reads a reconciled page correctly** ([#238](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/238)). Fields match by their bound column, so moved base fields no longer show as missing; the form-template row closes on a reconcile; and an already registered section is not registered again while its list page stays a real deliverable.
+
+### 🔒 A build you approved, and a ledger that survives
+
+- **No build tasks before the plan is approved** ([#261](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/261)). `--tasks`, `--split`, `--start`, `--add` and `--route` refuse to write anything unless `decisions.md` approves the exact plan version the manifest renders. The refusal names the expected version and every version that is approved, so a stale approval is easy to spot.
+- **A killed or parallel run no longer tears the task ledger** ([#260](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/260)). Task files, `index.md`, the split file and `timings.json` are written atomically, and `timings.json` is updated under a lock, so two concurrent `--start` calls cannot put two sub-agents on the same artifact. A busy ledger stops with a clear `timings-locked` or `ledger-busy` message that says to re-run.
+
 ## 1.15.0 (2026-10-06)
 
 ![A Classic section with stacked layers, a migration plan that records the decisions taken, and a Freedom section whose child pages are wired to their related lists](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.15.0-banner.png)
