@@ -127,10 +127,10 @@ jobs:
       - name: Gate 3 — manifests already prepared and in sync
         run: node scripts/bump-version.js --check
 
-      - name: Gate 4 — run tests
+      - name: Gate 4 — install test dependencies
         # Same hardened install as pr.yml: wheels only, pinned (S8541/S8544). Quoted: `:all: ` would parse as a mapping.
         run: "pip install --only-binary :all: pytest==8.3.4 pyyaml==6.0.2"
-      - name: Gate 4 — run tests (execute)
+      - name: Gate 4 — run tests
         run: pytest tests/
 
       - name: Audit — warn on undeclared files containing the new version
