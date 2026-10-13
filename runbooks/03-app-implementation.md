@@ -71,8 +71,9 @@ live records.
 If `get-guidance name=workplaces` returns an unknown-topic error, STOP — do not fall back to
 improvising the writes, because that is the exact failure the guidance exists to prevent. The topic is
 delivered by clio's knowledge library and ships from its `1.13.0` release onward, so an unknown topic
-means the installed clio carries an older library, or the library is not active. Read the
-`availableGuides` list the error returns to confirm, tell the developer the placement cannot be
+means the installed clio carries an older library, or the library is not active. Call
+`get-guidance name=list` to confirm the topic is absent from the catalog (an older clio lists the
+names in the error's `availableGuides` instead), tell the developer the placement cannot be
 applied safely until the knowledge library is at `1.13.0` or newer, and leave the section where it is
 rather than half-applying a navigation change. The same holds for `name=home-page`: without it, report
 the home page as created but not reachable.
