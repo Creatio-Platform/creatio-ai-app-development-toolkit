@@ -236,6 +236,19 @@ Use this exact visible skeleton for the Business Plan:
     the others, and ask rather than choose when it is a tie
   Confirm the refined answer with the developer before applying it — the first batch promised exactly
   that.
+- `roles to create:` — the roles the app needs that do not exist yet, or `none`. When refining this
+  section, read the role tree (`inspect-role`) before proposing a role and reuse one that already
+  fits: role names are not unique, so a second role with an existing name silently splits the
+  audience. Per role, state its name, its kind (organizational role, division, team or functional
+  role) and its parent — an existing organizational role, or, for a functional role, the
+  `All employees` / `All external users` anchor. A role for external users sits under
+  `All external users`. When a unit needs managers, name the users who manage it: a manager group is
+  the unit's own child, not a separate role to list.
+- `users to create:` — `none` unless the developer asked for accounts (for example demo or test users
+  per role). Per account, state the login, the contact it belongs to, whether it is an external
+  (portal) user, its roles and the license it needs. Never put a password in the plan. Accounts and
+  memberships stay on the environment where they are created and are not shipped with the package —
+  say so when the developer expects them on another environment.
 
 `## 3. Object Model` must define the core business objects.
 For each object block, include:
