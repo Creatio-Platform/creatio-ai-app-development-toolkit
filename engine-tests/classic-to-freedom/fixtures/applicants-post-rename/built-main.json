@@ -1,0 +1,2804 @@
+{
+ "viewConfig": [
+  {
+   "type": "crt.FlexContainer",
+   "direction": "column",
+   "stretch": true,
+   "fitContent": false,
+   "items": [
+    {
+     "type": "crt.FlexContainer",
+     "color": "primary",
+     "padding": {
+      "top": "large",
+      "right": "large",
+      "bottom": "medium",
+      "left": "large"
+     },
+     "fitContent": true,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "justifyContent": "space-between",
+       "wrap": "nowrap",
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "items": [
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(BackButton)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-icon",
+           "visible": true,
+           "icon": "back-button-icon",
+           "clicked": {
+            "request": "crt.ClosePageRequest"
+           },
+           "name": "BackButton"
+          },
+          {
+           "type": "crt.Label",
+           "caption": "$HeaderCaption",
+           "labelType": "headline-1",
+           "labelThickness": "default",
+           "labelColor": "#0D2E4E",
+           "labelBackgroundColor": "transparent",
+           "labelTextAlign": "start",
+           "headingLevel": "h1",
+           "name": "PageTitle"
+          }
+         ],
+         "direction": "row",
+         "justifyContent": "start",
+         "alignItems": "flex-start",
+         "wrap": "nowrap",
+         "name": "TitleContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "direction": "row",
+         "wrap": "nowrap",
+         "items": [
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.SaveRecordRequest",
+            "params": {
+             "showSuccessMessage": true
+            }
+           },
+           "hotkeys": [
+            "save"
+           ],
+           "color": "primary",
+           "caption": "$Resources.Strings.SaveButton",
+           "visible": "$HasUnsavedData",
+           "name": "SaveButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.CancelRecordChangesRequest"
+           },
+           "caption": "$Resources.Strings.CancelButton",
+           "visible": "$HasUnsavedData",
+           "name": "CancelButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(ActionsButton_caption)#",
+           "color": "default",
+           "size": "medium",
+           "iconPosition": "only-text",
+           "clickMode": "menu",
+           "menuItems": [
+            {
+             "type": "crt.MenuItem",
+             "caption": "#ResourceString(RunSecurityCheckMenuItem_caption)#",
+             "icon": "process-button-icon",
+             "color": "default",
+             "clicked": {
+              "request": "crt.RunBusinessProcessRequest",
+              "params": {
+               "processName": "RecruitingSecurityCheck",
+               "processRunType": "ForTheSelectedPage",
+               "saveAtProcessStart": true,
+               "showNotification": true,
+               "recordIdProcessParameterName": "Applicant1"
+              }
+             },
+             "name": "RunSecurityCheckMenuItem"
+            },
+            {
+             "type": "crt.MenuItem",
+             "caption": "#ResourceString(ReloadDataMenuItem_caption)#",
+             "icon": "reload-button-icon",
+             "color": "default",
+             "clicked": {
+              "request": "crt.LoadDataRequest",
+              "params": {
+               "refreshDataConfig": {
+                "mode": "RefreshAll"
+               }
+              }
+             },
+             "name": "ReloadDataMenuItem"
+            }
+           ],
+           "visible": true,
+           "name": "ActionsButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(RequeueQueueItemButton_caption)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-text",
+           "visible": "$QueueItemId | crt.ToBoolean",
+           "clicked": {
+            "request": "crt.RequeueQueueItem",
+            "params": {
+             "queueItemId": "$QueueItemId"
+            }
+           },
+           "name": "RequeueQueueItemButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(PostponeQueueItemButton_caption)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-text",
+           "visible": "$QueueItemId | crt.ToBoolean",
+           "clicked": {
+            "request": "crt.OpenPageRequest",
+            "params": {
+             "schemaName": "PostponeQueueItemPage",
+             "modelInitConfigs": [
+              {
+               "action": "edit",
+               "recordId": "$QueueItemId"
+              }
+             ]
+            }
+           },
+           "name": "PostponeQueueItemButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.ClosePageRequest"
+           },
+           "color": "default",
+           "caption": "$Resources.Strings.CloseButton",
+           "visible": "$HasUnsavedData | crt.InvertBooleanValue",
+           "name": "CloseButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(SetRecordRightsButtonCaption)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-icon",
+           "visible": true,
+           "icon": "lock-button-icon",
+           "clicked": {
+            "request": "crt.SetRecordRightsRequest"
+           },
+           "clickMode": "default",
+           "name": "SetRecordRightsButton"
+          }
+         ],
+         "justifyContent": "end",
+         "name": "ActionButtonsContainer"
+        }
+       ],
+       "name": "MainHeaderTop"
+      },
+      {
+       "type": "crt.FlexContainer",
+       "direction": "row",
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "alignItems": "center",
+         "justifyContent": "start",
+         "items": [
+          {
+           "type": "crt.TagSelect",
+           "recordId": "$Id",
+           "name": "TagSelect",
+           "tagInRecordSourceSchemaName": "ApplicantInTag"
+          }
+         ],
+         "padding": {
+          "top": "none",
+          "right": "small",
+          "bottom": "none",
+          "left": "small"
+         },
+         "name": "CardToolsContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "justifyContent": "end",
+         "items": [
+          {
+           "for": "CardToggleTabPanel",
+           "type": "crt.ButtonToggleGroup",
+           "name": "CardButtonToggleGroup"
+          }
+         ],
+         "name": "CardToggleContainer"
+        }
+       ],
+       "fitContent": true,
+       "visible": true,
+       "justifyContent": "space-between",
+       "gap": "medium",
+       "wrap": "nowrap",
+       "name": "MainHeaderBottom"
+      }
+     ],
+     "borderRadius": "medium",
+     "gap": "small",
+     "direction": "column",
+     "styles": {
+      "border": "none",
+      "border-bottom-left-radius": 0,
+      "border-bottom-right-radius": 0
+     },
+     "name": "MainHeader"
+    },
+    {
+     "type": "crt.FlexContainer",
+     "direction": "column",
+     "stretch": true,
+     "fitContent": false,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "direction": "column",
+       "items": [
+        {
+         "type": "crt.EntityStageProgressBar",
+         "saveOnChange": false,
+         "askUserToChangeSchema": true,
+         "entityName": "#DataSourceEntityName()#",
+         "layoutConfig": {},
+         "name": "ProgressBar"
+        }
+       ],
+       "fitContent": true,
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none",
+       "padding": {
+        "top": "none",
+        "right": "small",
+        "bottom": "none",
+        "left": "small"
+       },
+       "justifyContent": "start",
+       "alignItems": "stretch",
+       "gap": "none",
+       "wrap": "nowrap",
+       "name": "ProgressBarContainer"
+      },
+      {
+       "type": "crt.GridContainer",
+       "columns": [
+        "298px",
+        "minmax(64px, 1fr)"
+       ],
+       "rows": "1fr",
+       "gap": {
+        "columnGap": "small",
+        "rowGap": "small"
+       },
+       "padding": {
+        "left": "small",
+        "right": "small",
+        "top": "none",
+        "bottom": "none"
+       },
+       "stretch": true,
+       "fitContent": true,
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "direction": "column",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "stretch": true,
+         "items": [
+          {
+           "type": "crt.Approval",
+           "activeColor": "white",
+           "inactiveColor": "white",
+           "items": [],
+           "entityName": "Applicant",
+           "approvalEntityName": "ApplicantVisa",
+           "visible": true,
+           "hiddenWhenNoData": true,
+           "layoutConfig": {},
+           "name": "ApplicantApprovalWidget"
+          },
+          {
+           "type": "crt.GridContainer",
+           "rows": "minmax(max-content, 32px)",
+           "columns": "minmax(64px, 1fr)",
+           "gap": {
+            "columnGap": "large"
+           },
+           "padding": {
+            "top": "medium",
+            "right": "large",
+            "bottom": "medium",
+            "left": "large"
+           },
+           "layoutConfig": {
+            "basis": "fit-content"
+           },
+           "color": "primary",
+           "borderRadius": "medium",
+           "items": [
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Contact",
+             "control": "$PDS_Contact",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 1,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "mode": "List",
+             "showValueAsLink": true,
+             "name": "Contact"
+            },
+            {
+             "type": "crt.PhoneInput",
+             "label": "$Resources.Strings.PDS_ContactMobilePhone",
+             "control": "$PDS_ContactMobilePhone",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 2,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "readonly": true,
+             "tooltip": "#ResourceString(MobilePhone_tooltip)#",
+             "name": "MobilePhone"
+            },
+            {
+             "type": "crt.EmailInput",
+             "label": "$Resources.Strings.PDS_ContactEmail",
+             "control": "$PDS_ContactEmail",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 3,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "readonly": true,
+             "tooltip": "#ResourceString(Email_tooltip)#",
+             "name": "Email"
+            },
+            {
+             "type": "crt.Input",
+             "label": "$Resources.Strings.PDS_ContactSkype",
+             "control": "$PDS_ContactSkype",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 4,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "readonly": true,
+             "tooltip": "#ResourceString(Skype_tooltip)#",
+             "name": "Skype"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Job",
+             "control": "$PDS_Job",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 5,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "mode": "List",
+             "showValueAsLink": true,
+             "name": "Job"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Office",
+             "control": "$PDS_Office",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 6,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "mode": "List",
+             "showValueAsLink": true,
+             "name": "Office"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_ExpertiseLevel",
+             "control": "$PDS_ExpertiseLevel",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 7,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "mode": "List",
+             "showValueAsLink": true,
+             "name": "ExpertiseLevel"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Market",
+             "control": "$PDS_Market",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 8,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "mode": "List",
+             "showValueAsLink": true,
+             "name": "Market"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Segment",
+             "control": "$PDS_Segment",
+             "labelPosition": "above",
+             "layoutConfig": {
+              "column": 1,
+              "row": 9,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "mode": "List",
+             "showValueAsLink": true,
+             "name": "Segment"
+            }
+           ],
+           "name": "SideAreaProfileContainer"
+          },
+          {
+           "rows": "minmax(max-content, 32px)",
+           "columns": [
+            "minmax(64px, 1fr)"
+           ],
+           "gap": {
+            "columnGap": "large",
+            "rowGap": "none"
+           },
+           "padding": {
+            "top": "medium",
+            "right": "large",
+            "bottom": "medium",
+            "left": "large"
+           },
+           "layoutConfig": {
+            "basis": "fit-content"
+           },
+           "color": "primary",
+           "borderRadius": "medium",
+           "type": "crt.GridContainer",
+           "items": [
+            {
+             "type": "crt.Label",
+             "caption": "#ResourceString(InternalRequestContainerLabel_caption)#",
+             "labelType": "headline-3",
+             "labelThickness": "default",
+             "labelEllipsis": false,
+             "labelColor": "auto",
+             "labelBackgroundColor": "transparent",
+             "labelTextAlign": "start",
+             "visible": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 1,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "InternalRequestContainerLabel"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_InternalRequest",
+             "control": "$PDS_InternalRequest",
+             "labelPosition": "above",
+             "mode": "List",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 2,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "name": "InternalRequest"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_RequestDepartment",
+             "control": "$PDS_RequestDepartment",
+             "labelPosition": "above",
+             "mode": "List",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 3,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "readonly": true,
+             "tooltip": "#ResourceString(Department_tooltip)#",
+             "name": "Department"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_RequestStaffUnit",
+             "control": "$PDS_RequestStaffUnit",
+             "labelPosition": "above",
+             "mode": "List",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 4,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "visible": true,
+             "readonly": true,
+             "tooltip": "#ResourceString(StaffUnit_tooltip)#",
+             "name": "StaffUnit"
+            }
+           ],
+           "visible": true,
+           "alignItems": "stretch",
+           "name": "InternalRequestContainer"
+          }
+         ],
+         "name": "SideContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "direction": "row",
+         "wrap": "nowrap",
+         "layoutConfig": {
+          "column": 2,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "stretch": true,
+         "items": [
+          {
+           "type": "crt.FlexContainer",
+           "direction": "column",
+           "stretch": true,
+           "fitContent": false,
+           "items": [
+            {
+             "type": "crt.TabPanel",
+             "items": [
+              {
+               "caption": "#ResourceString(GeneralInfoTab_caption)#",
+               "type": "crt.TabContainer",
+               "items": [
+                {
+                 "type": "crt.GridContainer",
+                 "rows": "minmax(32px, max-content)",
+                 "columns": [
+                  "minmax(64px, 1fr)",
+                  "minmax(64px, 1fr)"
+                 ],
+                 "gap": {
+                  "columnGap": "large"
+                 },
+                 "items": [
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_Owner",
+                   "control": "$PDS_Owner",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 1,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "mode": "List",
+                   "showValueAsLink": true,
+                   "name": "Owner"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_Source",
+                   "control": "$PDS_Source",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 2,
+                    "row": 1,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "mode": "List",
+                   "showValueAsLink": true,
+                   "name": "Source"
+                  },
+                  {
+                   "type": "crt.Input",
+                   "label": "$Resources.Strings.PDS_CurrentWageLevel",
+                   "control": "$PDS_CurrentWageLevel",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 2,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "placeholder": "#ResourceString(CurrentWageLevel_placeholder)#",
+                   "name": "CurrentWageLevel"
+                  },
+                  {
+                   "type": "crt.Input",
+                   "label": "$Resources.Strings.PDS_ExpectedWageLevel",
+                   "control": "$PDS_ExpectedWageLevel",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 2,
+                    "row": 2,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "placeholder": "#ResourceString(ExpectedWageLevel_placeholder)#",
+                   "name": "ExpectedWageLevel"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_CurrentAccount",
+                   "control": "$PDS_CurrentAccount",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 3,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "mode": "List",
+                   "showValueAsLink": true,
+                   "name": "CurrentAccount"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_RejectReason",
+                   "control": "$PDS_RejectReason",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 2,
+                    "row": 3,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "mode": "List",
+                   "showValueAsLink": true,
+                   "name": "RejectReason"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_Employee",
+                   "control": "$PDS_Employee",
+                   "labelPosition": "above",
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 4,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "visible": true,
+                   "mode": "List",
+                   "showValueAsLink": true,
+                   "tooltip": "#ResourceString(Employee_tooltip)#",
+                   "name": "Employee"
+                  },
+                  {
+                   "type": "crt.ExpansionPanel",
+                   "title": "#ResourceString(CommunicationOptionsPanel_title)#",
+                   "toggleType": "default",
+                   "togglePosition": "before",
+                   "expanded": true,
+                   "labelColor": "auto",
+                   "fullWidthHeader": true,
+                   "titleWidth": 20,
+                   "padding": {
+                    "top": "small",
+                    "bottom": "small",
+                    "left": "none",
+                    "right": "none"
+                   },
+                   "fitContent": true,
+                   "visible": true,
+                   "items": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 32px)",
+                     "columns": [
+                      "minmax(32px, 1fr)",
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.CommunicationOptions",
+                       "columnsCount": 2,
+                       "showNoDataPlaceholder": true,
+                       "labelPosition": "auto",
+                       "readonly": false,
+                       "items": "$CommunicationOptions_mainItems",
+                       "masterRecordColumnValue": "$PDS_Contact",
+                       "masterRecordColumnName": "Contact",
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 2,
+                        "rowSpan": 1
+                       },
+                       "name": "CommunicationOptions_main"
+                      }
+                     ],
+                     "name": "CommunicationOptionsPanel_wrap"
+                    }
+                   ],
+                   "tools": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 24px)",
+                     "columns": [
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.FlexContainer",
+                       "direction": "row",
+                       "alignItems": "center",
+                       "gap": "none",
+                       "items": [
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(CommunicationOptionsAddButton_caption)#",
+                         "icon": "add-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.AddCommunicationOptionsRequest",
+                          "params": {
+                           "viewElementName": "CommunicationOptions_main"
+                          }
+                         },
+                         "name": "CommunicationOptions_mainAddBtn"
+                        }
+                       ],
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1
+                       },
+                       "name": "CommunicationOptionsPanel_toolbarRow"
+                      }
+                     ],
+                     "name": "CommunicationOptionsPanel_toolbar"
+                    }
+                   ],
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 5,
+                    "colSpan": 2,
+                    "rowSpan": 4
+                   },
+                   "name": "CommunicationOptionsPanel"
+                  }
+                 ],
+                 "name": "GeneralInfoTabContainer"
+                }
+               ],
+               "name": "GeneralInfoTab"
+              },
+              {
+               "type": "crt.TabContainer",
+               "caption": "#ResourceString(CurrentVacanciesTab_caption)#",
+               "iconPosition": "only-text",
+               "visible": true,
+               "items": [
+                {
+                 "type": "crt.GridContainer",
+                 "rows": "minmax(32px, max-content)",
+                 "columns": [
+                  "minmax(64px, 1fr)",
+                  "minmax(64px, 1fr)"
+                 ],
+                 "gap": {
+                  "columnGap": "large",
+                  "rowGap": "none"
+                 },
+                 "color": "transparent",
+                 "borderRadius": "none",
+                 "padding": {
+                  "top": "none",
+                  "right": "none",
+                  "bottom": "small",
+                  "left": "none"
+                 },
+                 "alignItems": "stretch",
+                 "visible": true,
+                 "items": [
+                  {
+                   "type": "crt.ExpansionPanel",
+                   "title": "#ResourceString(VacancyListPanel_title)#",
+                   "toggleType": "default",
+                   "togglePosition": "before",
+                   "expanded": true,
+                   "labelColor": "auto",
+                   "fullWidthHeader": true,
+                   "titleWidth": 20,
+                   "padding": {
+                    "top": "small",
+                    "bottom": "small",
+                    "left": "none",
+                    "right": "none"
+                   },
+                   "fitContent": true,
+                   "visible": true,
+                   "items": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 32px)",
+                     "columns": [
+                      "minmax(32px, 1fr)",
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.DataGrid",
+                       "items": "$VacancyList",
+                       "activeRow": "$VacancyList_ActiveRow",
+                       "primaryColumnName": "VacancyListDS_Id",
+                       "columns": [
+                        {
+                         "id": "ad006df2-1b33-40f2-8a59-632d75d38931",
+                         "code": "VacancyListDS_Number",
+                         "caption": "#ResourceString(VacancyListDS_Number)#",
+                         "dataValueType": 28,
+                         "width": 160
+                        },
+                        {
+                         "id": "eff93048-0338-4108-b02d-9f95c2163ab2",
+                         "code": "VacancyListDS_Category",
+                         "caption": "#ResourceString(VacancyListDS_Category)#",
+                         "dataValueType": 10,
+                         "width": 160
+                        },
+                        {
+                         "id": "10fcbcdb-f5fb-4d2a-964f-834c81a37c40",
+                         "code": "VacancyListDS_Type",
+                         "caption": "#ResourceString(VacancyListDS_Type)#",
+                         "dataValueType": 10,
+                         "width": 200
+                        },
+                        {
+                         "id": "00a51a42-d876-4228-a765-bf4f7b050cc7",
+                         "code": "VacancyListDS_Status",
+                         "caption": "#ResourceString(VacancyListDS_Status)#",
+                         "dataValueType": 10,
+                         "width": 160
+                        },
+                        {
+                         "id": "489a6861-ef05-4bb4-b659-32d91e36fa78",
+                         "code": "VacancyListDS_EmployeeJob",
+                         "caption": "#ResourceString(VacancyListDS_EmployeeJob)#",
+                         "dataValueType": 10,
+                         "width": 200
+                        },
+                        {
+                         "id": "840288e2-45b2-4c61-ab49-d97546e184aa",
+                         "code": "VacancyListDS_Department",
+                         "caption": "#ResourceString(VacancyListDS_Department)#",
+                         "dataValueType": 10,
+                         "width": 200
+                        }
+                       ],
+                       "features": {
+                        "rows": {
+                         "selection": {
+                          "enable": true,
+                          "multiple": true
+                         }
+                        }
+                       },
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 2,
+                        "rowSpan": 6
+                       },
+                       "visible": true,
+                       "name": "VacancyList"
+                      }
+                     ],
+                     "name": "VacancyListPanel_wrap"
+                    }
+                   ],
+                   "tools": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 24px)",
+                     "columns": [
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.FlexContainer",
+                       "direction": "row",
+                       "alignItems": "center",
+                       "gap": "none",
+                       "items": [
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(VacancyListRefreshButton_caption)#",
+                         "icon": "reload-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.LoadDataRequest",
+                          "params": {
+                           "config": {
+                            "loadType": "reload",
+                            "useLastLoadParameters": true
+                           },
+                           "dataSourceName": "VacancyListDS"
+                          }
+                         },
+                         "name": "VacancyListRefreshButton"
+                        },
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(VacancyListSettingsButton_caption)#",
+                         "icon": "actions-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clickMode": "menu",
+                         "menuItems": [
+                          {
+                           "type": "crt.MenuItem",
+                           "icon": "export-button-icon",
+                           "color": "default",
+                           "caption": "#ResourceString(VacancyListExportMenuItem_caption)#",
+                           "clicked": {
+                            "request": "crt.ExportDataGridToExcelRequest",
+                            "params": {
+                             "viewName": "VacancyList"
+                            }
+                           },
+                           "name": "VacancyListExportMenuItem"
+                          },
+                          {
+                           "type": "crt.MenuItem",
+                           "icon": "link-button-icon",
+                           "color": "default",
+                           "caption": "#ResourceString(AttachRequestToApplicantMenuItem_caption)#",
+                           "clicked": {
+                            "request": "usr.AttachRequestToApplicantRequest",
+                            "params": {}
+                           },
+                           "name": "AttachRequestToApplicantMenuItem"
+                          }
+                         ],
+                         "name": "VacancyListSettingsButton"
+                        },
+                        {
+                         "type": "crt.SearchFilter",
+                         "iconOnly": true,
+                         "placeholder": "#ResourceString(VacancyListSearchFilter_placeholder)#",
+                         "_filterOptions": {
+                          "expose": [
+                           {
+                            "attribute": "VacancyListSearchFilter_VacancyList",
+                            "converters": [
+                             {
+                              "converter": "crt.SearchFilterAttributeConverter",
+                              "args": [
+                               "VacancyList"
+                              ]
+                             }
+                            ]
+                           }
+                          ],
+                          "from": [
+                           "VacancyListSearchFilter_SearchValue",
+                           "VacancyListSearchFilter_FilteredColumnsGroups"
+                          ]
+                         },
+                         "name": "VacancyListSearchFilter"
+                        }
+                       ],
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1
+                       },
+                       "name": "VacancyListPanel_toolbarRow"
+                      }
+                     ],
+                     "name": "VacancyListPanel_toolbar"
+                    }
+                   ],
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 1,
+                    "colSpan": 2,
+                    "rowSpan": 8
+                   },
+                   "name": "VacancyListPanel"
+                  }
+                 ],
+                 "name": "CurrentVacanciesTabContainer"
+                }
+               ],
+               "name": "CurrentVacanciesTab"
+              },
+              {
+               "type": "crt.TabContainer",
+               "caption": "#ResourceString(HistoryTab_caption)#",
+               "iconPosition": "only-text",
+               "visible": true,
+               "items": [
+                {
+                 "type": "crt.GridContainer",
+                 "rows": "minmax(32px, max-content)",
+                 "columns": [
+                  "minmax(64px, 1fr)",
+                  "minmax(64px, 1fr)"
+                 ],
+                 "gap": {
+                  "columnGap": "large",
+                  "rowGap": "none"
+                 },
+                 "color": "transparent",
+                 "borderRadius": "none",
+                 "padding": {
+                  "top": "none",
+                  "right": "none",
+                  "bottom": "small",
+                  "left": "none"
+                 },
+                 "alignItems": "stretch",
+                 "visible": true,
+                 "items": [
+                  {
+                   "type": "crt.ExpansionPanel",
+                   "title": "#ResourceString(StageInRecruitmentPanel_title)#",
+                   "toggleType": "default",
+                   "togglePosition": "before",
+                   "expanded": true,
+                   "labelColor": "auto",
+                   "fullWidthHeader": true,
+                   "titleWidth": 20,
+                   "padding": {
+                    "top": "small",
+                    "bottom": "small",
+                    "left": "none",
+                    "right": "none"
+                   },
+                   "fitContent": true,
+                   "visible": true,
+                   "items": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 32px)",
+                     "columns": [
+                      "minmax(32px, 1fr)",
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.DataGrid",
+                       "items": "$StageInRecruitment",
+                       "activeRow": "$StageInRecruitment_ActiveRow",
+                       "primaryColumnName": "StageInRecruitmentDS_Id",
+                       "columns": [
+                        {
+                         "id": "115421ac-a7df-401f-a95c-0b6c10446b2f",
+                         "code": "StageInRecruitmentDS_Stage",
+                         "caption": "#ResourceString(StageInRecruitmentDS_Stage)#",
+                         "dataValueType": 10,
+                         "width": 200
+                        },
+                        {
+                         "id": "a9df9a12-b781-4d9f-9586-e258be79298d",
+                         "code": "StageInRecruitmentDS_TypeOfChangeInApplicant",
+                         "caption": "#ResourceString(StageInRecruitmentDS_TypeOfChangeInApplicant)#",
+                         "dataValueType": 10,
+                         "width": 200
+                        },
+                        {
+                         "id": "91ec6a53-e5c2-4a55-8278-78975c2c2c98",
+                         "code": "StageInRecruitmentDS_DueDate",
+                         "caption": "#ResourceString(StageInRecruitmentDS_DueDate)#",
+                         "dataValueType": 8,
+                         "width": 160
+                        },
+                        {
+                         "id": "63627adc-7bfc-4cc6-ad8d-bb76e237e556",
+                         "code": "StageInRecruitmentDS_CreatedOn",
+                         "caption": "#ResourceString(StageInRecruitmentDS_CreatedOn)#",
+                         "dataValueType": 7,
+                         "width": 160
+                        }
+                       ],
+                       "features": {
+                        "rows": {
+                         "selection": {
+                          "enable": true,
+                          "multiple": true
+                         }
+                        }
+                       },
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 2,
+                        "rowSpan": 6
+                       },
+                       "visible": true,
+                       "name": "StageInRecruitment"
+                      }
+                     ],
+                     "name": "StageInRecruitmentPanel_wrap"
+                    }
+                   ],
+                   "tools": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 24px)",
+                     "columns": [
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.FlexContainer",
+                       "direction": "row",
+                       "alignItems": "center",
+                       "gap": "none",
+                       "items": [
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(StageInRecruitmentRefreshButton_caption)#",
+                         "icon": "reload-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.LoadDataRequest",
+                          "params": {
+                           "config": {
+                            "loadType": "reload",
+                            "useLastLoadParameters": true
+                           },
+                           "dataSourceName": "StageInRecruitmentDS"
+                          }
+                         },
+                         "name": "StageInRecruitmentRefreshButton"
+                        },
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(StageInRecruitmentSettingsButton_caption)#",
+                         "icon": "actions-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clickMode": "menu",
+                         "menuItems": [
+                          {
+                           "type": "crt.MenuItem",
+                           "icon": "export-button-icon",
+                           "color": "default",
+                           "caption": "#ResourceString(StageInRecruitmentExportMenuItem_caption)#",
+                           "clicked": {
+                            "request": "crt.ExportDataGridToExcelRequest",
+                            "params": {
+                             "viewName": "StageInRecruitment"
+                            }
+                           },
+                           "name": "StageInRecruitmentExportMenuItem"
+                          }
+                         ],
+                         "name": "StageInRecruitmentSettingsButton"
+                        },
+                        {
+                         "type": "crt.SearchFilter",
+                         "iconOnly": true,
+                         "placeholder": "#ResourceString(StageInRecruitmentSearchFilter_placeholder)#",
+                         "_filterOptions": {
+                          "expose": [
+                           {
+                            "attribute": "StageInRecruitmentSearchFilter_StageInRecruitment",
+                            "converters": [
+                             {
+                              "converter": "crt.SearchFilterAttributeConverter",
+                              "args": [
+                               "StageInRecruitment"
+                              ]
+                             }
+                            ]
+                           }
+                          ],
+                          "from": [
+                           "StageInRecruitmentSearchFilter_SearchValue",
+                           "StageInRecruitmentSearchFilter_FilteredColumnsGroups"
+                          ]
+                         },
+                         "name": "StageInRecruitmentSearchFilter"
+                        }
+                       ],
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1
+                       },
+                       "name": "StageInRecruitmentPanel_toolbarRow"
+                      }
+                     ],
+                     "name": "StageInRecruitmentPanel_toolbar"
+                    }
+                   ],
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 1,
+                    "colSpan": 2,
+                    "rowSpan": 8
+                   },
+                   "name": "StageInRecruitmentPanel"
+                  },
+                  {
+                   "type": "crt.ExpansionPanel",
+                   "title": "#ResourceString(ActivityListPanel_title)#",
+                   "toggleType": "default",
+                   "togglePosition": "before",
+                   "expanded": true,
+                   "labelColor": "auto",
+                   "fullWidthHeader": true,
+                   "titleWidth": 20,
+                   "padding": {
+                    "top": "small",
+                    "bottom": "small",
+                    "left": "none",
+                    "right": "none"
+                   },
+                   "fitContent": true,
+                   "visible": true,
+                   "items": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 32px)",
+                     "columns": [
+                      "minmax(32px, 1fr)",
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.DataGrid",
+                       "items": "$ActivityList",
+                       "activeRow": "$ActivityList_ActiveRow",
+                       "primaryColumnName": "ActivityListDS_Id",
+                       "columns": [
+                        {
+                         "id": "ab9f88e7-33f2-4ea1-8c61-77b90cb4bc5b",
+                         "code": "ActivityListDS_Title",
+                         "caption": "#ResourceString(ActivityListDS_Title)#",
+                         "dataValueType": 28,
+                         "width": 260
+                        },
+                        {
+                         "id": "c45980a8-c987-436c-8f7e-92d8d0106a6d",
+                         "code": "ActivityListDS_Type",
+                         "caption": "#ResourceString(ActivityListDS_Type)#",
+                         "dataValueType": 10,
+                         "width": 140
+                        },
+                        {
+                         "id": "f66ae77f-9f5d-497f-9b34-717a8ce4a5c9",
+                         "code": "ActivityListDS_StartDate",
+                         "caption": "#ResourceString(ActivityListDS_StartDate)#",
+                         "dataValueType": 7,
+                         "width": 160
+                        },
+                        {
+                         "id": "5fa7f169-b541-4a8e-9d27-16058918f52a",
+                         "code": "ActivityListDS_Owner",
+                         "caption": "#ResourceString(ActivityListDS_Owner)#",
+                         "dataValueType": 10,
+                         "width": 180
+                        },
+                        {
+                         "id": "8bcaa2dc-2b02-4a4a-99fc-30cfd2c11aff",
+                         "code": "ActivityListDS_Status",
+                         "caption": "#ResourceString(ActivityListDS_Status)#",
+                         "dataValueType": 10,
+                         "width": 140
+                        }
+                       ],
+                       "features": {
+                        "rows": {
+                         "selection": {
+                          "enable": true,
+                          "multiple": true
+                         }
+                        }
+                       },
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 2,
+                        "rowSpan": 6
+                       },
+                       "visible": true,
+                       "name": "ActivityList"
+                      }
+                     ],
+                     "name": "ActivityListPanel_wrap"
+                    }
+                   ],
+                   "tools": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 24px)",
+                     "columns": [
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.FlexContainer",
+                       "direction": "row",
+                       "alignItems": "center",
+                       "gap": "none",
+                       "items": [
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(ActivityListAddButton_caption)#",
+                         "icon": "add-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.CreateRecordRequest",
+                          "params": {
+                           "entityName": "Activity",
+                           "defaultValues": [
+                            {
+                             "attributeName": "Applicant",
+                             "value": "$Id"
+                            }
+                           ]
+                          }
+                         },
+                         "name": "ActivityListAddButton"
+                        },
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(ActivityListRefreshButton_caption)#",
+                         "icon": "reload-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.LoadDataRequest",
+                          "params": {
+                           "config": {
+                            "loadType": "reload",
+                            "useLastLoadParameters": true
+                           },
+                           "dataSourceName": "ActivityListDS"
+                          }
+                         },
+                         "name": "ActivityListRefreshButton"
+                        },
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(ActivityListSettingsButton_caption)#",
+                         "icon": "actions-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clickMode": "menu",
+                         "menuItems": [
+                          {
+                           "type": "crt.MenuItem",
+                           "icon": "export-button-icon",
+                           "color": "default",
+                           "caption": "#ResourceString(ActivityListExportMenuItem_caption)#",
+                           "clicked": {
+                            "request": "crt.ExportDataGridToExcelRequest",
+                            "params": {
+                             "viewName": "ActivityList"
+                            }
+                           },
+                           "name": "ActivityListExportMenuItem"
+                          }
+                         ],
+                         "name": "ActivityListSettingsButton"
+                        },
+                        {
+                         "type": "crt.SearchFilter",
+                         "iconOnly": true,
+                         "placeholder": "#ResourceString(ActivityListSearchFilter_placeholder)#",
+                         "_filterOptions": {
+                          "expose": [
+                           {
+                            "attribute": "ActivityListSearchFilter_ActivityList",
+                            "converters": [
+                             {
+                              "converter": "crt.SearchFilterAttributeConverter",
+                              "args": [
+                               "ActivityList"
+                              ]
+                             }
+                            ]
+                           }
+                          ],
+                          "from": [
+                           "ActivityListSearchFilter_SearchValue",
+                           "ActivityListSearchFilter_FilteredColumnsGroups"
+                          ]
+                         },
+                         "name": "ActivityListSearchFilter"
+                        }
+                       ],
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1
+                       },
+                       "name": "ActivityListPanel_toolbarRow"
+                      }
+                     ],
+                     "name": "ActivityListPanel_toolbar"
+                    }
+                   ],
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 10,
+                    "colSpan": 2,
+                    "rowSpan": 8
+                   },
+                   "name": "ActivityListPanel"
+                  },
+                  {
+                   "type": "crt.ExpansionPanel",
+                   "title": "#ResourceString(EmailListPanel_title)#",
+                   "toggleType": "default",
+                   "togglePosition": "before",
+                   "expanded": true,
+                   "labelColor": "auto",
+                   "fullWidthHeader": true,
+                   "titleWidth": 20,
+                   "padding": {
+                    "top": "small",
+                    "bottom": "small",
+                    "left": "none",
+                    "right": "none"
+                   },
+                   "fitContent": true,
+                   "visible": true,
+                   "items": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 32px)",
+                     "columns": [
+                      "minmax(32px, 1fr)",
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.DataGrid",
+                       "items": "$EmailList",
+                       "activeRow": "$EmailList_ActiveRow",
+                       "primaryColumnName": "EmailListDS_Id",
+                       "columns": [
+                        {
+                         "id": "2e095721-1e1d-4fa6-882d-13b8f84b36b6",
+                         "code": "EmailListDS_Title",
+                         "caption": "#ResourceString(EmailListDS_Title)#",
+                         "dataValueType": 28,
+                         "width": 320
+                        },
+                        {
+                         "id": "286aaecc-195f-4b9b-8ff4-4314096029ca",
+                         "code": "EmailListDS_StartDate",
+                         "caption": "#ResourceString(EmailListDS_StartDate)#",
+                         "dataValueType": 7,
+                         "width": 160
+                        },
+                        {
+                         "id": "2b14551f-f61c-4c01-8516-5649ca524bf5",
+                         "code": "EmailListDS_Owner",
+                         "caption": "#ResourceString(EmailListDS_Owner)#",
+                         "dataValueType": 10,
+                         "width": 180
+                        }
+                       ],
+                       "features": {
+                        "rows": {
+                         "selection": {
+                          "enable": true,
+                          "multiple": true
+                         }
+                        }
+                       },
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 2,
+                        "rowSpan": 6
+                       },
+                       "visible": true,
+                       "name": "EmailList"
+                      }
+                     ],
+                     "name": "EmailListPanel_wrap"
+                    }
+                   ],
+                   "tools": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 24px)",
+                     "columns": [
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.FlexContainer",
+                       "direction": "row",
+                       "alignItems": "center",
+                       "gap": "none",
+                       "items": [
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(EmailListRefreshButton_caption)#",
+                         "icon": "reload-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.LoadDataRequest",
+                          "params": {
+                           "config": {
+                            "loadType": "reload",
+                            "useLastLoadParameters": true
+                           },
+                           "dataSourceName": "EmailListDS"
+                          }
+                         },
+                         "name": "EmailListRefreshButton"
+                        },
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(EmailListSettingsButton_caption)#",
+                         "icon": "actions-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clickMode": "menu",
+                         "menuItems": [
+                          {
+                           "type": "crt.MenuItem",
+                           "icon": "export-button-icon",
+                           "color": "default",
+                           "caption": "#ResourceString(EmailListExportMenuItem_caption)#",
+                           "clicked": {
+                            "request": "crt.ExportDataGridToExcelRequest",
+                            "params": {
+                             "viewName": "EmailList"
+                            }
+                           },
+                           "name": "EmailListExportMenuItem"
+                          }
+                         ],
+                         "name": "EmailListSettingsButton"
+                        },
+                        {
+                         "type": "crt.SearchFilter",
+                         "iconOnly": true,
+                         "placeholder": "#ResourceString(EmailListSearchFilter_placeholder)#",
+                         "_filterOptions": {
+                          "expose": [
+                           {
+                            "attribute": "EmailListSearchFilter_EmailList",
+                            "converters": [
+                             {
+                              "converter": "crt.SearchFilterAttributeConverter",
+                              "args": [
+                               "EmailList"
+                              ]
+                             }
+                            ]
+                           }
+                          ],
+                          "from": [
+                           "EmailListSearchFilter_SearchValue",
+                           "EmailListSearchFilter_FilteredColumnsGroups"
+                          ]
+                         },
+                         "name": "EmailListSearchFilter"
+                        }
+                       ],
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1
+                       },
+                       "name": "EmailListPanel_toolbarRow"
+                      }
+                     ],
+                     "name": "EmailListPanel_toolbar"
+                    }
+                   ],
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 19,
+                    "colSpan": 2,
+                    "rowSpan": 8
+                   },
+                   "name": "EmailListPanel"
+                  }
+                 ],
+                 "name": "HistoryTabContainer"
+                }
+               ],
+               "name": "HistoryTab"
+              },
+              {
+               "type": "crt.TabContainer",
+               "caption": "#ResourceString(ApprovalsTab_caption)#",
+               "iconPosition": "only-text",
+               "visible": true,
+               "items": [
+                {
+                 "type": "crt.GridContainer",
+                 "rows": "minmax(32px, max-content)",
+                 "columns": [
+                  "minmax(64px, 1fr)",
+                  "minmax(64px, 1fr)"
+                 ],
+                 "gap": {
+                  "columnGap": "large",
+                  "rowGap": "none"
+                 },
+                 "color": "transparent",
+                 "borderRadius": "none",
+                 "padding": {
+                  "top": "none",
+                  "right": "none",
+                  "bottom": "small",
+                  "left": "none"
+                 },
+                 "alignItems": "stretch",
+                 "visible": true,
+                 "items": [
+                  {
+                   "type": "crt.ExpansionPanel",
+                   "title": "#ResourceString(ApprovalsPanel_title)#",
+                   "toggleType": "default",
+                   "togglePosition": "before",
+                   "expanded": true,
+                   "labelColor": "auto",
+                   "fullWidthHeader": false,
+                   "titleWidth": 20,
+                   "padding": {
+                    "top": "small",
+                    "bottom": "small",
+                    "left": "none",
+                    "right": "none"
+                   },
+                   "fitContent": true,
+                   "visible": true,
+                   "items": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 32px)",
+                     "columns": [
+                      "minmax(32px, 1fr)",
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.ApprovalList",
+                       "masterRecordColumnValue": "$Id",
+                       "recordColumnName": "Applicant",
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 2,
+                        "rowSpan": 10
+                       },
+                       "features": {
+                        "editable": false
+                       },
+                       "entityName": "Applicant",
+                       "approvalEntityName": "ApplicantVisa",
+                       "items": "$ApprovalList_main",
+                       "primaryColumnName": "ApprovalList_mainDS_Id",
+                       "columns": [
+                        {
+                         "id": "13175cc2-f608-4b06-bb00-54ec2979f189",
+                         "code": "ApprovalList_mainDS_VisaOwner",
+                         "caption": "#ResourceString(ApprovalList_mainDS_VisaOwner)#",
+                         "dataValueType": 10,
+                         "width": 175
+                        },
+                        {
+                         "id": "709523d0-7e64-4a8b-94b4-ae5516a757b9",
+                         "code": "ApprovalList_mainDS_Objective",
+                         "caption": "#ResourceString(ApprovalList_mainDS_Objective)#",
+                         "dataValueType": 30,
+                         "width": 175
+                        },
+                        {
+                         "id": "fa63df74-d101-4055-ae8f-b296fee25b26",
+                         "code": "ApprovalList_mainDS_CreatedOn",
+                         "caption": "#ResourceString(ApprovalList_mainDS_CreatedOn)#",
+                         "dataValueType": 7,
+                         "width": 175
+                        },
+                        {
+                         "id": "b6b104fb-12f4-4461-aaf0-aa7a3c6518b2",
+                         "code": "ApprovalList_mainDS_SetDate",
+                         "caption": "#ResourceString(ApprovalList_mainDS_SetDate)#",
+                         "dataValueType": 7,
+                         "width": 175
+                        },
+                        {
+                         "id": "b412f475-5f93-4e40-bcf4-1320983faa22",
+                         "code": "ApprovalList_mainDS_SetBy",
+                         "caption": "#ResourceString(ApprovalList_mainDS_SetBy)#",
+                         "dataValueType": 10,
+                         "width": 175
+                        },
+                        {
+                         "id": "5def6bb5-b44d-4388-b1f0-5e7c3eff5f85",
+                         "code": "ApprovalList_mainDS_Status",
+                         "caption": "#ResourceString(ApprovalList_mainDS_Status)#",
+                         "dataValueType": 10,
+                         "width": 175
+                        }
+                       ],
+                       "visible": true,
+                       "name": "ApprovalList_main"
+                      }
+                     ],
+                     "name": "ApprovalsPanel_wrap"
+                    }
+                   ],
+                   "tools": [
+                    {
+                     "type": "crt.GridContainer",
+                     "rows": "minmax(max-content, 24px)",
+                     "columns": [
+                      "minmax(32px, 1fr)"
+                     ],
+                     "gap": {
+                      "columnGap": "large",
+                      "rowGap": "none"
+                     },
+                     "styles": {
+                      "overflow-x": "hidden"
+                     },
+                     "color": "transparent",
+                     "borderRadius": "none",
+                     "padding": {
+                      "top": "none",
+                      "right": "none",
+                      "bottom": "none",
+                      "left": "none"
+                     },
+                     "items": [
+                      {
+                       "type": "crt.FlexContainer",
+                       "direction": "row",
+                       "alignItems": "center",
+                       "gap": "none",
+                       "items": [
+                        {
+                         "type": "crt.Button",
+                         "caption": "#ResourceString(ApprovalListRefreshButton_caption)#",
+                         "icon": "reload-button-icon",
+                         "iconPosition": "only-icon",
+                         "color": "default",
+                         "size": "medium",
+                         "clicked": {
+                          "request": "crt.LoadDataRequest",
+                          "params": {
+                           "config": {
+                            "loadType": "reload",
+                            "useLastLoadParameters": true
+                           },
+                           "dataSourceName": "ApprovalList_mainDS"
+                          }
+                         },
+                         "name": "ApprovalList_mainRefreshBtn"
+                        },
+                        {
+                         "type": "crt.SearchFilter",
+                         "iconOnly": true,
+                         "placeholder": "#ResourceString(ApprovalListSearch_placeholder)#",
+                         "_filterOptions": {
+                          "expose": [
+                           {
+                            "attribute": "ApprovalListSearch_ApprovalList_main",
+                            "converters": [
+                             {
+                              "converter": "crt.SearchFilterAttributeConverter",
+                              "args": [
+                               "ApprovalList_main"
+                              ]
+                             }
+                            ]
+                           }
+                          ],
+                          "from": [
+                           "ApprovalListSearch_SearchValue",
+                           "ApprovalListSearch_FilteredColumnsGroups"
+                          ]
+                         },
+                         "name": "ApprovalList_mainSearch"
+                        }
+                       ],
+                       "layoutConfig": {
+                        "column": 1,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1
+                       },
+                       "name": "ApprovalsPanel_toolbarRow"
+                      }
+                     ],
+                     "name": "ApprovalsPanel_toolbar"
+                    }
+                   ],
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 1,
+                    "colSpan": 2,
+                    "rowSpan": 10
+                   },
+                   "name": "ApprovalsPanel"
+                  }
+                 ],
+                 "name": "ApprovalsTabContainer"
+                }
+               ],
+               "name": "ApprovalsTab"
+              }
+             ],
+             "name": "Tabs",
+             "styleType": "default",
+             "mode": "tab",
+             "bodyBackgroundColor": "primary-contrast-500",
+             "selectedTabTitleColor": "auto",
+             "tabTitleColor": "auto",
+             "underlineSelectedTabColor": "auto",
+             "headerBackgroundColor": "auto"
+            }
+           ],
+           "name": "CardContentContainer"
+          },
+          {
+           "type": "crt.TabPanel",
+           "items": [
+            {
+             "type": "crt.TabContainer",
+             "tools": [
+              {
+               "type": "crt.FlexContainer",
+               "direction": "row",
+               "gap": "small",
+               "alignItems": "center",
+               "items": [
+                {
+                 "type": "crt.Label",
+                 "caption": "#MacrosTemplateString(#ResourceString(NextStepsTabContainerHeaderLabel_caption)#)#",
+                 "labelType": "headline-3",
+                 "labelThickness": "default",
+                 "labelEllipsis": false,
+                 "labelColor": "#0D2E4E",
+                 "labelBackgroundColor": "transparent",
+                 "labelTextAlign": "start",
+                 "visible": true,
+                 "layoutConfig": {},
+                 "name": "NextStepsTabContainerHeaderLabel"
+                },
+                {
+                 "type": "crt.Button",
+                 "icon": "add-button-icon",
+                 "iconPosition": "only-icon",
+                 "color": "default",
+                 "size": "medium",
+                 "visible": "$CardState | crt.IsEqual : 'edit'",
+                 "clickMode": "menu",
+                 "menuItems": [
+                  {
+                   "type": "crt.MenuItem",
+                   "caption": "#ResourceString(CreateTaskBtn_caption)#",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.AddNextStepRequest",
+                    "params": {
+                     "entityName": "Activity"
+                    }
+                   },
+                   "name": "CreateTaskBtn"
+                  },
+                  {
+                   "type": "crt.MenuItem",
+                   "caption": "#ResourceString(CreateEmailBtn_caption)#",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.CreateEmailRequest"
+                   },
+                   "name": "CreateEmailBtn"
+                  }
+                 ],
+                 "layoutConfig": {},
+                 "name": "AddNextStepsButton"
+                }
+               ],
+               "layoutConfig": {
+                "colSpan": 1,
+                "column": 1,
+                "row": 1,
+                "rowSpan": 1
+               },
+               "visible": true,
+               "color": "transparent",
+               "borderRadius": "none",
+               "padding": {
+                "top": "none",
+                "right": "none",
+                "bottom": "none",
+                "left": "none"
+               },
+               "justifyContent": "start",
+               "wrap": "wrap",
+               "name": "NextStepsTabContainerHeaderContainer"
+              }
+             ],
+             "items": [
+              {
+               "type": "crt.NextSteps",
+               "masterSchemaId": "$Id",
+               "cardState": "$CardState",
+               "layoutConfig": {
+                "colSpan": 2,
+                "column": 1,
+                "row": 1,
+                "rowSpan": 1
+               },
+               "masterSchemaName": "#DataSourceEntityName()#",
+               "bindingColumns": [],
+               "name": "NextSteps"
+              }
+             ],
+             "caption": "#ResourceString(NextStepsTabContainer_caption)#",
+             "iconPosition": "left-icon",
+             "visible": true,
+             "icon": "task-tab-icon",
+             "name": "NextStepsTabContainer"
+            },
+            {
+             "type": "crt.TabContainer",
+             "items": [
+              {
+               "type": "crt.Feed",
+               "feedType": "Record",
+               "primaryColumnValue": "$Id",
+               "cardState": "$CardState",
+               "dataSourceName": "PDS",
+               "entitySchemaName": "Applicant",
+               "name": "Feed"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.FlexContainer",
+               "direction": "row",
+               "alignItems": "center",
+               "items": [
+                {
+                 "type": "crt.Label",
+                 "caption": "#ResourceString(FeedTabContainerCaption)#",
+                 "labelType": "headline-3",
+                 "labelThickness": "default",
+                 "labelEllipsis": false,
+                 "labelColor": "#0D2E4E",
+                 "labelBackgroundColor": "transparent",
+                 "labelTextAlign": "start",
+                 "name": "FeedTabContainerHeaderLabel"
+                }
+               ],
+               "name": "FeedTabContainerHeaderContainer"
+              }
+             ],
+             "caption": "#ResourceString(FeedTabContainerCaption)#",
+             "iconPosition": "left-icon",
+             "icon": "feed-icon",
+             "name": "FeedTabContainer"
+            },
+            {
+             "type": "crt.TabContainer",
+             "items": [
+              {
+               "type": "crt.FileList",
+               "masterRecordColumnValue": "$Id",
+               "recordColumnName": "Applicant",
+               "layoutConfig": {
+                "column": 1,
+                "row": 1,
+                "colSpan": 2,
+                "rowSpan": 6
+               },
+               "items": "$AttachmentList",
+               "primaryColumnName": "AttachmentListDS_Id",
+               "columns": [
+                {
+                 "id": "ffd968c4-a1f4-4181-809b-08aabbd56a4d",
+                 "code": "AttachmentListDS_Name",
+                 "caption": "#ResourceString(AttachmentListDS_Name)#",
+                 "dataValueType": 28,
+                 "width": 200
+                }
+               ],
+               "viewType": "gallery",
+               "tileSize": "small",
+               "name": "AttachmentList"
+              }
+             ],
+             "caption": "#ResourceString(AttachmentsTabContainerCaption)#",
+             "iconPosition": "left-icon",
+             "icon": "attachments-icon",
+             "tools": [
+              {
+               "type": "crt.FlexContainer",
+               "direction": "row",
+               "alignItems": "center",
+               "items": [
+                {
+                 "type": "crt.Label",
+                 "caption": "#ResourceString(AttachmentsTabContainerCaption)#",
+                 "labelType": "headline-3",
+                 "labelThickness": "default",
+                 "labelEllipsis": false,
+                 "labelColor": "#0D2E4E",
+                 "labelBackgroundColor": "transparent",
+                 "labelTextAlign": "start",
+                 "name": "AttachmentsTabContainerHeaderLabel"
+                },
+                {
+                 "type": "crt.Button",
+                 "caption": "#ResourceString(AttachmentAddButtonCaption)#",
+                 "icon": "upload-button-icon",
+                 "iconPosition": "only-icon",
+                 "color": "default",
+                 "size": "medium",
+                 "clicked": {
+                  "request": "crt.UploadFileRequest",
+                  "params": {
+                   "viewElementName": "AttachmentList"
+                  }
+                 },
+                 "name": "AttachmentAddButton"
+                },
+                {
+                 "type": "crt.Button",
+                 "caption": "#ResourceString(AttachmentRefreshButtonCaption)#",
+                 "icon": "reload-button-icon",
+                 "iconPosition": "only-icon",
+                 "color": "default",
+                 "size": "medium",
+                 "clicked": {
+                  "request": "crt.LoadDataRequest",
+                  "params": {
+                   "config": {
+                    "loadType": "reload"
+                   },
+                   "dataSourceName": "AttachmentListDS"
+                  }
+                 },
+                 "name": "AttachmentRefreshButton"
+                }
+               ],
+               "name": "AttachmentsTabContainerHeaderContainer"
+              }
+             ],
+             "name": "AttachmentsTabContainer"
+            }
+           ],
+           "mode": "toggle",
+           "layoutConfig": {
+            "maxWidth": 368,
+            "minWidth": 368
+           },
+           "stretch": true,
+           "classes": [
+            "card-toggle-tab-panel",
+            "container-background-color-primary",
+            "container-border-area"
+           ],
+           "name": "CardToggleTabPanel",
+           "styleType": "default",
+           "bodyBackgroundColor": "primary-contrast-500",
+           "selectedTabTitleColor": "auto",
+           "tabTitleColor": "auto",
+           "underlineSelectedTabColor": "auto",
+           "headerBackgroundColor": "auto"
+          }
+         ],
+         "name": "CenterContainer"
+        }
+       ],
+       "name": "CardContentWrapper",
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none"
+      }
+     ],
+     "name": "MainContainer"
+    }
+   ],
+   "name": "Main"
+  }
+ ],
+ "businessRules": {
+  "count": 11,
+  "rules": [
+   {
+    "caption": "Reject reason is required at the closing stages",
+    "condition": {
+     "logicalOperation": "OR",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000001"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000002",
+        "uId": "00000000-0000-4000-8000-000000000003"
+       },
+       "uId": "00000000-0000-4000-8000-000000000004"
+      },
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000005"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000006",
+        "uId": "00000000-0000-4000-8000-000000000007"
+       },
+       "uId": "00000000-0000-4000-8000-000000000008"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-required",
+      "items": [
+       "RejectReason"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000009"
+     }
+    ],
+    "name": "BusinessRule_05d507e",
+    "enabled": true
+   },
+   {
+    "caption": "Reject reason is optional outside the closing stages",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000010"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000011",
+        "uId": "00000000-0000-4000-8000-000000000012"
+       },
+       "uId": "00000000-0000-4000-8000-000000000013"
+      },
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000014"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000015",
+        "uId": "00000000-0000-4000-8000-000000000016"
+       },
+       "uId": "00000000-0000-4000-8000-000000000017"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-optional",
+      "items": [
+       "RejectReason"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000018"
+     }
+    ],
+    "name": "BusinessRule_642742a",
+    "enabled": true
+   },
+   {
+    "caption": "Request is required at job offer and attendance",
+    "condition": {
+     "logicalOperation": "OR",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000019"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000020",
+        "uId": "00000000-0000-4000-8000-000000000021"
+       },
+       "uId": "00000000-0000-4000-8000-000000000022"
+      },
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000023"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000024",
+        "uId": "00000000-0000-4000-8000-000000000025"
+       },
+       "uId": "00000000-0000-4000-8000-000000000026"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-required",
+      "items": [
+       "InternalRequest"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000027"
+     }
+    ],
+    "name": "BusinessRule_9c256e9",
+    "enabled": true
+   },
+   {
+    "caption": "Request is optional at the other stages",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000028"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000029",
+        "uId": "00000000-0000-4000-8000-000000000030"
+       },
+       "uId": "00000000-0000-4000-8000-000000000031"
+      },
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000032"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000033",
+        "uId": "00000000-0000-4000-8000-000000000034"
+       },
+       "uId": "00000000-0000-4000-8000-000000000035"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-optional",
+      "items": [
+       "InternalRequest"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000036"
+     }
+    ],
+    "name": "BusinessRule_89beea1",
+    "enabled": true
+   },
+   {
+    "caption": "Specialist expertise level is required at job offer",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000037"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000038",
+        "uId": "00000000-0000-4000-8000-000000000039"
+       },
+       "uId": "00000000-0000-4000-8000-000000000040"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-required",
+      "items": [
+       "ExpertiseLevel"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000041"
+     }
+    ],
+    "name": "BusinessRule_5f3fb1b",
+    "enabled": true
+   },
+   {
+    "caption": "Specialist expertise level is optional at the other stages",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Stage",
+        "uId": "00000000-0000-4000-8000-000000000042"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000043",
+        "uId": "00000000-0000-4000-8000-000000000044"
+       },
+       "uId": "00000000-0000-4000-8000-000000000045"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-optional",
+      "items": [
+       "ExpertiseLevel"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000046"
+     }
+    ],
+    "name": "BusinessRule_0f1a59d",
+    "enabled": true
+   },
+   {
+    "caption": "Employee is shown for internally recommended applicants",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Source",
+        "uId": "00000000-0000-4000-8000-000000000047"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000048",
+        "uId": "00000000-0000-4000-8000-000000000049"
+       },
+       "uId": "00000000-0000-4000-8000-000000000050"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "show-element",
+      "items": [
+       "Employee"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000051"
+     }
+    ],
+    "name": "BusinessRule_50070ef",
+    "enabled": true
+   },
+   {
+    "caption": "Employee is hidden for every other source",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Source",
+        "uId": "00000000-0000-4000-8000-000000000052"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000053",
+        "uId": "00000000-0000-4000-8000-000000000054"
+       },
+       "uId": "00000000-0000-4000-8000-000000000055"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "hide-element",
+      "items": [
+       "Employee"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000056"
+     }
+    ],
+    "name": "BusinessRule_9532070",
+    "enabled": true
+   },
+   {
+    "caption": "Employee is required for internally recommended applicants",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Source",
+        "uId": "00000000-0000-4000-8000-000000000057"
+       },
+       "comparisonType": "equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000058",
+        "uId": "00000000-0000-4000-8000-000000000059"
+       },
+       "uId": "00000000-0000-4000-8000-000000000060"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-required",
+      "items": [
+       "Employee"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000061"
+     }
+    ],
+    "name": "BusinessRule_598023a",
+    "enabled": true
+   },
+   {
+    "caption": "Employee is optional for every other source",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "AttributeValue",
+        "path": "PDS_Source",
+        "uId": "00000000-0000-4000-8000-000000000062"
+       },
+       "comparisonType": "not-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "00000000-0000-4000-8000-000000000063",
+        "uId": "00000000-0000-4000-8000-000000000064"
+       },
+       "uId": "00000000-0000-4000-8000-000000000065"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-optional",
+      "items": [
+       "Employee"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000066"
+     }
+    ],
+    "name": "BusinessRule_01a5aff",
+    "enabled": true
+   },
+   {
+    "caption": "Role in company is always required on the applicant card",
+    "condition": {
+     "logicalOperation": "AND",
+     "conditions": [
+      {
+       "leftExpression": {
+        "type": "SysValue",
+        "sysValueName": "CurrentDate",
+        "uId": "00000000-0000-4000-8000-000000000067"
+       },
+       "comparisonType": "greater-than-or-equal",
+       "rightExpression": {
+        "type": "Const",
+        "value": "1900-01-01T00:00:00.000Z",
+        "uId": "00000000-0000-4000-8000-000000000068"
+       },
+       "uId": "00000000-0000-4000-8000-000000000069"
+      }
+     ]
+    },
+    "actions": [
+     {
+      "type": "make-required",
+      "items": [
+       "Job"
+      ],
+      "uId": "00000000-0000-4000-8000-000000000070"
+     }
+    ],
+    "name": "BusinessRule_d3be36d",
+    "enabled": true
+   }
+  ]
+ },
+ "entitySchemaName": "Applicant",
+ "parentSchemaName": "PageWithTabsAndProgressBarTemplate"
+}

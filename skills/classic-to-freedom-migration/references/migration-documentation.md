@@ -58,9 +58,9 @@ migrations/<app-or-section-slug>/
     NN-rules-<key>.json  # the page's persisted `BusinessRule_*` schemas, for the keys that gate rules
     NN-reachability-<key>.json # one on-stand check's answer — the value for that `reachability` key
     NN-dashboards-migration-log.json # `DashboardMigrationLog` rows, when the plan moves dashboards — one file per run
-  evidence.json        # engine-written skeleton (`--reads`): every published evidence id already a key — fill VALUES, never keys
+  evidence.json        # engine-written skeleton (every `--tasks` / `--next` / `--start` and `--reads`, merged in place): every published evidence id already a key — fill VALUES, never keys
   judge.json           # the same, for the independent verdict on each of those records
-  recorded.json        # engine-written skeleton (`--reads`): the on-stand keys the BUILD agent records rather than reads — replace each `null`
+  recorded.json        # engine-written skeleton (as `evidence.json`): the on-stand keys the BUILD agent records rather than reads — replace each `null`
   built.json           # engine-written (`migrate.mjs --verify --from`): the payload COMPOSED from reads/ — never hand-authored
   verify.md            # engine-written (same run): the Plan-vs-Done table that payload was gated on
   build-tasks/         # engine-written (`migrate.mjs --tasks`): the approved plan cut into one-task files
@@ -99,10 +99,10 @@ Read-only findings from runtime discovery.
 Separate confirmed facts from inferences.
 
 ### plan.md — the approval-gated plan
-Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) — **written directly by `--out`**, its Overview/Main-scope values supplied via `manifest.planMeta`, plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
+Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) — **written directly by `--out`**, its Overview/Main-scope values supplied via `manifest.planMeta`, its `### Run diagnostics` block (skill build, clio, stand) via `manifest.runDiagnostics` (left out of the plan version), plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
 - This is the contract the user approves.
 - **Frozen after approval.** Do not edit it to reflect progress.
-- Any scope or strategy change requires a new entry in `decisions.md` and explicit re-approval. The version bump is AUTOMATIC and is not something to type: the change goes into the manifest, `--plan --out` is re-run, and the engine's `**Plan version:**` string moves with it. Record what changed, why, and the new version.
+- Any scope or strategy change requires a new entry in `decisions.md` and explicit re-approval. The version bump is AUTOMATIC and is not something to type: the change goes into the manifest, `--plan --out` is re-run, and the engine's `**Plan version:**` string moves with it. Record what changed, why, and the new version. That entry is not the approval: only an entry holding both `Approved by:` and `Plan version:` with that exact version counts as one (`--handoff` refuses without it).
 
 ### customizations.md — the Classic behaviour analysis
 Written by the **`classic-ui-expert`** run (SKILL.md step 5.1) — a workflow, a sub-agent, or that skill invoked inline — not by hand. It answers the imperative rows the engine can enumerate but not explain — a method whose trigger is unresolved, a method assigned from another module, a `message` whose counterpart is in another schema, a `mixin`.
@@ -124,7 +124,7 @@ Append-only. Every entry has a date.
 - plan approval, switch-over approval, package-placement decision, template choices that were not obvious, dropped artifacts with reason, and any re-approval after a scope change
 - one row/section per decision: date, decision, rationale, who approved, affected tasks
 - **the plan-approval entry names the plan VERSION** alongside the date and who approved. The build reads that entry as a precondition and refuses to run without a matching version — approving one plan does not authorise building another. At single-section scope this entry may be the file's only content.
-- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over three manifest inputs — `entity`, the `schemas` bodies and `planMeta` — so re-running the planner is not a new version to re-approve, while a changed `planMeta` or main-page schema is. It does not cover the child/detail/seed/section sections, so it confirms the approved and built plans share their main-page inputs rather than checksumming the whole artifact; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
+- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over every manifest key except `runDiagnostics` (the machine the plan was made on) — see "The plan version" in `engine/README.md` — so re-running the planner is not a new version to re-approve, while a changed manifest input is; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
 
   ```
   **Plan version:** `plan-4f9c2ab17e03` — record THIS string in the `decisions.md` approval entry; …
@@ -138,7 +138,7 @@ Append-only. Every entry has a date.
   ```
 
 ### worklog.md — session log and evidence
-Append-only, chronological. One entry per working session.
+Append-only, chronological. One entry per working session. The first entry opens with the run diagnostics block (SKILL.md step 1.2a), so the log alone names the skill, clio and stand versions the run used.
 
 ### build-tasks/ — the approved plan, cut into one-task files (both scopes)
 Engine-written, and not documentation: it is how the orchestrator schedules work and how a killed session resumes.
@@ -146,7 +146,7 @@ Engine-written, and not documentation: it is how the orchestrator schedules work
 - `index.md` is derived. Never hand-author a task list, a status table or a progress summary beside it.
 - `status` is derived, and `declared` is the only status field an agent writes. `status` is the engine's output — derived from the Outcome cells on every pass and written back by the one write phase, which runs after any repair round that command opened, so the file can never disagree with `index.md`. `declared` holds the agent's one word, `blocked`, and nothing else — a whole-task scope decision (`not-applicable` / `wont-do` / `postponed`) is a person's answer recorded through `--decide D<N>`, never written into the file; a word typed into `status` is named on `## Attention` (`statusFrom` stamps what the engine derived) and discarded. A `partial` task's unbuilt rows are re-filed as repair tasks by the next `--verify --tasks` or `--tasks --route`, and each row computes `done` when the repair round covering it records it built. No task is an exception: every task file is written by the engine (`--tasks --add` for one the orchestrator declares), so every task carries an `Outcome` table and the derivation always has cells to read. For an adopted file — a repair round's or a declared one's — only the `status:` line is written back and the body stays as authored.
 - Do not hand-edit an engine task file's `## Deliverables` table apart from that `Outcome` column; the engine rewrites the rest from the plan on every re-slice.
-- What a task must do, and the statuses it may record, are in `references/build-task-execution.md`; the folder's own modes and gates are SKILL.md step 7.
+- What a task must do, and the statuses it may record, are in `references/build-task-execution.md`; the folder's own modes and gates are SKILL.md step 7 and, in full, `references/orchestrate-build.md`.
 
 ## Status Vocabulary
 
@@ -258,15 +258,20 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 - Decision: <what was decided>
 - Rationale: <why>
 - Approved by: <user>
-- Plan version: <v1 | v2 | …>   # required on the plan-approval entry — the build compares it to plan.md
+- Plan version: plan-<hash>
 - Affects: <task IDs>
 ```
+
+On the plan-approval entry `Plan version:` is required, beside a non-empty `Approved by:` in the same `## `
+entry, and its value is the `plan-<hash>` string `plan.md` prints, alone on the line — the build and `--handoff`
+compare it to `plan.md` exactly, so nothing may follow it there.
 
 ### worklog.md
 ```markdown
 # Worklog
 
 ## <date> — <session summary>
+<first entry only: the `### Run diagnostics` block from `engine/diagnostics.mjs`, verbatim — SKILL.md step 1.2a>
 - Scope: <what this session covered>
 - Actions: <operations/tools used>
 - Read-back evidence: <schema UId, package, SCHEMA_DEPS, handlers, resources, validation>

@@ -1685,6 +1685,8 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": write_transcript()},
             telemetry_home=home, **stubbed,
         )
+        # The first reading must be answered before the next Stop, or that Stop sees it in flight and waits.
+        await_outcome(session, "usage")
         # A later turn: the transcript has grown by one more assistant reply.
         grown = Path(tempfile.mkdtemp(prefix="caadt-hook-grown-", dir=_TMP), "session.jsonl")
         grown.write_text(

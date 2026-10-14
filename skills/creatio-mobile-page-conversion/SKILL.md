@@ -40,8 +40,8 @@ clio as missing the tool, including the newest one — and the message below wou
 up-to-date user to update clio, every time they retry.
 
 - **If present** → also confirm the paired guidance article loads before proceeding: Load order step 2
-  calls `get-guidance` with name `freedom-page-web-to-mobile-conversion`. If that call falls back to
-  `availableGuides` (the article is absent or was renamed) instead of returning the real conversion
+  calls `get-guidance` with name `freedom-page-web-to-mobile-conversion`. If that call answers with a
+  guide-not-found error (the article is absent or was renamed) instead of returning the real conversion
   guidance, **STOP** — this is a DIFFERENT failure than the tool being missing, and updating clio may
   not fix it on its own, because the guidance library is fetched and cached separately from the tool.
   Tell the user verbatim:
@@ -50,8 +50,8 @@ up-to-date user to update clio, every time they retry.
   > `freedom-page-web-to-mobile-conversion` guidance article could not be loaded (missing, renamed, or a
   > stale cached guidance library). Refresh the guidance library with `clio update-knowledge`, then
   > re-run. If it still does not load, update clio itself (`dotnet tool update clio -g`) and re-run; and
-  > if it still does not load after that, check whether the article was renamed (`get-guidance` with no
-  > name lists `availableGuides`).
+  > if it still does not load after that, check whether the article was renamed (`get-guidance` with
+  > name `list` returns the catalog of guide names).
 
   Do NOT proceed with the tool but no guidance, or you will build the body missing the paste-verbatim
   data-section and hard mobile rules with no warning. Otherwise proceed with the Load order and the flow.

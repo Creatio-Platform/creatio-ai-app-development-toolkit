@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -21,11 +21,18 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
-  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
+  withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
+  readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
+  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { approvePlan } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -163,12 +170,36 @@ const SET6 = buildTaskSet(runMigration(MANIFEST6), optsOf(MANIFEST6));
 // The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
 const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
 const keysOf = (set) => [...new Set(pageTasks(set).map((t) => t.pageKey))];
-const cliTasksEarly = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+const cliTasksEarly = (args, manifest) => cliApproved(args, manifest);
 const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === pageKey && t.group === group);
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
 const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
+// The user's approval of the plan a manifest renders, recorded in the migration folder above `dir` — `--tasks`,
+// `--start` and `--route` write nothing without it. The version is computed once per manifest.
+const PLAN_VERSIONS = new Map();
+const planVersionOf = (manifest, baseDir = DIR) => {
+  const key = JSON.stringify([baseDir, manifest]);
+  if (!PLAN_VERSIONS.has(key)) PLAN_VERSIONS.set(key, runMigration(manifest, { baseDir }).planVersion);
+  return PLAN_VERSIONS.get(key);
+};
+const approve = (dir, manifest = MANIFEST, baseDir = DIR) => approvePlan(dir, planVersionOf(manifest, baseDir));
+const approveTasksArg = (args, manifest, baseDir) => {
+  const at = args.indexOf("--tasks");
+  if (at >= 0 && args[at + 1]) approve(args[at + 1], manifest, baseDir);
+};
+// THE BUILD LOOP OF AN APPROVED PLAN: `migrate.mjs` on a manifest piped to stdin, run the way the orchestrator runs
+// it once the user approved the plan — so a `--tasks <dir>` run first records that approval for the manifest it
+// pipes. Every refusal for a MISSING approval is exercised with a raw spawn instead.
+const cliUnapproved = (args, manifest) =>
+  spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+const cliApproved = (args, manifest) => { approveTasksArg(args, manifest, DIR); return cliUnapproved(args, manifest); };
+// The same, for a manifest read from a FILE: its bodies resolve against the file's own folder.
+const cliFileApproved = (manifestPath, ...args) => {
+  approveTasksArg(args, JSON.parse(fs.readFileSync(manifestPath, "utf8")), path.dirname(path.resolve(manifestPath)));
+  return spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+};
 // The (file, id) pairs actually on disk — what the regenerated index has to keep describing.
 const readExistingMeta = (dir) => fs.readdirSync(dir)
   .filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE)
@@ -492,6 +523,27 @@ check("ids: a task whose ROWS changed is the SAME task with a changed deliverabl
     const a = taskAt(SET, "main", DRIFT_GROUP), c = taskAt(SET3, "main", DRIFT_GROUP);
     return a.id === c.id && a.rowsDigest !== c.rowsDigest;
   }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP), c: taskAt(SET3, "main", DRIFT_GROUP) }));
+{
+  const TEXT_BODY = `define("MPage", [], function() {
+  return {
+    entitySchemaName: "M",
+    diff: [{ "operation": "insert", "name": "MainTab", "parentName": "Tabs", "propertyName": "tabs",
+      "values": { "caption": { "bindTo": "Resources.Strings.MainTabCaption" }, "items": [] } },
+      { "operation": "insert", "name": "Number", "parentName": "MainTab", "propertyName": "items", "values": { "bindTo": "Number" } }]
+  };
+});`;
+  const textManifest = (fr) => ({ ...manifestOf(), schemas: [{ pkg: "P", body: TEXT_BODY }],
+    resources: { MainTabCaption: "Main" }, resourceStrings: { MainTabCaption: { "en-US": "Main", "fr-FR": fr } } });
+  const [ma, mb] = [textManifest("Principal"), textManifest("Général")];
+  const [ra, rb] = [runMigration(ma), runMigration(mb)];
+  const formTexts = (run, m) => checklistGroups(run, optsOf(m)).flatMap((g) => g.rows).find((r) => r.deliverableId === "page:form")?.vk.texts;
+  const [sa, sb] = [buildTaskSet(ra, optsOf(ma)), buildTaskSet(rb, optsOf(mb))];
+  check("ids: a Classic text whose other-culture value changed leaves every task's `rowsDigest` as it was — the form-page row's texts are checked against the built page, not built by a task",
+    () => JSON.stringify(formTexts(ra, ma)) !== JSON.stringify(formTexts(rb, mb))
+      && sa.tasks.length === sb.tasks.length
+      && sa.tasks.every((t) => taskAt(sb, t.pageKey, t.group)?.rowsDigest === t.rowsDigest),
+    () => sa.tasks.filter((t) => taskAt(sb, t.pageKey, t.group)?.rowsDigest !== t.rowsDigest).map((t) => `${t.pageKey}·${t.group}`));
+}
 check("ids: an id is unique across the set, and two pages' identically-shaped tasks never collide — every page carries a `Page build` and a `Quality gates` task and they must still be told apart",
   () => new Set(SET.tasks.map((t) => t.id)).size === SET.tasks.length
     && taskAt(SET, "main", "Quality gates").id !== taskAt(SET, "child:C1", "Quality gates").id
@@ -511,11 +563,11 @@ check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that 
     return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
       && a.some((t) => /\d/.test(t.rows[0].label)) && a.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
   }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
-check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the caption and the count are both untouched by a rename, so digesting labels alone reported no drift on exactly the change a built page has to be re-checked against",
+check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the renamed field is its own deliverable row, so the task that carries it reads as changed and its id is kept",
   () => {
     const a = taskAt(SET, "main", DRIFT_GROUP), d = taskAt(SET4, "main", DRIFT_GROUP);
-    const sameLabels = a.rows.map((r) => r.label).join("|") === d.rows.map((r) => r.label).join("|");
-    return a.id === d.id && sameLabels && a.rowsDigest !== d.rowsDigest;
+    const renamed = a.rows.some((r) => r.label === "Field `MainF`") && d.rows.some((r) => r.label === "Field `MainRenamed`");
+    return a.id === d.id && renamed && a.rowsDigest !== d.rowsDigest;
   }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP)?.rowsDigest, d: taskAt(SET4, "main", DRIFT_GROUP)?.rowsDigest,
     labelsEqual: taskAt(SET, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|")
       === taskAt(SET4, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|") }));
@@ -1044,7 +1096,13 @@ console.log("\n===== the split: a cut decided once, validated here, frozen in th
 // step with the plan: a hand-typed row list would start passing for the wrong reason the moment a row changed.
 const allRows = (pageKey) => GROUPS.filter((g) => g.pageKey === pageKey).flatMap((g) => g.rows.map((r) => r.label));
 const splitItem = (id, pageKey, writesTo, rows, extra = {}) => ({ id, title: id, pageKey, writesTo, rows, ...extra });
-const FULL_SPLIT = { planVersion: RUN.planVersion, items: keysOf(SET).map((k) =>
+// One item per page, in the order the engine builds the page BODIES — leaf-first, so `main` comes after the children
+// whose related lists it wires. Read off the engine's own queue rather than re-derived here.
+function bodyOrder(set) {
+  return [...new Set(set.tasks.filter((t) => t.writesTo && t.artifact !== ARTIFACT_SCAFFOLD).map((t) => t.pageKey))];
+}
+const SPLIT_KEYS = bodyOrder(SET);
+const FULL_SPLIT = { planVersion: RUN.planVersion, items: SPLIT_KEYS.map((k) =>
   splitItem(`build-${slugKey(k)}`, k, k === "main" ? "main" : k, allRows(k))) };
 function slugKey(k) { return k.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, ""); }
 
@@ -1070,10 +1128,13 @@ check("split: a complete cut builds a task per ITEM — the seams are the file's
       && build.every((t, i) => t.id === FULL_SPLIT.items[i].id);
   }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems
     || buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).tasks.map((t) => `${t.order}:${t.id}`));
+// The same cut, with each page's rows claimed by GROUP: a plan that gains a deliverable row stays covered.
+const GROUP_SPLIT = { planVersion: RUN.planVersion, items: SPLIT_KEYS.map((k) =>
+  splitItem(`build-${slugKey(k)}`, k, k === "main" ? "main" : k, [...new Set(GROUPS.filter((g) => g.pageKey === k).map((g) => `@${g.baseTitle}`))])) };
 check("split: the item's `id` IS the task's identity — a frozen cut does not move, so the slug someone chose survives any change to the rows inside it (the mechanical slicer had to hash content because it re-decided the cut every run)",
   () => {
-    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
-    const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // manifest C: one task's rows changed
+    const set = buildTaskSetFromSplit(RUN, GROUP_SPLIT, OPTS);
+    const set3 = buildTaskSetFromSplit(RUN3, GROUP_SPLIT, OPTS3);   // manifest C: one task's rows changed
     const a = set.tasks.find((t) => t.id === "build-main");
     const c = set3.tasks.find((t) => t.id === "build-main");
     return a && c && a.id === c.id && a.rowsDigest !== c.rowsDigest;
@@ -1107,12 +1168,20 @@ check("split (anti-vacuity): the SAME split with that row restored resolves and 
     const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
     return !set.refused && set.tasks.length > 0;
   }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems);
-check("split: matching MASKS DIGITS, so a plan that gains a field does not stop the split resolving — the counts are exactly what a growing plan moves, and a cut that needed re-deciding on every added field would not be worth freezing",
+check("split: matching MASKS DIGITS in counts, and a plan that gains a field keeps a split that claims by GROUP resolving — a split that names rows one by one refuses, naming the new field row to place",
   () => {
-    const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // C: `Fields — 1 expected` became `2 expected`
-    return !set3.refused && set3.problems.length === 0
-      && rowKey("Fields — 19 expected") === rowKey("Fields — 20 expected");
-  }, () => buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems);
+    const byGroup = buildTaskSetFromSplit(RUN3, GROUP_SPLIT, OPTS3);   // C: one more field
+    const byRow = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);
+    return !byGroup.refused && byGroup.problems.length === 0 && byRow.refused
+      && byRow.problems.some((p) => /Field `MainF2`/.test(p) && /is in NO item/.test(p))
+      && rowKey("Side profile — 19 fields") === rowKey("Side profile — 20 fields");
+  }, () => ({ byGroup: buildTaskSetFromSplit(RUN3, GROUP_SPLIT, OPTS3).problems, byRow: buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems }));
+check("split: a split written when the plan had ONE `Fields — N expected` / `Related lists — N expected` row refuses with the remedy — the row is now one per item, claim them by group or by their own text",
+  () => {
+    const old = mapMain((i) => ({ ...i, rows: [...i.rows.filter((r) => !/^(Field|Related list) `/.test(r)), "Fields — 1 expected", "Related lists — 1 expected"] }));
+    const set = buildTaskSetFromSplit(RUN, old, OPTS);
+    return set.refused && ["Fields — 1 expected", "Related lists — 1 expected"].every((l) => set.problems.some((p) => p.includes(l) && /now one row per item/.test(p) && /@Form — Coverage \(verified\)/.test(p)));
+  }, () => buildTaskSetFromSplit(RUN, mapMain((i) => ({ ...i, rows: [...i.rows.filter((r) => !/^(Field|Related list) `/.test(r)), "Fields — 1 expected", "Related lists — 1 expected"] })), OPTS).problems);
 check("split: an item left with NO rows by a changed plan is reported and KEPT, never deleted — its file may hold the only record of work already done on a stand",
   () => {
     const extra = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("gone-from-plan", "main", "main", [])] };
@@ -1283,6 +1352,59 @@ check("split: a helper whose CALLER is not in the plan at all is not a chain def
     return r.errors.length === 0;
   });
 
+// A `Child page wiring` row binds a related list to a child page, so the item carrying it goes after every item
+// writing that child page. The row's `vk` names the child page key, so the order is checked, not trusted.
+{
+  const c1Row = GROUPS.find((g) => g.pageKey === "child:C1" && g.baseTitle !== "Child page wiring" && g.rows.length)?.rows[0]?.label;
+  const WIRE_ITEM = { id: "wire-main", title: "w", pageKey: "main", writesTo: "main", rows: ["@Child page wiring"] };
+  const C1_ITEM = { id: "c1-build", title: "c", pageKey: "child:C1", writesTo: "child:C1", rows: [c1Row] };
+  const wiringErrors = (items) => resolveSplit({ items }, GROUPS, new Map()).errors.filter((e) => /wires /.test(e));
+  check("split: an item wiring a related list to `child:C1` may not sit before the item that writes `child:C1` — the list cannot be bound to a page that has not been built",
+    () => {
+      const errs = wiringErrors([WIRE_ITEM, C1_ITEM]);
+      return !!c1Row && errs.length === 1 && /`wire-main` wires `child:C1` but sits BEFORE 1 item\(s\)/.test(errs[0])
+        && errs[0].includes("c1-build") && /Move it after them/.test(errs[0]);
+    }, () => wiringErrors([WIRE_ITEM, C1_ITEM]));
+  check("split: the same two items in the RIGHT order raise no wiring error",
+    () => !!c1Row && wiringErrors([C1_ITEM, WIRE_ITEM]).length === 0,
+    () => wiringErrors([C1_ITEM, WIRE_ITEM]));
+  const MAIN_ITEM = { id: "main-build", title: "m", pageKey: "main", writesTo: "main",
+    rows: [GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Form — Coverage (verified)")?.rows[0]?.label] };
+  check("split: a binding-only item may not sit before the item that writes the page HOLDING the related list either — the list must exist before it is wired",
+    () => {
+      const errs = wiringErrors([C1_ITEM, WIRE_ITEM, MAIN_ITEM]);
+      return errs.length === 1 && /`wire-main` wires `main` but sits BEFORE 1 item\(s\)/.test(errs[0]) && errs[0].includes("main-build")
+        && wiringErrors([C1_ITEM, MAIN_ITEM, WIRE_ITEM]).length === 0;
+    }, () => [wiringErrors([C1_ITEM, WIRE_ITEM, MAIN_ITEM]), wiringErrors([C1_ITEM, MAIN_ITEM, WIRE_ITEM])]);
+  const writesOf = (items, id) => resolveSplit({ items }, GROUPS, new Map()).items.find((it) => it.id === id)?.writesTo;
+  const mainRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Form — Coverage (verified)")?.rows[0]?.label;
+  check("split: an item holding ONLY binding rows writes `wiring:<page>`, the artifact the engine's own cut gives them; one that also holds page rows writes the page",
+    () => writesOf([C1_ITEM, WIRE_ITEM], "wire-main") === "wiring:main"
+      && !!mainRow && writesOf([C1_ITEM, { ...WIRE_ITEM, rows: ["@Child page wiring", mainRow] }], "wire-main") === "page:main",
+    () => [writesOf([C1_ITEM, WIRE_ITEM], "wire-main"), mainRow]);
+  // A binding-only item writes add-ons, not the holder page, so it is no writer a wiring item has to follow.
+  const mainWiring = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Child page wiring");
+  const secondBind = { ...mainWiring?.rows[0], label: 'Related list "R8D" opens the rebuilt child page `child:C1@R8D`', deliverableId: "child-page-wiring:R8D" };
+  const TWO_GROUPS = GROUPS.map((g) => (g === mainWiring ? { ...g, rows: [...g.rows, secondBind] } : g));
+  const twoSplit = (items, groups) => resolveSplit({ items }, groups, new Map()).errors.filter((e) => /wires /.test(e));
+  const WIRE_C1 = { id: "wire-c1", title: "w", pageKey: "child:C1", writesTo: "child:C1", rows: ["@Child page wiring"] };
+  const halves = [{ ...WIRE_ITEM, id: "wire-main-1", rows: ["@Child page wiring[1]"] }, { ...WIRE_ITEM, id: "wire-main-2" }];
+  check("split: binding-only items raise no wiring error against each other — two on one holder, or the holder's before a child page's own — since neither writes the page the other wires",
+    () => !!mainWiring?.rows[0]?.vk && twoSplit([C1_ITEM, MAIN_ITEM, ...halves], TWO_GROUPS).length === 0
+      && twoSplit([C1_ITEM, MAIN_ITEM, WIRE_ITEM, WIRE_C1], GROUPS).length === 0,
+    () => [twoSplit([C1_ITEM, MAIN_ITEM, ...halves], TWO_GROUPS), twoSplit([C1_ITEM, MAIN_ITEM, WIRE_ITEM, WIRE_C1], GROUPS)]);
+  // The inline grid's no-page row sits in the same `Child page wiring` group as the binding rows and has no `vk`.
+  const naRow = { label: 'Related list "R9D" — `C9`', deliverableId: "child-page-wiring:R9D", na: "no page to wire — an inline-editable related list" };
+  const NA_GROUPS = GROUPS.map((g) => (g.pageKey === "main" && g.baseTitle === "Child page wiring" ? { ...g, rows: [...g.rows, naRow] } : g));
+  const mainFiled = NA_GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates")?.rows.find((r) => r.deliverableId === "quality:ran");
+  const naSplit = resolveSplit({ items: [C1_ITEM, { ...MAIN_ITEM, rows: [...MAIN_ITEM.rows, ...(mainFiled ? ["@Quality gates[1]"] : [])] }, WIRE_ITEM] }, NA_GROUPS, new Map());
+  check("split: an item holding the whole `Child page wiring` group, the inline grid's no-page row included, writes `wiring:<page>` and leaves the page's filed gate with the page's last writer",
+    () => !!mainFiled && naSplit.items.find((it) => it.id === "wire-main")?.writesTo === "wiring:main"
+      && naSplit.items.find((it) => it.id === "wire-main").rows.some((r) => r.na)
+      && !naSplit.errors.some((e) => /quality:ran/.test(e)),
+    () => [!!mainFiled, naSplit.items.map((it) => [it.id, it.writesTo]), naSplit.errors]);
+}
+
 // Per-type routing binds each Type's form by the Type column, so it cannot run before those forms exist. Like the
 // folded chain, the engine emits the row itself and knows which page keys are typed — so this ordering is checked,
 // not trusted. It is a real mistake: on a 94-item split of a real plan the routing item sat second, ahead of both
@@ -1431,7 +1553,9 @@ console.log("\n===== a review waits for the page it judges, and may not precede 
 // on a page that is still being built. The `Quality gates` rows name the page, so the engine says so.
 {
   const rows = allRows("main");
-  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows[0].label;
+  // The JUDGED row is what makes an item a review; the filed row is build work and stays with the writer.
+  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows
+    .find((r) => r.deliverableId === "quality:judged").label;
   const build = rows.filter((r) => r !== gateRow);
   const REVIEW = splitItem("the-review", "main", "", [gateRow]);
   const BUILD = splitItem("the-build", "main", "main", build);
@@ -1446,12 +1570,12 @@ console.log("\n===== a review waits for the page it judges, and may not precede 
     }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [REVIEW, ...others, BUILD] }, OPTS).problems);
   check("split: the same two in the right order pass, and the READ-ONLY review still waits on every writer of that page — with no `writesTo` it joins no chain, so without this dependency nothing would make it wait at all",
     () => {
-      const set = mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [BUILD, ...others, REVIEW] }, OPTS), []);
+      const set = mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...others, BUILD, REVIEW] }, OPTS), []);
       const rev = set.tasks.find((t) => t.id === "the-review");
       const at = new Map(set.tasks.map((t) => [t.id, t.step]));
       return !set.refused && rev.writesTo === "" && rev.dependsOn.includes("the-build")
         && set.tasks.every((t) => t.dependsOn.every((d) => !at.has(d) || at.get(d) < t.step));
-    }, () => mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [BUILD, ...others, REVIEW] }, OPTS), [])
+    }, () => mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...others, BUILD, REVIEW] }, OPTS), [])
       .tasks.map((t) => `${t.step}:${t.id}:${t.writesTo || "—"}→${t.dependsOn.join(",")}`));
   check("split: an item that carries NO `Quality gates` row is never treated as a review — the rule reads the rows, not the item's name",
     () => {
@@ -1749,7 +1873,9 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
   {
     const SMALL = checklistOpts(MANIFEST);
     const whole = small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
-    const twins = whole.rows.map((r, i) => ({ n: i + 1, r })).filter((x) => x.r.label === "Fields — 1 expected"
+    const onPage = (k) => new Set(whole.rows.filter((r) => r.pageKey === k && !r.na).map((r) => r.label));
+    const shared = [...onPage("main")].find((l) => onPage("child:C1").has(l));
+    const twins = whole.rows.map((r, i) => ({ n: i + 1, r })).filter((x) => x.r.label === shared
       && (x.r.pageKey === "main" || x.r.pageKey === "child:C1"));
     const d = tmp("collapsed-route");
     syncTaskDir(d, RUN, SMALL);
@@ -1874,6 +2000,25 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     check("clock (control): an ABSENT `timings.json` is still an ordinary empty record — only a file that exists and does not parse is refused",
       () => { fs.rmSync(f); return syncTaskDir(d, RUN, OPTS).refused !== true; },
       () => syncTaskDir(d, RUN, OPTS).problems);
+  }
+
+  {
+    const d = fresh();
+    const f = path.join(d, TIMINGS_FILE);
+    const mark = (state) => {
+      if (state === null) fs.rmSync(f, { force: true });
+      else fs.writeFileSync(f, state);
+      return readTimingsFile(d).malformed;
+    };
+    check("readTimingsFile: a file that does not parse reads `malformed`; an absent or valid one does not",
+      () => typeof mark("{ not json") === "string" && !!mark("{ not json") && !mark(null) && !mark(JSON.stringify({ running: {}, samples: [] })),
+      () => ({ bad: mark("{ not json"), absent: mark(null) }));
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    fs.writeFileSync(f, "{ not json");
+    try { startTask(d, id, RUN, { ...OPTS, dispatchToken: "tok-m" }, null, at(0)); } catch { /* a refusal is the expected answer */ }
+    const written = fs.readFileSync(f, "utf8");
+    check("readTimingsFile: `--start` over a malformed timings file leaves it byte-identical",
+      () => !!id && written === "{ not json", () => written);
   }
 
   // 1c — re-opening a closed task by its `status:` line alone cannot hold: the cells outrank it.
@@ -2318,8 +2463,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     // ---- the recorded-run shapes, end to end through the CLI ----
     {
       // Defined locally: the shared `cliTasks` below is declared after this block.
-      const cli = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
-        { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+      const cli = cliApproved;
       // The folder is cut BY THE CLI, which slices with the real default budget — a folder cut in-process with the
       // test's own budget carries different ids, and every closure written into it would read as stale instead.
       // "services": closures with no clock. Exit 2, every file named.
@@ -2459,7 +2603,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
 }
 
 console.log("\n===== migrate.mjs --tasks <dir> (CLI) =====");
-const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+const cliTasks = cliApproved;
 // The CLI has no `run: 0` to hand it, so it slices this small fixture with the REAL default budget — which
 // collapses it. Everything the CLI block asserts about counts and file names has to be read off that set.
 const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
@@ -2512,7 +2656,7 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
     planGaps(gapRun).length > 0, () => planGaps(gapRun));
   const base = tmp("gap");
   const dir = path.join(base, "build-tasks");
-  const run = cliTasks(["--tasks", dir], skeletal);
+  const run = cliUnapproved(["--tasks", dir], skeletal);
   check("migrate.mjs --tasks: a plan-level gap writes NOTHING and exits 2 — the directory is never created, so a sub-agent cannot be dispatched with write access to a stand against a plan that is not buildable-out-of",
     run.status === 2 && !fs.existsSync(dir) && fs.readdirSync(base).length === 0,
     () => ({ status: run.status, exists: fs.existsSync(dir), ls: fs.readdirSync(base), stdout: run.stdout }));
@@ -2522,6 +2666,128 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
       && /re-run `--plan`/.test(run.stdout || ""),
     () => run.stdout);
   fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== migrate.mjs --tasks / --start (CLI): the plan approval gate =====");
+{
+  // No build task is written for a plan nobody approved at the version this manifest renders. The approval is read
+  // off decisions.md in the migration folder by the rule `--handoff` applies (`planApprovalLine`).
+  const V = RUN.planVersion;
+  const snapOf = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { recursive: true }).sort()
+    .filter((f) => fs.statSync(path.join(d, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(d, f), "utf8")]) : null);
+  const NOT_APPROVED = /⛔ NOTHING WRITTEN — no task folder for a plan that is not approved/;
+
+  // T1 — no decisions.md at all.
+  {
+    const base = tmp("approval-none");
+    const dir = path.join(base, "build-tasks");
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T1 (R1): `--tasks` with no decisions.md exits 2, creates no task folder and writes nothing into the migration folder",
+      () => run.status === 2 && NOT_APPROVED.test(run.stdout || "") && !fs.existsSync(dir) && fs.readdirSync(base).length === 0,
+      () => ({ status: run.status, ls: fs.readdirSync(base), stdout: run.stdout }));
+    check("approval gate T1 (R1): the refusal names the plan version it expected an approval of, and the fields an approval holds",
+      () => (run.stdout || "").includes(`\`${V}\``) && /Approved by:/.test(run.stdout || "") && /7\.1 step 1/.test(run.stdout || ""),
+      () => run.stdout);
+    check("approval gate T1 (R1): the refusal is not mistaken for a plan gap — it names no gap and no other banner",
+      () => !/plan with gaps/.test(run.stdout || "") && !/GATE BLOCKED|STRUCTURE INCOMPLETE|COVERAGE INCOMPLETE/.test(run.stderr || ""),
+      () => ({ stdout: run.stdout, stderr: run.stderr }));
+    // A frozen split is a write too: refused before it is copied in.
+    const splitPath = path.join(base, "split.json");
+    fs.writeFileSync(splitPath, JSON.stringify({ planVersion: V, items: FULL_SPLIT.items }, null, 2));
+    const split = cliUnapproved(["--tasks", dir, "--split", splitPath], MANIFEST);
+    check("approval gate T1 (R1): `--tasks --split` with no approval exits 2 and freezes no split — the folder does not exist afterwards",
+      () => split.status === 2 && NOT_APPROVED.test(split.stdout || "") && !fs.existsSync(dir),
+      () => ({ status: split.status, stdout: split.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // T2 — an approval of a different (stale) version.
+  {
+    const base = tmp("approval-stale");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"), "# Decisions And Approvals\n\n"
+      + "## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n\n"
+      + "## Plan re-approved\n- Approved by: user\n- Plan version: `plan-111111111111`\n");
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T2 (R2): `--tasks` over an approval of a different plan version exits 2 and writes no task folder",
+      () => run.status === 2 && NOT_APPROVED.test(run.stdout || "") && !fs.existsSync(dir),
+      () => ({ status: run.status, stdout: run.stdout }));
+    check("approval gate T2 (R2): the refusal names every version decisions.md approves AND the version this manifest renders, so the operator sees the plan changed after it was approved",
+      () => (run.stdout || "").includes("`plan-000000000000`") && (run.stdout || "").includes("`plan-111111111111`")
+        && (run.stdout || "").includes(`\`${V}\``) && /plan changed after it was approved/.test(run.stdout || ""),
+      () => run.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // T3 — the version is named but nobody approved it.
+  {
+    const base = tmp("approval-unsigned");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"),
+      `# Decisions And Approvals\n\n## Scope change\n- Decision: drop a page\n- Approved by:\n- Plan version: \`${V}\`\n`);
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T3 (R4): an entry holding the plan version with an EMPTY `Approved by:` is no approval — exit 2, no task folder, and it is not reported as an approval of any version",
+      () => run.status === 2 && NOT_APPROVED.test(run.stdout || "") && !fs.existsSync(dir)
+        && /records no approval of plan version/.test(run.stdout || ""),
+      () => ({ status: run.status, stdout: run.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // T4 — a matching approval: the mode runs and prints as it does on any approved folder.
+  {
+    const base = tmp("approval-ok");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"),
+      `# Decisions And Approvals\n\n## Plan approved\n- **Approved by:** user\n- **Plan version:** \`${V}\`\n`);
+    const run = cliUnapproved(["--tasks", dir], MANIFEST);
+    check("approval gate T4 (R3): with an approval of THIS plan version `--tasks` exits 0, writes every task file plus the index and prints the slice note — no approval wording",
+      () => run.status === 0 && CLI_SET.tasks.every((t) => fs.existsSync(path.join(dir, t.file)))
+        && fs.existsSync(path.join(dir, TASK_INDEX_FILE))
+        && new RegExp(String.raw`wrote ${CLI_SET.tasks.length} build task\(s\)`).test(run.stdout || "")
+        && !/not approved/.test((run.stdout || "") + (run.stderr || "")),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 600), stderr: run.stderr }));
+
+    // `--start` over that same folder once the approval is gone: no clock, no status change, nothing written.
+    const id = CLI_SET.tasks.find((t) => !t.dependsOn?.length)?.id;
+    const copy = path.join(tmp("approval-start"), "mig");
+    fs.cpSync(base, copy, { recursive: true });
+    const cdir = path.join(copy, "build-tasks");
+    fs.writeFileSync(path.join(copy, "decisions.md"), "# Decisions And Approvals\n");
+    const before = snapOf(copy);
+    const start = cliUnapproved(["--tasks", cdir, "--start", id], MANIFEST);
+    check("approval gate T1 (R1): `--tasks --start <id>` with no approval exits 2, opens no clock, issues no dispatch token and leaves the folder byte-identical",
+      () => !!id && start.status === 2 && NOT_APPROVED.test(start.stdout || "") && !/DISPATCH TOKEN/.test(start.stdout || "")
+        && JSON.stringify(snapOf(copy)) === JSON.stringify(before),
+      () => ({ id, status: start.status, stdout: start.stdout }));
+    fs.writeFileSync(path.join(copy, "decisions.md"), `## Plan approved\n- Approved by: user\n- Plan version: ${V}\n`);
+    const started = cliUnapproved(["--tasks", cdir, "--start", id], MANIFEST);
+    check("approval gate T4 (R3, anti-vacuity): the same `--start` with the approval restored starts the task — the refusal above is the gate, not a task that could not start",
+      () => started.status === 0 && /DISPATCH TOKEN/.test(started.stdout || ""),
+      () => ({ status: started.status, stdout: (started.stdout || "").slice(0, 600) }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+{
+  // `approvedPlanVersions` reads decisions.md by the same rule as `planApprovalLine`: every version it lists is one
+  // that call accepts, and an entry with no (or an empty) `Approved by:` lists nothing.
+  const A = "plan-aaaaaaaaaaaa", B = "plan-bbbbbbbbbbbb", C = "plan-cccccccccccc";
+  const text = "# Decisions And Approvals\n\n"
+    + `## Plan approved\n- Approved by: user\n- Plan version: \`${A}\`\n\n`
+    + `## Scope change\n- Decision: drop a page\n- Plan version: \`${C}\`\n\n`
+    + `## Unsigned\n- Approved by:\n- Plan version: ${C}\n\n`
+    + `## Plan re-approved\n- **Approved by:** user\n- **Plan version:** \`${B}\`\n\n`
+    + `## Plan approved again\n- Approved by: user\n- Plan version: ${A}\n`;
+  check("approvedPlanVersions: lists each approved version once, in file order, and skips an entry nobody approved",
+    () => JSON.stringify(approvedPlanVersions(text)) === JSON.stringify([A, B]),
+    () => approvedPlanVersions(text));
+  check("approvedPlanVersions: agrees with planApprovalLine on every version — listed ones are accepted, the unapproved one is not",
+    () => [A, B].every((v) => planApprovalLine(text, v) !== null) && planApprovalLine(text, C) === null,
+    () => [A, B, C].map((v) => [v, planApprovalLine(text, v)]));
+  check("approvedPlanVersions: an empty or missing decisions.md approves nothing, and an `Approved by:` with an empty `Plan version:` names no version",
+    () => approvedPlanVersions("").length === 0 && approvedPlanVersions(undefined).length === 0
+      && approvedPlanVersions("## Plan approved\n- Approved by: user\n- Plan version:\n").length === 0,
+    () => approvedPlanVersions("## Plan approved\n- Approved by: user\n- Plan version:\n"));
 }
 
 console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then frozen =====");
@@ -3807,12 +4073,24 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
     () => back.status === "partial" && /status: partial/.test(fs.readFileSync(p, "utf8")),
     () => fs.readFileSync(p, "utf8").split("\n").slice(0, 4));
 
-  check("two deliverables of ONE task that share a long common prefix keep SEPARATE outcomes — the `Quality gates` rows differ only in their last sentence, and filing both under a truncated key let the second silently overwrite the first",
+  // Two filed gate rows of different pages differ only in the id they name at the end, and the collapsed run puts
+  // them in ONE task.
+  const twins = (() => {
+    const d = tmp("partial-twins");
+    const opts = checklistOpts(MANIFEST);
+    const whole = syncTaskDir(d, RUN, opts).tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+    const at = whole.rows.map((r, i) => [r, i + 1]).filter(([r]) => r.deliverableId === "quality:ran").map(([, n]) => n);
+    const fp = path.join(d, whole.file);
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), at[0], "not-built — needs-decision"));
+    const rows = syncTaskDir(d, RUN, opts).tasks.find((t) => t.id === whole.id).rows;
+    return { at, rows: at.map((n) => rows[n - 1]) };
+  })();
+  check("two deliverables of ONE task that share a long common prefix keep SEPARATE outcomes — two pages' filed `Quality gates` rows differ only in the id they name at the end, and filing both under a truncated key would let the second silently overwrite the first",
     () => {
-      const rows = second.tasks.find((t) => t.id === target.id).rows;
-      return rows.length === 2 && rows[0].label.slice(0, 60) === rows[1].label.slice(0, 60)
-        && rows[0].outcomeKind === "not-built" && rows[1].outcomeKind === "built";
-    }, () => second.tasks.find((t) => t.id === target.id).rows.map((r) => r.outcomeKind));
+      const [a, b] = twins.rows;
+      return twins.at.length >= 2 && a.label.slice(0, 60) === b.label.slice(0, 60)
+        && a.outcomeKind === "not-built" && b.outcomeKind === "built";
+    }, () => ({ at: twins.at, kinds: twins.rows.map((r) => r?.outcomeKind) }));
 
   check("the index counts `partial` in its OWN bucket and NOT as done — a run with unbuilt deliverables that reads `Done: 9 · Open: 0` has told the reader the opposite of the truth",
     () => /\*\*⚠ Partial:\*\* 1/.test(idx) && !/\*\*Done:\*\* 1 /.test(idx) && /◐ partial/.test(idx),
@@ -3826,10 +4104,10 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
   check("the progress block — the one surface a watching user reads while the run happens — carries the partial count AND names each unbuilt row, because that is the boundary the two lost filters died at",
     () => {
       const prog = renderProgress(second, dir);
-      // …and says what the row is waiting on WITHOUT claiming nothing can be scheduled for it: `notBuiltOpenRows`
-      // filters on no cause, so `--route` opens a round over a `needs-decision` row like any other.
+      // …and says what the row is waiting on: only `blocked` is routed, a `needs-decision` row waits for
+      // `--decide D<N> [--build|--wont-do|--postponed]`.
       return /⚠ partial 1/.test(prog) && /⚠ NOT BUILT — 1 deliverable/.test(prog)
-        && /a decision settles it, not a re-run — route it once that decision exists/.test(prog)
+        && /a decision settles it, not a re-run: `--decide D<N> \[--build\|--wont-do\|--postponed\]`/.test(prog)
         && !/not re-dispatched/.test(prog);
     }, () => renderProgress(second, dir));
 
@@ -3884,8 +4162,7 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
 
 console.log("\n===== end to end through the CLI: the run FAILS and the list is generated, not summarised =====");
 {
-  const cliT = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
-    { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+  const cliT = cliApproved;
   const dP = path.join(tmp("notbuilt-cli"), "build-tasks");
   cliT(["--tasks", dP], MANIFEST);
   const victim = readTaskDir(dP).find((t) => t.rows.length >= 2);
@@ -3988,6 +4265,47 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
   const vfO = path.join(dO, vicO.file);
   fs.writeFileSync(vfO, setOutcome(allBuilt(fs.readFileSync(vfO, "utf8")), 1, NOT_BUILT_BLOCKED));
   const unroutedO = cliT(["--tasks", dO], MANIFEST);
+  {
+    // The SAME folder state the routed run below opens a round on, with decisions.md approving an EARLIER plan
+    // version: `--route` schedules sub-agents too, so it writes nothing for a plan nobody approved at this version.
+    const baseU = path.join(tmp("notbuilt-route-unapproved"), "mig");
+    fs.cpSync(baseO, baseU, { recursive: true });
+    const dU = path.join(baseU, "build-tasks");
+    fs.writeFileSync(path.join(baseU, "decisions.md"),
+      "# Decisions And Approvals\n\n## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n");
+    const snap = () => fs.readdirSync(baseU, { recursive: true }).sort()
+      .filter((f) => fs.statSync(path.join(baseU, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(baseU, f), "utf8")]);
+    const before = snap();
+    const refusedRoute = cliUnapproved(["--tasks", dU, "--route"], MANIFEST);
+    check("approval gate T5 (R1): `--tasks --route` over a folder whose plan version is not approved exits 2, writes NO repair task and leaves every file of the migration folder byte-identical",
+      () => refusedRoute.status === 2 && /NOTHING WRITTEN — no repair tasks for a plan that is not approved/.test(refusedRoute.stdout || "")
+        && repairFilesIn(dU).length === 0 && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: refusedRoute.status, stdout: (refusedRoute.stdout || "").slice(0, 600), repair: repairFilesIn(dU) }));
+    check("approval gate T5 (R2): the `--route` refusal names the version decisions.md approves and the version this manifest renders",
+      () => (refusedRoute.stdout || "").includes("`plan-000000000000`") && (refusedRoute.stdout || "").includes(`\`${RUN.planVersion}\``),
+      () => refusedRoute.stdout);
+    fs.rmSync(path.dirname(baseU), { recursive: true, force: true });
+  }
+  {
+    // A plan with GAPS and no approval of its version: the gaps refusal answers, not the approval one — approving
+    // a plan that cannot be built would send the operator the wrong way. Gaps are checked before approval.
+    const gapped = { ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] };
+    const baseG = path.join(tmp("notbuilt-route-gapped"), "mig");
+    fs.cpSync(baseO, baseG, { recursive: true });
+    const dG = path.join(baseG, "build-tasks");
+    fs.writeFileSync(path.join(baseG, "decisions.md"),
+      "# Decisions And Approvals\n\n## Plan approved\n- Approved by: user\n- Plan version: `plan-000000000000`\n");
+    const snap = () => fs.readdirSync(baseG, { recursive: true }).sort()
+      .filter((f) => fs.statSync(path.join(baseG, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(baseG, f), "utf8")]);
+    const before = snap();
+    const gappedRoute = cliUnapproved(["--tasks", dG, "--route"], gapped);
+    check("approval gate (R5): `--tasks --route` on a plan with gaps and no matching approval exits 2 with the PLAN-level gaps refusal, never the not-approved one, and leaves every file of the migration folder byte-identical",
+      () => gappedRoute.status === 2 && /this run has PLAN-level gaps/.test(gappedRoute.stdout || "")
+        && !/not approved/.test(gappedRoute.stdout || "")
+        && repairFilesIn(dG).length === 0 && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: gappedRoute.status, stdout: (gappedRoute.stdout || "").slice(0, 600), repair: repairFilesIn(dG) }));
+    fs.rmSync(path.dirname(baseG), { recursive: true, force: true });
+  }
   const route = cliT(["--tasks", dO, "--route"], MANIFEST);
   const routeCauses = repairCausesIn(dO);
 
@@ -4146,7 +4464,7 @@ check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md
   () => {
     const d = tmp("asserted-progress");
     const s1 = syncTaskDir(d, RUN, OPTS);
-    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const tgt = taskAt(s1, "child:G1", "Page build");
     const fp = path.join(d, tgt.file);
     fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — no Freedom equivalent, my call"));
     const s2 = syncTaskDir(d, RUN, OPTS);
@@ -4159,7 +4477,7 @@ check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md
   }, () => {
     const d = tmp("asserted-progress-d");
     const s1 = syncTaskDir(d, RUN, OPTS);
-    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const tgt = taskAt(s1, "child:G1", "Page build");
     const fp = path.join(d, tgt.file);
     fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — no Freedom equivalent, my call"));
     return renderProgress(syncTaskDir(d, RUN, OPTS), d);
@@ -4181,6 +4499,9 @@ console.log("\n===== the residual is ROUTED: a not-built row becomes a repair ro
 
 // A folder whose one `Quality gates` deliverable the build agent recorded as NOT BUILT — dispatched, signed and
 // closed the way a real run closes it, because the residual's closure is checked against the dispatch record.
+// A task of the fixture with more than one deliverable row, for the checks that record different outcomes on two
+// rows of ONE task. The review task holds a single row (the judged gate), so it cannot be that task.
+const TWO_ROW_TARGET = ["child:G1", "Page build"];
 const partialFolder = (name, notBuilt = [1], [pageKey, group] = ["child:G1", "Quality gates"]) => {
   const d = tmp(name);
   const tgt = taskAt(syncTaskDir(d, RUN, OPTS), pageKey, group);
@@ -4458,14 +4779,14 @@ check("the round's OWN status is computed from its cells — every row `built` r
 
 check("a round that fixed SOME of its rows closes those and only those — the whole point of per-row outcomes: crediting every row it covers because one status word said `done` is the bucket problem one level down",
   () => {
-    const { d, tgt } = partialFolder("repair-cells-some", [1, 2]);
+    const { d, tgt } = partialFolder("repair-cells-some", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
     const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual).filter(Boolean));
     return backAt(set, tgt.id).status === "partial"
       && residuals.has("closed") && residuals.has("open");
-  }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2]);
+  }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).rows.map((r) => [r.outcome, r.residual]); });
 
@@ -4493,7 +4814,7 @@ check("a deliverable is routed ONCE however many files record it — a `partial`
 
 check("a row a round has SETTLED stops being named as NOT BUILT — its own Outcome cell reads `not-built` for good, so the progress block and the index Attention kept printing a deliverable that is on the stand while the gate had correctly stopped counting it; two surfaces disagreeing about one row is how a reader learns to skip the list",
   () => {
-    const { d, tgt } = partialFolder("notbuilt-settled", [1, 2]);
+    const { d, tgt } = partialFolder("notbuilt-settled", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
@@ -4501,13 +4822,13 @@ check("a row a round has SETTLED stops being named as NOT BUILT — its own Outc
     const idxLines = renderTaskIndex(set).split("\n").filter((l) => /row \d+ — \*\*not built\*\*/.test(l));
     // Before either round runs, BOTH rows are open and the line has to count two of them on one task — a list
     // that only ever renders `1` cannot say it lost one.
-    const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2]);
+    const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2], TWO_ROW_TARGET);
     const both = renderProgress(syncTaskDir(d2, RUN, OPTS), d2);
     return residuals.has("closed") && residuals.has("open")
       && /⚠ NOT BUILT — 2 deliverable\(s\) across 1 task\(s\)/.test(both)
       && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d))
       && idxLines.length === 1;
-  }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2]);
+  }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
     return { progress: renderProgress(s, d).split("\n").filter((l) => /NOT BUILT/.test(l)),
@@ -4535,6 +4856,29 @@ check("a row the cap has EXHAUSTED fails the gate instead of passing as schedule
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
     return { parent: backAt(s, tgt.id).status, residuals: backAt(s, tgt.id).rows.map((r) => r.residual),
       unrouted: notBuiltOpenItems(s.tasks).filter((it) => !it.residual).length }; });
+
+{
+  const { d } = partialFolder("cap-parked-beside-decision");
+  for (let r = 1; r <= REPAIR_ROUND_CAP; r++) {
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    for (const t of res.written) runRepair(d, t.id, r % 2 ? NOT_BUILT_BLOCKED_ALT : NOT_BUILT_BLOCKED);
+  }
+  const other = taskAt(syncRepairDir(d, RUN, {}, OPTS).set, "main", "Page build");
+  clearDepsOf(d, other.id, RUN, OPTS, nextMin());
+  startTask(d, other.id, RUN, { ...OPTS, dispatchToken: `tok-${other.id}` }, null, AT(nextMin()));
+  const fpO = taskFilePath(d, other.id);
+  fs.writeFileSync(fpO, setOutcome(allBuilt(fs.readFileSync(fpO, "utf8")), 1, "not-built — needs-decision"));
+  editFrontMatter(d, other.id, "agentNonce", `tok-${other.id}`);
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(nextMin()) });
+  const res = syncRepairDir(d, RUN, {}, OPTS);
+  const awaiting = TASKS_MODULE.decisionWaitingRows(res.set.tasks);
+  const text = repairRoundLines({ ...res, awaiting }, d, "route").join("\n");
+  check("--route: a cause parked after the round cap is reported as PARKED beside a row that waits on a decision, and neither the awaiting-decision report nor the nothing-to-route text is printed",
+    () => awaiting.length === 1 && res.parked.length === 1 && new RegExp(`PARKED after ${REPAIR_ROUND_CAP} rounds`).test(text)
+      && !/wait(s)? on a decision/.test(text) && !/nothing there is waiting to be routed/.test(text),
+    () => ({ awaiting: awaiting.length, parked: res.parked.length, text }));
+  fs.rmSync(d, { recursive: true, force: true });
+}
 
 check("a newly recorded cause gets its OWN round rather than waiting behind another cause's open one — the cap counts the KIND, but an `unverified:fields` round still open must not hold a `not-built:fields` row unroutable while the gate names it and tells the user to run `--route`, which would write nothing",
   () => {
@@ -4623,7 +4967,7 @@ check("the round that started the chain closes when a LATER round fixes its rows
 
 check("a round still being worked holds its cause PENDING — some cells filled and the rest blank is a sub-agent mid-task, and opening the next round over it would put a second agent on rows the first has not reached",
   () => {
-    const { d } = partialFolder("repair-midflight", [1, 2]);
+    const { d } = partialFolder("repair-midflight", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     const id = repairIds(d)[0];
     startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
@@ -4632,7 +4976,7 @@ check("a round still being worked holds its cause PENDING — some cells filled 
     editFrontMatter(d, id, "agentNonce", `tok-${id}`);
     const res = syncRepairDir(d, RUN, {}, OPTS);
     return res.written.length === 0 && res.set.tasks.find((t) => t.kind === "repair").status === "in-progress";
-  }, () => { const { d } = partialFolder("repair-midflight-d", [1, 2]);
+  }, () => { const { d } = partialFolder("repair-midflight-d", [1, 2], TWO_ROW_TARGET);
     syncRepairDir(d, RUN, {}, OPTS);
     const id = repairIds(d)[0];
     startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
@@ -4673,8 +5017,8 @@ console.log("\n===== a residual credits the ROWS IT COVERS, never the cause buck
 
 // The fixture above, carried one step further: the residual is routed, dispatched and CLOSED, so the task reads
 // `done`. Everything below then changes the task AFTER that, which is the case the earlier checks never made.
-const closedResidual = (name) => {
-  const { d, tgt } = partialFolder(name);
+const closedResidual = (name, target = undefined) => {
+  const { d, tgt } = partialFolder(name, [1], target);
   syncRepairDir(d, RUN, {}, OPTS);
   closeRepairs(d);
   return { d, tgt };
@@ -4701,7 +5045,7 @@ check("a repair task's rows are READ, and `covers` is carried beside them — th
 
 check("a SECOND row recorded not-built after the first residual closed is NOT credited by it — same page, same cause bucket, a repair task that never listed it. Crediting it is this ticket's own failure mode: the run would report success over a deliverable the build agent wrote down as not built",
   () => {
-    const { d, tgt } = closedResidual("covers-second-row");
+    const { d, tgt } = closedResidual("covers-second-row", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const after = syncTaskDir(d, RUN, OPTS);
@@ -4712,7 +5056,7 @@ check("a SECOND row recorded not-built after the first residual closed is NOT cr
     return back.status === "partial" && rows.length === 2
       && rows.find((r) => r.n === 1).residual === "closed"
       && unrouted.length === 1 && unrouted[0].n === 2;
-  }, () => { const { d, tgt } = closedResidual("covers-second-row-d");
+  }, () => { const { d, tgt } = closedResidual("covers-second-row-d", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const a = syncTaskDir(d, RUN, OPTS);
@@ -4721,13 +5065,13 @@ check("a SECOND row recorded not-built after the first residual closed is NOT cr
 
 check("that second row opens a NEW repair round rather than sitting uncredited — the prior round closed `done`, which is an ATTEMPT, so the cause advances to round 2 and the cap stays the terminal",
   () => {
-    const { d, tgt } = closedResidual("covers-second-round");
+    const { d, tgt } = closedResidual("covers-second-round", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const next = syncRepairDir(d, RUN, {}, OPTS);
     return next.written.length === 1 && next.written[0].repairRound === 2
       && next.written[0].cause.startsWith("not-built:");
-  }, () => { const { d, tgt } = closedResidual("covers-second-round-d");
+  }, () => { const { d, tgt } = closedResidual("covers-second-round-d", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
     const n = syncRepairDir(d, RUN, {}, OPTS);
@@ -4735,14 +5079,14 @@ check("that second row opens a NEW repair round rather than sitting uncredited �
 
 check("a row BLANKED after the residual closed is not credited either — an unaccounted row is the weaker claim of the two (nobody said anything about it at all), so a bucket that credits it is the same defect with less evidence",
   () => {
-    const { d, tgt } = closedResidual("covers-blanked");
+    const { d, tgt } = closedResidual("covers-blanked", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "—"));
     const after = syncTaskDir(d, RUN, OPTS);
     const unrouted = notBuiltRows(after.tasks).filter((r) => !r.residual);
     return after.tasks.find((t) => t.id === tgt.id).status === "partial"
       && unrouted.length === 1 && unrouted[0].n === 2 && unrouted[0].cause === null;
-  }, () => { const { d, tgt } = closedResidual("covers-blanked-d");
+  }, () => { const { d, tgt } = closedResidual("covers-blanked-d", TWO_ROW_TARGET);
     const fp = taskFilePath(d, tgt.id);
     fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "—"));
     const a = syncTaskDir(d, RUN, OPTS);
@@ -4798,6 +5142,355 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
   }, () => { const dir = tmp("verify-blockquote-d");
     return fs.readFileSync(path.join(dir, syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written[0].file), "utf8"); });
 /* ================================================================================================
+   The build-time RECONCILE MODE (overlay | classic-layout). It is chosen once with
+   `--reconcile-mode` at the `--tasks` cut, frozen in the folder, read back on every re-slice, and
+   stamped into `index.md` + every engine task's front matter so the ONE sub-agent handed a task file
+   knows how to place elements. It changes HOW a build reconciles, never the plan — so `--plan`/`--spec`
+   reject it, and a rebuild (no `planMeta.freedomExists`) rejects it too. A modeless run is byte-for-byte
+   unchanged, which is why every existing golden above still holds.
+   ================================================================================================ */
+{
+  // ---- the freeze/read primitives (mirror readFrozenSplit/freezeSplit) ----
+  const d0 = tmp("mode_freeze");
+  check("readFrozenMode is null before any freeze", () => readFrozenMode(d0) === null);
+  freezeMode(d0, RECONCILE_MODE_CLASSIC);
+  check("freezeMode → readFrozenMode round-trips", () => readFrozenMode(d0) === RECONCILE_MODE_CLASSIC);
+  check("an unrecognised frozen value reads back as null (strict about values, like a bad status)",
+    () => { fs.writeFileSync(path.join(d0, ".reconcile-mode"), "bogus\n"); return readFrozenMode(d0) === null; });
+
+  // ---- resolveFrozenMode: flag wins, else frozen, else null; freezes when set ----
+  const d1 = tmp("mode_resolve");
+  check("resolveFrozenMode returns null and freezes nothing with no flag and no frozen file",
+    () => resolveFrozenMode(d1, {}) === null && readFrozenMode(d1) === null);
+  check("resolveFrozenMode freezes the flag value and returns it",
+    () => resolveFrozenMode(d1, { reconcileMode: RECONCILE_MODE_CLASSIC }) === RECONCILE_MODE_CLASSIC
+      && readFrozenMode(d1) === RECONCILE_MODE_CLASSIC);
+  check("a re-slice with NO flag reads the frozen mode back (the orchestrator need not re-pass it)",
+    () => resolveFrozenMode(d1, {}) === RECONCILE_MODE_CLASSIC);
+  check("RECONCILE_MODE_DEFAULT is overlay (the implicit, unstamped current behavior)",
+    () => RECONCILE_MODE_DEFAULT === RECONCILE_MODE_OVERLAY);
+
+  // ---- syncTaskDir stamps index + every engine task's front matter, and freezes ----
+  const d2 = tmp("mode_stamp");
+  const setC = syncTaskDir(d2, RUN, { ...checklistOpts(MANIFEST), reconcileMode: RECONCILE_MODE_CLASSIC });
+  check("the built set carries the resolved mode", () => setC.reconcileMode === RECONCILE_MODE_CLASSIC);
+  check("syncTaskDir freezes the mode in the folder", () => readFrozenMode(d2) === RECONCILE_MODE_CLASSIC);
+  const idxC = fs.readFileSync(path.join(d2, TASK_INDEX_FILE), "utf8");
+  check("index.md names the reconcile mode in its headline", () => /Reconcile mode:\*\*\s*`classic-layout`/.test(idxC), () => idxC.split("\n").slice(0, 4));
+  const engFile = setC.tasks.find((t) => t.origin === "engine").file;
+  const tfC = fs.readFileSync(path.join(d2, engFile), "utf8");
+  check("an engine task's front matter carries `reconcileMode: classic-layout`",
+    () => /^reconcileMode: classic-layout$/m.test(tfC), () => tfC.split("\n").slice(0, 16));
+  check("the stamped front matter round-trips through parseTaskFile",
+    () => parseTaskFile(tfC).meta.reconcileMode === RECONCILE_MODE_CLASSIC);
+
+  // ---- a re-slice with NO flag keeps the frozen mode (index + set) ----
+  const setC2 = syncTaskDir(d2, RUN, checklistOpts(MANIFEST));
+  check("a re-slice with no flag keeps the frozen mode on the set", () => setC2.reconcileMode === RECONCILE_MODE_CLASSIC);
+  check("and the index still names it after a modeless re-slice",
+    () => /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(d2, TASK_INDEX_FILE), "utf8")));
+
+  // ---- a MODELESS run is byte-for-byte unchanged (backward compat): no line, no front-matter key ----
+  const dN = tmp("mode_none");
+  const setN = syncTaskDir(dN, RUN, checklistOpts(MANIFEST));
+  check("a modeless run resolves to null on the set (implicit overlay, unstamped)", () => setN.reconcileMode === null);
+  check("a modeless run freezes NO .reconcile-mode file", () => readFrozenMode(dN) === null);
+  check("a modeless index has no Reconcile-mode line", () => !/Reconcile mode:/.test(fs.readFileSync(path.join(dN, TASK_INDEX_FILE), "utf8")));
+  check("a modeless engine task file has no reconcileMode front-matter key",
+    () => !/reconcileMode:/.test(fs.readFileSync(path.join(dN, setN.tasks.find((t) => t.origin === "engine").file), "utf8")));
+
+  // ---- CLI: the flag on a reconcile plan writes the folder, freezes, exits 0; guards on misuse ----
+  const RECON = { ...MANIFEST, planMeta: { ...MANIFEST.planMeta, freedomExists: true } };
+  const bR = tmp("cli_recon"); const dR = path.join(bR, "bt");
+  const okRun = cliTasks(["--tasks", dR, "--reconcile-mode", "classic-layout"], RECON);
+  check("CLI: `--tasks --reconcile-mode classic-layout` on a reconcile plan exits 0 and writes the folder",
+    () => okRun.status === 0 && fs.existsSync(path.join(dR, TASK_INDEX_FILE)), () => ({ status: okRun.status, err: okRun.stderr, out: (okRun.stdout || "").slice(0, 300) }));
+  check("CLI: the folder is frozen in `classic-layout`", () => readFrozenMode(dR) === RECONCILE_MODE_CLASSIC);
+  check("CLI: a re-slice with no flag keeps the frozen mode (index still names it)",
+    () => { const r = cliTasks(["--tasks", dR], RECON); return r.status === 0 && /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(dR, TASK_INDEX_FILE), "utf8")); });
+  check("CLI: re-passing a DIFFERENT mode over a frozen folder is REFUSED (exit 1, names the frozen one)",
+    () => { const r = cliTasks(["--tasks", dR, "--reconcile-mode", "overlay"], RECON); return r.status === 1 && /cut in `classic-layout`/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bR, { recursive: true, force: true });
+
+  check("CLI: an unknown mode value is REFUSED (exit 1, names the allowed set)",
+    () => { const r = cliTasks(["--tasks", path.join(tmp("cli_bad"), "bt"), "--reconcile-mode", "sideways"], RECON);
+      return r.status === 1 && /must be one of/.test(r.stderr || r.stdout || "") && /classic-layout/.test(r.stderr || r.stdout || ""); });
+  check("CLI: `--reconcile-mode` without `--tasks` is REFUSED (`--spec` — it is a task-cut choice)",
+    () => { const r = cliTasks(["--spec", "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /only means something with `--tasks/.test(r.stderr || r.stdout || ""); });
+  check("CLI: `--reconcile-mode` on a REBUILD (no planMeta.freedomExists) is REFUSED (nothing to reconcile onto)",
+    () => { const r = cliTasks(["--tasks", path.join(tmp("cli_rebuild"), "bt"), "--reconcile-mode", "classic-layout"], MANIFEST);
+      return r.status === 1 && /existing-Freedom reconcile/.test(r.stderr || r.stdout || ""); });
+
+  // ---- the mode is chosen on the FIRST cut and frozen: a modeless cut cannot gain one on a re-slice ----
+  const bMl = tmp("cli_modeless"); const dMl = path.join(bMl, "bt");
+  cliTasks(["--tasks", dMl], RECON); // first cut, NO mode
+  check("CLI: a folder cut WITHOUT a mode refuses a later `--reconcile-mode` (first-cut freeze)",
+    () => { const r = cliTasks(["--tasks", dMl, "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /already cut WITHOUT a reconcile mode/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bMl, { recursive: true, force: true });
+  // ---- a corrupted `.reconcile-mode` is refused, not silently overwritten ----
+  const bCorrupt = tmp("cli_corrupt"); const dCorrupt = path.join(bCorrupt, "bt");
+  cliTasks(["--tasks", dCorrupt, "--reconcile-mode", "classic-layout"], RECON);
+  fs.writeFileSync(path.join(dCorrupt, ".reconcile-mode"), "sideways\n");
+  check("CLI: a corrupted `.reconcile-mode` value is REFUSED rather than overwritten",
+    () => { const r = cliTasks(["--tasks", dCorrupt, "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /unrecognised value/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bCorrupt, { recursive: true, force: true });
+
+  // ---- overlay is frozen + stamped exactly like classic-layout, and a later classic-layout is refused (AC7) ----
+  const bOv = tmp("cli_overlay"); const dOv = path.join(bOv, "bt");
+  const ovRun = cliTasks(["--tasks", dOv, "--reconcile-mode", "overlay"], RECON);
+  check("CLI overlay: exits 0, freezes overlay, stamps the index headline",
+    () => ovRun.status === 0 && readFrozenMode(dOv) === RECONCILE_MODE_OVERLAY
+      && /Reconcile mode:\*\*\s*`overlay`/.test(fs.readFileSync(path.join(dOv, TASK_INDEX_FILE), "utf8")),
+    () => ({ status: ovRun.status, frozen: readFrozenMode(dOv) }));
+  check("CLI overlay: an engine task's front matter carries `reconcileMode: overlay`",
+    () => { const set = readTaskDir(dOv); const eng = set.find((t) => t.origin === "engine");
+      return !!eng && /^reconcileMode: overlay$/m.test(fs.readFileSync(path.join(dOv, eng.file), "utf8")); });
+  check("CLI overlay: a later `--reconcile-mode classic-layout` over an overlay folder is REFUSED",
+    () => { const r = cliTasks(["--tasks", dOv, "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /cut in `overlay` mode/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bOv, { recursive: true, force: true });
+
+  // ---- `--reconcile-mode` refuses to combine with the read/query/decision modes (set once at the cut) ----
+  // Each `other` gets its own required args so the flow reaches the reconcile-mode combo guard (not an earlier
+  // arg-shape error), and all of them carry the "set once at the --tasks cut" refusal.
+  const comboBuilt = path.join(tmp("cli_combo_built"), "built.json");
+  fs.writeFileSync(comboBuilt, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", viewConfig: { items: [] } } } }));
+  const combos = { "--verify": ["--verify", "--built", comboBuilt], "--route": ["--route"], "--next": ["--next"],
+    "--decide": ["--decide", "D13", "--wont-do", "--pages", "main"], "--revoke": ["--revoke", "D13"] };
+  for (const [other, extra] of Object.entries(combos)) {
+    const dC = path.join(tmp(`cli_combo${other.replaceAll("-", "_")}`), "bt");
+    check(`CLI: \`--reconcile-mode\` + \`${other}\` is refused (exit 1, set once at the --tasks cut)`,
+      () => { const r = cliTasks(["--tasks", dC, ...extra, "--reconcile-mode", "classic-layout"], RECON);
+        return r.status === 1 && /set once at the .--tasks. cut/.test(r.stderr || r.stdout || ""); },
+      () => { const r = cliTasks(["--tasks", dC, ...extra, "--reconcile-mode", "classic-layout"], RECON); return { status: r.status, err: (r.stderr || r.stdout || "").slice(0, 200) }; });
+  }
+
+  // ---- --decide / --revoke keep the frozen stamp on the task files AND the index headline ----
+  {
+    const dD = path.join(tmp("mode_decide_stamp"), "bt");
+    syncTaskDir(dD, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const dm = new Map([["D13", "descope — test"]]);
+    applyDecision(dD, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    const idxAfterDecide = fs.readFileSync(path.join(dD, TASK_INDEX_FILE), "utf8");
+    check("--decide keeps the `Reconcile mode:` headline on index.md",
+      () => /Reconcile mode:\*\*\s*`classic-layout`/.test(idxAfterDecide), () => idxAfterDecide.split("\n").slice(0, 4));
+    const engD = readTaskDir(dD).find((t) => t.origin === "engine");
+    check("--decide keeps `reconcileMode: classic-layout` in engine task front matter",
+      () => !!engD && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dD, engD.file), "utf8")));
+    revokeDecision(dD, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    check("--revoke keeps the `Reconcile mode:` headline on index.md",
+      () => /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(dD, TASK_INDEX_FILE), "utf8")));
+  }
+  // ---- readMergedTaskDir (feeds the refused-round index refresh) carries the frozen stamp ----
+  {
+    const dR = path.join(tmp("mode_readmerged"), "bt");
+    syncTaskDir(dR, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    check("readMergedTaskDir carries the frozen reconcileMode (so a refused-round index refresh keeps it)",
+      () => readMergedTaskDir(dR, RUN, OPTS).reconcileMode === RECONCILE_MODE_CLASSIC);
+  }
+  // ---- syncRepairDir stamps every repair task file on a frozen folder (AC1: in every build brief) ----
+  {
+    const dRep = path.join(tmp("mode_repair_stamp"), "bt");
+    syncTaskDir(dRep, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const rep = syncRepairDir(dRep, RUN, VERIFY_PAGES, OPTS);
+    const repFile = (rep.written || [])[0];
+    check("syncRepairDir stamps `reconcileMode: classic-layout` on a repair task file and it round-trips",
+      () => {
+        if (!repFile) return false;
+        const txt = fs.readFileSync(path.join(dRep, repFile.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC;
+      },
+      () => ({ repFile: repFile?.file }));
+  }
+  // ---- --verify --built --tasks reads the frozen mode; the applied mode is printed, never silently off ----
+  {
+    const dV = path.join(tmp("mode_verify_cli"), "bt");
+    cliTasks(["--tasks", dV, "--reconcile-mode", "classic-layout"], RECON);
+    const bf = path.join(tmp("mode_verify_built"), "built.json");
+    fs.writeFileSync(bf, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vOn = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
+    check("verify on a classic-layout folder announces the applied mode (EXTRA gate ON), not a silent overlay",
+      () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vOn.stderr || ""), () => vOn.stderr);
+    // end-to-end: a built page carrying a base field NOT in the plan makes --verify flag ❌ EXTRA and exit non-zero.
+    const bfExtra = path.join(tmp("mode_verify_extra_built"), "built.json");
+    fs.writeFileSync(bfExtra, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [{ name: "StrayBase", type: "crt.Input" }] } } } }));
+    const vExtra = cliTasks(["--tasks", dV, "--verify", "--built", bfExtra], RECON);
+    check("verify on a classic-layout folder flags a base field NOT in the plan as ❌ EXTRA and does not pass (exit != 0)",
+      () => vExtra.status !== 0 && /❌ EXTRA/.test(vExtra.stdout || "") && /StrayBase/.test(vExtra.stdout || ""),
+      () => ({ status: vExtra.status, extra: (vExtra.stdout || "").split("\n").filter((l) => /EXTRA/.test(l)) }));
+    const vOff = cliTasks(["--verify", "--built", bf], RECON); // no --tasks → gate not applied
+    check("verify WITHOUT --tasks on a reconcile plan announces the EXTRA gate is NOT applied",
+      () => /EXTRA-field gate NOT applied/.test(vOff.stderr || ""), () => vOff.stderr);
+    // A corrupted .reconcile-mode on --verify must NOT silently verify a classic-layout folder as overlay.
+    fs.writeFileSync(path.join(dV, ".reconcile-mode"), "sideways\n");
+    const vCorrupt = cliTasks(["--tasks", dV, "--verify", "--built", bf], RECON);
+    check("verify REFUSES a corrupted .reconcile-mode rather than silently skipping the classic-layout gate",
+      () => vCorrupt.status === 1 && /unrecognised value/.test(vCorrupt.stderr || vCorrupt.stdout || ""), () => vCorrupt.stderr);
+  }
+  // ---- a DROPPED `.reconcile-mode` (dotfile gone, task files still stamped) is a lost dotfile, not a mode reset ----
+  // A mutation op (--decide/--revoke) or a repair round must NOT strip the stamp off every rewritten task file and
+  // silently revert the folder to overlay; and --verify must restore the mode from the stamp, keeping the gate ON.
+  {
+    const engStamped = (dir) => { const eng = readTaskDir(dir).find((t) => t.origin === "engine");
+      return !!eng && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dir, eng.file), "utf8")); };
+    const dropDotfile = (dir) => fs.rmSync(path.join(dir, ".reconcile-mode"), { force: true });
+    const dm = new Map([["D13", "descope — test"]]);
+    // --decide with the dotfile gone keeps the stamp on the rewritten task files (restored from the stamp).
+    const dDec = path.join(tmp("mode_lost_decide"), "bt");
+    syncTaskDir(dDec, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dDec);
+    applyDecision(dDec, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    check("--decide with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files (restored from the stamp, not reset to overlay)",
+      () => engStamped(dDec), () => ({ eng: readTaskDir(dDec).find((t) => t.origin === "engine")?.file }));
+    // --revoke with the dotfile gone likewise keeps the stamp.
+    const dRevL = path.join(tmp("mode_lost_revoke"), "bt");
+    syncTaskDir(dRevL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    applyDecision(dRevL, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    dropDotfile(dRevL);
+    revokeDecision(dRevL, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    check("--revoke with a DROPPED .reconcile-mode keeps `reconcileMode: classic-layout` on the task files",
+      () => engStamped(dRevL));
+    // a repair round with the dotfile gone stamps the repair file from the task-file stamp, not overlay.
+    const dRepL = path.join(tmp("mode_lost_repair"), "bt");
+    syncTaskDir(dRepL, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dRepL);
+    const repL = syncRepairDir(dRepL, RUN, VERIFY_PAGES, OPTS);
+    const repLFile = (repL.written || [])[0];
+    check("a repair round with a DROPPED .reconcile-mode still stamps `reconcileMode: classic-layout` on the repair task",
+      () => !!repLFile && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dRepL, repLFile.file), "utf8")),
+      () => ({ repFile: repLFile?.file }));
+    // --verify --tasks with the dotfile gone restores the mode from the stamp and keeps the EXTRA gate ON.
+    const dVerL = path.join(tmp("mode_lost_verify"), "bt");
+    cliTasks(["--tasks", dVerL, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dVerL);
+    const bfL = path.join(tmp("mode_lost_verify_built"), "built.json");
+    fs.writeFileSync(bfL, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vLost = cliTasks(["--tasks", dVerL, "--verify", "--built", bfL], RECON);
+    check("verify with a DROPPED .reconcile-mode restores classic-layout from the stamp — EXTRA gate stays ON, not silently overlay",
+      () => /reconcile verify mode = classic-layout — EXTRA-field gate ON/.test(vLost.stderr || ""), () => vLost.stderr);
+    // the CUT path (syncTaskDir/resolveFrozenMode) restores AND re-freezes the dotfile from the stamp on a no-flag re-slice.
+    const dReslice = path.join(tmp("mode_lost_reslice"), "bt");
+    syncTaskDir(dReslice, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dReslice);
+    const reSet = syncTaskDir(dReslice, RUN, checklistOpts(MANIFEST)); // NO flag
+    check("a no-flag re-slice with a DROPPED .reconcile-mode restores classic-layout from the stamp (set + front matter) AND re-freezes the dotfile",
+      () => reSet.reconcileMode === RECONCILE_MODE_CLASSIC && engStamped(dReslice) && readFrozenMode(dReslice) === RECONCILE_MODE_CLASSIC,
+      () => ({ set: reSet.reconcileMode, dotfile: readFrozenMode(dReslice) }));
+    // MIXED stamps (task files disagree) are ambiguous — treated like a corrupted dotfile, not first-wins.
+    const dMixed = path.join(tmp("mode_lost_mixed"), "bt");
+    const mixedSet = syncTaskDir(dMixed, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dMixed);
+    const engMix = mixedSet.tasks.find((t) => t.origin === "engine").file; // flip ONE task file's stamp to overlay
+    fs.writeFileSync(path.join(dMixed, engMix), fs.readFileSync(path.join(dMixed, engMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    check("a folder with DISAGREEING task-file stamps resolves to null (ambiguous, not first-wins) so the mode is not silently trusted",
+      () => effectiveFrozenMode(dMixed) === null, () => ({ resolved: effectiveFrozenMode(dMixed) }));
+    // CLI: re-passing the SAME mode on a dropped-dotfile folder is accepted (not a false "cut WITHOUT a mode" refusal).
+    const dCliSame = path.join(tmp("mode_lost_cli_same"), "bt");
+    cliTasks(["--tasks", dCliSame, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliSame);
+    const rSame = cliTasks(["--tasks", dCliSame, "--reconcile-mode", "classic-layout"], RECON);
+    check("CLI: re-passing the SAME mode on a dropped-dotfile folder is accepted and re-freezes it (no false 'cut WITHOUT a mode')",
+      () => rSame.status === 0 && readFrozenMode(dCliSame) === RECONCILE_MODE_CLASSIC, () => ({ status: rSame.status, err: rSame.stderr }));
+    // CLI: re-passing a DIFFERENT mode on a dropped-dotfile folder is refused and names the mode restored from the stamps.
+    const dCliDiff = path.join(tmp("mode_lost_cli_diff"), "bt");
+    cliTasks(["--tasks", dCliDiff, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliDiff);
+    const rDiff = cliTasks(["--tasks", dCliDiff, "--reconcile-mode", "overlay"], RECON);
+    check("CLI: re-passing a DIFFERENT mode on a dropped-dotfile folder is refused, naming the mode restored from the stamps",
+      () => rDiff.status === 1 && /cut in `classic-layout`/.test(rDiff.stderr || rDiff.stdout || ""), () => rDiff.stderr);
+    // CLI: a dropped-dotfile folder with DISAGREEING task stamps is refused on a no-flag re-slice (not silently overlaid).
+    const dCliMix = path.join(tmp("mode_lost_cli_mixed"), "bt");
+    cliTasks(["--tasks", dCliMix, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliMix);
+    const engCliMix = readTaskDir(dCliMix).find((t) => t.origin === "engine");
+    fs.writeFileSync(path.join(dCliMix, engCliMix.file), fs.readFileSync(path.join(dCliMix, engCliMix.file), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    const rMix = cliTasks(["--tasks", dCliMix], RECON);
+    check("CLI: a dropped-dotfile folder with DISAGREEING task stamps is refused on re-slice (not silently overlaid)",
+      () => rMix.status === 1 && /DISAGREEING/.test(rMix.stderr || rMix.stdout || ""), () => rMix.stderr);
+    // verify on that mixed folder is refused too — the EXTRA gate is never silently turned off by an ambiguous folder.
+    const bfMix = path.join(tmp("mode_lost_cli_mixed_built"), "built.json");
+    fs.writeFileSync(bfMix, JSON.stringify({ pages: { main: { schemaUId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schemaName: "X_FormPage", parentSchemaName: "X_FormPage", viewConfig: { items: [] } } } }));
+    const vMix = cliTasks(["--tasks", dCliMix, "--verify", "--built", bfMix], RECON);
+    check("verify on a dropped-dotfile folder with DISAGREEING stamps is refused (EXTRA gate not silently overlaid)",
+      () => vMix.status === 1 && /DISAGREEING/.test(vMix.stderr || vMix.stdout || ""), () => vMix.stderr);
+    // BOTH index.md AND .reconcile-mode gone, task files still stamped: the guard keys off the task files (not the
+    // regenerable index), so a no-flag re-slice restores the mode from the stamp rather than slipping through as a fresh cut.
+    const dCliNoIdx = path.join(tmp("mode_lost_cli_noindex"), "bt");
+    cliTasks(["--tasks", dCliNoIdx, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliNoIdx);
+    fs.rmSync(path.join(dCliNoIdx, TASK_INDEX_FILE), { force: true });
+    const rNoIdx = cliTasks(["--tasks", dCliNoIdx], RECON);
+    check("CLI: a no-flag re-slice with BOTH index.md and .reconcile-mode gone restores classic-layout from the task stamps (not a silent fresh-cut overlay)",
+      () => rNoIdx.status === 0 && readFrozenMode(dCliNoIdx) === RECONCILE_MODE_CLASSIC, () => ({ status: rNoIdx.status, frozen: readFrozenMode(dCliNoIdx), err: rNoIdx.stderr }));
+    // An UNRECOGNISED stamp with the dotfile dropped is refused the same way a corrupted dotfile is (not read as overlay).
+    const dCliBad = path.join(tmp("mode_lost_cli_badstamp"), "bt");
+    cliTasks(["--tasks", dCliBad, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliBad);
+    for (const t of readTaskDir(dCliBad)) {
+      const p = path.join(dCliBad, t.file);
+      fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: Classic-Layout"));
+    }
+    const rBad = cliTasks(["--tasks", dCliBad], RECON);
+    check("CLI: a dropped-dotfile folder whose task stamps hold an UNRECOGNISED value is refused (not read as overlay)",
+      () => rBad.status === 1 && /UNRECOGNISED/.test(rBad.stderr || rBad.stdout || ""), () => rBad.stderr);
+    // --decide on a mixed-stamp dropped-dotfile folder is refused too (the guard runs on every --tasks entry path).
+    const dCliDecMix = path.join(tmp("mode_lost_cli_decide_mixed"), "bt");
+    cliTasks(["--tasks", dCliDecMix, "--reconcile-mode", "classic-layout"], RECON);
+    dropDotfile(dCliDecMix);
+    const engDecMix = readTaskDir(dCliDecMix).find((t) => t.origin === "engine");
+    fs.writeFileSync(path.join(dCliDecMix, engDecMix.file), fs.readFileSync(path.join(dCliDecMix, engDecMix.file), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    const rDecMix = cliTasks(["--tasks", dCliDecMix, "--decide", "D13", "--wont-do", "--pages", "main"], RECON);
+    check("CLI: --decide on a dropped-dotfile folder with DISAGREEING stamps is refused (guard runs on the --decide entry path)",
+      () => rDecMix.status === 1 && /DISAGREEING/.test(rDecMix.stderr || rDecMix.stdout || ""), () => rDecMix.stderr);
+    // LIBRARY-level: syncTaskDir (via resolveFrozenMode) THROWS on ambiguous stamps with a dropped dotfile, so a direct
+    // caller that never passes through the CLI guard fails closed rather than silently re-slicing the folder to overlay.
+    const dLibMix = path.join(tmp("mode_lib_mixed"), "bt");
+    const libSet = syncTaskDir(dLibMix, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dLibMix);
+    const engLibMix = libSet.tasks.find((t) => t.origin === "engine").file;
+    fs.writeFileSync(path.join(dLibMix, engLibMix), fs.readFileSync(path.join(dLibMix, engLibMix), "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: overlay"));
+    check("syncTaskDir THROWS on DISAGREEING task stamps with a dropped dotfile (library fail-closed, not a silent overlay re-slice)",
+      () => { try { syncTaskDir(dLibMix, RUN, checklistOpts(MANIFEST)); return false; } catch (e) { return /disagreeing/i.test(e.message); } });
+    const dLibBad = path.join(tmp("mode_lib_badstamp"), "bt");
+    const libBadSet = syncTaskDir(dLibBad, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    dropDotfile(dLibBad);
+    for (const t of libBadSet.tasks) {
+      const p = path.join(dLibBad, t.file);
+      if (fs.existsSync(p)) fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^reconcileMode: classic-layout$/m, "reconcileMode: Classic-Layout"));
+    }
+    check("syncTaskDir THROWS on an UNRECOGNISED task stamp with a dropped dotfile (library fail-closed)",
+      () => { try { syncTaskDir(dLibBad, RUN, checklistOpts(MANIFEST)); return false; } catch (e) { return /unrecognised/i.test(e.message); } });
+  }
+  // ---- addTasks stamps the frozen mode on a task it mints (AC3 stamp reaches orchestrator-minted tasks) ----
+  {
+    const dAdd = path.join(tmp("mode_addtasks_stamp"), "bt");
+    syncTaskDir(dAdd, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    addTasks(dAdd, RUN, { ...DECL }, OPTS);
+    const minted = readTaskDir(dAdd).find((t) => t.id === DECL.id);
+    check("addTasks stamps `reconcileMode: classic-layout` on the task it mints on a frozen folder",
+      () => {
+        if (!minted) return false;
+        const txt = fs.readFileSync(path.join(dAdd, minted.file), "utf8");
+        return /^reconcileMode: classic-layout$/m.test(txt) && parseTaskFile(txt).meta.reconcileMode === RECONCILE_MODE_CLASSIC;
+      },
+      () => ({ minted: minted?.file }));
+  }
+  // ---- --revoke keeps the stamp on the rewritten TASK FRONT MATTER, not only the index headline ----
+  {
+    const dRv = path.join(tmp("mode_revoke_frontmatter"), "bt");
+    syncTaskDir(dRv, RUN, { ...OPTS, reconcileMode: RECONCILE_MODE_CLASSIC });
+    const dm = new Map([["D13", "descope — test"]]);
+    applyDecision(dRv, RUN, { ...OPTS, decision: "D13", mode: "wont-do", pages: ["main"], decisions: dm });
+    revokeDecision(dRv, RUN, { ...OPTS, decision: "D13", decisions: dm });
+    const engRv = readTaskDir(dRv).find((t) => t.origin === "engine");
+    check("--revoke keeps `reconcileMode: classic-layout` in the rewritten engine task front matter",
+      () => !!engRv && /^reconcileMode: classic-layout$/m.test(fs.readFileSync(path.join(dRv, engRv.file), "utf8")));
+  }
+}
+/* ================================================================================================
    THE MIGRATION RESULT REPORT. An orchestrated run must not end on two files that disagree: the
    `--verify` table ("2 machine row(s) not confirmed") and `build-tasks/index.md` (5 open, 3 partial, three handlers
    recorded NOT BUILT), with the agent presenting the first. `--verify --built <f> --tasks <dir>` prints ONE report
@@ -4805,7 +5498,7 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
    ================================================================================================ */
 console.log("\n===== the migration result report — one artifact, computed from the ledger AND the built pages =====");
 {
-  const cliR = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { cwd: DIR, input: JSON.stringify(manifest), encoding: "utf8" });
+  const cliR = cliApproved;
   const closeAll = (dir) => {
     for (;;) {
       const tasks = readTaskDir(dir);
@@ -5237,14 +5930,14 @@ console.log("\n===== the startable set — one predicate, two callers =====");
   {
     const d = folderAt(0);
     const a = answerOf(d);
-    check("T1 fixture (anti-vacuity): the fresh folder really holds a dependency CHAIN — exactly one task has no `dependsOn`, and the other nine wait on it directly or transitively, so 'withholds what waits' is not a claim about an empty list",
-      () => SET.tasks.filter((t) => (t.dependsOn || []).length === 0).length === 1 && SET.tasks.length === 10,
+    check("T1 fixture (anti-vacuity): the fresh folder really holds a dependency CHAIN — exactly one task has no `dependsOn`, and the other eleven wait on it directly or transitively, so 'withholds what waits' is not a claim about an empty list",
+      () => SET.tasks.filter((t) => (t.dependsOn || []).length === 0).length === 1 && SET.tasks.length === 12,
       () => SET.tasks.map((t) => ({ id: t.id, dep: t.dependsOn })));
     check("T1 (R1): on a fresh folder the answer names the head of the queue and NOTHING else — the orchestrator asks which task to start instead of reading the `Step` column off a derived index",
       () => a.verdict === NEXT_STARTABLE && idsOf(a.startable).join(",") === HEAD,
       () => ({ verdict: a.verdict, startable: idsOf(a.startable) }));
     check("T1 (R1): every other task is WITHHELD with the cause that holds it — `deps`, naming the open task(s) it waits on, so an empty-looking queue is never unexplained",
-      () => a.withheld.length === 9 && a.withheld.every((w) => w.cause === HOLD_DEPS && w.tasks.length > 0),
+      () => a.withheld.length === SET.tasks.length - 1 && a.withheld.every((w) => w.cause === HOLD_DEPS && w.tasks.length > 0),
       () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
     fs.rmSync(d, { recursive: true, force: true });
   }
@@ -5329,7 +6022,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
         const cdir = path.join(cbase, "tasks");
         const cman = path.join(cbase, "manifest.json");
         fs.writeFileSync(cman, JSON.stringify(MANIFEST));
-        const cli = (...args) => spawnSync(process.execPath, [MIGRATE, cman, ...args], { encoding: "utf8" });
+        const cli = (...args) => cliFileApproved(cman, ...args);
         cli("--tasks", cdir);
         const busy = readTaskDir(cdir).find((t) => t.writesTo);
         cli("--tasks", cdir, "--start", busy.id);
@@ -5527,7 +6220,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
   // ---- T5 (R3) — the four empty answers are distinguishable -------------------------------------
   {
     // FINISHED — every task settled, nothing left to hand out.
-    const dFin = folderAt(10);
+    const dFin = folderAt(SET.tasks.length);
     const aFin = startableTasks(syncTaskDir(dFin, RUN, OPTS), dFin);
     check("T5 fixture (anti-vacuity): the finished folder really has every task SETTLED and a dispatch record for each — else `finished` would be indistinguishable from a ledger failure",
       () => {
@@ -5578,7 +6271,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   const dir = path.join(base, "build & tasks");
   const manifestPath = path.join(base, "the $manifest.json");
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
-  const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+  const cliFile = (...args) => cliFileApproved(manifestPath, ...args);
   cliFile("--tasks", dir);
 
   const fresh = cliFile("--tasks", dir, "--next");
@@ -5660,7 +6353,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   const dir = path.join(base, "build-tasks");
   const manifestPath = path.join(base, "m.json");
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
-  const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+  const cliFile = (...args) => cliFileApproved(manifestPath, ...args);
   cliFile("--tasks", dir);
   const CLI_OPTS = checklistOpts(MANIFEST);
   for (const t of [...buildTaskSet(RUN, CLI_OPTS).tasks].sort((a, b) => a.order - b.order)) {
@@ -5717,6 +6410,342 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   check("--next without --tasks: exit 1 — it answers a question about a task FOLDER, and without one there is nothing to answer about",
     () => alone.status === 1 && /--tasks/.test(alone.stderr || ""),
     () => ({ status: alone.status, stderr: alone.stderr }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====");
+{
+  // The two facts a hand-off refuses on are read from files a PERSON writes, so the readers are pinned on the
+  // shapes those files take and on the near-misses that must not pass.
+  const V = "plan-4f9c2ab17e03";
+  check("planApprovalLine: a `Plan version:` line naming the version is the approval, returned without its list marker",
+    () => planApprovalLine(`# Decisions\n- Approved by: user\n- Plan version: \`${V}\`\n`, V) === `Plan version: \`${V}\``);
+  const BY = "- Approved by: user\n";
+  check("planApprovalLine: the version must be the WHOLE `Plan version:` value — a prefix or an extension of it is a different plan",
+    () => planApprovalLine(`${BY}- Plan version: \`plan-4f9c\``, V) === null && planApprovalLine(`${BY}- Plan version: \`${V}0\``, V) === null
+      && planApprovalLine(`${BY}- Plan version: \`plan-4f9c2ab17e03-b\``, V) === null);
+  check("planApprovalLine: the version on a line that is not a `Plan version:` field is not an approval",
+    () => planApprovalLine(`${BY}- Rationale: supersedes ${V}`, V) === null && planApprovalLine("", V) === null
+      && planApprovalLine(`${BY}Plan version ${V} rejected`, V) === null && planApprovalLine(`${BY}- Plan version: ${V}`, null) === null);
+  check("planApprovalLine: an entry that names the version with no (or an empty) `Approved by:` is not an approval — a scope change records the new version before it is approved",
+    () => planApprovalLine(`## 2026-09-30 — Scope change\n- Decision: drop a page\n- Plan version: \`${V}\`\n`, V) === null
+      && planApprovalLine(`## Scope change\n- Approved by:\n- Plan version: ${V}\n`, V) === null);
+  check("planApprovalLine: `Approved by:` and `Plan version:` must be in the SAME `## ` entry",
+    () => planApprovalLine(`## Earlier\n${BY}- Plan version: plan-000000000000\n## Scope change\n- Plan version: ${V}\n`, V) === null);
+  check("planApprovalLine: the full template entry passes, bold field names too, and its `Plan version` line is returned",
+    () => planApprovalLine(`## Scope change\n- Plan version: ${V}\n## 2026-09-30 — Plan approved\n- Decision: build\n- Rationale: ok\n${BY}- Plan version: \`${V}\`\n- Affects: all\n`, V) === `Plan version: \`${V}\``
+      && planApprovalLine(`## Plan approved\n- **Approved by:** user\n- **Plan version:** \`${V}\`\n`, V) === `**Plan version:** \`${V}\``);
+  check("worklogRoute: a plain, bold or listed `Route:` line is read, and the LAST one wins",
+    () => worklogRoute("Route: agent") === "Route: agent" && worklogRoute("- **Route:** `inline`") === "Route: inline"
+      && worklogRoute("Route: agent\n## later\nRoute: codex\n") === "Route: codex",
+    () => [worklogRoute("Route: agent"), worklogRoute("- **Route:** `inline`"), worklogRoute("Route: agent\nRoute: codex")]);
+  check("worklogRoute: a line that only mentions a route, or an empty `Route:`, is not the route",
+    () => worklogRoute("- the Route: line is written in 7.0") === null && worklogRoute("Route:") === null
+      && worklogRoute("") === null && RESUME_FILE === "resume.md");
+  check("worklogRoute: only a 7.0 route is a route — each of agent · codex · copilot · inline is read, a trailing note is kept",
+    () => DISPATCH_ROUTES.every((r) => worklogRoute(`Route: ${r}`) === `Route: ${r}`)
+      && worklogRoute("- **Route:** `inline` (the host has no sub-agents)") === "Route: inline (the host has no sub-agents)",
+    () => DISPATCH_ROUTES.map((r) => worklogRoute(`Route: ${r}`)));
+  check("worklogRoute: `Route: TBD`, a misspelt or a re-cased route is NO route — and a later such line is not saved by an earlier valid one",
+    () => worklogRoute("Route: TBD") === null && worklogRoute("Route: agents") === null && worklogRoute("Route: Agent") === null
+      && worklogRoute("Route: agent\n## later\nRoute: TBD\n") === null,
+    () => [worklogRoute("Route: TBD"), worklogRoute("Route: agents"), worklogRoute("Route: agent\nRoute: TBD")]);
+  {
+    // The decisions.md TEMPLATE in migration-documentation.md, filled in the obvious way, must pass the gate the
+    // hand-off applies — a template whose value line carries its own explanation fails the exact version match.
+    const doc = fs.readFileSync(path.join(ENGINE_DIR, "..", "references", "migration-documentation.md"), "utf8");
+    const fence = "```markdown\n";
+    const open = doc.indexOf(fence, doc.indexOf("### decisions.md\n"));
+    const block = open < 0 ? "" : doc.slice(open + fence.length, doc.indexOf("```", open + fence.length));
+    // Every remaining `<placeholder>` on a line becomes `x`; a linear scan, so no regex can backtrack.
+    const fillPlaceholders = (line) => {
+      let out = "";
+      let at = 0;
+      for (let lt = line.indexOf("<"); lt >= 0; lt = line.indexOf("<", at)) {
+        const gt = line.indexOf(">", lt);
+        if (gt < 0) break;
+        out += line.slice(at, lt) + "x";
+        at = gt + 1;
+      }
+      return out + line.slice(at);
+    };
+    const filled = block.replace("<user>", "Kamil").replaceAll("plan-<hash>", V).split("\n").map(fillPlaceholders).join("\n");
+    check("planApprovalLine: the decisions.md TEMPLATE entry, filled in, is an approval of that version",
+      () => block.includes("Plan version:") && planApprovalLine(filled, V) === `Plan version: ${V}`,
+      () => ({ block, filled, got: planApprovalLine(filled, V) }));
+  }
+}
+
+console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
+{
+  // THE HAND-OFF TO A FRESH SESSION. A driver that plans and builds in one session carries the discovery and
+  // planning into every build turn. `--handoff` writes the one file a fresh session resumes from, and every value
+  // in it is computed here — none is typed by the driver, because a hand-written note is a prose-only rule.
+  //
+  // The layout is the real one on purpose: the manifest sits OUTSIDE the migration folder (a session scratchpad),
+  // and both paths carry a space, since the resume prompt must name them verbatim.
+  const base = tmp("cli-handoff");
+  const folder = path.join(base, "mig folder");
+  const dir = path.join(folder, "build-tasks");
+  const manifestPath = path.join(base, "scratch pad", "manifest.json");
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
+  const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
+  const APPROVAL = `- Plan version: \`${RUN.planVersion}\``;
+  const decisionsOk = `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Decision: build the plan\n- Approved by: user\n${APPROVAL}\n`;
+  const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n";
+  // Recorded BEFORE the cut: `--tasks` slices only a plan whose version decisions.md approves.
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, "decisions.md"), decisionsOk);
+  fs.writeFileSync(path.join(folder, "worklog.md"), worklogOk);
+  cliFile(manifestPath, "--tasks", dir);
+  const RESUME = path.join(folder, "resume.md");
+  const COPY = path.join(folder, RESUME_MANIFEST_FILE);
+  const snapOf = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { recursive: true }).sort()
+    .filter((f) => fs.statSync(path.join(d, f)).isFile()).map((f) => [f, fs.readFileSync(path.join(d, f), "utf8")]) : null);
+
+  const next = cliFile(manifestPath, "--tasks", dir, "--next");
+  const nextId = ((next.stdout || "").split("\n").find((l) => l.includes("--start ")) || "")
+    .split("--start ")[1]?.trim().replace(/^["']|["']$/g, "");
+  check("--handoff (anti-vacuity): the sliced fixture has a startable task for the resume to name — else 'names the next task' would be a claim about an empty answer",
+    () => next.status === 0 && !!nextId, () => ({ status: next.status, stdout: next.stdout }));
+
+  const ok = cliFile(manifestPath, "--tasks", dir, "--handoff");
+  const resume = fs.existsSync(RESUME) ? fs.readFileSync(RESUME, "utf8") : "";
+  check("--handoff (R1): on an approved, sliced folder it exits 0 and WRITES <migration-folder>/resume.md",
+    () => ok.status === 0 && resume.length > 0, () => ({ status: ok.status, stdout: ok.stdout, stderr: ok.stderr }));
+  check("--handoff (R1): resume.md records the ABSOLUTE manifest path, the migration folder and the environment the plan names",
+    () => resume.includes(`**Manifest:** \`${COPY}\``) && resume.includes(path.resolve(folder))
+      && /\*\*Environment:\*\* `test`/.test(resume),
+    () => resume);
+  check("--handoff (R8): the manifest is COPIED into the migration folder, byte for byte, and resume.md names the copy — never the temporary original",
+    () => fs.existsSync(COPY) && fs.readFileSync(COPY, "utf8") === fs.readFileSync(manifestPath, "utf8")
+      && !resume.includes(path.resolve(manifestPath)),
+    () => ({ copy: fs.existsSync(COPY), resume }));
+  check("--handoff (R1): resume.md records the APPROVED plan version and the approval line it was read from in decisions.md",
+    () => resume.includes(`**Approved plan version:** \`${RUN.planVersion}\``) && resume.includes(APPROVAL.replace(/^- /, "")),
+    () => resume);
+  check("--handoff (R1): resume.md records the `Route:` line from worklog.md verbatim",
+    () => /\*\*Route:\*\* `Route: agent`/.test(resume), () => resume);
+  check("--handoff (R1): resume.md carries the engine's `--- progress ---` block, as `--tasks` prints it",
+    () => resume.includes("--- progress ---") && /done \d+ · running \d+ · todo \d+/.test(resume) && /dispatched \d+ of \d+/.test(resume),
+    () => resume);
+  check("--handoff (R1): resume.md names the next startable task — the same one `--next` names first",
+    () => resume.includes(`**Next startable task:** \`${nextId}\``), () => ({ nextId, resume }));
+  const promptBlock = (resume.split("## Resume prompt")[1] || "");
+  check("--handoff (R1): the ONE copyable resume prompt names the migration folder and the manifest path verbatim, and the `--next` it continues with",
+    () => promptBlock.includes(path.resolve(folder)) && promptBlock.includes(COPY)
+      && promptBlock.includes("--next") && (promptBlock.match(/```/g) || []).length === 2,
+    () => promptBlock);
+  check("--handoff (R4): the stdout note names resume.md and the manifest copy, gives the prompt to paste into a fresh session, and sends the choice to the 7.1b question",
+    () => (ok.stdout || "").includes(RESUME) && /fresh session/i.test(ok.stdout || "") && (ok.stdout || "").includes(COPY)
+      && (ok.stdout || "").includes("7.1b") && (ok.stdout || "").includes("`Build session:`"),
+    () => ok.stdout);
+  check("--handoff (R4): the stdout note has no unconditional STOP — whether the build leaves this session is the user's 7.1b answer, not the tool's",
+    () => !/\bSTOP\b/.test(ok.stdout || ""), () => ok.stdout);
+  {
+    // THE NOTE AND 7.1b NAME THE SAME ANSWERS. Each side had its own test, so they drifted apart once; this reads the
+    // option labels from 7.1b itself and requires every one of them in the tool output.
+    const doc = fs.readFileSync(path.join(ENGINE_DIR, "..", "references", "orchestrate-build.md"), "utf8");
+    const gate = doc.slice(doc.indexOf("**7.1b "), doc.indexOf("**7.2 "));
+    const labels = [...gate.matchAll(/^\d+\. \*\*([^*]+?)(?: \(Recommended\))?\*\*/gm)].map((m) => m[1]);
+    check("--handoff (R4): every 7.1b answer is named in the stdout note, so the tool output and the question cannot disagree",
+      () => labels.length === 3 && labels.every((l) => (ok.stdout || "").includes(`- ${l}:`)),
+      () => ({ labels, stdout: ok.stdout }));
+  }
+  check("--handoff: it reads the task folder, it does not move it — no task started, no token issued",
+    () => readTaskDir(dir).every((t) => t.status === "todo") && !/DISPATCH TOKEN/.test(ok.stdout || ""),
+    () => readTaskDir(dir).map((t) => t.status));
+
+  // R2 — the four refusals. Each exits 2, names the cause AND the fix, and writes nothing: no resume.md where
+  // there was none, the previous one byte-identical where there was, and the task folder untouched.
+  const refusalCase = (label, arrange, args, cause, fix) => {
+    const copy = path.join(tmp(`cli-handoff-${label}`), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    const hadResume = label === "no-route";   // one case keeps the earlier resume.md, to pin "unchanged"
+    if (!hadResume) fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    if (!hadResume) fs.rmSync(path.join(copy, RESUME_MANIFEST_FILE), { force: true });
+    arrange(copy);
+    const before = snapOf(copy);
+    const res = cliFile(args.manifest || manifestPath, "--tasks", path.join(copy, "build-tasks"), "--handoff");
+    const after = snapOf(copy);
+    check(`--handoff (R2) ${label}: exit 2, NOTHING WRITTEN, the cause and the fix named, ${hadResume ? "the earlier resume.md unchanged" : "no resume.md"} and the folder byte-identical`,
+      () => res.status === 2 && /NOTHING WRITTEN/.test(res.stdout || "") && cause.test(res.stdout || "") && fix.test(res.stdout || "")
+        && (hadResume ? fs.readFileSync(path.join(copy, "resume.md"), "utf8") === resume : !fs.existsSync(path.join(copy, "resume.md")))
+        && (hadResume || !fs.existsSync(path.join(copy, RESUME_MANIFEST_FILE)))
+        && JSON.stringify(before) === JSON.stringify(after),
+      () => ({ status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+  };
+  refusalCase("no-approval", (c) => fs.writeFileSync(path.join(c, "decisions.md"),
+    decisionsOk.replace(RUN.planVersion, "plan-000000000000")), {},
+  /no approval of plan version/, /Record the approval/);
+  refusalCase("unsliced", (c) => fs.rmSync(path.join(c, "build-tasks"), { recursive: true, force: true }), {},
+    /not sliced/, /--tasks .*build-tasks/);
+  refusalCase("no-manifest", () => {}, { manifest: path.join(base, "scratch pad", "gone.json") },
+    /manifest .*does not exist/, /reruns step 4.*hands off/);
+  refusalCase("no-route", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent\n", "")), {},
+    /no `Route:` line/, /7\.0/);
+  refusalCase("route-tbd", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent", "Route: TBD")), {},
+    /no `Route:` line naming one of agent · codex · copilot · inline/, /7\.0/);
+  {
+    // A plan with a plan-level gap is refused on the terms every task-folder mode refuses it on.
+    const gapManifest = path.join(base, "scratch pad", "gap.json");
+    fs.writeFileSync(gapManifest, JSON.stringify({ ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] }));
+    refusalCase("plan-gap", () => {}, { manifest: gapManifest }, /no task folder for a plan with gaps/, /re-run `--plan`/);
+  }
+  {
+    // TWO causes at once: each is named, so one run shows the whole fix rather than the first half of it.
+    const copy = path.join(tmp("cli-handoff-multi"), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    fs.rmSync(path.join(copy, RESUME_MANIFEST_FILE), { force: true });
+    fs.writeFileSync(path.join(copy, "decisions.md"), decisionsOk.replace(RUN.planVersion, "plan-000000000000"));
+    fs.writeFileSync(path.join(copy, "worklog.md"), worklogOk.replace("Route: agent\n", ""));
+    const res = cliFile(manifestPath, "--tasks", path.join(copy, "build-tasks"), "--handoff");
+    const causeLines = (res.stdout || "").split("\n").filter((l) => l.startsWith("  — "));
+    check("--handoff (R2): two causes in one folder are BOTH named, one line each, in one refusal — exit 2, nothing written",
+      () => res.status === 2 && causeLines.length === 2 && /no approval of plan version/.test(causeLines[0])
+        && /no `Route:` line/.test(causeLines[1]) && !fs.existsSync(path.join(copy, "resume.md"))
+        && !fs.existsSync(path.join(copy, RESUME_MANIFEST_FILE)),
+      () => ({ status: res.status, stdout: res.stdout }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+  }
+  {
+    // A `--next` that exits 2 is no place to resume from. A STUCK folder: its one build task recorded `blocked`,
+    // nothing in flight, the review behind it.
+    const copy = path.join(tmp("cli-handoff-stuck"), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    fs.rmSync(path.join(copy, RESUME_MANIFEST_FILE), { force: true });
+    const cdir = path.join(copy, "build-tasks");
+    editFrontMatter(cdir, nextId, "status", "blocked");
+    const asked = cliFile(manifestPath, "--tasks", cdir, "--next");
+    const res = cliFile(manifestPath, "--tasks", cdir, "--handoff");
+    check("--handoff (R9): a folder `--next` answers `stuck` for (exit 2) is refused — exit 2, NOTHING WRITTEN, no resume.md and no manifest copy, with `--next`'s own answer and fix",
+      () => asked.status === 2 && res.status === 2 && /NOTHING WRITTEN/.test(res.stdout || "") && /answers `stuck`/.test(res.stdout || "")
+        && /NOTHING STARTABLE AND NOTHING IN FLIGHT/.test(res.stdout || "") && /HELD — somebody has to decide/.test(res.stdout || "")
+        && !fs.existsSync(path.join(copy, "resume.md")) && !fs.existsSync(path.join(copy, RESUME_MANIFEST_FILE)),
+      () => ({ nextStatus: asked.status, status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+  }
+  refusalCase("scope-change-only", (c) => fs.writeFileSync(path.join(c, "decisions.md"),
+    `# Decisions And Approvals\n\n## 2026-09-30 — Scope change\n- Decision: drop a page\n- Rationale: out of scope\n${APPROVAL}\n`), {},
+  /no approval of plan version/, /Approved by:/);
+  // Before the first dispatch `--next` refuses a folder whose decisions.md holds a D<N> nothing cites, so the
+  // hand-off refuses it too: the fresh session's first `--next` would be refused.
+  refusalCase("uncited-decision", (c) => fs.appendFileSync(path.join(c, "decisions.md"), "\n## D9 — an uncited decision\n"), {},
+    /D9 — an uncited decision/, /decisionsWithoutDeliverable/);
+  {
+    // An unsliced folder is refused WITHOUT being created: the refresh `--tasks` modes run creates the folder.
+    const copy = path.join(tmp("cli-handoff-uncut"), "mig folder");
+    fs.mkdirSync(copy, { recursive: true });
+    fs.writeFileSync(path.join(copy, "decisions.md"), decisionsOk);
+    fs.writeFileSync(path.join(copy, "worklog.md"), worklogOk);
+    const res = cliFile(manifestPath, "--tasks", path.join(copy, "build-tasks"), "--handoff");
+    check("--handoff (R2): a folder never sliced is refused and NOT created — a hand-off must not cut the folder it reports on",
+      () => res.status === 2 && !fs.existsSync(path.join(copy, "build-tasks")) && !fs.existsSync(path.join(copy, "resume.md")),
+      () => ({ status: res.status, stdout: res.stdout }));
+    fs.rmSync(path.dirname(copy), { recursive: true, force: true });
+  }
+  {
+    // A manifest on stdin has no path, so the fresh session would have nothing to re-open.
+    fs.rmSync(RESUME, { force: true });
+    const res = cliTasks(["--tasks", dir, "--handoff"], MANIFEST);
+    check("--handoff (R2): a manifest piped on stdin is refused — exit 2, nothing written — because the resume must name a path",
+      () => res.status === 2 && /NOTHING WRITTEN/.test(res.stdout || "") && /stdin/.test(res.stdout || "") && !fs.existsSync(RESUME),
+      () => ({ status: res.status, stdout: res.stdout }));
+  }
+  {
+    const alone = cliFile(manifestPath, "--handoff");
+    check("--handoff without --tasks: exit 1 — it hands off a task FOLDER, and without one there is nothing to hand off",
+      () => alone.status === 1 && /--tasks/.test(alone.stderr || ""), () => ({ status: alone.status, stderr: alone.stderr }));
+    for (const [label, args] of [["--next", ["--next"]], ["--start", ["--start", nextId]], ["--route", ["--route"]],
+      ["--verify", ["--verify", "--built", "nope.json"]], ["--split", ["--split", path.join(base, "split.json")]],
+      ["--add", ["--add", path.join(base, "add.json")]], ["--revoke", ["--revoke", "D1"]]]) {
+      const res = cliFile(manifestPath, "--tasks", dir, "--handoff", ...args);
+      check(`--handoff + ${label}: exit 1 and nothing printed on stdout — the resume must describe ONE folder state`,
+        () => res.status === 1 && /--handoff/.test(res.stderr || "") && (res.stdout || "").trim() === "" && !fs.existsSync(RESUME),
+        () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    }
+    // `--build` is an answer to `--decide`, so it reaches `--handoff` only through `--decide` — both shapes refuse.
+    for (const [label, args, names] of [["--build", ["--build"], /--build/],
+      ["--decide D1 --build", ["--decide", "D1", "--build", "--task", nextId], /--handoff/]]) {
+      const res = cliFile(manifestPath, "--tasks", dir, "--handoff", ...args);
+      check(`--handoff + ${label}: exit 1, nothing printed on stdout and no resume.md — a build answer and a hand-off are separate calls`,
+        () => res.status === 1 && names.test(res.stderr || "") && (res.stdout || "").trim() === "" && !fs.existsSync(RESUME),
+        () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
+    }
+  }
+  {
+    // R8 — THE FRESH SESSION OUTLIVES THE SCRATCHPAD. The original manifest is deleted, as a cleaned temporary
+    // input folder deletes it; the `--next` command resume.md ends on must still run, because it names the copy.
+    const ok2 = cliFile(manifestPath, "--tasks", dir, "--handoff");
+    const text = fs.readFileSync(RESUME, "utf8");
+    const cmd = (/continue step 7 with: (.*)$/m.exec(text) || [])[1] || "";
+    fs.rmSync(manifestPath, { force: true });
+    const ran = spawnSync(cmd, { shell: true, encoding: "utf8" });
+    check("--handoff (R8): with the original manifest DELETED, the `--next` command resume.md names still answers — it reads the copy beside resume.md",
+      () => ok2.status === 0 && !fs.existsSync(manifestPath) && cmd.includes(RESUME_MANIFEST_FILE)
+        && ran.status === 0 && (ran.stdout || "").includes(nextId),
+      () => ({ cmd, status: ran.status, stdout: (ran.stdout || "").slice(0, 400), stderr: (ran.stderr || "").slice(0, 400) }));
+    // A resumed session hands off again from the copy itself: the copy is kept as it is and resume.md still names it.
+    const before = fs.existsSync(COPY) ? fs.readFileSync(COPY, "utf8") : null;
+    const again = cliFile(COPY, "--tasks", dir, "--handoff");
+    check("--handoff (R8): a hand-off run FROM the copy (a resumed session handing off again) exits 0, leaves the copy byte-identical and names it",
+      () => again.status === 0 && before !== null && fs.readFileSync(COPY, "utf8") === before
+        && fs.readFileSync(RESUME, "utf8").includes(`**Manifest:** \`${COPY}\``),
+      () => ({ status: again.status, stdout: again.stdout, stderr: again.stderr }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // THE SECOND HAND-OFF POINT: after a `--verify --tasks` that opened repair tasks. The folder has been dispatched
+  // (every plan task started, built and closed), so the before-first-dispatch refusals do not apply, and the resume
+  // must name the repair task `--next` names.
+  const base = tmp("cli-handoff-repair");
+  const folder = path.join(base, "mig folder");
+  const dir = path.join(folder, "build-tasks");
+  const manifestPath = path.join(base, "scratch pad", "manifest.json");
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
+  const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, "decisions.md"),
+    `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Approved by: user\n- Plan version: ${RUN.planVersion}\n`);
+  fs.writeFileSync(path.join(folder, "worklog.md"), "# Worklog\n\nRoute: agent\n");
+  cliFile(manifestPath, "--tasks", dir);
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const t of readTaskDir(dir).filter((x) => x.status === "todo")) {
+      const tok = /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(cliFile(manifestPath, "--tasks", dir, "--start", t.id).stdout || "")?.[1];
+      if (!tok) continue;
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, allBuilt(fs.readFileSync(fp, "utf8")).replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
+      cliFile(manifestPath, "--tasks", dir);
+      moved = true;
+    }
+  }
+  const planDone = readTaskDir(dir).length;
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const verify = cliFile(manifestPath, "--verify", "--built", builtFile, "--tasks", dir);
+  const repairs = readTaskDir(dir).filter((t) => t.file.startsWith("task-repair-"));
+  const next = cliFile(manifestPath, "--tasks", dir, "--next");
+  const nextId = ((next.stdout || "").split("\n").find((l) => l.includes("--start ")) || "")
+    .split("--start ")[1]?.trim().replace(/^["']|["']$/g, "");
+  check("--handoff after --verify (anti-vacuity): every plan task closed, the verify run opened repair tasks, and `--next` names one of them",
+    () => planDone > 0 && readTaskDir(dir).filter((t) => !t.file.startsWith("task-repair-")).every((t) => t.status === "done")
+      && /wrote \d+ repair task\(s\) \(round 1\)/.test(verify.stdout || "") && repairs.length > 0
+      && next.status === 0 && repairs.some((t) => t.id === nextId),
+    () => ({ verify: (verify.stdout || "").slice(-400), repairs: repairs.map((t) => t.id), next: next.stdout }));
+  const res = cliFile(manifestPath, "--tasks", dir, "--handoff");
+  const resume = fs.existsSync(path.join(folder, "resume.md")) ? fs.readFileSync(path.join(folder, "resume.md"), "utf8") : "";
+  const counts = /done (\d+) · running \d+ · todo (\d+)/.exec(resume) || [];
+  check("--handoff (R9): after a --verify that opened repair tasks it exits 0, names the repair task `--next` names, and its progress block counts the closed plan tasks as done and the repairs as todo",
+    () => res.status === 0 && resume.includes(`**Next startable task:** \`${nextId}\``)
+      && Number(counts[1]) === planDone && Number(counts[2]) === repairs.length,
+    () => ({ status: res.status, stdout: res.stdout, stderr: res.stderr, nextId, planDone, repairs: repairs.length, resume }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 {
@@ -5781,6 +6810,19 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
       () => ({ status: drifted.status, stderr: (drifted.stderr || "").slice(0, 400),
         before: beforeA, after: fs.readdirSync(dirA).sort() }));
     fs.rmSync(baseA, { recursive: true, force: true });
+  }
+
+  {
+    // `--add` writes task files and the index, so it is gated like `--tasks`: no approval of this plan version in
+    // decisions.md means no folder, no index and no declared task.
+    const baseN = tmp("cli-add-unapproved");
+    const dirN = path.join(baseN, "build-tasks");
+    const refused = cliUnapproved(["--tasks", dirN, "--add", declFile({ ...GOOD, id: "cli-add-unapproved" }, "unapproved")], MANIFEST);
+    check("approval gate (R1): `--tasks <fresh dir> --add` with no decisions.md exits 2, names the plan version it expects, and creates no folder and no index",
+      () => refused.status === 2 && /NOTHING WRITTEN — no declared task for a plan that is not approved/.test(refused.stdout || "")
+        && (refused.stdout || "").includes(`\`${RUN.planVersion}\``) && !fs.existsSync(dirN),
+      () => ({ status: refused.status, stdout: (refused.stdout || "").slice(0, 600), stderr: (refused.stderr || "").slice(0, 300), exists: fs.existsSync(dirN) }));
+    fs.rmSync(baseN, { recursive: true, force: true });
   }
 
   const ok = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "good")], MANIFEST);
@@ -6916,13 +7958,23 @@ function cardSplit(prefix, other, { run = CARD_RUN, groups = CARD_GROUPS, waitin
   const rowsOf = (k, keep = () => true) => groups.filter((g) => g.pageKey === k && keep(g))
     .flatMap((g) => g.rows.map((r) => r.label)).filter((l) => l !== waiting);
   const isReview = (g) => g.baseTitle === "Quality gates";
+  // The wiring rows bind `main`'s related lists to the child pages, so they go in an item after every child page;
+  // the rest of `main` keeps its place ahead of them.
+  const isWiring = (g) => g.baseTitle === "Child page wiring";
   const waitPage = groups.find((g) => g.rows.some((r) => r.label === waiting))?.pageKey;
   const waitItem = (k) => (k === waitPage ? [splitItem(other, k, k, [waiting])] : []);
   const itemsOf = (k) => (k === "main"
-    ? [splitItem(`${prefix}-source`, k, k, rowsOf(k, (g) => !isReview(g))), ...waitItem(k),
-      splitItem(`${prefix}-review`, k, k, rowsOf(k, isReview))]
+    ? [splitItem(`${prefix}-source`, k, k, rowsOf(k, (g) => !isReview(g) && !isWiring(g))), ...waitItem(k)]
     : [...waitItem(k), splitItem(`${prefix}-${slugKey(k)}`, k, k, rowsOf(k))]);
-  return { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap(itemsOf) };
+  const wiring = rowsOf("main", isWiring);
+  // `main`'s review judges the finished page, so it follows the wiring item as well.
+  const tail = [...(wiring.length ? [splitItem(`${prefix}-wiring`, "main", "main", wiring)] : []),
+    splitItem(`${prefix}-review`, "main", "main", rowsOf("main", isReview))];
+  // A child page wires its own children's lists too, so the child pages follow the engine's leaf-first queue.
+  const keys = [...new Set(groups.map((g) => g.pageKey))];
+  const children = bodyOrder(buildTaskSet(run, CARD_OPTS, groups)).filter((k) => k.startsWith("child:"));
+  const ordered = [...keys.filter((k) => !k.startsWith("child:")), ...children];
+  return { planVersion: run.planVersion, items: [...ordered.flatMap(itemsOf), ...tail] };
 }
 
 {
@@ -7056,13 +8108,13 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => ({ started: refused.started?.id, keys: Object.keys(refused).filter((k) => k.startsWith("blocked")) }));
   const manifestPath = path.join(base, "manifest.json");
   fs.writeFileSync(manifestPath, JSON.stringify(CARD_MANIFEST));
-  const cliCopy = tmp("decision-hold-cli");
+  const cliCopy = path.join(tmp("decision-hold-cli"), "build-tasks");
   fs.cpSync(dir, cliCopy, { recursive: true });
-  const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", cliCopy, ...args], { encoding: "utf8" });
+  const cli = (...args) => cliFileApproved(manifestPath, "--tasks", cliCopy, ...args);
   const nextCli = cli("--next");
   const nextOut = nextCli.stdout || "";
   const startCli = cli("--start", "dec-waiting");
-  fs.rmSync(cliCopy, { recursive: true, force: true });
+  fs.rmSync(path.dirname(cliCopy), { recursive: true, force: true });
   check("--next (CLI): the decision hold names the source task and row",
     () => /\[dec-waiting\] — every open row waits on a decision/.test(nextOut) && new RegExp(`dec-source row ${n}:`).test(nextOut),
     () => nextOut);
@@ -7073,8 +8125,8 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => startCli.status === 2 && /waits on an open decision on a subject another task shares/.test(startCli.stdout || "")
       && new RegExp(`dec-source row ${n}:`).test(startCli.stdout || ""),
     () => ({ status: startCli.status, stdout: startCli.stdout, stderr: startCli.stderr }));
-  check("--next and --start (CLI): the decision hold also names re-opening the source row as a release",
-    () => /re-opening it to build it/.test(nextOut) && /re-open it: clear its `Outcome` cell/.test(startCli.stdout || ""),
+  check("--next and --start (CLI): the decision hold names `--decide D<N> --build` on the source row as the way to build it — no task file is edited",
+    () => /--decide D<N> --build/.test(nextOut) && /--decide D<N> --build --row/.test(startCli.stdout || ""),
     () => ({ next: nextOut, start: startCli.stdout }));
   const reopened = tmp("decision-hold-reopen");
   fs.cpSync(dir, reopened, { recursive: true });
@@ -7535,7 +8587,9 @@ console.log("\n===== build order: virtual attributes are declared before the han
     () => ({ exported: phaseKeys.length, unmatched: phaseKeys.filter((k) => !emittedTitles.has(k)) }));
   {
     // A handler row its task recorded blocked, routed, and closed blocked again by its repair round, then the rest
-    // of the page dispatched: its rows and the rows of the page's other tasks, in queue order.
+    // of the page dispatched: its rows and the rows of the page's other tasks, in queue order. A repair round writes
+    // the page, so it follows every build task of that page; those are dispatched before it, and the page's
+    // remaining tasks (its review) after.
     const d = tmp("vmattr-stalled-handler");
     const ordered = () => [...syncTaskDir(d, attrRun, attrOpts).tasks].sort((x, y) => x.order - y.order);
     const handlerTask = ordered().findLast((t) => t.pageKey === "main" && t.rows.some((r) => r.vk === "handler"));
@@ -7550,13 +8604,15 @@ console.log("\n===== build order: virtual attributes are declared before the han
       fs.writeFileSync(f, text.replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
       syncTaskDir(d, attrRun, { ...attrOpts, now: AT(nextMin()) });
     };
-    for (const t of ordered().filter((x) => x.order <= handlerTask.order)) {
+    const sent = new Set();
+    for (const t of ordered().filter((x) => x.order <= handlerTask.order || (x.kind !== "repair" && x.writesTo === handlerTask.writesTo))) {
       dispatch(t, t.id === handlerTask.id ? (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built") : "built");
+      sent.add(t.id);
     }
     const round1 = syncRepairDir(d, attrRun, {}, attrOpts).written;
     for (const t of round1) dispatch(t, NOT_BUILT_BLOCKED);
     const held = syncRepairDir(d, attrRun, {}, attrOpts);
-    for (const t of ordered().filter((x) => x.kind !== "repair" && x.order > handlerTask.order && x.pageKey === "main")) dispatch(t, "built");
+    for (const t of ordered().filter((x) => x.kind !== "repair" && !sent.has(x.id) && x.pageKey === "main")) dispatch(t, "built");
     const again = syncRepairDir(d, attrRun, {}, attrOpts);
     const labels = (xs) => xs.map((h) => h.row.deliverable).sort();
     const handlerLabels = handlerRows.map((n) => handlerTask.rows[n - 1].label).sort();
@@ -7568,6 +8624,175 @@ console.log("\n===== build order: virtual attributes are declared before the han
         && again.written.every((t) => t.repairRound === 2),
       () => ({ handlerLabels, round1: round1.map((t) => t.file), held: labels(held.stalled), stalled: labels(again.stalled), round2 }));
     fs.rmSync(d, { recursive: true, force: true });
+
+    // The repair round of that handler row is routed while a LATER build task of the same page is still open. The
+    // round writes the page too, so it is not startable until that build task is done, and is startable after.
+    const d2 = tmp("vmattr-stalled-handler-order");
+    const ordered2 = () => [...syncTaskDir(d2, attrRun, attrOpts).tasks].sort((x, y) => x.order - y.order);
+    const dispatch2 = (t, mark) => {
+      const tok = `tok-${t.id}`;
+      startTask(d2, t.id, attrRun, { ...attrOpts, dispatchToken: tok }, null, AT(nextMin()));
+      const f = taskFilePath(d2, t.id);
+      let text = fs.readFileSync(f, "utf8");
+      for (let i = 1; i <= rowCount(text); i++) text = setOutcome(text, i, typeof mark === "function" ? mark(i) : mark);
+      fs.writeFileSync(f, text.replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
+      syncTaskDir(d2, attrRun, { ...attrOpts, now: AT(nextMin()) });
+    };
+    const handler2 = ordered2().find((t) => t.id === handlerTask.id);
+    const handlerMark = (n) => (handlerRows.includes(n) ? NOT_BUILT_BLOCKED : "built");
+    for (const t of ordered2().filter((x) => x.order <= handler2.order)) dispatch2(t, t.id === handler2.id ? handlerMark : "built");
+    const laterBuilds = ordered2().filter((x) => x.kind !== "repair" && x.writesTo === handler2.writesTo && x.order > handler2.order);
+    const round = syncRepairDir(d2, attrRun, {}, attrOpts).written;
+    const startableIds = () => startableTasks(syncTaskDir(d2, attrRun, attrOpts), d2).startable.map((t) => t.id);
+    const before = startableIds();
+    for (const t of laterBuilds) dispatch2(t, "built");
+    const after = startableIds();
+    check("build order + repair: the handler's repair round is NOT startable while a later build task of its page is open, and IS startable once that task is done",
+      () => laterBuilds.length > 0 && round.length === 1 && !before.includes(round[0].id) && after.includes(round[0].id),
+      () => ({ laterBuilds: laterBuilds.map((t) => t.id), round: round.map((t) => t.id), before, after }));
+    fs.rmSync(d2, { recursive: true, force: true });
+  }
+}
+
+/* ================================================================================================
+   A SPLIT MAY NOT PUT A VIRTUAL ATTRIBUTE AFTER A HANDLER THAT WRITES IT.
+   A split file decides the seams itself, so the engine's own phase order does not reach it. A handler row
+   records the attributes its method sets (`writesAttrs`), and `resolveSplit` refuses a split that places a
+   page's `[attribute-virtual] X` row in a LATER item than a handler row on that page writing X. The rule is
+   matched on recorded writes, never on "every handler of the page": an earlier item holding a handler that
+   writes no virtual attribute is a correct split and resolves.
+   ================================================================================================ */
+console.log("\n===== split: a virtual attribute is never placed after a handler that writes it =====");
+{
+  const WRITE_GROUPS = [
+    { pageKey: "main", baseTitle: "Form — Custom methods", rows: [
+      { label: "Handler — `setLegalEntity`", vk: { type: "handler", method: "setLegalEntity" }, writesAttrs: ["LegalEntity"] },
+      { label: "Handler — `getEmailFilter`", vk: { type: "handler", method: "getEmailFilter" } },
+    ] },
+    { pageKey: "main", baseTitle: "⚠ Other declared logic worklist", rows: [
+      { label: "[attribute-virtual] LegalEntity", vk: { type: "vmattr", name: "LegalEntity" } },
+    ] },
+    // A second page writing an attribute of the SAME name: the rule is scoped to one page's view model.
+    { pageKey: "list", baseTitle: "List — Custom methods", rows: [
+      { label: "Handler — `setListEntity`", vk: { type: "handler", method: "setListEntity" }, writesAttrs: ["LegalEntity"] },
+    ] },
+  ];
+  const writeSplit = (items) => resolveSplit({ items }, WRITE_GROUPS, new Map());
+  const item = (id, pageKey, rows) => ({ id, title: id, pageKey, writesTo: pageKey, rows });
+  const WRITER = "Handler — `setLegalEntity`";
+  const OTHER = "Handler — `getEmailFilter`";
+  const ATTR = "[attribute-virtual] LegalEntity";
+  const LIST_WRITER = item("list-logic", "list", ["Handler — `setListEntity`"]);
+  const refused = [item("handlers", "main", [WRITER, OTHER]), item("attrs", "main", [ATTR]), LIST_WRITER];
+  check("split: an `[attribute-virtual]` row in a LATER item than a handler that writes it is REFUSED, and the message names the attribute, the handler and both items",
+    () => {
+      const r = writeSplit(refused);
+      return r.errors.length === 1 && r.errors[0].includes("LegalEntity") && r.errors[0].includes("setLegalEntity")
+        && r.errors[0].includes("`handlers`") && r.errors[0].includes("`attrs`") && /Move the attribute row/.test(r.errors[0]);
+    }, () => writeSplit(refused).errors);
+  const sameItem = [item("together", "main", [WRITER, OTHER, ATTR]), LIST_WRITER];
+  check("split: the attribute and the handler writing it in ONE item resolve — the sub-agent declares and writes it in the same task",
+    () => writeSplit(sameItem).errors.length === 0, () => writeSplit(sameItem).errors);
+  const attrFirst = [item("attrs", "main", [ATTR]), item("handlers", "main", [WRITER, OTHER]), LIST_WRITER];
+  check("split: the attribute in an EARLIER item than the handler writing it resolves",
+    () => writeSplit(attrFirst).errors.length === 0, () => writeSplit(attrFirst).errors);
+  const unrelatedFirst = [item("main-layout", "main", [OTHER]), item("main-logic", "main", [ATTR, WRITER]), LIST_WRITER];
+  check("split: an earlier item holding a handler that writes NO virtual attribute resolves — the rule follows recorded writes, not every handler of the page",
+    () => writeSplit(unrelatedFirst).errors.length === 0, () => writeSplit(unrelatedFirst).errors);
+  const otherPageFirst = [LIST_WRITER, item("attrs", "main", [ATTR]), item("handlers", "main", [WRITER, OTHER])];
+  check("split: a handler on ANOTHER page writing an attribute of the same name does not refuse — each page declares its own view-model attributes",
+    () => writeSplit(otherPageFirst).errors.length === 0, () => writeSplit(otherPageFirst).errors);
+
+  // TWO writers of one attribute. The attribute has to precede the EARLIEST of them: a later writer sitting after
+  // the attribute is fine, an earlier one is not, whatever else writes it further down.
+  const SECOND_WRITER = "Handler — `setLegalEntityAgain`";
+  const TWO_WRITER_GROUPS = WRITE_GROUPS.map((g) => (g.pageKey === "main" && g.baseTitle === "Form — Custom methods"
+    ? { ...g, rows: [...g.rows, { label: SECOND_WRITER, vk: { type: "handler", method: "setLegalEntityAgain" }, writesAttrs: ["LegalEntity"] }] }
+    : g));
+  const twoWriterSplit = (items) => resolveSplit({ items }, TWO_WRITER_GROUPS, new Map());
+  const writerBetween = [item("writer-a", "main", [WRITER, OTHER]), item("attrs", "main", [ATTR]),
+    item("writer-b", "main", [SECOND_WRITER]), LIST_WRITER];
+  check("split: with two writers of one attribute, an attribute placed after the FIRST writer is refused once, naming that writer and its item — a later writer does not hide it",
+    () => {
+      const r = twoWriterSplit(writerBetween);
+      return r.errors.length === 1 && r.errors[0].includes("`setLegalEntity`") && r.errors[0].includes("`writer-a`")
+        && !r.errors[0].includes("setLegalEntityAgain") && !r.errors[0].includes("`writer-b`");
+    }, () => twoWriterSplit(writerBetween).errors);
+  const attrWithFirstWriter = [item("writer-a", "main", [WRITER, OTHER, ATTR]), item("writer-b", "main", [SECOND_WRITER]), LIST_WRITER];
+  check("split: with two writers of one attribute, the attribute in the FIRST writer's item resolves even though a second writer comes later",
+    () => twoWriterSplit(attrWithFirstWriter).errors.length === 0, () => twoWriterSplit(attrWithFirstWriter).errors);
+
+  // The same rule through the real engine: the handler row gets its write targets from the method's own body.
+  const wBody = 'define("MPage",[],function(){return{entitySchemaName:"M",'
+    + 'attributes:{"LegalEntity":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN},'
+    + '"IsSignVisible":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false}},'
+    + 'diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}],'
+    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},getEmailFilter:function(){return this.get("Id");}}};});';
+  const wManifest = {
+    entity: "M", seed: SEED, schemas: [{ pkg: "P", body: wBody }], addRecordMiniPage: false,
+    section: { schemas: [], listColumns: { success: true, sectionSchema: "MSection", entity: "M", source: "schema-default", columns: [{ name: "Name" }] } },
+    planMeta: PLAN_META,
+    signals: { dcm: RESOLVED, processes: RESOLVED, printables: RESOLVED, deduplication: RESOLVED },
+  };
+  const wRun = runMigration(wManifest);
+  const wOpts = checklistOpts(wManifest);
+  const wRows = checklistGroups(wRun, wOpts).flatMap((g) => g.rows);
+  const rowNamed = (label) => wRows.find((r) => r.label === label);
+  check("handler rows: a handler row carries the attributes its method sets, and a handler setting none carries no write list",
+    () => JSON.stringify(rowNamed(WRITER)?.writesAttrs) === JSON.stringify(["LegalEntity"])
+      && rowNamed(OTHER) && rowNamed(OTHER).writesAttrs === undefined && rowNamed(ATTR)?.vk?.type === "vmattr",
+    () => ({ writer: rowNamed(WRITER), other: rowNamed(OTHER), attr: rowNamed(ATTR) }));
+  check("handler rows: the write list sits BESIDE the verifier payload, not inside it — the handler `vk` is exactly what the row digest reads, so every recorded digest stays valid",
+    () => {
+      const w = rowNamed(WRITER);
+      return !!w && !("writesAttrs" in w.vk)
+        && TASKS_MODULE.rowsDigest([w]) === TASKS_MODULE.rowsDigest([{ ...w, writesAttrs: undefined }]);
+    }, () => rowNamed(WRITER));
+  // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
+  // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
+  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "ce526a7f" };
+  const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
+  check("row digest: the handler tasks of an existing plan keep their recorded digest",
+    () => Object.entries(PINNED_HANDLER_DIGESTS).every(([id, digest]) => chunked.tasks.find((t) => t.id === id)?.rowsDigest === digest),
+    () => chunked.tasks.filter((t) => t.rows.some((r) => r.vk === "handler")).map((t) => `${t.id}:${t.rowsDigest}`));
+
+  // A split of the real plan: every row placed, the review last, the list page in its own item. Each page's last
+  // writer takes the filed gate row — the first row of its `Quality gates` group, so `[1]` claims it — and the
+  // review takes the rest of the group.
+  const withFiledGate = (it) => ({ ...it, rows: [...it.rows, "@Quality gates[1]"] });
+  const planSplit = (mainItems) => ({ planVersion: wRun.planVersion, items: [
+    ...mainItems.slice(0, -1), withFiledGate(mainItems.at(-1)),
+    withFiledGate({ id: "list-page", title: "list", pageKey: "list", writesTo: "list", rows: ["@List page", "@⚠ Confirm worklist"] }),
+    { id: "review", title: "review", pageKey: "main", writesTo: "", rows: ["@Quality gates", "list::@Quality gates"] },
+  ] });
+  const MAIN_BASE = ["@Pages", "@Form — Layout (by tab/region)", "@Form — Coverage (verified)", "@⚠ Confirm worklist"];
+  const badSplit = planSplit([
+    { id: "main-build", title: "b", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, WRITER, OTHER] },
+    { id: "main-attrs", title: "a", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist"] },
+  ]);
+  const goodSplit = planSplit([
+    { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER] },
+    { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
+  ]);
+  check("split (real plan): the attribute placed after the handler that sets it is refused; the same plan split with only an unrelated handler earlier is cut",
+    () => {
+      const bad = buildTaskSetFromSplit(wRun, badSplit, wOpts);
+      const good = buildTaskSetFromSplit(wRun, goodSplit, wOpts);
+      return bad.refused && bad.problems.length === 1 && bad.problems[0].includes("setLegalEntity")
+        && !good.refused && good.tasks.some((t) => t.id === "main-logic");
+    }, () => ({ bad: buildTaskSetFromSplit(wRun, badSplit, wOpts).problems, good: buildTaskSetFromSplit(wRun, goodSplit, wOpts).problems }));
+  {
+    const base = tmp("split-attr-after-writer");
+    const dir = path.join(base, "build-tasks");
+    const splitPath = path.join(base, "split.json");
+    fs.writeFileSync(splitPath, JSON.stringify(badSplit, null, 2));
+    const run = cliTasks(["--tasks", dir, "--split", splitPath], wManifest);
+    check("migrate.mjs --tasks --split: that split exits 2, names the attribute and the handler, and writes NOTHING",
+      () => run.status === 2 && /⛔ NOTHING WRITTEN/.test(run.stdout || "")
+        && (run.stdout || "").includes("LegalEntity") && (run.stdout || "").includes("setLegalEntity")
+        && !fs.existsSync(dir),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 1600), stderr: (run.stderr || "").slice(0, 600) }));
+    fs.rmSync(base, { recursive: true, force: true });
   }
 }
 
@@ -7697,428 +8922,6 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
     () => shape(mixedCut));
 }
 
-// `--decide` names the open rows on other tasks that share a subject with a row it decided, and closes none of them.
-{
-  const split = cardSplit("sib", "sib-other");
-  const opts = optsOf(CARD_MANIFEST);
-  const D4 = new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]]);
-  const fixture = (label) => {
-    const base = tmp(label);
-    const dir = path.join(base, "build-tasks");
-    freezeSplit(dir, JSON.stringify(split));
-    const set = syncTaskDir(dir, CARD_RUN, opts);
-    fs.writeFileSync(path.join(base, "decisions.md"), "## D4 — handled elsewhere\n\n## D5 — covered by the portal\n");
-    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(CARD_MANIFEST));
-    return { base, dir, set };
-  };
-  const rowOf = (set, id, label) => (set.tasks.find((t) => t.id === id)?.rows || []).findIndex((r) => r.label === label) + 1;
-  const decide = (dir, id, n, decision = "D4") => applyDecision(dir, CARD_RUN, { ...opts, decision, mode: "wont-do",
-    rowRef: { taskId: id, n: String(n) }, decisions: D4 });
-  const cellOf = (dir, id, n) => readTaskDir(dir).find((t) => t.id === id)?.rows?.[n - 1];
-  const named = (res) => (res.siblings || []).map((x) => `${x.task.id}:${x.n}`);
-
-  {
-    const { base, dir, set } = fixture("siblings-listed");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    const res = decide(dir, "sib-source", n);
-    check("--decide: an open row on another task sharing the decided row's subject is listed",
-      () => !res.refused && named(res).join(",") === "sib-other:1", () => ({ refused: res.problems, named: named(res) }));
-    check("--decide: a listed sibling row is not written",
-      () => !cellOf(dir, "sib-other", 1)?.outcomeKind && !/^decisions: \S/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
-      () => cellOf(dir, "sib-other", 1));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  // The printed command, run as printed, closes exactly the listed rows.
-  {
-    const { base, dir, set } = fixture("siblings-cli");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    const manifestPath = path.join(base, "manifest.json");
-    const out = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--decide", "D4", "--wont-do",
-      "--row", `sib-source:${n}`], { encoding: "utf8" });
-    const cmds = (out.stdout || "").split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
-    const decidedRows = () => readTaskDir(dir).flatMap((t) => (t.rows || [])
-      .map((r, i) => (r.outcomeKind === "wont-do" ? `${t.id}:${i + 1}` : null)).filter(Boolean)).sort((a, b) => a.localeCompare(b));
-    const before = decidedRows();
-    const runs = cmds.map((c) => spawnSync(c, { encoding: "utf8", shell: true }));
-    const after = decidedRows();
-    check("--decide (CLI): prints one ready-to-run command per open sibling row",
-      () => out.status === 0 && cmds.length === 1 && cmds[0].includes("sib-other:1") && /--wont-do/.test(cmds[0]),
-      () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
-    check("--decide (CLI): the printed command closes exactly the listed rows",
-      () => runs.every((r) => r.status === 0) && after.join(",") === [...before, "sib-other:1"].sort((a, b) => a.localeCompare(b)).join(",")
-        && /^decisions: 1:D4$/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
-      () => ({ before, after, runs: runs.map((r) => `${r.status} ${r.stderr}`) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, set } = fixture("siblings-no-subject");
-    const src = set.tasks.find((t) => t.id === "sib-source");
-    const n = src.rows.findIndex((r) => !r.subject && !r.na) + 1;
-    const res = decide(dir, "sib-source", n);
-    check("--decide: a decided row with no subject lists no siblings",
-      () => n > 0 && !res.refused && named(res).length === 0, () => ({ n, named: named(res) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, set } = fixture("siblings-closed");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    decide(dir, "sib-other", 1, "D5");
-    const decided = decide(dir, "sib-source", n);
-    const f = taskFilePath(dir, "sib-other");
-    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, "built").replace(/^decisions:.*$/m, "decisions: "));
-    const built = decide(dir, "sib-source", n, "D5");
-    check("--decide: a sibling row already decided is not listed",
-      () => !decided.refused && named(decided).length === 0, () => named(decided));
-    check("--decide: a sibling row already built is not listed",
-      () => !built.refused && named(built).length === 0, () => named(built));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, set } = fixture("siblings-postponed");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
-      "--postponed", "--to", "ENG-12345", "--row", `sib-source:${n}`], { encoding: "utf8" });
-    const cmd = (out.stdout || "").split("\n").find((l) => l.includes("--row") && l.includes("sib-other:1")) || "";
-    check("--decide --postponed (CLI): the sibling command carries the same mode and destination",
-      () => out.status === 0 && /--postponed --to "?'?ENG-12345/.test(cmd) && !/--wont-do/.test(cmd),
-      () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-}
-
-// `--decide` also names the open rows of the SAME task that share a subject with a row it decided.
-{
-  const SAME_SRC = "same-source";
-  const split = cardSplit("same", "same-unused", { waiting: null });
-  const opts = optsOf(CARD_MANIFEST);
-  const decisions = new Map([["D4", "handled elsewhere"]]);
-  const fixture = (label) => {
-    const base = tmp(label);
-    const dir = path.join(base, "build-tasks");
-    freezeSplit(dir, JSON.stringify(split));
-    const set = syncTaskDir(dir, CARD_RUN, opts);
-    fs.writeFileSync(path.join(base, "decisions.md"), "## D4 — handled elsewhere\n");
-    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(CARD_MANIFEST));
-    const src = set.tasks.find((t) => t.id === SAME_SRC);
-    const rowOf = (m) => (src?.rows || []).findIndex((r) => r.label === cardLabel(m)) + 1;
-    return { base, dir, n0: rowOf("onBulk0"), n5: rowOf("onBulk5") };
-  };
-  const named = (res) => (res.siblings || []).map((x) => `${x.task.id}:${x.n}`);
-  const rawOf = (dir) => fs.readFileSync(taskFilePath(dir, SAME_SRC), "utf8");
-
-  {
-    const { base, dir, n0, n5 } = fixture("siblings-same-task");
-    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
-      rowRef: { taskId: SAME_SRC, n: String(n0) }, decisions });
-    const row5 = readTaskDir(dir).find((t) => t.id === SAME_SRC)?.rows?.[n5 - 1];
-    check("--decide: an open row of the SAME task sharing the decided row's subject is listed",
-      () => n0 > 0 && n5 > 0 && !res.refused && named(res).join(",") === `${SAME_SRC}:${n5}`,
-      () => ({ n0, n5, refused: res.problems, named: named(res) }));
-    check("--decide: the decided row itself is never listed as its own sibling",
-      () => !res.refused && !named(res).includes(`${SAME_SRC}:${n0}`) && named(res).includes(`${SAME_SRC}:${n5}`),
-      () => ({ n0, named: named(res) }));
-    check("--decide: a listed same-task row keeps its cell blank and gets no `decisions:` entry",
-      () => !row5?.outcomeKind && new RegExp(`^decisions: ${n0}:D4$`, "m").test(rawOf(dir)),
-      () => ({ row5, decisions: /^decisions:.*$/m.exec(rawOf(dir))?.[0] }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, n0, n5 } = fixture("siblings-same-task-cli");
-    const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
-      "--wont-do", "--row", `${SAME_SRC}:${n0}`], { encoding: "utf8" });
-    const stdout = out.stdout || "";
-    const cmds = stdout.split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
-    check("--decide (CLI): a same-task sibling gets a ready-to-run command, and the heading does not say `other tasks`",
-      () => out.status === 0 && cmds.length === 1 && cmds[0].includes(`${SAME_SRC}:${n5}`) && !/on other tasks/.test(stdout),
-      () => ({ status: out.status, stdout, stderr: out.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir } = fixture("siblings-same-run");
-    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do", taskId: SAME_SRC, decisions });
-    check("--decide: rows decided in the same run are not listed as siblings of each other",
-      () => !res.refused && res.touched.length > 1 && named(res).length === 0, () => ({ refused: res.problems, named: named(res) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, n0, n5 } = fixture("siblings-same-built");
-    const f = taskFilePath(dir, SAME_SRC);
-    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n5, "built"));
-    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
-      rowRef: { taskId: SAME_SRC, n: String(n0) }, decisions });
-    check("--decide: a built same-task row is not listed",
-      () => !res.refused && named(res).length === 0, () => ({ refused: res.problems, named: named(res) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-}
-
-// Before the first dispatch, `--tasks`, `--next` and `--start` list every decision no task's `decisions:` line cites.
-{
-  const UNDEC_SRC = "undec-source";
-  const split = cardSplit("undec", "undec-other");
-  const opts = optsOf(CARD_MANIFEST);
-  const DECISIONS_MD = "## D4 — handled elsewhere\n\n## D5 — covered by the portal\n";
-  const PLAN_MD = "# Plan\n\n### Adjustments\n\n1. **Print is not migrated**\n";
-  const BLOCK = /decision\(s\) in decisions\.md are applied to no row/;
-  const listed = (out) => [...String(out || "").matchAll(/^ {2}· (D\d+) — /gm)].map((m) => m[1]);
-  const fixture = (label, { md = DECISIONS_MD } = {}) => {
-    const base = tmp(label);
-    const dir = path.join(base, "build-tasks");
-    freezeSplit(dir, JSON.stringify(split));
-    if (md) fs.writeFileSync(path.join(base, "decisions.md"), md);
-    fs.writeFileSync(path.join(base, "plan.md"), PLAN_MD);
-    const manifestPath = path.join(base, "manifest.json");
-    fs.writeFileSync(manifestPath, JSON.stringify(CARD_MANIFEST));
-    const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, ...args], { encoding: "utf8" });
-    return { base, dir, cli };
-  };
-  const startableIds = (dir) => startableTasks(syncTaskDir(dir, CARD_RUN, opts), dir).startable.map((t) => t.id);
-
-  {
-    const { base, cli } = fixture("undecided-cut");
-    const cut = cli();
-    check("first dispatch: the cut lists every decision no row cites, with the `--decide` before dispatch line",
-      () => BLOCK.test(cut.stdout) && listed(cut.stdout).join(",") === "D4,D5" && /--decide.*before dispatch/.test(cut.stdout),
-      () => ({ status: cut.status, stdout: cut.stdout, stderr: cut.stderr }));
-    check("first dispatch: the `--decide` line names the outcome flags and the row addressing `--decide` requires",
-      () => /--decide D<N> --wont-do \| --postponed --to <destination>`, addressed by `--pages <keys>`, `--task <task-id>` or `--row <task-id>:<n>`, before dispatch/.test(cut.stdout || ""),
-      () => cut.stdout);
-    check("first dispatch: a plan `Adjustment N` is never listed",
-      () => !/Adjustment/.test(cut.stdout || ""), () => cut.stdout);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-next");
-    cli();
-    const before = cli("--next");
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    const decided = cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
-    const after = cli("--next");
-    check("first dispatch: `--next` lists an uncited decision",
-      () => before.status === 0 && listed(before.stdout).join(",") === "D4,D5",
-      () => ({ status: before.status, stdout: before.stdout }));
-    check("first dispatch: a decision `--decide` applied to a row is left out of `--next`",
-      () => n > 0 && decided.status === 0 && after.status === 0 && listed(after.stdout).join(",") === "D5",
-      () => ({ n, decided: decided.stderr, stdout: after.stdout }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-dispatched");
-    cli();
-    const [first] = startableIds(dir);
-    const started = cli("--start", first);
-    const inFlight = cli("--next");
-    check("first dispatch: `--start` of the first task lists the uncited decisions",
-      () => started.status === 0 && listed(started.stdout).join(",") === "D4,D5",
-      () => ({ first, status: started.status, stdout: started.stdout, stderr: started.stderr }));
-    check("first dispatch: while the first task is in flight, `--next` prints no block",
-      () => inFlight.status === 0 && !BLOCK.test(inFlight.stdout), () => inFlight.stdout);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-closed");
-    cli();
-    clearDepsOf(dir, UNDEC_SRC, CARD_RUN, opts);
-    const next = cli("--next");
-    const later = cli("--start", UNDEC_SRC);
-    check("first dispatch: once a dispatched task has closed, `--next` and a later `--start` print no block",
-      () => next.status === 0 && !BLOCK.test(next.stdout) && later.status === 0 && !BLOCK.test(later.stdout),
-      () => ({ next: next.stdout, later: later.stdout, stderr: later.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const withMd = fixture("undecided-with");
-    const without = fixture("undecided-without", { md: null });
-    const runs = (f) => [f.cli(), f.cli("--next"), f.cli()];
-    const a = runs(withMd);
-    const b = runs(without);
-    const snapshot = (dir) => fs.readdirSync(dir).sort((x, y) => x.localeCompare(y))
-      .map((f) => `${f}\n${fs.readFileSync(path.join(dir, f), "utf8").replaceAll(withMd.dir, "<dir>").replaceAll(without.dir, "<dir>")}`);
-    check("first dispatch: exit codes are identical with and without uncited decisions",
-      () => a.map((r) => r.status).join(",") === b.map((r) => r.status).join(","),
-      () => ({ with: a.map((r) => r.status), without: b.map((r) => r.status) }));
-    check("first dispatch: no decisions.md prints no block",
-      () => b.every((r) => !BLOCK.test(r.stdout)) && a.every((r) => BLOCK.test(r.stdout)),
-      () => ({ with: a.map((r) => r.stdout), without: b.map((r) => r.stdout) }));
-    check("first dispatch: the listing writes nothing into the task folder",
-      () => JSON.stringify(snapshot(withMd.dir)) === JSON.stringify(snapshot(without.dir)),
-      () => ({ with: snapshot(withMd.dir).map((s) => s.split("\n")[0]), without: snapshot(without.dir).map((s) => s.split("\n")[0]) }));
-    fs.rmSync(withMd.base, { recursive: true, force: true });
-    fs.rmSync(without.base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-all-cited", { md: "## D4 — handled elsewhere\n" });
-    cli();
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
-    const next = cli("--next");
-    check("first dispatch: when every decision is cited, nothing is printed",
-      () => n > 0 && next.status === 0 && !BLOCK.test(next.stdout), () => next.stdout);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-table-row", { md: "| D4 | **handled elsewhere** | 2026-09-25 |\n" });
-    const cut = cli();
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    const decided = cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
-    check("first dispatch: a table-row `D<N>` is listed, and `--decide` accepts that id",
-      () => listed(cut.stdout).join(",") === "D4" && n > 0 && decided.status === 0,
-      () => ({ cut: cut.stdout, status: decided.status, stderr: decided.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  check("first dispatch: a cascade citation `D4+` counts as citing D4",
-    () => TASKS_MODULE.unappliedDecisions([{ decisions: new Map([[1, "D4+"]]) }],
-      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D5");
-
-  {
-    const base = tmp("first-dispatch-timings");
-    const pending = (state, startedId) => {
-      const file = path.join(base, TIMINGS_FILE);
-      if (state === null) fs.rmSync(file, { force: true });
-      else fs.writeFileSync(file, typeof state === "string" ? state : JSON.stringify(state));
-      return TASKS_MODULE.firstDispatchPending(base, startedId);
-    };
-    const running = { running: { mine: "2026-09-25T10:00:00Z" }, samples: [] };
-    check("firstDispatchPending: no timings file is pending", () => pending(null) === true);
-    check("firstDispatchPending: a zero-minute sample is a dispatch",
-      () => pending({ running: {}, samples: [{ id: "mine", weight: 1, minutes: 0 }] }) === false);
-    check("firstDispatchPending: another task's open clock is a dispatch; the started task's own clock is not",
-      () => pending(running, "other") === false && pending(running, "mine") === true && pending(running) === false);
-    check("firstDispatchPending: a timings file that does not parse is a dispatch", () => pending("{ not json") === false);
-    const mark = (state) => {
-      const file = path.join(base, TIMINGS_FILE);
-      if (state === null) fs.rmSync(file, { force: true });
-      else fs.writeFileSync(file, state);
-      return readTimingsFile(base).malformed;
-    };
-    check("readTimingsFile: a file that does not parse reads `malformed`; an absent or valid one does not",
-      () => typeof mark("{ not json") === "string" && !!mark("{ not json") && !mark(null) && !mark(JSON.stringify({ running: {}, samples: [] })),
-      () => ({ bad: mark("{ not json"), absent: mark(null) }));
-    fs.rmSync(path.join(base, TIMINGS_FILE), { force: true });
-    const pendingWith = (tasks) => TASKS_MODULE.firstDispatchPending(base, null, tasks);
-    check("firstDispatchPending: a task with a `built` row is a dispatch, with no timings file",
-      () => pendingWith([{ rows: [{ outcomeKind: "built" }] }]) === false);
-    check("firstDispatchPending: a task with an `agentNonce` is a dispatch, with no timings file",
-      () => pendingWith([{ rows: [], agentNonce: "tok-1" }]) === false && pendingWith([{ rows: [], agentNonce: "  " }]) === true);
-    check("firstDispatchPending: rows closed only by `--decide` are not a dispatch",
-      () => pendingWith([{ rows: [{ outcomeKind: "wont-do" }, { outcomeKind: "postponed" }], decisions: new Map([[1, "D4"], [2, "D5"]]) }]) === true);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const base = tmp("timings-malformed-start");
-    const d = path.join(base, "build-tasks");
-    freezeSplit(d, JSON.stringify(split));
-    syncTaskDir(d, CARD_RUN, opts);
-    const [first] = startableIds(d);
-    fs.writeFileSync(path.join(d, TIMINGS_FILE), "{ not json");
-    try { startTask(d, first, CARD_RUN, { ...opts, dispatchToken: "tok-m" }); } catch { /* a refusal is the expected answer */ }
-    const written = fs.readFileSync(path.join(d, TIMINGS_FILE), "utf8");
-    check("readTimingsFile: `--start` over a malformed timings file leaves it byte-identical",
-      () => !!first && written === "{ not json", () => written);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  check("unappliedDecisions: a citation on an unread task is not counted",
-    () => TASKS_MODULE.unappliedDecisions([{ unread: true, decisions: new Map([[1, "D4"]]) }],
-      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D4,D5");
-
-  {
-    const { base, dir, cli } = fixture("undecided-built-row");
-    cli();
-    const before = cli("--next");
-    const f = taskFilePath(dir, UNDEC_SRC);
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n, "built"));
-    const after = cli("--next");
-    check("first dispatch: a row recorded `built` with no timings file ends the listing",
-      () => BLOCK.test(before.stdout) && n > 0 && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
-      () => ({ n, before: before.stdout, after: after.stdout }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-nonce");
-    cli();
-    const before = cli("--next");
-    editFrontMatter(dir, UNDEC_SRC, "agentNonce", "tok-agent");
-    const after = cli("--next");
-    check("first dispatch: a task carrying an `agentNonce` with no timings file ends the listing",
-      () => BLOCK.test(before.stdout) && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
-      () => ({ before: before.stdout, after: after.stdout }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const STUCK = /NOTHING STARTABLE AND NOTHING IN FLIGHT/;
-    const stuckNext = (label, md) => {
-      const f = fixture(label, { md });
-      f.cli();
-      for (const id of startableIds(f.dir)) editFrontMatter(f.dir, id, "status", "blocked");
-      const r = f.cli("--next");
-      const scrub = (s) => String(s || "").replaceAll(f.base, "<base>");
-      fs.rmSync(f.base, { recursive: true, force: true });
-      return { status: r.status, stdout: scrub(r.stdout), stderr: scrub(r.stderr) };
-    };
-    const a = stuckNext("undecided-stuck-with", DECISIONS_MD);
-    const b = stuckNext("undecided-stuck-without", null);
-    const verdictOf = (s) => {
-      const at = s.search(/\n\n\d+ decision\(s\) in decisions\.md/);
-      return (at < 0 ? s : s.slice(0, at)).trimEnd();
-    };
-    check("first dispatch (anti-vacuity): both folders answer `stuck`, and only the one with decisions.md prints the block",
-      () => a.status === 2 && STUCK.test(a.stdout) && STUCK.test(b.stdout) && BLOCK.test(a.stdout) && !BLOCK.test(b.stdout),
-      () => ({ a, b }));
-    check("first dispatch: a `stuck` `--next` has the same exit code, verdict and stderr with and without uncited decisions",
-      () => a.status === b.status && verdictOf(a.stdout) === b.stdout.trimEnd() && a.stderr === b.stderr,
-      () => ({ status: [a.status, b.status], with: verdictOf(a.stdout), without: b.stdout, stderr: [a.stderr, b.stderr] }));
-    check("first dispatch: on a `stuck` `--next` the block follows the verdict text",
-      () => a.stdout.search(BLOCK) > a.stdout.search(STUCK), () => a.stdout);
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-second-start");
-    cli();
-    const [first] = startableIds(dir);
-    fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ running: { "another-task": "2026-09-25T10:00:00Z" }, samples: [] }));
-    const started = cli("--start", first);
-    check("first dispatch: `--start` while another task's clock is open prints no block",
-      () => !!first && started.status === 0 && !BLOCK.test(started.stdout),
-      () => ({ first, status: started.status, stdout: started.stdout, stderr: started.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-}
-
-{
-  const { base, dir, decisions, src, rep } = repairMirrorFixture("siblings-cascaded", "D13", "descope", 2);
-  const res = src && rep ? applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
-    rowRef: { taskId: src.id, n: 1 }, decisions }) : null;
-  const key = (x) => `${x.task.id}:${x.n}`;
-  const siblings = new Set((res?.siblings || []).map(key));
-  check("--decide: a row the decision cascaded into is reported on `cascaded` and not listed as a sibling",
-    () => !!res && !res.refused && res.cascaded.length > 0 && res.cascaded.every((x) => !siblings.has(key(x))),
-    () => ({ refused: res?.problems, cascaded: (res?.cascaded || []).map(key), siblings: [...siblings] }));
-  fs.rmSync(base, { recursive: true, force: true });
-}
-
 console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drift, adopted-file writes, mode exclusion =====");
 {
   // `stopGate` travels from the split into the task file and the index — the orchestrator reads it before it
@@ -8215,12 +9018,2580 @@ console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drif
 for (const flag of ["--plan", "--spec", "--checklist", "--stubs"]) {
   // `--tasks` WRITES a folder; every other mode prints. Both at once would silently skip one of them.
   const d = tmp(`cli-tasks-mutex${flag.replaceAll("-", "_")}`);
-  const r = cliTasks(["--tasks", d, flag], MANIFEST);
+  const r = cliUnapproved(["--tasks", d, flag], MANIFEST);
   check(`cli: \`--tasks\` with \`${flag}\` exits 1 and names the flag — one of the two would otherwise silently not happen`,
     () => r.status === 1 && (r.stderr || "").includes(`\`--tasks\` cannot be combined with ${flag}`)
       && !fs.existsSync(path.join(d, TASK_INDEX_FILE)),
     () => ({ status: r.status, stderr: r.stderr }));
   fs.rmSync(d, { recursive: true, force: true });
+}
+
+/* ---- The identity each row kind is matched by, stated on the row that depends on it --------------
+   Five vk kinds are closed by identity, and each verifier reads a DIFFERENT thing — a field or rule by element name
+   or `$` binding, a list column by its exact `PDS_*` code only, a quick filter or table element by exact name plus
+   component type. The task file IS the prompt the building sub-agent reads, so each row must state its own rule:
+   one sentence for every kind is true for some and sends a builder to change what the verifier never reads. */
+const OWN_RULE = {
+  fields: /`ContactField`\) and bind it to that column \(`\$PDS_Contact`\) — either one closes the row/,
+  rule: /target the field ELEMENT .* the caption is never read/,
+  listcolumns: /EXACTLY the `PDS_<Column>` code the plan names — only the code is matched, never an element name or a `\$` binding, and a missing code is ❌ MISSING/,
+  listfilter: /EXACTLY the name the plan gives it and is a `crt\.QuickFilter`/,
+  element: /EXACTLY the name the plan gives it and the plan's component type/,
+};
+const IDENTITY_KINDS = Object.keys(OWN_RULE);
+// A rule that belongs to one kind only, so its presence on another kind's row is the bug this block guards.
+const BINDING_LEG = /`\$PDS_Contact`|bind it to that column|follows that element's binding/;
+const cellOf = (text, label) => text.split("\n").find((l) => l.includes("| " + label + " |")) || "";
+// One task per kind is rendered from the standard run's own task, only its rows swapped, so every kind is covered
+// even though the standard fixture plans no rule, quick filter or table element.
+const renderWithRow = (vk) => renderTaskFile({ ...SAMPLE, rows: [{ label: `probe-${vk}`, group: "Probe", vk }] }, SET);
+
+check("identity: every identity-matched row kind states ITS OWN rule in the `Closed by` cell — `fields`, `rule`,"
+  + " `listcolumns`, `listfilter` and `element` each render the sentence for what their verifier actually reads",
+  () => IDENTITY_KINDS.every((vk) => OWN_RULE[vk].test(cellOf(renderWithRow(vk), `probe-${vk}`))),
+  () => IDENTITY_KINDS.map((vk) => [vk, cellOf(renderWithRow(vk), `probe-${vk}`).slice(0, 140)]));
+
+check("identity: no row kind carries ANOTHER kind's rule — a `listcolumns`, `listfilter` or `element` row never"
+  + " tells the builder to bind anything (their verifiers read no binding), and only a `fields` row names `$PDS_Contact`",
+  () => IDENTITY_KINDS.every((vk) => {
+    const cell = cellOf(renderWithRow(vk), `probe-${vk}`);
+    const others = IDENTITY_KINDS.filter((k) => k !== vk);
+    const bindingOk = ["listcolumns", "listfilter", "element"].includes(vk) ? !BINDING_LEG.test(cell) : true;
+    return bindingOk && others.every((k) => !OWN_RULE[k].test(cell));
+  }),
+  () => IDENTITY_KINDS.map((vk) => [vk, cellOf(renderWithRow(vk), `probe-${vk}`).slice(0, 140)]));
+
+check("identity: on the standard run's REAL task files, the `fields` and `listcolumns` rows carry their own rule —"
+  + " the plumbing holds on a planned task set, not only on a synthesized row",
+  () => {
+    const seen = new Set();
+    for (const t of SET.tasks) {
+      const text = renderTaskFile(t, SET);
+      for (const r of t.rows.filter((x) => x.vk === "fields" || x.vk === "listcolumns")) {
+        if (!OWN_RULE[r.vk].test(cellOf(text, r.label))) return false;
+        seen.add(r.vk);
+      }
+    }
+    return seen.has("fields") && seen.has("listcolumns");
+  });
+
+check("identity: every other machine-checked row keeps the plain `--verify (<kind>)` cell — no identity sentence"
+  + " on a `template`, `formpage`, `details` or evidence row",
+  () => SET.tasks.every((t) => {
+    const text = renderTaskFile(t, SET);
+    return t.rows.filter((r) => r.vk && !IDENTITY_KINDS.includes(r.vk))
+      .every((r) => IDENTITY_KINDS.every((k) => !OWN_RULE[k].test(cellOf(text, r.label))));
+  }));
+
+// RISK1 — the digest guard. `closedByOf` renders the cell; `rowsDigest` hashes the SOURCE rows. A `done` task
+// that reads as drifted is RE-DISPATCHED into a live migration, so improving a cell's wording must never move it.
+// The values are PINNED literals. They move only when a task's own rows change — a row added, dropped or moved
+// between tasks — never when a cell's wording does. Recomputing the set twice inside one
+// run would be trivially equal and prove nothing; a literal is what actually catches a future edit that lets the
+// rendered cell leak into the digest.
+const ROWS_DIGESTS_BASE = JSON.parse(fs.readFileSync(path.join(DIR, "fixtures", "applicants-recorded", "rows-digests.base.json"), "utf8"));
+check("identity digest guard: rendering the identity condition does NOT move any task's `rowsDigest` — the digest reads"
+  + " the SOURCE rows, so a `done` task cannot read as drifted (and be re-dispatched into a live migration)"
+  + " because a cell's wording improved. Pinned as literals.",
+  () => {
+    const now = SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`);
+    return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
+  },
+  () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+
+// Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
+// add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
+// LAST task writing the page that holds the list, and nothing that writes the page body waits on it.
+{
+  const wiringTasks = SET.tasks.filter((t) => t.rows.some((r) => r.group === "Child page wiring"));
+  const lastWriterOf = (key) => SET.tasks.filter((t) => t.pageKey === key && t.writesTo?.startsWith("page:"))
+    .sort((a, b) => b.order - a.order)[0];
+  const wiringOf = (holder) => wiringTasks.find((t) => t.pageKey === holder);
+  check("child page wiring: each page holding a related list to a rebuilt child gets ONE wiring task writing `wiring:<page>` — `child:C1` bound from `main`, the grandchild `child:G1` from `child:C1`",
+    () => wiringTasks.length === 2 && wiringOf("main")?.writesTo === "wiring:main"
+      && wiringOf("child:C1")?.writesTo === "wiring:child::C1Page"
+      && wiringOf("main").rows.every((r) => r.group === "Child page wiring") && wiringOf("main").rows.some((r) => r.label.includes("`child:C1`"))
+      && wiringOf("child:C1").rows.some((r) => r.label.includes("`child:G1`")) && wiringOf("main").group === "Child page wiring",
+    () => wiringTasks.map((t) => ({ task: t.id, page: t.pageKey, writes: t.writesTo, group: t.group, rows: t.rows.map((r) => r.label.slice(0, 60)) })));
+  check("child page wiring: the wiring task waits on the LAST writer of the child page it binds and of the page holding the list",
+    () => wiringOf("main").dependsOn.includes(lastWriterOf("child:C1").id) && wiringOf("main").dependsOn.includes(lastWriterOf("main").id)
+      && wiringOf("child:C1").dependsOn.includes(lastWriterOf("child:G1").id) && wiringOf("child:C1").dependsOn.includes(lastWriterOf("child:C1").id),
+    () => wiringTasks.map((t) => ({ task: t.id, deps: t.dependsOn })));
+  check("child page wiring: no task writing a page body, and no review, waits on a wiring task — the page's later work is not held behind the child pages",
+    () => SET.tasks.filter((t) => !t.writesTo?.startsWith("wiring:"))
+      .every((t) => wiringTasks.every((w) => !(t.dependsOn || []).includes(w.id)))
+      && !lastWriterOf("main").dependsOn.includes(lastWriterOf("child:C1").id),
+    () => SET.tasks.map((t) => ({ task: t.id, writes: t.writesTo, deps: t.dependsOn })));
+  // The written folder carries the same dependencies: `--start` refuses a task whose `dependsOn` is open, and that
+  // field is what the folder publishes.
+  const d = tmp("wiring-deps");
+  const folder = syncTaskDir(d, RUN, OPTS);
+  const written = folder.tasks.find((t) => t.id === wiringOf("main").id);
+  check("child page wiring: the synced task folder keeps the wiring task's waits",
+    () => (written?.dependsOn || []).includes(lastWriterOf("child:C1").id) && written?.writesTo === "wiring:main",
+    () => written);
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
+// A split carrying the binding rows in an item of their own gives that item the same waits the budget cut does.
+{
+  const wiringRows = GROUPS.filter((g) => g.pageKey === "main" && g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => r.label));
+  const items = FULL_SPLIT.items.map((it) => (it.pageKey === "main" ? { ...it, rows: it.rows.filter((r) => !wiringRows.includes(r)) } : it));
+  const at = items.findIndex((it) => it.pageKey === "main");
+  items.splice(at + 1, 0, splitItem("main-wiring", "main", "main", wiringRows));
+  const set = buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  const wiring = set.tasks.find((t) => t.id === "main-wiring");
+  const writerOf = (key) => set.tasks.filter((t) => t.writesTo === key).sort((a, b) => b.order - a.order)[0]?.id;
+  check("split: a binding-only item writes `wiring:main` and waits on the last writer of the child page it binds and of `main`",
+    () => !set.refused && wiringRows.length > 0 && wiring?.writesTo === "wiring:main"
+      && wiring.dependsOn.includes(writerOf("page:child::C1Page")) && wiring.dependsOn.includes(writerOf("page:main")),
+    () => ({ refused: set.refused, problems: set.problems, wiring: wiring && { w: wiring.writesTo, deps: wiring.dependsOn } }));
+}
+// The split's waits come from queue order (the last writer seen so far), so they must hold whichever of the two
+// pages the binding rows join is written last: `main`'s writers before `child:C1`'s, or after them.
+{
+  const wiringRows = GROUPS.filter((g) => g.pageKey === "main" && g.baseTitle === "Child page wiring").flatMap((g) => g.rows.map((r) => r.label));
+  const base = FULL_SPLIT.items.map((it) => (it.pageKey === "main" ? { ...it, rows: it.rows.filter((r) => !wiringRows.includes(r)) } : it));
+  const isMainWriter = (it) => it.pageKey === "main" && it.writesTo === "main";
+  const isC1Writer = (it) => it.pageKey === "child:C1" && it.writesTo === "child:C1";
+  // Moves every `main` writer to just before (or just after) the `child:C1` writers; the wiring item goes after both.
+  const ordered = (mainFirst) => {
+    const mains = base.filter(isMainWriter);
+    const rest = base.filter((it) => !isMainWriter(it));
+    const at = mainFirst ? rest.findIndex(isC1Writer) : rest.findLastIndex(isC1Writer) + 1;
+    const items = [...rest.slice(0, at), ...mains, ...rest.slice(at)];
+    const last = Math.max(items.findLastIndex(isMainWriter), items.findLastIndex(isC1Writer));
+    items.splice(last + 1, 0, splitItem("main-wiring", "main", "main", wiringRows));
+    return buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  };
+  const waits = (set) => {
+    const wiring = set.tasks.find((t) => t.id === "main-wiring");
+    const writerOf = (key) => set.tasks.filter((t) => t.writesTo === key).sort((a, b) => b.order - a.order)[0];
+    const c1 = writerOf("page:child::C1Page");
+    const main = writerOf("page:main");
+    return { refused: set.refused, problems: set.problems, wiring: wiring && { order: wiring.order, deps: wiring.dependsOn },
+      c1: c1 && { id: c1.id, order: c1.order }, main: main && { id: main.id, order: main.order } };
+  };
+  const holds = (w) => !w.refused && !!w.wiring && !!w.c1 && !!w.main
+    && w.wiring.deps.includes(w.c1.id) && w.wiring.deps.includes(w.main.id)
+    && w.wiring.order > w.c1.order && w.wiring.order > w.main.order;
+  check("split: the binding-only item waits on BOTH last writers and ranks after both, whether `main` is written before `child:C1` or after it",
+    () => {
+      const before = waits(ordered(true));
+      const after = waits(ordered(false));
+      return wiringRows.length > 0 && holds(before) && holds(after)
+        && before.main.order < before.c1.order && after.main.order > after.c1.order;
+    },
+    () => ({ mainFirst: waits(ordered(true)), mainLast: waits(ordered(false)) }));
+}
+// A page whose only related list to a rebuilt child is an inline grid binds nothing, so it gets no wiring task: the
+// grid's no-page row stays with the page build.
+{
+  const gridChild = { entity: "C1", seed: SEED, schemas: [{ pkg: "P", body: 'define("C1Page",[],function(){return{entitySchemaName:"C1",methods:{getFilter:function(){return 1;}},diff:[]};});' }] };
+  const m = { ...manifestOf(), childPageSchemas: { C1Page: gridChild } };
+  const set = buildTaskSet(runMigration(m), optsOf(m));
+  const naTask = set.tasks.find((t) => t.rows.some((r) => r.group === "Child page wiring"));
+  check("child page wiring: an inline grid alone makes no `wiring:` task — its no-page row is carried by the page's own build task",
+    () => !set.tasks.some((t) => t.writesTo?.startsWith("wiring:")) && naTask?.writesTo === "page:main"
+      && naTask.rows.filter((r) => r.group === "Child page wiring").every((r) => r.na),
+    () => set.tasks.map((t) => ({ id: t.id, w: t.writesTo, rows: t.rows.filter((r) => r.group === "Child page wiring").map((r) => [r.label.slice(0, 40), r.na]) })));
+}
+// A child page shared by two parents (a diamond) is reached once by the leaf-first walk, so one of its parents can
+// rank ahead of it. That parent's wiring task still has to wait for the shared page.
+{
+  const parentBody = (page, entity) => `define("${page}",[],function(){return{entitySchemaName:"${entity}",details:{S:{schemaName:"SD${entity}",entitySchemaName:"S1",filter:{detailColumn:"p",masterColumn:"Id"}}},diff:[{operation:"insert",name:"ST",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"S",parentName:"ST",values:{itemType:2}},{operation:"insert",name:"${entity}F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${entity}F"}}]};});`;
+  const parent = (page, entity) => ({ entity, seed: SEED, schemas: [{ pkg: "P", body: parentBody(page, entity) }],
+    detailSchemas: { [`SD${entity}`]: { entity: "S1", columns: ["Number"], editPage: "S1Page" } },
+    childPageSchemas: { S1Page: leafBundle("S1", "S1Page") } });
+  const base = manifestOf({ extraChild: true });
+  const m = { ...base, childPageSchemas: { C1Page: parent("C1Page", "C1"), C2Page: parent("C2Page", "C2") } };
+  const set = buildTaskSet(runMigration(m), optsOf(m));
+  const sharedKey = set.tasks.find((t) => t.pageKey.startsWith("child:S1") && t.writesTo?.startsWith("page:"))?.pageKey;
+  const lastShared = set.tasks.filter((t) => t.pageKey === sharedKey && t.writesTo?.startsWith("page:")).sort((a, b) => b.order - a.order)[0];
+  const wiresShared = set.tasks.filter((t) => t.writesTo?.startsWith("wiring:") && t.rows.some((r) => r.label.includes("`" + sharedKey + "`")));
+  check("child page wiring (diamond): BOTH parents of a shared child page wire it, and each wiring task is queued after the shared page and waits on its last writer",
+    () => !!lastShared && wiresShared.length === 2
+      && wiresShared.every((w) => w.order > lastShared.order && w.dependsOn.includes(lastShared.id)),
+    () => ({ sharedKey, last: lastShared?.id, wiring: wiresShared.map((w) => ({ id: w.id, page: w.pageKey, order: w.order, deps: w.dependsOn })) }));
+}
+
+// ============================================================================================================
+// `--decide D<N> --build`: a person's "build it" answer to a needs-decision row reaches the folder through the
+// engine (no file is hand-edited), and `--route` says when rows wait on a decision rather than on a repair round.
+// ============================================================================================================
+console.log("\n===== --decide --build and the decision-waiting --route report =====");
+{
+  const BO = checklistOpts(MANIFEST);
+  const BUILD_DECISIONS = new Map([["D5", "build the typed forms"]]);
+  const NEEDS_DECISION = "not-built — needs-decision";
+  const MANIFEST_FILE = (base) => { const f = path.join(base, "m.json"); fs.writeFileSync(f, JSON.stringify(MANIFEST)); return f; };
+  const cliB = (base, ...args) => cliFileApproved(MANIFEST_FILE(base), ...args);
+  const closeEverything = (dir) => {
+    for (const t of [...buildTaskSet(RUN, BO).tasks].sort((a, b) => a.order - b.order)) runTask(dir, t.id, RUN, BO, t.order * 2);
+  };
+  // A folder every task of which was dispatched, signed and closed `built`, then one row of one task recorded
+  // `not-built — needs-decision` — the state a build agent leaves when it raises a scope question.
+  const buildItFixture = (label) => {
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D5 — build the typed forms\n");
+    syncTaskDir(dir, RUN, BO);
+    closeEverything(dir);
+    const t = readTaskDir(dir).find((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair"
+      && !x.rows.some((r) => r.na));
+    const fp = taskFilePath(dir, t.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, NEEDS_DECISION));
+    syncTaskDir(dir, RUN, { ...BO, now: AT(900) });
+    return { base, dir, t, fp };
+  };
+  const rowOf = (dir, id, n) => readTaskDir(dir).find((x) => x.id === id).rows[n - 1];
+  const build = (dir, opts) => applyDecision(dir, RUN, { ...BO, decision: "D5", mode: "build", decisions: BUILD_DECISIONS, ...opts });
+  const waits = (out) => /wait(s)? on a decision/.test(out || "");
+
+  // ---- --route ---------------------------------------------------------------------------------
+  {
+    const { base, dir, t } = buildItFixture("build-route");
+    const route = cliB(base, "--tasks", dir, "--route");
+    check("--route: with only needs-decision rows open it NAMES them as waiting on a decision — task, row and label — and never claims a repair task exists",
+      () => waits(route.stdout) && (route.stdout || "").includes(t.file)
+        && (route.stdout || "").includes(t.rows[0].label.slice(0, 40))
+        && !/nothing there is waiting to be routed/.test(route.stdout || "")
+        && !/already has a repair task/.test(route.stdout || ""),
+      () => route.stdout);
+    check("--route: the decision-waiting report names the command that answers it, `--decide D<N> --build`",
+      () => /--decide D<N> --build/.test(route.stdout || ""), () => route.stdout);
+    check("--route: no repair task file is written for a needs-decision row",
+      () => readTaskDir(dir).some((x) => x.kind === "repair") === false, () => readTaskDir(dir).map((x) => x.file));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const base = tmp("build-route-clean");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, BO);
+    closeEverything(dir);
+    const route = cliB(base, "--tasks", dir, "--route");
+    check("--route: a folder with nothing open and nothing waiting on a decision reports that nothing is waiting to be routed",
+      () => /nothing there is waiting to be routed/.test(route.stdout || "") && !waits(route.stdout),
+      () => route.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = buildItFixture("build-route-repair");
+    const other = readTaskDir(dir).find((x) => x.rows.length >= 2 && x.rows.every((r) => r.outcomeKind === "built"));
+    const fpB = other ? taskFilePath(dir, other.id) : null;
+    if (fpB) fs.writeFileSync(fpB, setOutcome(fs.readFileSync(fpB, "utf8"), 2, NOT_BUILT_BLOCKED));
+    const route = cliB(base, "--tasks", dir, "--route");
+    check("--route: a folder that HAS a repairable row writes its repair task and reports it — the decision-waiting rows do not replace that report",
+      () => !!fpB && /wrote \d+ repair task\(s\)/.test(route.stdout || "") && !/nothing there is waiting to be routed/.test(route.stdout || ""),
+      () => route.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = buildItFixture("build-route-mixed");
+    const other = readTaskDir(dir).find((x) => x.rows.length >= 2 && x.rows.every((r) => r.outcomeKind === "built"));
+    const fpB = other ? taskFilePath(dir, other.id) : null;
+    if (fpB) fs.writeFileSync(fpB, setOutcome(fs.readFileSync(fpB, "utf8"), 2, NOT_BUILT_BLOCKED));
+    const first = cliB(base, "--tasks", dir, "--route");
+    const second = cliB(base, "--tasks", dir, "--route");
+    for (const [what, out, re] of [["writes a repair task", first, /wrote \d+ repair task\(s\)/], ["holds one already open", second, /already have an OPEN repair task/]]) {
+      check(`--route: a run that ${what} beside a needs-decision row keeps the repair report, never claims nothing is waiting, and the progress block still points the decision row at \`--decide D<N>\``,
+        () => !!fpB && re.test(out.stdout || "") && !/nothing there is waiting to be routed/.test(out.stdout || "")
+          && /--decide D<N>/.test(out.stdout || ""),
+        () => out.stdout);
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --build reopens the row -------------------------------------------------------------
+  {
+    const { base, dir, t, fp } = buildItFixture("build-reopen");
+    check("fixture (--build): the row is recorded needs-decision and its task computes partial",
+      () => rowOf(dir, t.id, 1).outcomeCause === "needs-decision" && readTaskDir(dir).find((x) => x.id === t.id).status === "partial");
+    const res = build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    const meta = parseTaskFile(fs.readFileSync(fp, "utf8")).meta;
+    check("--decide --build: reopens the addressed row — Outcome cleared, `decisions:` names D5 against it, status recomputed off the cells, nothing else in the task touched",
+      () => !res.refused && res.touched?.length === 1 && back.rows[0].outcomeKind === null && back.rows[0].outcome === ""
+        && String(meta.decisions).trim() === "1:D5!" && back.status === "todo"
+        && back.rows.slice(1).every((r) => r.outcomeKind === "built"),
+      () => ({ res: { refused: res.refused, problems: res.problems }, status: back.status, decisions: meta.decisions, kinds: back.rows.map((r) => r.outcomeKind) }));
+    const idx = readIndex(dir);
+    check("--decide --build: no hand-edit / drift warning is raised for the reopened task — the engine wrote every field it reads",
+      () => !back.statusEdited && !/edited after the engine wrote it/.test(idx) && !/OLDER set of deliverables/.test(idx)
+        && !/have CHANGED since/.test(idx) && meta.declared === "",
+      () => idx.slice(idx.indexOf("## Attention")).split("\n").slice(0, 8));
+    const next = cliB(base, "--tasks", dir, "--next");
+    check("--next: offers the reopened task, exit 0, with no edited-by-hand or drift line",
+      () => next.status === 0 && /STARTABLE NOW/.test(next.stdout || "") && (next.stdout || "").includes(t.id)
+        && !/edited by hand|edited after|OLDER set|CHANGED since|drift/i.test(`${next.stdout}${next.stderr}`),
+      () => ({ status: next.status, stdout: next.stdout, stderr: next.stderr }));
+    const closedUnder = readTimingsFile(dir).samples.find((x) => x.id === t.id)?.token;
+    const started = startTask(dir, t.id, RUN, { ...BO, dispatchToken: "tok-again" }, null, AT(901));
+    check("--start: the reopened task is dispatched under the new token (not the one it closed under), is `in-progress`, and its earlier signature is not overwritten — no dispatch-gate block and no filled-cell refusal",
+      () => !!started.started && !started.blockedByDispatch && !started.filledCells
+        && readTaskDir(dir).find((x) => x.id === t.id).status === "in-progress"
+        && !!closedUnder && closedUnder !== "tok-again" && readTimingsFile(dir).running[t.id]?.token === "tok-again"
+        && readTaskDir(dir).find((x) => x.id === t.id).agentNonce === closedUnder,
+      () => ({ keys: Object.keys(started), running: readTimingsFile(dir).running[t.id], status: readTaskDir(dir).find((x) => x.id === t.id).status }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-declared");
+    fs.writeFileSync(fp, fs.readFileSync(fp, "utf8").replace(/^declared:.*$/m, "declared: blocked"));
+    const routeBlocked = cliB(base, "--tasks", dir, "--route");
+    check("--route: a needs-decision row on a task that declares `blocked` is still named as waiting on a decision — the halt IS the question",
+      () => waits(routeBlocked.stdout) && !/nothing there is waiting to be routed/.test(routeBlocked.stdout || ""),
+      () => routeBlocked.stdout);
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--decide --build: a `declared: blocked` that raised the question is retired with the answer, so the task reads `todo`, not halted",
+      () => back.declared === "" && back.status === "todo", () => ({ declared: back.declared, status: back.status }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, t, fp } = buildItFixture("build-declared-notes");
+    fs.writeFileSync(fp, fs.readFileSync(fp, "utf8").replace(/^declared:.*$/m, "declared: blocked").trimEnd() + "\n\nstand outage: the stand was unreachable\n");
+    const cli = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    check("CLI `--decide --build`: a `declared: blocked` whose cause is recorded only in `## Notes` is cleared with a message that points at the Notes instead of claiming the halt was this question",
+      () => cli.status === 0 && /retired the `declared: blocked` of/.test(cli.stdout || "") && /check the task's `## Notes`/.test(cli.stdout || "")
+        && !/the halt was this question/.test(cli.stdout || ""),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-declared-kept");
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED).replace(/^declared:.*$/m, "declared: blocked"));
+    const cli = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    const res = { keptHalts: [t.file], clearedHalts: [] };
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("CLI `--decide --build`: a kept halt is REPORTED — the output names the `declared: blocked` it kept",
+      () => cli.status === 0 && (cli.stdout || "").includes("kept the `declared: blocked` of") && (cli.stdout || "").includes(t.file)
+        && !/retired the `declared: blocked`/.test(cli.stdout || ""),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
+    check("--decide --build: a `declared: blocked` that another row of the task still backs is KEPT — the reopen answers one row's question, not the task's halt",
+      () => back.declared === "blocked" && back.status === "blocked"
+        && (res.keptHalts || []).includes(t.file) && !(res.clearedHalts || []).length,
+      () => ({ declared: back.declared, status: back.status }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t } = buildItFixture("build-drift-said");
+    const fpD = taskFilePath(dir, t.id);
+    fs.writeFileSync(fpD, fs.readFileSync(fpD, "utf8").replace(/^rowsDigest:.*$/m, "rowsDigest: stale0000"));
+    const cli = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    check("CLI `--decide --build`: a drift warning the reopen clears is REPORTED, not dropped silently",
+      () => cli.status === 0 && /cleared .*drift warning/.test(cli.stdout || "") && (cli.stdout || "").includes(t.file),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- refusals and skips ---------------------------------------------------------------------------
+  {
+    const { base, dir, t, fp } = buildItFixture("build-guard");
+    const before = fs.readFileSync(fp, "utf8");
+    const bad = build(dir, { decision: "D999", rowRef: { taskId: t.id, n: "1" } });
+    check("--decide D999 --build: an unknown D<N> is refused with the same message as --decide and the folder is unchanged",
+      () => bad.refused && bad.problems?.some((p) => /D999.*does not resolve/.test(p)) && fs.readFileSync(fp, "utf8") === before,
+      () => bad);
+    const built = build(dir, { rowRef: { taskId: t.id, n: "2" } });
+    check("--decide --build: a built row is skipped with a reason, and a call that touches nothing is refused",
+      () => built.refused && built.skipped?.some((s) => s.n === 2 && /already built/.test(s.why)),
+      () => built);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED));
+    const blocked = build(dir, { rowRef: { taskId: t.id, n: "2" } });
+    check("--decide --build: a `not-built — blocked` row is skipped — only a needs-decision row is a question a build-it answer can settle",
+      () => blocked.refused && blocked.skipped?.some((s) => s.n === 2 && /needs-decision/.test(s.why)), () => blocked);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "built"));
+    applyDecision(dir, RUN, { ...BO, decision: "D5", mode: "wont-do", decisions: BUILD_DECISIONS, rowRef: { taskId: t.id, n: "1" } });
+    const decided = build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    check("--decide --build: a row already decided (wont-do) is skipped with a reason and left as decided",
+      () => decided.refused && decided.skipped?.some((s) => s.n === 1 && /already decided/.test(s.why))
+        && rowOf(dir, t.id, 1).outcomeKind === "wont-do",
+      () => decided);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t } = buildItFixture("build-task");
+    const all = build(dir, { taskId: t.id });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--decide --build --task: reopens only the needs-decision row of the task and reports the built ones as skipped",
+      () => !all.refused && all.touched.length === 1 && all.skipped.length === t.rows.length - 1
+        && back.rows[0].outcomeKind === null && back.rows.slice(1).every((r) => r.outcomeKind === "built"),
+      () => ({ touched: all.touched?.length, skipped: all.skipped?.length, problems: all.problems }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, t, fp } = buildItFixture("build-bypass");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — x (D5)"));
+    const set = syncTaskDir(dir, RUN, { ...BO, now: AT(902) });
+    const key = verifyRowKey(t.pageKey, t.rows[0].label);
+    check("a build-it entry is not a closure: a `wont-do` typed by hand into the re-opened cell is named on Attention and does not hide the row from `--verify`",
+      () => /but the row is NOT in/.test(readIndex(dir))
+        && !decidedRowKeys(set).has(key),
+      () => readIndex(dir).slice(readIndex(dir).indexOf("## Attention")).split("\n").slice(0, 8));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A build-it entry writes no closure: a `wont-do` typed by hand into the reopened cell leaves the task
+    // outside the decided-descope exemption, so the dispatch audit still asks for a builder's record.
+    const descopeFixture = (label, rowOneDecision) => {
+      const base = tmp(label);
+      const dir = path.join(base, "build-tasks");
+      fs.writeFileSync(path.join(base, "decisions.md"), "## D5 — build the typed forms\n## D6 — drop the rest\n");
+      const decisions = new Map([["D5", "build the typed forms"], ["D6", "drop the rest"]]);
+      syncTaskDir(dir, RUN, BO);
+      const t = readTaskDir(dir).filter((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair"
+        && !x.rows.some((r) => r.na) && !(x.dependsOn || []).length).sort((a, b) => a.order - b.order)[0];
+      const fp = taskFilePath(dir, t.id);
+      let txt = fs.readFileSync(fp, "utf8");
+      for (let i = 1; i <= t.rows.length; i++) txt = setOutcome(txt, i, NEEDS_DECISION);
+      fs.writeFileSync(fp, txt);
+      syncTaskDir(dir, RUN, { ...BO, now: AT(900) });
+      const answer = (n, mode, decision) => applyDecision(dir, RUN, { ...BO, decision, mode, decisions, rowRef: { taskId: t.id, n: String(n) } });
+      answer(1, rowOneDecision, "D5");
+      for (let i = 2; i <= t.rows.length; i++) answer(i, "wont-do", "D6");
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — x (D5)"));
+      syncTaskDir(dir, RUN, { ...BO, now: AT(902) });
+      return { base, dir, t };
+    };
+    const decided = descopeFixture("build-descope-decided", "wont-do");
+    check("a task whose every row a person closed with `--decide wont-do` is decided descope: the dispatch audit asks for no builder record",
+      () => !dispatchAudit(readTaskDir(decided.dir), decided.dir).never.some((x) => x.id === decided.t.id),
+      () => dispatchAudit(readTaskDir(decided.dir), decided.dir).never.map((x) => x.id));
+    fs.rmSync(decided.base, { recursive: true, force: true });
+    const viaBuild = descopeFixture("build-descope-build", "build");
+    check("a build-it entry is no closure for the task: with every cell `wont-do` and row 1 typed by hand over a `--decide --build` entry, the dispatch audit still flags the task as never dispatched",
+      () => dispatchAudit(readTaskDir(viaBuild.dir), viaBuild.dir).never.some((x) => x.id === viaBuild.t.id),
+      () => dispatchAudit(readTaskDir(viaBuild.dir), viaBuild.dir).never.map((x) => x.id));
+    fs.rmSync(viaBuild.base, { recursive: true, force: true });
+  }
+  {
+    // A repair round whose every cell reads `wont-do` is a decided round, and spends no attempt, only when each
+    // cell is closed by a `--decide` entry. A build-it entry with a hand-typed cell is an attempt.
+    const capFixture = (label, mode) => {
+      const base = tmp(label);
+      const dir = path.join(base, "build-tasks");
+      fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope the handlers\n");
+      const decisions = new Map([["D13", "descope the handlers"]]);
+      syncTaskDir(dir, RUN, OPTS);
+      let res = null;
+      for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
+        res = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+        const rt = res.written.find((x) => x.cause === "missing:handlers");
+        if (!rt || r > REPAIR_ROUND_CAP) break;
+        const fpR = taskFilePath(dir, rt.id);
+        const rows = readTaskDir(dir).find((x) => x.id === rt.id).rows.length;
+        const fill = (word) => {
+          let txt = fs.readFileSync(fpR, "utf8");
+          for (let i = 1; i <= rows; i++) txt = setOutcome(txt, i, word);
+          fs.writeFileSync(fpR, txt);
+        };
+        if (mode === "build") {
+          fill(NEEDS_DECISION);
+          applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "build", decisions, taskId: rt.id });
+          fill("wont-do — x (D13)");
+        } else {
+          applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", decisions, taskId: rt.id });
+        }
+      }
+      fs.rmSync(base, { recursive: true, force: true });
+      return res;
+    };
+    const byDecision = capFixture("build-cap-decided", "wont-do");
+    check(`${REPAIR_ROUND_CAP} repair rounds closed by \`--decide wont-do\` spend no attempt: the next round for the cause is still written`,
+      () => byDecision.written.some((x) => x.cause === "missing:handlers") && !byDecision.parked.some((p) => p.cause === "missing:handlers"),
+      () => ({ written: byDecision.written.map((x) => x.cause), parked: byDecision.parked.map((p) => p.cause) }));
+    const byBuild = capFixture("build-cap-build", "build");
+    check(`${REPAIR_ROUND_CAP} repair rounds each reopened through \`--decide --build\` and typed \`wont-do\` by hand are attempts: the cause is parked and no further round is written`,
+      () => byBuild.parked.some((p) => p.cause === "missing:handlers") && !byBuild.written.some((x) => x.cause === "missing:handlers"),
+      () => ({ written: byBuild.written.map((x) => x.cause), parked: byBuild.parked.map((p) => p.cause) }));
+  }
+  {
+    // An adopted body (a repair task) is written in place, not re-rendered.
+    const { base, dir, rep } = repairMirrorFixture("build-adopted", "D5", "build the typed forms");
+    const fpR = taskFilePath(dir, rep.id);
+    fs.writeFileSync(fpR, setOutcome(fs.readFileSync(fpR, "utf8"), 1, NEEDS_DECISION));
+    const res = build(dir, { taskBudget: OPTS.taskBudget, rowRef: { taskId: rep.id, n: "1" } });
+    const back = readTaskDir(dir).find((x) => x.id === rep.id);
+    const meta = parseTaskFile(fs.readFileSync(fpR, "utf8")).meta;
+    check("--decide --build: a repair task's needs-decision row is re-opened in place — cell cleared, `decisions:` written, task back to `todo`",
+      () => !res.refused && back.rows[0].outcomeKind === null && String(meta.decisions).trim() === "1:D5!" && back.status === "todo",
+      () => ({ res: res.problems, kinds: back.rows.map((r) => r.outcomeKind), decisions: meta.decisions, status: back.status }));
+    const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D5" });
+    const again = readTaskDir(dir).find((x) => x.id === rep.id);
+    check("--revoke D5: withdrawing a build-it entry on a repair task puts the question back in place and drops the entry",
+      () => !rev.refused && again.rows[0].outcomeCause === "needs-decision"
+        && String(parseTaskFile(fs.readFileSync(fpR, "utf8")).meta.decisions || "").trim() === "",
+      () => ({ rev: rev.problems, cell: again.rows[0].outcome }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --revoke -------------------------------------------------------------------------------------
+  {
+    const { base, dir, t, fp } = buildItFixture("build-revoke");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    const snapshot = () => Object.fromEntries(fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE && f !== path.basename(fp))
+      .map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]));
+    const othersBefore = snapshot();
+    const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
+    const othersAfter = snapshot();
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    const meta = parseTaskFile(fs.readFileSync(fp, "utf8")).meta;
+    check("--revoke D5: every other task file is byte-for-byte unchanged",
+      () => Object.keys(othersBefore).length > 0 && JSON.stringify(othersBefore) === JSON.stringify(othersAfter),
+      () => Object.keys(othersBefore).filter((f) => othersBefore[f] !== othersAfter[f]));
+    check("--revoke D5: a build-it entry is withdrawn — the row is a question again, the entry is gone, the task computes partial and no warning is raised",
+      () => !rev.refused && rev.cleared.length === 1 && back.rows[0].outcomeCause === "needs-decision"
+        && String(meta.decisions || "").trim() === "" && back.status === "partial" && !back.statusEdited
+        && !/edited after the engine wrote it/.test(readIndex(dir)),
+      () => ({ rev: { cleared: rev.cleared?.length, skipped: rev.skipped }, kinds: back.rows.map((r) => r.outcome), decisions: meta.decisions, status: back.status }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-revoke-started");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    startTask(dir, t.id, RUN, { ...BO, dispatchToken: "tok-started" }, null, AT(902));
+    const mid = readTaskDir(dir).find((x) => x.id === t.id);
+    const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--revoke D5: withdrawing a build-it entry on a task a builder is running drops only the entry — the cell stays blank for the builder, the task stays in-progress, the live clock is kept, and the withdrawal is reported with its reason",
+      () => mid.status === "in-progress" && !rev.refused && rev.cleared.length === 0
+        && rev.skipped.some((x) => x.withdrawn && x.n === 1 && /in-progress/.test(x.why))
+        && back.rows[0].outcomeKind === null && back.rows[0].outcome === "" && back.status === "in-progress" && !back.statusEdited
+        && readTimingsFile(dir).running[t.id]?.token === "tok-started"
+        && String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim() === ""
+        && !/edited after the engine wrote it|OLDER set|CHANGED since/.test(readIndex(dir)),
+      () => ({ mid: mid.status, rev: rev.refused ? rev.problems : rev.cleared?.length, skipped: rev.skipped?.map((x) => x.why), back: back.status, cell: back.rows[0].outcome }));
+    const cliStarted = (() => {
+      const f = buildItFixture("build-revoke-started-cli");
+      build(f.dir, { rowRef: { taskId: f.t.id, n: "1" } });
+      startTask(f.dir, f.t.id, RUN, { ...BO, dispatchToken: "tok-started" }, null, AT(902));
+      const out = cliB(f.base, "--tasks", f.dir, "--revoke", "D5");
+      fs.rmSync(f.base, { recursive: true, force: true });
+      return out;
+    })();
+    check("CLI `--revoke D5` over a build-it entry of a running task: exits 0 and opens with `withdrew 1 build-it entry`, naming the task as in-progress",
+      () => cliStarted.status === 0 && (cliStarted.stdout || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D5") && /in-progress/.test(cliStarted.stdout || ""),
+      () => ({ status: cliStarted.status, stdout: cliStarted.stdout, stderr: cliStarted.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-revoke-built-cli");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"));
+    const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
+    check("CLI `--revoke D5`: over a build-it entry whose row a builder has since built, exits 0 and opens with `withdrew 1 build-it entry`, never with the no-op text",
+      () => cli.status === 0 && (cli.stdout || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D5") && !/nothing to revoke/.test(cli.stdout || ""),
+      () => ({ status: cli.status, stdout: cli.stdout, stderr: cli.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-revoke-built");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"));
+    const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--revoke D5: once a builder has built the reopened row, revoking drops the entry and leaves the builder's `built` record alone",
+      () => !rev.refused && back.rows[0].outcomeKind === "built"
+        && String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim() === "",
+      () => ({ rev: { cleared: rev.cleared?.length, skipped: rev.skipped }, kinds: back.rows.map((r) => r.outcomeKind) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir, t, fp } = buildItFixture("build-reraised");
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, NEEDS_DECISION));
+    const route = cliB(base, "--tasks", dir, "--route");
+    check("a build-it row the builder raises again as needs-decision is an open question again — `--route` names it rather than reading the old entry as an answer",
+      () => waits(route.stdout) && (route.stdout || "").includes(t.file), () => route.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    // A row a builder recorded while its task is still running is not reopened: the reopen resets the task to
+    // `todo`, and `--start` could then dispatch a second agent onto the page the first one is writing.
+    const base = tmp("build-inflight");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, BO);
+    const t = readTaskDir(dir).filter((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair"
+      && !x.rows.some((r) => r.na) && !(x.dependsOn || []).length).sort((a, b) => a.order - b.order)[0];
+    const fp = taskFilePath(dir, t.id);
+    const live = startTask(dir, t.id, RUN, { ...BO, dispatchToken: "tok-live" }, null, AT(800));
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, NEEDS_DECISION));
+    syncTaskDir(dir, RUN, { ...BO, now: AT(801) });
+    const before = fs.readFileSync(fp, "utf8");
+    check("fixture (--build): the task is in-progress and one of its rows is recorded needs-decision",
+      () => !!live.started && readTaskDir(dir).find((x) => x.id === t.id).status === "in-progress"
+        && rowOf(dir, t.id, 1).outcomeCause === "needs-decision",
+      () => ({ started: Object.keys(live), status: readTaskDir(dir).find((x) => x.id === t.id).status }));
+    const res = build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    check("--decide --build: a needs-decision row of a task that is still in-progress is skipped with the reason, the task stays in-progress and its file is byte-identical",
+      () => res.refused && res.skipped?.some((x) => x.n === 1 && /in-progress/.test(x.why) && /second agent/.test(x.why))
+        && readTaskDir(dir).find((x) => x.id === t.id).status === "in-progress" && fs.readFileSync(fp, "utf8") === before,
+      () => ({ refused: res.refused, skipped: res.skipped?.map((x) => x.why), status: readTaskDir(dir).find((x) => x.id === t.id).status }));
+    const route = cliB(base, "--tasks", dir, "--route");
+    const routeHead = (route.stdout || "").split("--- progress")[0];
+    check("--route: a needs-decision row of a task that is still in-progress is named as a question on a task that has not closed, with its status; no repair task is claimed and none is written",
+      () => (route.stdout || "").includes(t.file) && routeHead.includes(`(${t.id}:1)`) && /has not closed yet/.test(routeHead)
+        && routeHead.includes("(task in-progress)") && !/already has a repair task/.test(routeHead)
+        && !/nothing there is waiting to be routed/.test(routeHead) && !waits(routeHead) && !/wrote \d+ repair task/.test(routeHead)
+        && readTaskDir(dir).some((x) => x.kind === "repair") === false,
+      () => route.stdout);
+    const offered = startableTasks(syncTaskDir(dir, RUN, { ...BO, now: AT(802) }), dir).startable.map((x) => x.id);
+    check("--next: the skipped task is not offered for dispatch while it is still in-progress",
+      () => !offered.includes(t.id), () => offered);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A needs-decision row on a task nobody has dispatched is a question on a task that has not closed.
+    const base = tmp("build-inflight-todo");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, BO);
+    const t = readTaskDir(dir).filter((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair"
+      && !x.rows.some((r) => r.na) && !(x.dependsOn || []).length).sort((a, b) => a.order - b.order)[0];
+    const fp = taskFilePath(dir, t.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, NEEDS_DECISION));
+    syncTaskDir(dir, RUN, { ...BO, now: AT(801) });
+    const status = readTaskDir(dir).find((x) => x.id === t.id).status;
+    const route = cliB(base, "--tasks", dir, "--route");
+    const routeHead = (route.stdout || "").split("--- progress")[0];
+    check("--route: a needs-decision row of a task that is not closed (todo or in-progress) is named as a question on a task that has not closed and never as having a repair task",
+      () => ["todo", "in-progress"].includes(status) && routeHead.includes(`(${t.id}:1)`) && /has not closed yet/.test(routeHead)
+        && routeHead.includes(`(task ${status})`) && !/already has a repair task/.test(routeHead) && !/nothing there is waiting to be routed/.test(routeHead),
+      () => ({ status, head: routeHead }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // `--pages` addresses every task of the page: each needs-decision row on it reopens and resets its task,
+    // and a task on another page is not touched.
+    const base = tmp("build-pages");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN5, OPTS5);
+    for (const t of [...buildTaskSet(RUN5, OPTS5).tasks].sort((x, y) => x.order - y.order)) runTask(dir, t.id, RUN5, OPTS5, t.order * 2);
+    const eligible = readTaskDir(dir).filter((x) => x.rows.length >= 2 && !x.rows.some((r) => r.na));
+    const onPage = eligible.filter((x) => x.pageKey === "main").slice(0, 2);
+    const other = eligible.find((x) => x.pageKey === "child:C1");
+    for (const x of [...onPage, other]) {
+      const f = taskFilePath(dir, x.id);
+      fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, NEEDS_DECISION));
+    }
+    syncTaskDir(dir, RUN5, { ...OPTS5, now: AT(903) });
+    const otherPath = taskFilePath(dir, other.id);
+    const otherBefore = fs.readFileSync(otherPath, "utf8");
+    const res = applyDecision(dir, RUN5, { ...OPTS5, decision: "D5", mode: "build", decisions: BUILD_DECISIONS, pages: ["main"] });
+    const after = (x) => readTaskDir(dir).find((y) => y.id === x.id);
+    check("--decide --build --pages: every needs-decision row on the page reopens, each of its tasks is `todo`, and a task on another page is byte-identical",
+      () => onPage.length === 2 && !res.refused && res.touched.length === 2
+        && onPage.every((x) => after(x).rows[0].outcomeKind === null && after(x).status === "todo"
+          && after(x).rows.slice(1).every((r) => r.outcomeKind === "built"))
+        && fs.readFileSync(otherPath, "utf8") === otherBefore && after(other).rows[0].outcomeCause === "needs-decision",
+      () => ({ onPage: onPage.map((x) => x.id), other: other.id, refused: res.refused, problems: res.problems, touched: res.touched?.length }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // One D<N> holding a build-it entry and a decided row: revoking withdraws the entry and clears the cell.
+    const { base, dir, t, fp } = buildItFixture("build-revoke-mixed");
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NEEDS_DECISION));
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    applyDecision(dir, RUN, { ...BO, decision: "D5", mode: "wont-do", decisions: BUILD_DECISIONS, rowRef: { taskId: t.id, n: "2" } });
+    const mid = parseTaskFile(fs.readFileSync(fp, "utf8")).meta;
+    const rev = revokeDecision(dir, RUN, { ...BO, decision: "D5" });
+    const back = readTaskDir(dir).find((x) => x.id === t.id);
+    check("--revoke D5: one D<N> holding a build-it entry and a wont-do row drops both `decisions:` entries, puts the reopened row back as a question and clears the decided cell",
+      () => /1:D5!/.test(String(mid.decisions)) && /2:D5/.test(String(mid.decisions)) && !rev.refused
+        && String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim() === ""
+        && back.rows[0].outcomeCause === "needs-decision" && back.rows[1].outcomeKind === null && !back.statusEdited,
+      () => ({ mid: mid.decisions, cleared: rev.cleared?.length, skipped: rev.skipped, cells: back.rows.map((r) => r.outcome) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A withdrawn build-it entry and a decided cell that stays in force under one D<N>: the withdrawal is
+    // persisted and reported as such, and only the cell still in force fails the run.
+    const { base, dir, t, fp } = buildItFixture("build-revoke-mixed-cli");
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NEEDS_DECISION));
+    build(dir, { rowRef: { taskId: t.id, n: "1" } });
+    applyDecision(dir, RUN, { ...BO, decision: "D5", mode: "wont-do", decisions: BUILD_DECISIONS, rowRef: { taskId: t.id, n: "2" } });
+    fs.writeFileSync(fp, setOutcome(setOutcome(fs.readFileSync(fp, "utf8"), 1, "built"), 2, "built"));
+    const cli = cliB(base, "--tasks", dir, "--revoke", "D5");
+    const left = String(parseTaskFile(fs.readFileSync(fp, "utf8")).meta.decisions || "").trim();
+    check("CLI `--revoke D5` over a withdrawn build-it entry and a cell still in force: exits 1, opens by reporting the withdrawal rather than `nothing revoked`, lists the withdrawn entry and the skipped cell separately, and the folder keeps only the entry still in force",
+      () => cli.status === 1 && (cli.stderr || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D5") && !/nothing revoked/.test(cli.stderr || "")
+        && /withdrawn .* row 1/.test(cli.stderr || "")
+        && /skipped .* row 2/.test(cli.stderr || "") && left === "2:D5",
+      () => ({ status: cli.status, stderr: cli.stderr, left }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- CLI wiring ---------------------------------------------------------------------------------------
+  {
+    const { base, dir, t } = buildItFixture("build-cli");
+    const ok = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    check("CLI `--decide D5 --build --row <task>:<n>`: exits 0, says which row it reopened, and reads back as a startable task",
+      () => ok.status === 0 && /reopened 1 row/.test(ok.stdout || "") && readTaskDir(dir).find((x) => x.id === t.id).status === "todo",
+      () => ({ status: ok.status, stdout: ok.stdout, stderr: ok.stderr }));
+    const noRows = cliB(base, "--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+    check("CLI `--decide --build` over a row with nothing to reopen exits 1 and names why",
+      () => noRows.status === 1 && /reopened no rows/.test(noRows.stderr || "") && /not a `needs-decision` row/.test(noRows.stderr || ""),
+      () => ({ status: noRows.status, stderr: noRows.stderr }));
+    for (const [why, args] of [
+      ["`--build` names no D<N>", ["--build", "--row", `${t.id}:1`]],
+      ["`--build` and `--wont-do` are two answers to one question", ["--decide", "D5", "--build", "--wont-do", "--row", `${t.id}:1`]],
+      ["`--build` and `--postponed` are two answers to one question", ["--decide", "D5", "--build", "--postponed", "--to", "ENG-1", "--row", `${t.id}:1`]],
+      ["`--build` reopens rows, it does not go anywhere", ["--decide", "D5", "--build", "--to", "ENG-1", "--row", `${t.id}:1`]],
+      ["`--build` does not go with `--revoke`", ["--revoke", "D5", "--build"]],
+    ]) {
+      const r = cliB(base, "--tasks", dir, ...args);
+      check(`CLI: \`--build\` is REFUSED, not ignored — ${why}`, () => r.status === 1 && /--build/.test(r.stderr || ""),
+        () => ({ status: r.status, stderr: (r.stderr || "").slice(0, 300) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  check("prompts: no engine text tells the reader to edit a task file to build a needs-decision row",
+    () => !/re-open it: clear its `Outcome` cell/.test(fs.readFileSync(MIGRATE, "utf8"))
+      && !/re-opening it to build it/.test(fs.readFileSync(MIGRATE, "utf8")));
+  check("prompts: no progress or Attention text tells the reader to route a needs-decision row once a decision exists",
+    () => !/route it once that decision exists/.test(fs.readFileSync(path.join(path.dirname(MIGRATE), "tasks.mjs"), "utf8"))
+      && !/route it once that decision exists/.test(fs.readFileSync(MIGRATE, "utf8")));
+}
+
+// Per-item field / related-list rows weigh nothing: the Layout row that places an item carries its build weight.
+{
+  const isFieldRow = (r) => r.label.startsWith("Field `");
+  const itemTasks = (set) => set.tasks.filter((t) => t.rows.some(isFieldRow) && t.pageKey === "main");
+  const fieldRows = (set) => itemTasks(set).flatMap((t) => t.rows.filter(isFieldRow));
+  check("weight: a page's per-field rows pack as the one aggregate row did — the bulk page's field rows sit in ONE task, and one more field adds no task",
+    () => fieldRows(SET5).length >= 40 && itemTasks(SET5).length === 1 && SET5.tasks.length === SET6.tasks.length,
+    () => ({ fieldRows: fieldRows(SET5).length, tasks: itemTasks(SET5).map((t) => [t.id, t.rows.length]), set5: SET5.tasks.length, set6: SET6.tasks.length }));
+  check("weight (anti-vacuity): the bulk fixture really carries 40+ per-field rows, each with an item check, in the plan and in the cut",
+    () => SET5.tasks.flatMap((t) => t.rows).filter(isFieldRow).length >= 40
+      && checklistGroups(RUN5, OPTS5).flatMap((g) => g.rows).filter((r) => r.vk?.item).length >= 40);
+}
+
+console.log("\n===== deliverable status: a planning decision closes its row before dispatch =====");
+// The task row carrying `label` in the folder, with its `decisions:` entry; null when no task holds it.
+const locateRow = (dir, label) => {
+  for (const t of readTaskDir(dir)) {
+    const i = t.rows.findIndex((r) => r.label === label);
+    if (i >= 0) return { t, i, r: t.rows[i], d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null };
+  }
+  return null;
+};
+{
+  const stBody = `define("MPage",[],function(){return{entitySchemaName:"M",attributes:{"Dept":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN}},details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}},R2:{schemaName:"R2D",entitySchemaName:"C2",filter:{detailColumn:"m",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"R2",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"MainG",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainG"}},{operation:"insert",name:"PrintButton",parentName:"ProfileContainer",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"ProfileContainer",propertyName:"items",values:{}}],methods:{onA:function(){return this.get("x");},onB:function(){return this.get("y");}}};});`;
+  const PRINTABLE = { resolved: true, present: true, names: ["Invoice"] };
+  const stManifest = (deliverableStatus, extra = {}) => ({ ...manifestOf(), schemas: [{ pkg: "P", body: stBody }],
+    detailSchemas: { R1D: { entity: "C1", columns: ["Number"], editPage: false }, R2D: { entity: "C2", columns: ["Number"], editPage: false } }, childPageSchemas: {},
+    signals: { ...manifestOf().signals, printables: PRINTABLE }, deliverableStatus, ...extra });
+  const DEC = new Map([["D3", "not carried over"], ["D6", "replaced by the portal"]]);
+  const DEC_MD = "## D3 — not carried over\n\n## D6 — replaced by the portal\n";
+  const WONT = (d) => ({ status: "wont-do", decision: d });
+  const T1_STATUS = { "main#field:MainG": WONT("D3"), "main#related-list:R2D": WONT("D3"), "main#method:onB": WONT("D6"), "main#card-action:Print": WONT("D6") };
+  const LABELS = { "main#field:MainG": "Field `MainG`", "main#related-list:R2D": "Related list `R2D`",
+    "main#method:onB": "Handler — `onB`", "main#card-action:Print": "Card action — Print" };
+  const M1 = stManifest(T1_STATUS);
+  const RUN_ST = runMigration(M1, { decisions: DEC });
+  const OPTS_ST = { ...optsOf(M1), decisions: DEC };
+  const cut = (label, run, opts, split = null) => {
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, run, opts, split);
+    return { base, dir, set };
+  };
+  {
+    const { base, dir, set } = cut("status-cut", RUN_ST, OPTS_ST);
+    const disk = readTaskDir(dir);
+    const find = (label) => { for (const t of disk) { const i = t.rows.findIndex((r) => r.label === label && t.pageKey === "main"); if (i >= 0) return { t, i, r: t.rows[i] }; } return null; };
+    const mapOf = (x) => (x?.t?.decisions instanceof Map ? x.t.decisions : parseDecisionsMap(x?.t?.decisions));
+    const got = Object.entries(T1_STATUS).map(([k, st]) => ({ k, st, x: find(LABELS[k]) }));
+    check("T1: a manifest status closes a field, a related-list, a method and a card-action row at the cut — `wont-do — <title> (D<N>)` with its `decisions:` entry marked `D<N>=`",
+      () => RUN_ST.statusIssues.length === 0 && !set.refused && got.every(({ st, x }) => x?.r.outcomeKind === "wont-do"
+        && x.r.outcome === `wont-do — ${DEC.get(st.decision)} (${st.decision})` && mapOf(x).get(x.i + 1) === `${st.decision}=`),
+      () => ({ issues: RUN_ST.statusIssues, refused: set.problems, got: got.map(({ k, x }) => [k, x?.r?.outcome, x && mapOf(x).get(x.i + 1)]) }));
+    const onA = find("Handler — `onA`"), proc = find("Card action — Process");
+    const mainF = find("Field `MainF`"), r1 = find("Related list `R1D`");
+    check("T1: the dropped field's and related list's siblings stay open, as does an unaddressed method; the Process row the stand check found nothing behind arrives `not-applicable`",
+      () => onA && !onA.r.outcomeKind && mainF && !mainF.r.outcomeKind && r1 && !r1.r.outcomeKind && proc?.r.outcomeKind === "not-applicable",
+      () => ({ onA: onA?.r, mainF: mainF?.r, r1: r1?.r, proc: proc?.r }));
+    const snap = () => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const first = snap();
+    syncTaskDir(dir, RUN_ST, OPTS_ST);
+    check("T1: a second cut over the same folder writes nothing new", () => JSON.stringify(first) === JSON.stringify(snap()));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // The cut reconciles the cells it wrote: a removed entry or `build` reopens the row, another D<N> rewrites it,
+    // and a `--decide` cell or an unmarked entry is never touched.
+    // The two handlers get a task of their own, so a cleared cell has a closed task to reopen.
+    const handlers = new Set(["Handler — `onA`", "Handler — `onB`"]);
+    const groupEntry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
+    const split = parseSplit(JSON.stringify({ items: [
+      { id: "methods", title: "methods", pageKey: "main", writesTo: "main", rows: [...handlers] },
+      { id: "page", title: "Page", pageKey: "main", writesTo: "main",
+        rows: checklistGroups(RUN_ST, OPTS_ST).filter((g) => !(g.pageKey === "main" && g.rows.every((r) => handlers.has(r.label)))).map(groupEntry) },
+    ] })).split;
+    const { base, dir } = cut("status-reconcile", RUN_ST, OPTS_ST, split);
+    const locate = (label) => locateRow(dir, label);
+    const onA = locate("Handler — `onA`");
+    const manual = applyDecision(dir, RUN_ST, { ...OPTS_ST, split, decision: "D3", mode: "wont-do", rowRef: { taskId: onA.t.id, n: String(onA.i + 1) } });
+    const before = Object.fromEntries(Object.keys(LABELS).map((k) => [k, locate(LABELS[k])]));
+    const recut = (status) => { const m = stManifest(status); return syncTaskDir(dir, runMigration(m, { decisions: DEC }), { ...optsOf(m), decisions: DEC }, split); };
+    const next = { "main#related-list:R2D": { status: "build" }, "main#card-action:Print": WONT("D3") };
+    const resynced = recut(next);
+    const at = Object.fromEntries(Object.keys(LABELS).map((k) => [k, locate(LABELS[k])]));
+    const methodTask = () => locate("Handler — `onB`")?.t;
+    check("reconcile (anti-vacuity): before the re-cut every status cell carries `D<N>=` and the manual `--decide` on `onA` wrote a plain `D3`, in the task that holds `onB`",
+      () => !manual.refused && Object.values(before).every((x) => /^D\d+=$/.test(x?.d || "")) && before["main#method:onB"].t.id === onA.t.id
+        && before["main#method:onB"].t.status === "wont-do",
+      () => ({ manual: manual.problems, before: Object.values(before).map((x) => [x?.r.label, x?.d, x?.t.status]),
+      }));
+    check("reconcile: a removed entry reopens its row and drops its `decisions:` entry, for a field and for a method",
+      () => ["main#field:MainG", "main#method:onB"].every((k) => at[k] && !at[k].r.outcomeKind && at[k].r.outcome === "" && at[k].d === null),
+      () => ["main#field:MainG", "main#method:onB"].map((k) => [k, at[k]?.r.outcome, at[k]?.d]));
+    check("reconcile: an entry switched to `build` reopens its row",
+      () => !at["main#related-list:R2D"].r.outcomeKind && at["main#related-list:R2D"].d === null,
+      () => [at["main#related-list:R2D"]?.r.outcome, at["main#related-list:R2D"]?.d]);
+    check("reconcile: an entry switched to another D<N> is rewritten under it, still marked `D<N>=`",
+      () => at["main#card-action:Print"].r.outcome === "wont-do — not carried over (D3)" && at["main#card-action:Print"].d === "D3=",
+      () => [at["main#card-action:Print"]?.r.outcome, at["main#card-action:Print"]?.d]);
+    check("reconcile: the manual `--decide` cell survives the re-cut, and the task the cleared cell reopened is `todo` again",
+      () => locate("Handler — `onA`")?.r.outcome === "wont-do — not carried over (D3)" && locate("Handler — `onA`")?.d === "D3"
+        && methodTask()?.status === "todo" && resynced.tasks.find((t) => t.id === onA.t.id)?.status === "todo",
+      () => ({ onA: locate("Handler — `onA`")?.r.outcome, status: methodTask()?.status }));
+    const snap = () => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const settled = snap();
+    recut(next);
+    check("reconcile: a second re-cut with the same statuses writes nothing new", () => JSON.stringify(settled) === JSON.stringify(snap()));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = cut("status-reconcile-unmarked", RUN_ST, OPTS_ST);
+    for (const f of fs.readdirSync(dir).filter((x) => x.startsWith("task-"))) {
+      const file = path.join(dir, f);
+      fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/^decisions: .*$/m, (l) => l.replaceAll("=", "")));
+    }
+    const m = stManifest(undefined);
+    syncTaskDir(dir, runMigration(m, { decisions: DEC }), { ...optsOf(m), decisions: DEC });
+    const rows = readTaskDir(dir).flatMap((t) => t.rows.map((r, i) => ({ r, d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null })));
+    const kept = Object.values(LABELS).map((l) => rows.find((x) => x.r.label === l));
+    check("reconcile: a folder whose status cells carry no `=` mark keeps them when the entries are removed",
+      () => kept.every((x) => x?.r.outcomeKind === "wont-do" && /^D\d+$/.test(x.d || "")),
+      () => kept.map((x) => [x?.r.label, x?.r.outcome, x?.d]));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // `--verify --built --tasks` over per-item rows: a row closed by `--decide` leaves the page-level field match and
+    // related-list count, so one built field and one grid close the remaining field and list. Section 3 of the
+    // report lists every row the machine could not confirm.
+    const m = stManifest(undefined);
+    const verifyItems = (decide) => {
+      const base = tmp("status-verify-items");
+      const dir = path.join(base, "build-tasks");
+      fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(m));
+      fs.writeFileSync(path.join(base, "built.json"), JSON.stringify({ pages: { main: { schemaUId: "0b6f86b8-8f5e-4770-9462-b75ee2394b81",
+        viewConfig: [{ name: "MainF", type: "crt.Input", control: "$MainF" }, { name: "G1", type: "crt.DataGrid" }] } } }));
+      const cli = (...args) => cliFileApproved(path.join(base, "manifest.json"), ...args);
+      // Recorded after the cut: before the first dispatch a cut refuses decisions no deliverable accounts for.
+      const cutRun = cli("--tasks", dir);
+      fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
+      const rowRef = (label) => { for (const t of readTaskDir(dir)) { const i = t.rows.findIndex((r) => r.label === label); if (i >= 0) return `${t.id}:${i + 1}`; } return null; };
+      const decided = decide ? ["Field `MainG`", "Related list `R2D`"].map((l) => cli("--tasks", dir, "--decide", "D3", "--wont-do", "--row", rowRef(l)).status) : [];
+      const out = cli("--verify", "--built", path.join(base, "built.json"), "--tasks", dir).stdout.replaceAll("ˋ", "`");
+      fs.rmSync(base, { recursive: true, force: true });
+      const from = out.indexOf("## 3. The machine could not confirm");
+      const open = from < 0 ? "" : out.slice(from).split("\n## ")[0];
+      const lineFor = (label) => open.split("\n").find((l) => l.includes(`| ${label} |`)) || "";
+      return { cut: cutRun.status, decided, lineFor, open };
+    };
+    const withDecision = verifyItems(true), without = verifyItems(false);
+    const ITEMS = ["Field `MainF`", "Field `MainG`", "Related list `R1D`", "Related list `R2D`"];
+    check("per-item verify with recorded decisions: `--decide` on one of two Field rows and one of two Related list rows closes every field and related-list row of the page",
+      () => withDecision.cut === 0 && withDecision.decided.length === 2 && withDecision.decided.every((s) => s === 0)
+        && !!withDecision.open && ITEMS.every((l) => !withDecision.lineFor(l)),
+      () => ({ cut: withDecision.cut, decided: withDecision.decided, open: withDecision.open.slice(0, 2000) }));
+    check("per-item verify without the decisions: the second field is not found and one grid for two lists leaves both list rows open",
+      () => without.cut === 0 && !without.lineFor("Field `MainF`") && /⚠ verify.*missing: MainG/.test(without.lineFor("Field `MainG`"))
+        && ["Related list `R1D`", "Related list `R2D`"].every((l) => /⚠ verify/.test(without.lineFor(l))),
+      () => ITEMS.map((l) => without.lineFor(l)));
+  }
+  {
+    const issuesOf = (manifest, decisions = DEC) => runMigration(manifest, decisions ? { decisions } : {}).statusIssues || [];
+    // `helper` is called only by `onA`, so the plan folds it under `onA` and both share `onA`'s fold-chain subject.
+    const foldBody = stBody.replace('onA:function(){return this.get("x");}', 'onA:function(){this.helper();return this.get("x");},helper:function(){return this.get("z");}');
+    const foldManifest = (status) => ({ ...stManifest(status), schemas: [{ pkg: "P", body: foldBody }] });
+    const helperRow = checklistGroups(runMigration(foldManifest(undefined)), optsOf(foldManifest(undefined))).flatMap((g) => g.rows).find((r) => r.deliverableId === "method:helper");
+    const helperOnly = issuesOf(foldManifest({ "main#method:helper": WONT("D3") }));
+    const callerAnswered = issuesOf(foldManifest({ "main#method:helper": WONT("D3"), "main#method:onA": { status: "build" } }));
+    check("T5 (anti-vacuity): the fixture folds `helper` under `onA`",
+      () => helperRow?.vk?.parent === "onA", () => helperRow?.vk);
+    check("T5: a wont-do on a folded helper whose caller has no status is refused, naming the caller's key; a status on the caller clears it",
+      () => helperOnly.length === 1 && helperOnly[0].key === "main#method:helper" && /fold:/.test(helperOnly[0].problem)
+        && JSON.stringify(helperOnly[0].valid) === JSON.stringify(["main#method:onA"]) && callerAnswered.length === 0,
+      () => ({ helperOnly, callerAnswered }));
+    // A `confirm:<kind>:<item>` subject carries the item's own evidence id, which no other deliverable shares.
+    const confirmRows = checklistGroups(RUN_ST, OPTS_ST).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, groupTitle: g.baseTitle })));
+    const subjects = TASKS_MODULE.rowSubjects(confirmRows);
+    const at = confirmRows.findIndex((r) => r.pageKey === "main" && r.deliverableId?.startsWith("confirm:"));
+    const confirmKey = at >= 0 ? `main#${confirmRows[at].deliverableId}` : null;
+    const confirmOnly = confirmKey ? issuesOf(stManifest({ [confirmKey]: WONT("D3") })) : null;
+    check("T5: a wont-do on a `confirm:<kind>:<item>` deliverable is accepted — its subject is that item's own `confirm:` id, which no other deliverable shares",
+      () => at >= 0 && subjects[at]?.startsWith("confirm:") && subjects.filter((s) => s === subjects[at]).length === 1 && confirmOnly?.length === 0,
+      () => ({ confirmKey, subject: subjects[at], confirmOnly }));
+  }
+  {
+    const issuesOf = (status) => runMigration(stManifest(status), { decisions: DEC }).statusIssues || [];
+    const badStatus = issuesOf({ "main#method:onB": { status: "wontdo", decision: "D3" } });
+    const noDecision = issuesOf({ "main#method:onB": { status: "wont-do" } });
+    const badDecision = issuesOf({ "main#method:onB": WONT("6") });
+    check("T5: a status other than `wont-do` / `build` is refused, naming the value it got",
+      () => badStatus.length === 1 && /`wontdo`/.test(badStatus[0].problem) && badStatus[0].kind === "status", () => badStatus);
+    check("T5: a `wont-do` with no decision, or with a decision not shaped D<N>, is refused",
+      () => [noDecision, badDecision].every((x) => x.length === 1 && /needs its own `decision`/.test(x[0].problem) && x[0].kind === "decision"),
+      () => ({ noDecision, badDecision }));
+    const base = tmp("status-optional-decisions");
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D3 — not carried over\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(stManifest({ "main#method:onB": WONT("D9") })));
+    fs.writeFileSync(path.join(base, "built.json"), JSON.stringify({ pages: {} }));
+    const verified = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--verify", "--built", path.join(base, "built.json"), "--out", path.join(base, "report.md")], { encoding: "utf8" });
+    const report = fs.existsSync(path.join(base, "report.md")) ? fs.readFileSync(path.join(base, "report.md"), "utf8") : "";
+    check("T5: a mode that reads decisions.md optionally still checks a D<N> when it reads one — `--verify --built --out` beside a decisions.md without D9 raises deliverableStatus INVALID",
+      () => verified.status === 2 && /deliverableStatus INVALID[^\n]*D9/.test(verified.stdout + verified.stderr + report),
+      () => ({ status: verified.status, out: (verified.stdout + verified.stderr).slice(0, 600) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const plan = RUN_ST.plan;
+    const lineOf = (re) => plan.split("\n").find((l) => re.test(l)) || "";
+    const end = plan.slice(plan.indexOf("### Won't do"));
+    check("T4: the status is printed on the deliverable's own plan line — the method row and the card-action Layout row read `**Won't do** — D6: <title>`",
+      () => /\*\*Won't do\*\* — D6: replaced by the portal/.test(lineOf(/^\| onB \|/)) && /\*\*Won't do\*\* — D6: replaced by the portal/.test(lineOf(/^\| Card actions \| Print \|/))
+        && /\*\*Won't do\*\* — no process connected/.test(lineOf(/^\| Card actions \| Process \|/)) && !/Won't do/.test(lineOf(/^\| onA \|/)),
+      () => [lineOf(/^\| onB \|/), lineOf(/^\| Card actions \| Print \|/), lineOf(/^\| Card actions \| Process \|/)]);
+    check("T4: a closed deliverable with no line of its own is listed under `### Won't do` at the end of the plan; one printed on its line is not repeated",
+      () => plan.includes("### Won't do") && end.includes("`main#field:MainG`") && end.includes("`main#related-list:R2D`") && !end.includes("`main#field:MainF`")
+        && !end.includes("`main#method:onB`") && !end.includes("`main#card-action:Print`"),
+      () => end.slice(0, 900));
+  }
+  {
+    const issueOf = (status, extra = {}, decisions = DEC) => runMigration(stManifest(status, extra), decisions ? { decisions } : {}).statusIssues || [];
+    const unknownId = issueOf({ "main#field:Nope": WONT("D3") });
+    check("T5: an unknown id is refused, listing the valid ids for that page",
+      () => /names no deliverable/.test(unknownId[0]?.problem || "") && unknownId[0].valid.includes("main#method:onA") && unknownId[0].valid.includes("main#field:MainF"),
+      () => unknownId);
+    const unknownD = issueOf({ "main#method:onB": WONT("D9") });
+    const noFile = issueOf({ "main#method:onB": WONT("D6") }, {}, null);
+    check("T5: a D<N> decisions.md does not hold is refused, and so is any wont-do when no decisions.md was read",
+      () => /D9.*does not resolve/.test(unknownD[0]?.problem || "") && /no decisions\.md was read/.test(noFile[0]?.problem || ""),
+      () => ({ unknownD, noFile }));
+    const engineClosed = issueOf({ "main#card-action:Process": WONT("D6") });
+    check("T5: a status on a deliverable the engine already closed is refused, naming the engine's reason",
+      () => /already closed by the engine: no process connected/.test(engineClosed[0]?.problem || ""), () => engineClosed);
+    const CARD = { behaviourIndex: { "attribute-virtual:Dept": { card: "C7" }, onA: { card: "C7" } } };
+    const related = issueOf({ "main#attribute-virtual:Dept": WONT("D3") }, CARD);
+    const answered = issueOf({ "main#attribute-virtual:Dept": WONT("D3"), "main#method:onA": { status: "build" } }, CARD);
+    check("T5: a wont-do whose behaviour card an unanswered deliverable shares is refused, naming that deliverable; an explicit `build` answers it",
+      () => /card:C7/.test(related[0]?.problem || "") && related[0].valid.includes("main#method:onA") && !related[0].valid.includes("main#method:onB")
+        && answered.length === 0,
+      () => ({ related, answered }));
+    const gapRun = runMigration(stManifest({ "main#field:Nope": WONT("D3") }), { decisions: DEC });
+    check("T5: the refusal is a plan gap naming the key and the valid ids",
+      () => planGaps(gapRun).some((g) => /deliverableStatus INVALID/.test(g) && g.includes("main#field:Nope") && g.includes("main#method:onA")),
+      () => planGaps(gapRun));
+    const base = tmp("status-cli");
+    fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(M1));
+    const plan = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--plan", "--out", path.join(base, "plan.md")], { encoding: "utf8" });
+    const planText = fs.existsSync(path.join(base, "plan.md")) ? fs.readFileSync(path.join(base, "plan.md"), "utf8") : "";
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(stManifest({ "main#method:onB": WONT("D9") })));
+    const refused = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", path.join(base, "build-tasks")], { encoding: "utf8" });
+    check("T5: `--plan --out` resolves D<N> against the decisions.md beside the plan; `--tasks` refuses an unresolved one and writes nothing",
+      () => !/deliverableStatus INVALID/.test(plan.stdout + plan.stderr + planText) && /D6: replaced by the portal/.test(planText) && refused.status === 2
+        && /NOTHING WRITTEN/.test(refused.stdout) && /D9/.test(refused.stdout) && !fs.existsSync(path.join(base, "build-tasks")),
+      () => ({ plan: plan.status, planErr: plan.stderr.slice(0, 300), refused: refused.status, out: refused.stdout.slice(0, 400) }));
+    // Each mode runs twice from a folder with no decisions.md: once with the statuses, once with none.
+    const cliRuns = (status) => {
+      const dir = tmp("status-cli-no-decisions");
+      const m = stManifest(status);
+      fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ ...m, signals: { ...m.signals, dashboards: manifestOf().signals.dcm } }));
+      fs.writeFileSync(path.join(dir, "built.json"), JSON.stringify({ pages: {} }));
+      const cliOf = (...args) => cliFileApproved(path.join(dir, "manifest.json"), ...args);
+      const runs = { reads: cliOf("--reads", dir), verify: cliOf("--verify", "--built", path.join(dir, "built.json")), checklist: cliOf("--checklist"), plan: cliOf("--plan") };
+      fs.rmSync(dir, { recursive: true, force: true });
+      return runs;
+    };
+    const withStatus = cliRuns(T1_STATUS), without = cliRuns(undefined);
+    const statusGap = (r) => /deliverableStatus INVALID|no decisions\.md was read/.test(r.stdout + r.stderr);
+    const READ_ONLY = ["reads", "verify", "checklist"];
+    check("`--reads`, `--verify --built` and `--checklist` exit as they do without statuses and raise no deliverable-status gap when no decisions.md is read; `--plan` still raises it",
+      () => READ_ONLY.every((k) => !statusGap(withStatus[k]) && withStatus[k].status === without[k].status)
+        && withStatus.plan.status === 2 && statusGap(withStatus.plan) && !statusGap(without.plan),
+      () => Object.fromEntries(Object.keys(withStatus).map((k) => [k, { status: withStatus[k].status, baseline: without[k].status, gap: statusGap(withStatus[k]), err: withStatus[k].stderr.slice(0, 300) }])));
+    {
+      const a = tmp("status-one-decisions-a"), b = tmp("status-one-decisions-b");
+      fs.writeFileSync(path.join(a, "decisions.md"), DEC_MD);
+      fs.writeFileSync(path.join(a, "manifest.json"), JSON.stringify(M1));
+      fs.writeFileSync(path.join(a, "built.json"), JSON.stringify({ pages: {} }));
+      const cliA = (...args) => cliFileApproved(path.join(a, "manifest.json"), ...args);
+      const cutA = cliA("--tasks", path.join(a, "build-tasks"));
+      const verified = cliA("--verify", "--built", path.join(a, "built.json"), "--tasks", path.join(a, "build-tasks"), "--out", path.join(b, "report.md"));
+      const report = fs.existsSync(path.join(b, "report.md")) ? fs.readFileSync(path.join(b, "report.md"), "utf8") : "";
+      check("one decisions.md per run: with `--tasks` and `--out` in different folders, the plan check and the cut both read the one above the task folder",
+        () => cutA.status === 0 && !!report && !/deliverableStatus INVALID|does not resolve/.test(verified.stdout + verified.stderr + report),
+        () => ({ cut: cutA.status, verify: verified.status, out: (verified.stdout + verified.stderr).slice(0, 500) }));
+      fs.rmSync(a, { recursive: true, force: true });
+      fs.rmSync(b, { recursive: true, force: true });
+    }
+    const stale = cut("status-cut-unknown", RUN_ST, { ...optsOf(M1), decisions: new Map([["D3", "not carried over"]]) });
+    check("T5: a cut against a decisions.md that lacks a status's D<N> is refused and writes nothing",
+      () => stale.set.refused && stale.set.refusal === "deliverable-status" && stale.set.problems.some((p) => /D6/.test(p)) && !fs.existsSync(stale.dir),
+      () => stale.set.problems);
+    fs.rmSync(stale.base, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // An existing folder re-cut with one resolvable and one unresolvable D<N>: nothing is written, the resolvable
+    // cell included.
+    const m0 = stManifest(undefined);
+    const { base, dir } = cut("status-existing-refusal", runMigration(m0, { decisions: DEC }), { ...optsOf(m0), decisions: DEC });
+    const snap = () => fs.readdirSync(dir, { recursive: true }).filter((f) => fs.statSync(path.join(dir, f)).isFile()).sort((a, b) => a.localeCompare(b))
+      .map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]);
+    const before = snap();
+    const ONLY_D3 = new Map([["D3", DEC.get("D3")]]);
+    const mixed = stManifest({ "main#field:MainG": WONT("D3"), "main#method:onB": WONT("D6") });
+    const refused = syncTaskDir(dir, runMigration(mixed, { decisions: DEC }), { ...optsOf(mixed), decisions: ONLY_D3 });
+    check("existing folder: a re-cut whose statuses cite one resolvable and one unresolvable D<N> is refused `deliverable-status`, naming the row and the D<N>",
+      () => refused.refused && refused.refusal === "deliverable-status" && refused.problems.length === 1
+        && refused.problems[0].includes(LABELS["main#method:onB"]) && /`D6`/.test(refused.problems[0]),
+      () => ({ refusal: refused.refusal, problems: refused.problems }));
+    check("existing folder: the refused re-cut leaves every file byte-identical — the resolvable D3 cell is not written either",
+      () => JSON.stringify(snap()) === JSON.stringify(before), () => snap().map(([f]) => f));
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D3 — not carried over\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(mixed));
+    const cli = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir], { encoding: "utf8" });
+    check("existing folder: `--tasks` over the same statuses exits 2 with NOTHING WRITTEN, names D6, prints its remedy and leaves every file as it was",
+      () => cli.status === 2 && /NOTHING WRITTEN/.test(cli.stdout) && /D6/.test(cli.stdout) && /fix the manifest \/ the stand, re-run `--plan`/.test(cli.stdout)
+        && JSON.stringify(snap()) === JSON.stringify(before),
+      () => ({ status: cli.status, out: cli.stdout.slice(0, 900), err: cli.stderr.slice(0, 300) }));
+    const resolvable = stManifest({ "main#field:MainG": WONT("D3") });
+    syncTaskDir(dir, runMigration(resolvable, { decisions: ONLY_D3 }), { ...optsOf(resolvable), decisions: ONLY_D3 });
+    const mainG = readTaskDir(dir).flatMap((t) => t.rows).find((r) => r.label === LABELS["main#field:MainG"]);
+    check("existing folder (anti-vacuity): the same re-cut with only the resolvable status writes its cell",
+      () => mainG?.outcome === "wont-do — not carried over (D3)", () => mainG);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A row recorded `built` keeps its cell when a `wont-do` status arrives for it.
+    const m0 = stManifest(undefined);
+    const { base, dir } = cut("status-after-built", runMigration(m0, { decisions: DEC }), { ...optsOf(m0), decisions: DEC });
+    const label = LABELS["main#method:onB"];
+    const locate = () => locateRow(dir, label);
+    const at = locate();
+    const file = path.join(dir, at.t.file);
+    fs.writeFileSync(file, setOutcome(fs.readFileSync(file, "utf8"), at.i + 1, "built"));
+    const built = fs.readFileSync(file, "utf8");
+    // The status changes the plan, so `planVersion:` moves; every other byte of the task file stays.
+    const samePastPlanVersion = (a, b) => a.replace(/^planVersion: .*$/m, "") === b.replace(/^planVersion: .*$/m, "");
+    const m = stManifest({ "main#method:onB": WONT("D6") });
+    const resynced = syncTaskDir(dir, runMigration(m, { decisions: DEC }), { ...optsOf(m), decisions: DEC });
+    const after = locate();
+    check("a row recorded `built` stays `built` when its deliverable later gets a `wont-do` status — no cell rewrite, no `decisions:` entry",
+      () => locate() && !resynced.refused && after.r.outcomeKind === "built" && after.r.outcome === "built" && after.d === null
+        && samePastPlanVersion(fs.readFileSync(file, "utf8"), built),
+      () => ({ refused: resynced.problems, outcome: after?.r.outcome, decision: after?.d }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const status = { "main#card-action:Print": WONT("D6"), "main#method:onA": WONT("D3"), "main#method:onB": WONT("D3") };
+    const m = stManifest(status);
+    const run = runMigration(m, { decisions: DEC });
+    const opts = { ...optsOf(m), decisions: DEC };
+    const groups = checklistGroups(run, opts);
+    // One all-closed task per computed word: wont-do + not-applicable, wont-do alone, not-applicable alone.
+    const CLOSED = { mixed: ["Card action — Print", "Card action — Process"], wontdo: ["Handler — `onA`", "Handler — `onB`"],
+      na: ["C1 — separate page?", "C2 — separate page?"] };
+    const WORD = { mixed: "done", wontdo: "wont-do", na: "not-applicable" };
+    const claimed = new Set(Object.values(CLOSED).flat());
+    const entry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
+    const split = parseSplit(JSON.stringify({ items: [
+      ...Object.entries(CLOSED).map(([id, rows]) => ({ id, title: id, pageKey: "main", writesTo: "main", rows })),
+      { id: "page", title: "Page", pageKey: "main", writesTo: "main",
+        rows: groups.filter((g) => !(g.pageKey === "main" && g.rows.every((r) => claimed.has(r.label)))).map(entry) },
+    ] })).split;
+    const { base, dir, set } = cut("status-closed-task", run, opts, split);
+    const fileOf = (id) => path.join(dir, set.tasks.find((t) => t.id === id).file);
+    const metaOf = (id, key) => new RegExp(`^${key}: (.*)$`, "m").exec(fs.readFileSync(fileOf(id), "utf8"))?.[1]?.trim() ?? null;
+    const indexRow = (id) => readIndex(dir).split("\n").find((l) => l.includes(path.basename(fileOf(id)))) || "";
+    const pinned = () => Object.entries(WORD).map(([id, w]) => [id, metaOf(id, "status"), indexRow(id).includes(`| ${TASKS_MODULE.statusMark(w)} |`)]);
+    const pinnedOk = () => pinned().every(([id, st, inIndex]) => st === WORD[id] && inIndex);
+    const offered = (answer) => answer.startable.some((t) => Object.hasOwn(CLOSED, t.id));
+    const answer = set.refused ? null : startableTasks(set, dir);
+    const naTask = set.tasks?.find((t) => t.id === "na");
+    check("T6: all-closed tasks compute their word on the pass that cuts them — wont-do + not-applicable reads `done`, wont-do alone `wont-do`, not-applicable alone `not-applicable`, in the task file and in index.md",
+      () => !set.refused && pinnedOk(), () => ({ refused: set.problems, pinned: pinned() }));
+    check("T6: a task whose rows are all engine-closed and that carries no `decisions:` entry is a decided descope — `--next` does not offer it and the dispatch audit fails none",
+      () => naTask.rows.every((r) => r.na) && metaOf("na", "decisions") === "" && answer.verdict !== NEXT_LEDGER
+        && !offered(answer) && answer.dispatch.failing.length === 0,
+      () => ({ rows: naTask?.rows?.map((r) => [r.label, r.outcomeKind, r.na]), decisions: metaOf("na", "decisions"),
+        verdict: answer?.verdict, failing: answer?.dispatch?.failing?.map((t) => t.id) }));
+    const again = syncTaskDir(dir, run, opts, split);
+    const answer2 = startableTasks(again, dir);
+    check("T6: a second sync keeps every word and offers none of them",
+      () => pinnedOk() && answer2.verdict !== NEXT_LEDGER && !offered(answer2) && answer2.dispatch.failing.length === 0,
+      () => ({ pinned: pinned(), verdict: answer2.verdict, failing: answer2.dispatch.failing.map((t) => t.id) }));
+    const cleared = fs.readFileSync(fileOf("na"), "utf8").split("\n")
+      .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+    fs.writeFileSync(fileOf("na"), cleared.replace(/^status: .*$/m, "status: todo").replace(/^statusFrom: .*$/m, "statusFrom: "));
+    const resynced = syncTaskDir(dir, run, opts, split);
+    const snap = () => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const settledSnap = snap();
+    syncTaskDir(dir, run, opts, split);
+    check("T6: a folder whose engine-closed rows have no Outcome yet settles `not-applicable` on re-sync, is not offered, and a second sync writes nothing",
+      () => !resynced.refused && metaOf("na", "status") === "not-applicable" && !offered(startableTasks(resynced, dir))
+        && JSON.stringify(settledSnap) === JSON.stringify(snap()),
+      () => ({ status: metaOf("na", "status"), offered: startableTasks(resynced, dir).startable.map((t) => t.id),
+        same: JSON.stringify(settledSnap) === JSON.stringify(snap()) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A row the cut closed (a manifest status, or a plan boundary) is not a question: a build-it answer skips it
+    // with the reason and leaves the cell as it is.
+    const { base, dir } = cut("status-build", RUN_ST, OPTS_ST);
+    const statusRow = locateRow(dir, LABELS["main#method:onB"]);
+    const boundaryRow = locateRow(dir, "Card action — Process");
+    const before = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const via = (x) => applyDecision(dir, RUN_ST, { ...OPTS_ST, decision: "D6", mode: "build", rowRef: { taskId: x.t.id, n: String(x.i + 1) } });
+    const onStatus = via(statusRow), onBoundary = via(boundaryRow);
+    check("`--decide --build` on a row the cut closed from `manifest.deliverableStatus`, or a plan-boundary row, reopens nothing: it is refused with the row's reason and the folder is byte-identical",
+      () => onStatus.refused && onStatus.skipped.length === 1 && onStatus.skipped[0].why.includes("manifest.deliverableStatus")
+        && onBoundary.refused && onBoundary.skipped.length === 1 && onBoundary.skipped[0].why.includes("plan-boundary")
+        && JSON.stringify(before) === JSON.stringify(fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"))),
+      () => ({ status: onStatus.skipped?.map((x) => x.why), boundary: onBoundary.skipped?.map((x) => x.why), problems: [onStatus.problems, onBoundary.problems] }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A build-it entry withdrawn beside a cell whose `manifest.deliverableStatus` entry still cites the same D<N>.
+    // The CLI slices with its own opts, so the folder is cut with them.
+    const cliOpts = { ...checklistOpts(M1), decisions: DEC };
+    const { base, dir, set } = cut("status-revoke-mixed", RUN_ST, cliOpts);
+    const open = locateRow(dir, "Handler — `onA`");
+    const fpOpen = path.join(dir, open.t.file);
+    fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(M1));
+    // Every open row of the task is built but the one asked about, so the task is settled and awaits the answer.
+    open.t.rows.forEach((r, i) => {
+      if (!r.outcomeKind) fs.writeFileSync(fpOpen, setOutcome(fs.readFileSync(fpOpen, "utf8"), i + 1, i === open.i ? "not-built — needs-decision" : "built"));
+    });
+    syncTaskDir(dir, RUN_ST, { ...cliOpts, now: AT(910) });
+    const cliS = (...args) => cliFileApproved(path.join(base, "manifest.json"), "--tasks", dir, ...args);
+    const decided = cliS("--decide", "D6", "--build", "--row", `${open.t.id}:${open.i + 1}`);
+    fs.writeFileSync(fpOpen, setOutcome(fs.readFileSync(fpOpen, "utf8"), open.i + 1, "built"));
+    const cli = cliS("--revoke", "D6");
+    const entriesOf = (x) => [...(x.t.decisions instanceof Map ? x.t.decisions : parseDecisionsMap(x.t.decisions)).entries()].map(([n, d]) => `${n}:${d}`);
+    const onA = locateRow(dir, "Handler — `onA`");
+    const onB = locateRow(dir, LABELS["main#method:onB"]);
+    check("CLI `--decide D6 --build` then `--revoke D6` where a `deliverableStatus` entry still cites D6: exits 1, the head line reports the withdrawal (not `nothing revoked`), the status cell is listed as skipped, and `decisions:` on disk drops the build-it entry and keeps the status cell's",
+      () => !set.refused && decided.status === 0 && cli.status === 1 && (cli.stderr || "").startsWith("migrate.mjs: withdrew 1 build-it entry under D6")
+        && !/nothing revoked/.test(cli.stderr || "") && /skipped .*manifest\.deliverableStatus/.test(cli.stderr || "")
+        && !entriesOf(onA).some((e) => /D6!/.test(e)) && onB.r.outcomeKind === "wont-do" && entriesOf(onB).some((e) => e.startsWith(`${onB.i + 1}:D6`)),
+      () => ({ decided: [decided.status, decided.stderr], status: cli.status, stderr: cli.stderr, onA: entriesOf(onA), onB: entriesOf(onB) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = cut("status-revoke", RUN_ST, OPTS_ST);
+    const rev = revokeDecision(dir, RUN_ST, { ...OPTS_ST, decision: "D6" });
+    syncTaskDir(dir, RUN_ST, OPTS_ST);
+    const rowOf = (label) => readTaskDir(dir).flatMap((t) => t.rows).find((r) => r.label === label);
+    const bornKeys = ["main#method:onB", "main#card-action:Print"];
+    check("`--revoke` skips a row whose manifest status cites that D<N>, naming the `manifest.deliverableStatus` entry to remove; the next cut leaves it as it was",
+      () => !rev.refused && rev.cleared.length === 0 && rev.skipped.length === 2
+        && bornKeys.every((k) => rev.skipped.some((s) => s.why.includes(`\`${k}\``) && s.why.includes("manifest.deliverableStatus")))
+        && bornKeys.every((k) => rowOf(LABELS[k])?.outcomeKind === "wont-do"),
+      () => ({ cleared: rev.cleared?.map((c) => [c.task.file, c.n]), skipped: rev.skipped?.map((s) => s.why), rows: bornKeys.map((k) => rowOf(LABELS[k])?.outcome) }));
+    fs.rmSync(base, { recursive: true, force: true });
+    // The CLI slices with the default budget, so its folder is cut with the CLI's own opts.
+    const onCli = cut("status-revoke-cli", RUN_ST, { ...checklistOpts(M1), decisions: DEC });
+    fs.writeFileSync(path.join(onCli.base, "decisions.md"), DEC_MD);
+    fs.writeFileSync(path.join(onCli.base, "manifest.json"), JSON.stringify(M1));
+    const cli = spawnSync(process.execPath, [MIGRATE, path.join(onCli.base, "manifest.json"), "--tasks", onCli.dir, "--revoke", "D6"], { encoding: "utf8" });
+    check("`--revoke` of a D<N> only manifest statuses cite revokes nothing, exits 1 and prints each skipped row with the entry to remove",
+      () => cli.status === 1 && /nothing revoked/.test(cli.stderr) && bornKeys.every((k) => cli.stderr.includes(`\`${k}\``)) && /skipped/.test(cli.stderr),
+      () => ({ status: cli.status, out: cli.stdout.slice(0, 900), err: cli.stderr.slice(0, 300) }));
+    fs.rmSync(onCli.base, { recursive: true, force: true });
+  }
+  {
+    const plain = checklistGroups(runMigration(stManifest(undefined)), optsOf(stManifest(undefined))).flatMap((g) => g.rows.map((r) => ({ ...r, page: g.pageKey })));
+    const withSt = checklistGroups(RUN_ST, OPTS_ST).flatMap((g) => g.rows.map((r) => ({ ...r, page: g.pageKey })));
+    const shape = (r) => JSON.stringify([r.page, r.label, r.vk ?? null, r.na ?? null, r.deliverableId]);
+    const untouched = withSt.filter((r) => !r.status);
+    check("T7: rows without a status are unchanged by the statuses of others — same labels, verifiers, boundaries and ids",
+      () => plain.length === withSt.length && untouched.every((r) => plain.some((p) => shape(p) === shape(r))) && withSt.filter((r) => r.status).length === 4,
+      () => ({ plain: plain.length, withSt: withSt.length, changed: untouched.filter((r) => !plain.some((p) => shape(p) === shape(r))).map(shape) }));
+    const { base, set } = cut("status-one-task", RUN_ST, OPTS_ST);
+    const planRows = withSt.map((r) => `${r.page} ${r.label}`).sort((a, b) => a.localeCompare(b));
+    const taskRows = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS).flatMap((t) => t.rows.map((r) => `${r.pageKey || t.pageKey} ${r.label}`)).sort((a, b) => a.localeCompare(b));
+    check("T7: every deliverable, closed or not, still lands in exactly one task",
+      () => JSON.stringify(planRows) === JSON.stringify(taskRows), () => ({ plan: planRows.length, tasks: taskRows.length }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const pages = [...new Set(checklistGroups(RUN, OPTS).map((g) => g.pageKey))];
+    const grand = pages.find((k) => /G1/.test(k));
+    const m = { ...manifestOf(), deliverableStatus: { [`${grand}#page:form`]: WONT("D3") } };
+    const run = runMigration(m, { decisions: DEC });
+    const row = checklistGroups(run, optsOf(m)).find((g) => g.pageKey === grand)?.rows.find((r) => r.deliverableId === "page:form");
+    check("status reaches a grandchild page: a status on a depth-2 page's row is applied there",
+      () => !!grand && row?.status?.kind === "wont-do" && row.status.decision === "D3" && (run.statusIssues || []).length === 0,
+      () => ({ pages, row, issues: run.statusIssues }));
+  }
+  {
+    // Planning decisions before the first dispatch: every D<N> in decisions.md is cited by a status, a task
+    // `decisions:` entry, or `manifest.decisionsWithoutDeliverable`.
+    const appBody = stBody.replace("onB:function", "init:function");
+    const APP_MD = ["## D1 — list columns kept", "## D2 — no mobile page", "## D3 — not carried over", "## D4 — portal stays classic",
+      "## D5 — Init handler not carried over", "## D6 — replaced by the portal", ""].join("\n\n");
+    const OTHERS = ["D1", "D2", "D3", "D4", "D6"];
+    const appManifest = (extra = {}) => ({ ...stManifest(undefined), schemas: [{ pkg: "P", body: appBody }], ...extra });
+    const folder = (label, manifest, md = APP_MD) => {
+      const base = tmp(label);
+      fs.writeFileSync(path.join(base, "decisions.md"), md);
+      fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(manifest));
+      const dir = path.join(base, "build-tasks");
+      const cli = (...args) => cliFileApproved(path.join(base, "manifest.json"), "--tasks", dir, ...args);
+      return { base, dir, cli };
+    };
+    const snapDir = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).sort((a, b) => a.localeCompare(b)).map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]) : null);
+    {
+      const f = folder("decisions-unaccounted", appManifest({ decisionsWithoutDeliverable: OTHERS }));
+      const r = f.cli();
+      const out = r.stdout + r.stderr;
+      check("T1: a decision in decisions.md that no status, task or marker cites refuses the first cut — exit 2, NOTHING WRITTEN, no folder",
+        () => r.status === 2 && /NOTHING WRITTEN/.test(r.stdout) && !fs.existsSync(f.dir),
+        () => ({ status: r.status, out: out.slice(0, 900) }));
+      check("T1: the refusal names the D<N> and its title, a valid `<page>#<id>`, the `deliverableStatus` entry shape and the `decisionsWithoutDeliverable` marker",
+        () => /D5 — Init handler not carried over/.test(r.stdout) && r.stdout.includes("main#method:init")
+          && /manifest\.deliverableStatus/.test(r.stdout) && /"status": "wont-do", "decision": "D<N>"/.test(r.stdout)
+          && /manifest\.decisionsWithoutDeliverable/.test(r.stdout) && !OTHERS.some((d) => new RegExp(String.raw`\b${d} — `).test(r.stdout)),
+        () => r.stdout.slice(0, 1500));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      const m = appManifest({ decisionsWithoutDeliverable: OTHERS, deliverableStatus: { "main#method:init": WONT("D5") } });
+      const f = folder("decisions-status", m);
+      // The split puts the `init` row alone in its task, so the status closes that whole task.
+      const INIT = "Handler — `init`";
+      const entry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
+      const groups = checklistGroups(runMigration(appManifest({ decisionsWithoutDeliverable: OTHERS })), optsOf(m));
+      const splitPath = path.join(f.base, "split.json");
+      fs.writeFileSync(splitPath, JSON.stringify({ items: [
+        { id: "init", title: "init", pageKey: "main", writesTo: "main", rows: [INIT] },
+        { id: "page", title: "Page", pageKey: "main", writesTo: "main", rows: groups.flatMap((g) => (g.pageKey === "main" && g.rows.some((x) => x.label === INIT)
+          ? g.rows.filter((x) => x.label !== INIT).map((x) => x.label) : [entry(g)])) },
+      ] }));
+      const r = f.cli("--split", splitPath);
+      const init = locateRow(f.dir, INIT);
+      const next = f.cli("--next");
+      check("T2: the same decision cited by a `wont-do` status cuts — the row arrives `wont-do — <title> (D5)` marked `D5=`",
+        () => r.status === 0 && init?.r.outcomeKind === "wont-do" && init.r.outcome === "wont-do — Init handler not carried over (D5)" && init.d === "D5=",
+        () => ({ status: r.status, out: (r.stdout + r.stderr).slice(0, 600), init: init?.r, d: init?.d }));
+      const closed = readTaskDir(f.dir).filter((t) => t.rows.every((r2) => r2.outcomeKind));
+      check("T2: `--next` answers over that folder and does not offer the task the status closed (anti-vacuity: that task is closed and in the checked list)",
+        () => next.status === 0 && !/NOTHING WRITTEN/.test(next.stdout) && init?.t.rows.length === 1
+          && closed.some((t) => t.id === init.t.id) && closed.every((t) => !next.stdout.includes(`[${t.id}]`)),
+        () => ({ status: next.status, out: next.stdout.slice(0, 900), initTask: init?.t.rows.map((x) => [x.label, x.outcomeKind]), closed: closed.map((t) => t.id) }));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      const f = folder("decisions-marker", appManifest({ decisionsWithoutDeliverable: [...OTHERS, "D5"] }));
+      const r = f.cli();
+      const init = locateRow(f.dir, "Handler — `init`");
+      check("T3: decisions listed in `decisionsWithoutDeliverable` pass the check — the cut writes and the listed decision closes no row",
+        () => r.status === 0 && !!init && !init.r.outcomeKind && init.d === null,
+        () => ({ status: r.status, out: (r.stdout + r.stderr).slice(0, 600), init: init?.r }));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      // A clean cut, then D7 is appended to decisions.md: before any dispatch every task-folder run refuses and
+      // changes nothing; `--decide` and `--revoke` are not refused.
+      const m = appManifest({ decisionsWithoutDeliverable: [...OTHERS, "D5"] });
+      const f = folder("decisions-pre-dispatch", m);
+      const cut0 = f.cli();
+      fs.appendFileSync(path.join(f.base, "decisions.md"), "\n## D7 — added after the cut\n");
+      const before = snapDir(f.dir);
+      const id = readTaskDir(f.dir).map((t) => t.id).sort((a, b) => a.localeCompare(b))[0];
+      const resync = f.cli(), next = f.cli("--next"), start = f.cli("--start", id);
+      check("T1: before the first dispatch a decision added after the cut refuses the re-sync, `--next` and `--start` — each exits 2 with NOTHING WRITTEN naming D7",
+        () => cut0.status === 0 && [resync, next, start].every((x) => x.status === 2 && /NOTHING WRITTEN/.test(x.stdout) && /D7 — added after the cut/.test(x.stdout)),
+        () => ({ cut: cut0.status, runs: [resync, next, start].map((x) => [x.status, x.stdout.slice(0, 300)]) }));
+      check("T1: the refused runs leave the folder byte-identical and open no clock",
+        () => JSON.stringify(snapDir(f.dir)) === JSON.stringify(before) && !fs.existsSync(path.join(f.dir, TASKS_MODULE.TIMINGS_FILE)),
+        () => snapDir(f.dir)?.map(([n]) => n));
+      const row = readTaskDir(f.dir).flatMap((t) => t.rows.map((r2, i) => ({ t, i, r2 }))).find((x) => x.r2.label === "Handler — `init`");
+      const decided = f.cli("--decide", "D7", "--wont-do", "--row", `${row.t.id}:${row.i + 1}`);
+      const afterDecide = f.cli();
+      const revoked = f.cli("--revoke", "D7");
+      check("T4: `--decide` and `--revoke` are never refused by the check — `--decide D7` writes, the re-sync then passes, and `--revoke D7` clears it",
+        () => decided.status === 0 && afterDecide.status === 0 && revoked.status === 0 && !/NOTHING WRITTEN/.test(decided.stdout + revoked.stdout),
+        () => ({ decided: [decided.status, (decided.stdout + decided.stderr).slice(0, 400)], afterDecide: [afterDecide.status, afterDecide.stdout.slice(0, 300)], revoked: [revoked.status, (revoked.stdout + revoked.stderr).slice(0, 300)] }));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      const m = appManifest({ decisionsWithoutDeliverable: [...OTHERS, "D5"] });
+      const f = folder("decisions-post-dispatch", m);
+      const cut0 = f.cli();
+      const answer = f.cli("--next");
+      const cmd = /--start\s+(\S+)/.exec(answer.stdout)?.[1]?.replace(/^['"]|['"]$/g, "");
+      const started = cmd ? f.cli("--start", cmd) : { status: -1, stdout: "" };
+      fs.appendFileSync(path.join(f.base, "decisions.md"), "\n## D7 — added after the first dispatch\n");
+      const resync = f.cli(), next = f.cli("--next");
+      check("T4: after the first dispatch a decision no row cites triggers no refusal — the re-sync and `--next` answer as before",
+        () => cut0.status === 0 && started.status === 0 && [resync, next].every((x) => !/NOTHING WRITTEN/.test(x.stdout) && !/D7/.test(x.stdout)) && resync.status === 0,
+        () => ({ cut: cut0.status, cmd, started: [started.status, started.stdout.slice(0, 300)], resync: [resync.status, resync.stdout.slice(0, 300)], next: [next.status, next.stdout.slice(0, 300)] }));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      // The open-ids list names each page once and leaves out the plan's `na` rows and rows a status closed.
+      const m = appManifest({ decisionsWithoutDeliverable: OTHERS.filter((d) => d !== "D1"), deliverableStatus: { "main#method:onA": WONT("D1") } });
+      const f = folder("decisions-open-ids", m);
+      const r = f.cli();
+      const decMap = new Map(APP_MD.split("\n").map((l) => /^## (D\d+) — (.*)$/.exec(l)).filter(Boolean).map((x) => [x[1], x[2]]));
+      const groups = checklistGroups(runMigration(m, { decisions: decMap }), optsOf(m));
+      const naKeys = groups.flatMap((g) => g.rows.filter((row) => row.na && row.deliverableId).map((row) => `${g.pageKey}#${row.deliverableId}`));
+      const openPages = [...new Set(groups.filter((g) => g.rows.some((row) => row.deliverableId && !row.na && !row.status)).map((g) => g.pageKey))];
+      const lines = r.stdout.slice(r.stdout.indexOf("Open deliverable ids:")).split("\n").slice(1).filter((l) => l.startsWith("  · "));
+      const listedPages = lines.map((l) => l.slice(4, l.indexOf(": ")));
+      const listed = new Set(lines.flatMap((l) => l.slice(l.indexOf(": ") + 2).split(", ")));
+      check("T1: the open deliverable ids leave out the plan's `na` rows and a row a `wont-do` status closed, and name each page with an open row on one line",
+        () => r.status === 2 && naKeys.length > 0 && listed.size > 0 && !naKeys.some((k) => listed.has(k)) && !listed.has("main#method:onA")
+          && listedPages.length === new Set(listedPages).size && openPages.length > 1
+          && JSON.stringify([...listedPages].sort((a, b) => a.localeCompare(b))) === JSON.stringify([...openPages].sort((a, b) => a.localeCompare(b))),
+        () => ({ status: r.status, naKeys, listedPages, openPages, onA: listed.has("main#method:onA") }));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      // `--route`, `--add` and `--verify --tasks` never run the check: each is run over a pre-dispatch folder a
+      // plain re-sync refuses on D7.
+      const m = appManifest({ decisionsWithoutDeliverable: [...OTHERS, "D5"] });
+      const preDispatch = (label) => {
+        const f = folder(label, m);
+        const cut0 = f.cli();
+        fs.appendFileSync(path.join(f.base, "decisions.md"), "\n## D7 — added after the cut\n");
+        const refused = f.cli();
+        return { ...f, ready: cut0.status === 0 && refused.status === 2 && /D7 — added after the cut/.test(refused.stdout) };
+      };
+      const outOf = (x) => (x.stdout || "") + (x.stderr || "");
+      const notChecked = (x) => !/no deliverable accounts for|D7 — added after the cut/.test(outOf(x));
+      const fr = preDispatch("decisions-route");
+      const route = fr.cli("--route");
+      const fa = preDispatch("decisions-add");
+      const declPath = path.join(fa.base, "decl.json");
+      const mainBuild = taskAt(buildTaskSet(runMigration(m, { decisions: new Map([...OTHERS, "D5"].map((d) => [d, d])) }), optsOf(m)), "main", "Page build");
+      fs.writeFileSync(declPath, JSON.stringify({ ...DECL, id: "pre-dispatch-add", pageKey: "main", writesTo: mainBuild?.writesTo }));
+      const add = fa.cli("--add", declPath);
+      const fv = preDispatch("decisions-verify");
+      const builtPath = path.join(fv.base, "built.json");
+      fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: false } }));
+      const verify = fv.cli("--verify", "--built", builtPath);
+      check("T4: `--route`, `--add` and `--verify --tasks` are never refused by the check — each answers over a pre-dispatch folder with D7 unaccounted",
+        () => [fr, fa, fv].every((x) => x.ready) && [route, add, verify].every(notChecked)
+          && route.status === 0 && add.status === 0 && /wrote 1 declared task/.test(add.stdout)
+          && (verify.stdout || "").startsWith("# Migration result") && /repair task\(s\)/.test(verify.stdout),
+        () => ({ ready: [fr, fa, fv].map((x) => x.ready), route: [route.status, outOf(route).slice(0, 300)], add: [add.status, outOf(add).slice(0, 300)], verify: [verify.status, (verify.stdout || "").slice(-300)] }));
+      for (const x of [fr, fa, fv]) fs.rmSync(x.base, { recursive: true, force: true });
+    }
+    {
+      const tasksOf = (entries) => [{ id: "a", decisions: new Map(entries) }];
+      const DECS = new Map([["D1", "one"], ["D2", "two"], ["D3", "three"], ["D4", "four"], ["Adjustment 1", "adj"]]);
+      const open = TASKS_MODULE.unaccountedDecisions(DECS, { tasks: tasksOf([[1, "D1"], [2, "D2="]]), deliverableStatus: { "main#x": WONT("D3") }, withoutDeliverable: [] });
+      check("T1 (unit): a D<N> is accounted by a task `decisions:` entry (plain or `=`-marked), a status or the marker; `Adjustment N` is never returned",
+        () => JSON.stringify(open) === JSON.stringify([{ id: "D4", title: "four" }])
+          && TASKS_MODULE.unaccountedDecisions(DECS, { tasks: tasksOf([[1, "D1"], [2, "D2="]]), deliverableStatus: { "main#x": WONT("D3") }, withoutDeliverable: ["D4"] }).length === 0,
+        () => open);
+      const buildOf = (entry) => TASKS_MODULE.unaccountedDecisions(DECS, { tasks: tasksOf([[1, "D1"], [2, "D2="]]), deliverableStatus: { "main#x": WONT("D3"), "main#y": entry }, withoutDeliverable: [] });
+      const buildCites = buildOf({ status: "build", decision: "D4" });
+      const buildBare = buildOf({ status: "build" });
+      check("T1 (unit): a `build` status that carries a `decision` accounts for that D<N>; one without a `decision` accounts for none",
+        () => buildCites.length === 0 && JSON.stringify(buildBare) === JSON.stringify([{ id: "D4", title: "four" }]),
+        () => ({ buildCites, buildBare }));
+      const bare = tmp("decisions-first-dispatch");
+      const pendingBare = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "", rows: [] }]);
+      const nonce = TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "abc", rows: [] }]);
+      const withRow = (row) => TASKS_MODULE.firstDispatchPending(bare, [{ agentNonce: "", rows: [row] }]);
+      const built = withRow({ outcomeKind: "built" });
+      const notBuilt = withRow({ outcomeKind: "not-built" });
+      const asserted = withRow({ outcomeKind: "not-applicable" });
+      const boundary = withRow({ outcomeKind: "not-applicable", na: "other section" });
+      const decided = withRow({ outcomeKind: "wont-do" });
+      const handTyped = withRow({ outcomeKind: "not-built", naNoReason: true });
+      const timingsOnly = (state) => {
+        const d = tmp("decisions-timings");
+        fs.writeFileSync(path.join(d, TASKS_MODULE.TIMINGS_FILE), JSON.stringify(state));
+        const pending = TASKS_MODULE.firstDispatchPending(d, []);
+        fs.rmSync(d, { recursive: true, force: true });
+        return pending;
+      };
+      const noRecord = timingsOnly({ samples: [], running: {} });
+      const samplesOnly = timingsOnly({ samples: [{ id: "a", weight: 1, minutes: 5 }] });
+      const runningOnly = timingsOnly({ running: { a: { startedAt: "2026-09-30T00:00:00Z", token: "t" } } });
+      check("T4 (unit): a well-formed timings file with no record leaves the folder pre-dispatch; one holding only a sample, or only a running clock, counts as a dispatch",
+        () => noRecord === true && samplesOnly === false && runningOnly === false,
+        () => ({ noRecord, samplesOnly, runningOnly }));
+      fs.writeFileSync(path.join(bare, TASKS_MODULE.TIMINGS_FILE), "{ not json");
+      const malformed = TASKS_MODULE.firstDispatchPending(bare, []);
+      check("T4 (unit): the folder is pre-dispatch only with no nonce, no sub-agent outcome and no timings record; an unparseable timings file counts as a dispatch",
+        () => pendingBare === true && nonce === false && malformed === false,
+        () => ({ pendingBare, nonce, malformed }));
+      check("T4 (unit): `built`, `not-built` and a `not-applicable` on a row the plan did not mark are sub-agent outcomes; the plan's boundary `not-applicable`, a `--decide` cell and a hand-typed word are not",
+        () => built === false && notBuilt === false && asserted === false && boundary === true && decided === true && handTyped === true,
+        () => ({ built, notBuilt, asserted, boundary, decided, handTyped }));
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
+    {
+      const issuesOf = (extra, decisions = DEC) => runMigration(stManifest(extra.deliverableStatus, { decisionsWithoutDeliverable: extra.list }), decisions ? { decisions } : {}).noDeliverableIssues || [];
+      const unknown = issuesOf({ list: ["D9"] });
+      const clash = issuesOf({ list: ["D6"], deliverableStatus: { "main#method:onB": WONT("D6") } });
+      const shape = issuesOf({ list: ["6"] });
+      const notArray = issuesOf({ list: "D3" });
+      const ok = issuesOf({ list: ["D3"] });
+      check("T5: a marker item decisions.md does not hold, one a `wont-do` status also cites, one not shaped D<N>, and a non-array value are each refused; a resolvable D<N> is not",
+        () => /does not resolve/.test(unknown[0]?.problem || "") && /wont-do/.test(clash[0]?.problem || "") && /D<N>/.test(shape[0]?.problem || "")
+          && notArray.length === 1 && ok.length === 0,
+        () => ({ unknown, clash, shape, notArray, ok }));
+      const gapRun = runMigration(stManifest(undefined, { decisionsWithoutDeliverable: ["D9"] }), { decisions: DEC });
+      check("T5: an invalid marker is a plan gap naming the item",
+        () => planGaps(gapRun).some((g) => /decisionsWithoutDeliverable INVALID/.test(g) && g.includes("D9")) && /decisionsWithoutDeliverable/.test(gapRun.plan),
+        () => planGaps(gapRun));
+      const noFile = issuesOf({ list: ["D3"] }, null);
+      const optional = runMigration(stManifest(undefined, { decisionsWithoutDeliverable: ["D3"] }), { decisionsOptional: true }).noDeliverableIssues || [];
+      check("T5: with no decisions.md read the marker is refused, unless the mode reads decisions.md optionally",
+        () => /no decisions\.md was read/.test(noFile[0]?.problem || "") && optional.length === 0, () => ({ noFile, optional }));
+      const f = folder("decisions-marker-invalid", stManifest(undefined, { decisionsWithoutDeliverable: ["D9"] }), DEC_MD);
+      const r = f.cli();
+      check("T5: `--tasks` with an invalid marker exits 2 with NOTHING WRITTEN",
+        () => r.status === 2 && /NOTHING WRITTEN/.test(r.stdout) && /D9/.test(r.stdout) && !fs.existsSync(f.dir),
+        () => ({ status: r.status, out: r.stdout.slice(0, 500) }));
+      fs.rmSync(f.base, { recursive: true, force: true });
+    }
+    {
+      const withList = runMigration(stManifest(T1_STATUS, { decisionsWithoutDeliverable: ["D7"] }), { decisions: new Map([...DEC, ["D7", "kept as is"]]) });
+      const empty = runMigration(stManifest(T1_STATUS, { decisionsWithoutDeliverable: [] }), { decisions: DEC });
+      const end = withList.plan.slice(withList.plan.indexOf("### Won't do"));
+      check("T6: the plan lists each decision in `decisionsWithoutDeliverable` with its title under `### Won't do`",
+        () => withList.noDeliverableIssues.length === 0 && /manifest\.decisionsWithoutDeliverable/.test(end) && /- D7 — kept as is/.test(end),
+        () => end.slice(0, 900));
+      const noMarkerPlan = (run) => run.plan.replace(/\*\*Plan version:\*\* `plan-[0-9a-f]+`/, "");
+      check("T6: an empty or absent `decisionsWithoutDeliverable` prints no line — the plan reads as without the key",
+        () => !/decisionsWithoutDeliverable/.test(empty.plan) && noMarkerPlan(empty) === noMarkerPlan(RUN_ST),
+        () => ({ has: /decisionsWithoutDeliverable/.test(empty.plan) }));
+    }
+  }
+}
+
+console.log("\n===== a folder cut with one aggregate Fields / Related lists row =====");
+{
+  const FIX = path.join(DIR, "fixtures", "tasks-aggregate-rows");
+  const m = JSON.parse(fs.readFileSync(path.join(FIX, "manifest.json"), "utf8"));
+  const copy = (label) => { const base = tmp(label); fs.cpSync(FIX, base, { recursive: true }); return { base, dir: path.join(base, "build-tasks") }; };
+  const cliIn = (base, ...args) => cliFileApproved(path.join(base, "manifest.json"), "--tasks", path.join(base, "build-tasks"), ...args);
+  const snapOf = (dir) => fs.readdirSync(dir).sort().map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]);
+  const FILE = "task-run-whole-migration-89143b68.md";
+  const edit = (dir, fn) => { const f = path.join(dir, FILE); fs.writeFileSync(f, fn(fs.readFileSync(f, "utf8"))); };
+  const blankAggregates = (text) => setOutcome(setOutcome(text, 35, "—"), 36, "—").replace(/^decisions: .*$/m, "decisions: ");
+  {
+    const { base, dir } = copy("aggregate-recorded");
+    const before = snapOf(dir);
+    const r = cliIn(base);
+    const set = syncTaskDir(dir, runMigration(m), { ...checklistOpts(m), decisions: new Map([["D3", "not carried over"]]) });
+    check("aggregate rows: a recorded `built` on `Fields — N expected` and a decided `Related lists — N expected` refuse the sync — exit 2, NOTHING WRITTEN, both rows named, the folder byte-identical",
+      () => r.status === 2 && /NOTHING WRITTEN/.test(r.stdout) && r.stdout.includes(`${FILE} row 35 (Fields — 2 expected)`)
+        && r.stdout.includes(`${FILE} row 36 (Related lists — 2 expected)`) && set.refused && set.refusal === TASKS_MODULE.REFUSED_RETIRED
+        && JSON.stringify(snapOf(dir)) === JSON.stringify(before),
+      () => ({ status: r.status, out: r.stdout.slice(0, 700), refusal: set.refusal }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = copy("aggregate-remedy");
+    edit(dir, blankAggregates);
+    // With the recorded cells emptied nothing in the folder shows a dispatch, so D3, cited by no row any more,
+    // refuses the sync before the first dispatch; the refusal lists the related-list ids its status remedy takes.
+    const blanked = snapOf(dir);
+    const chained = cliIn(base);
+    const chainedSet = syncTaskDir(dir, runMigration(m), { ...checklistOpts(m), decisions: new Map([["D3", "not carried over"]]), refuseUnaccounted: true });
+    const listIds = ["main#related-list:R1D", "main#related-list:R2D"];
+    check("aggregate rows: with the aggregate cells and their `decisions:` entry emptied on a folder with no dispatch, the next sync refuses on the decision no row cites — exit 2, NOTHING WRITTEN, D3 and both related-list ids named, the folder byte-identical",
+      () => chained.status === 2 && /NOTHING WRITTEN/.test(chained.stdout) && /D3 — not carried over/.test(chained.stdout)
+        && listIds.every((k) => chained.stdout.includes(k))
+        && chainedSet.refused && chainedSet.refusal === TASKS_MODULE.REFUSED_DECISIONS && JSON.stringify(snapOf(dir)) === JSON.stringify(blanked),
+      () => ({ status: chained.status, out: chained.stdout.slice(0, 700), refusal: chainedSet.refusal }));
+    const statuses = Object.fromEntries(listIds.map((k) => [k, { status: "wont-do", decision: "D3" }]));
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify({ ...m, deliverableStatus: statuses }));
+    const remedied = cliIn(base);
+    const closed = readTaskDir(dir).find((t) => t.file === FILE);
+    const closedLists = (closed?.rows || []).map((r, i) => [r.label, i + 1]).filter(([l]) => /^Related list `R[12]D`$/.test(l));
+    const closedMap = closed?.decisions instanceof Map ? closed.decisions : parseDecisionsMap(closed?.decisions);
+    const closedSnap = snapOf(dir);
+    cliIn(base);
+    check("aggregate rows: with decisions.md in place and D3 recorded as a status on each related list, the folder syncs onto per-item rows that arrive `wont-do (D3)`, and a further sync writes nothing",
+      () => remedied.status === 0 && closedLists.length === 2
+        && closedLists.every(([, n]) => closed.rows[n - 1].outcome === "wont-do — not carried over (D3)" && closedMap.get(n) === "D3=")
+        && JSON.stringify(snapOf(dir)) === JSON.stringify(closedSnap),
+      () => ({ status: remedied.status, out: remedied.stdout.slice(0, 400), rows: closedLists.map(([, n]) => [closed?.rows[n - 1]?.outcome, closedMap.get(n)]) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // A folder with a dispatch record takes the remedy as written: the sync passes and each related list takes its
+    // own `--decide`.
+    const { base, dir } = copy("aggregate-remedy-dispatched");
+    edit(dir, blankAggregates);
+    const taskId = readTaskDir(dir).find((t) => t.file === FILE).id;
+    fs.writeFileSync(path.join(dir, TASKS_MODULE.TIMINGS_FILE), JSON.stringify({ samples: [{ id: taskId, weight: 1, minutes: 5 }], running: {} }));
+    const synced = cliIn(base);
+    const task = readTaskDir(dir).find((t) => t.file === FILE);
+    const lists = (task?.rows || []).map((r, i) => [r.label, i + 1]).filter(([l]) => /^Related list `R[12]D`$/.test(l));
+    const decided = lists.map(([, n]) => cliIn(base, "--decide", "D3", "--wont-do", "--row", `${task.id}:${n}`).status);
+    cliIn(base);
+    const after = readTaskDir(dir).find((t) => t.file === FILE);
+    const map = after.decisions instanceof Map ? after.decisions : parseDecisionsMap(after.decisions);
+    const settled = snapOf(dir);
+    cliIn(base);
+    check("aggregate rows: with the aggregate cells emptied on a dispatched folder the sync writes per-item rows, each related list takes its own `--decide`, and a further sync writes nothing",
+      () => synced.status === 0 && lists.length === 2 && decided.every((s) => s === 0)
+        && lists.every(([, n]) => after.rows[n - 1].outcomeKind === "wont-do" && map.get(n) === "D3")
+        && JSON.stringify(snapOf(dir)) === JSON.stringify(settled),
+      () => ({ synced: synced.status, err: synced.stdout.slice(0, 400), lists, decided, rows: lists.map(([, n]) => [after.rows[n - 1]?.outcome, map.get(n)]) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+console.log("\n===== the record files exist from slicing on, and a re-slice merges into them =====");
+// A builder files its evidence record during the build, so `evidence.json` / `judge.json` / `recorded.json` must
+// already exist when the first build task starts — not only after the `--reads` step that runs once every build
+// task is done. Every task-folder mode writes them into the MIGRATION folder (the parent of the task folder), and
+// writing into an existing file only ever ADDS a missing id.
+{
+  const RECORD_FILES = ["evidence.json", "judge.json", "recorded.json"];
+  const PLAN = readPlan(RUN, checklistOpts(MANIFEST));
+  const PLAN2 = readPlan(RUN2, checklistOpts(MANIFEST2));
+  const readJson = (base, f) => (fs.existsSync(path.join(base, f)) ? JSON.parse(fs.readFileSync(path.join(base, f), "utf8")) : {});
+  const recordState = (base) => Object.fromEntries(RECORD_FILES.map((f) => [f, fs.existsSync(path.join(base, f))
+    ? fs.readFileSync(path.join(base, f), "utf8").slice(0, 120) : null]));
+  check("record files (anti-vacuity): the fixture publishes evidence ids, and the grown plan publishes one the first does not",
+    () => PLAN.evidenceIds.length > 0 && PLAN2.evidenceIds.some((id) => !PLAN.evidenceIds.includes(id)),
+    () => ({ a: PLAN.evidenceIds, b: PLAN2.evidenceIds }));
+
+  const base = tmp("records");
+  const dir = path.join(base, "build-tasks");
+  const run = cliTasks(["--tasks", dir], MANIFEST);
+  check("record files: `--tasks` on a fresh folder writes `evidence.json` and `judge.json` beside the task folder with EVERY published id already a key — the first builder files into a file that exists",
+    () => run.status === 0 && ["evidence.json", "judge.json"].every((f) => {
+      const doc = readJson(base, f);
+      return PLAN.evidenceIds.every((id) => Object.hasOwn(doc, id));
+    }),
+    () => ({ status: run.status, stderr: run.stderr, files: fs.readdirSync(base), state: recordState(base) }));
+  check("record files: the empty value beside each id is the one `--reads` writes — both findings lists scaffolded on an evidence record, `convincing: null` on a verdict",
+    () => {
+      const ev = readJson(base, "evidence.json"), ju = readJson(base, "judge.json");
+      return PLAN.evidenceIds.every((id) => Array.isArray(ev[id].findings) && Array.isArray(ev[id].findingsRaised)
+        && ev[id].referencePage === "" && ju[id].convincing === null);
+    }, () => recordState(base));
+  check("record files: `recorded.json` follows the plan — written with every builder-recorded key when the plan has any, absent when it has none",
+    () => PLAN.builderRecorded.length
+      ? PLAN.builderRecorded.every((b) => readJson(base, "recorded.json")[b.reachabilityKey] === null)
+      : !fs.existsSync(path.join(base, "recorded.json")),
+    () => ({ builderRecorded: PLAN.builderRecorded, state: recordState(base) }));
+
+  // A filed value, an id the plan does not publish, and a verdict — all three must come back untouched.
+  const ownId = PLAN.evidenceIds[0];
+  const filed = { referencePage: "Contacts_FormPage", components: ["crt.Input", "crt.ComboBox"], findings: ["kept"], findingsRaised: [], note: "ünïcode · `tick`" };
+  const ev = readJson(base, "evidence.json");
+  ev[ownId] = filed;
+  ev["gone#quality-gates"] = { referencePage: "Old" };
+  fs.writeFileSync(path.join(base, "evidence.json"), JSON.stringify(ev, null, 2) + "\n");
+  const ju = readJson(base, "judge.json");
+  ju[ownId] = { convincing: true, why: "names the page and the components" };
+  fs.writeFileSync(path.join(base, "judge.json"), JSON.stringify(ju, null, 2) + "\n");
+  const grown = cliTasks(["--tasks", dir], MANIFEST2);
+  const ev2 = readJson(base, "evidence.json"), ju2 = readJson(base, "judge.json");
+  const added = PLAN2.evidenceIds.filter((id) => !PLAN.evidenceIds.includes(id));
+  check("record files: a re-slice after the plan GAINS an evidence id inserts that id into both files — a page added to the plan gets a slot without anyone retyping its id",
+    () => grown.status === 0 && added.length > 0 && added.every((id) => id in ev2 && id in ju2)
+      && PLAN2.evidenceIds.every((id) => id in ev2 && id in ju2),
+    () => ({ status: grown.status, stderr: grown.stderr, added, keys: Object.keys(ev2) }));
+  check("record files: …and a value already filed is kept BYTE-IDENTICAL, in both files — the merge adds keys, it never rewrites an answer",
+    () => JSON.stringify(ev2[ownId]) === JSON.stringify(filed)
+      && JSON.stringify(ju2[ownId]) === JSON.stringify({ convincing: true, why: "names the page and the components" }),
+    () => ({ evidence: ev2[ownId], judge: ju2[ownId] }));
+  check("record files: …and a key the plan does not publish is KEPT — dropping it would delete a record somebody filed",
+    () => JSON.stringify(ev2["gone#quality-gates"]) === JSON.stringify({ referencePage: "Old" }),
+    () => Object.keys(ev2));
+  const before = fs.readFileSync(path.join(base, "evidence.json"), "utf8");
+  cliTasks(["--tasks", dir], MANIFEST2);
+  check("record files: a re-slice with nothing to add leaves the file's bytes exactly as they were",
+    () => fs.readFileSync(path.join(base, "evidence.json"), "utf8") === before,
+    () => fs.readFileSync(path.join(base, "evidence.json"), "utf8").slice(0, 200));
+
+  // An unparseable file is somebody's record the engine cannot read. Reported, never replaced.
+  const broken = "{ \"main#quality-gates\": { \"referencePage\": \"half-writ";
+  fs.writeFileSync(path.join(base, "judge.json"), broken);
+  const reported = cliTasks(["--tasks", dir], MANIFEST2);
+  check("record files: an UNPARSEABLE existing file is reported by name on stdout and left byte for byte as it was — the engine cannot tell what it holds, so it never overwrites it",
+    () => reported.status === 0 && fs.readFileSync(path.join(base, "judge.json"), "utf8") === broken
+      && /judge\.json/.test(reported.stdout || "") && /not overwritten|left as it is|NOT (READ|WRITTEN)/i.test(reported.stdout || ""),
+    () => ({ status: reported.status, stdout: (reported.stdout || "").slice(-600), back: fs.readFileSync(path.join(base, "judge.json"), "utf8") }));
+  fs.writeFileSync(path.join(base, "judge.json"), JSON.stringify(ju2, null, 2) + "\n");
+
+  // `--next` and `--start` read the cut, so they keep the files current the same way.
+  for (const f of RECORD_FILES) fs.rmSync(path.join(base, f), { force: true });
+  const next = cliTasks(["--tasks", dir, "--next"], MANIFEST2);
+  check("record files: `--next` writes them too — a folder whose record files went missing gets them back from the mode the orchestrator runs most",
+    () => [0, 2].includes(next.status) && PLAN2.evidenceIds.every((id) => id in readJson(base, "evidence.json")),
+    () => ({ status: next.status, stderr: next.stderr, state: recordState(base) }));
+  // `--start` on a PAGE BUILD task: the page it builds files its own records, the `Quality gates` one included.
+  // The CLI's own budget keeps this small plan in one Whole-migration task, so the folder is cut by a split that
+  // gives every page its own build item.
+  const startBase = tmp("records-start");
+  const startDir = path.join(startBase, "build-tasks");
+  const startSplit = path.join(startBase, "split.json");
+  fs.writeFileSync(startSplit, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
+  const cutStart = cliTasks(["--tasks", startDir, "--split", startSplit], MANIFEST);
+  // The page's dependencies are dispatched and closed first, so `--start` opens the page task itself.
+  const pageTask = syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)).tasks.find((t) => t.artifact === "page:main");
+  check("record files (anti-vacuity): the per-page cut holds a page build task to start",
+    () => pageTask != null, () => ({ cut: [cutStart.status, (cutStart.stdout || "").slice(0, 300)] }));
+  clearDepsOf(startDir, pageTask.id, RUN, checklistOpts(MANIFEST));
+  const startable = startableTasks(syncTaskDir(startDir, RUN, checklistOpts(MANIFEST)), startDir).startable;
+  const startedPage = pageTask.artifact.slice("page:".length);
+  const pageIds = PLAN.evidenceIds.filter((id) => id.startsWith(`${startedPage}#`));
+  check("record files (anti-vacuity): that page publishes evidence ids, its `#quality-gates` record among them, and its task is startable once its dependencies closed",
+    () => pageIds.length > 0 && pageIds.includes(`${startedPage}#quality-gates`) && startable.some((t) => t.id === pageTask.id),
+    () => ({ pageIds, startable: startable.map((t) => [t.id, t.artifact]) }));
+  for (const f of RECORD_FILES) fs.rmSync(path.join(startBase, f), { force: true });
+  const started = cliTasks(["--tasks", startDir, "--start", pageTask.id], MANIFEST);
+  check("record files: `--start` on the page build task marks it in-progress and hands back its dispatch token",
+    () => started.status === 0 && readTaskDir(startDir).find((t) => t.id === pageTask.id)?.status === "in-progress"
+      && (started.stdout || "").includes(`DISPATCH TOKEN for \`${pageTask.id}\``),
+    () => ({ status: started.status, stdout: (started.stdout || "").slice(0, 400), stderr: started.stderr }));
+  check("record files: `--start` on a page build task writes them too — `evidence.json` and `judge.json` hold every evidence id of THAT page, its `#quality-gates` record included",
+    () => ["evidence.json", "judge.json"].every((f) => pageIds.every((id) => Object.hasOwn(readJson(startBase, f), id))),
+    () => ({ task: [pageTask.id, pageTask.artifact], pageIds, state: recordState(startBase) }));
+  fs.rmSync(startBase, { recursive: true, force: true });
+
+  // `--handoff` keeps them current too: the fresh session resumes into a folder whose record files exist.
+  const hoBase = tmp("records-handoff");
+  const hoDir = path.join(hoBase, "mig", "build-tasks");
+  const hoManifest = path.join(hoBase, "scratch", "manifest.json");
+  fs.mkdirSync(path.dirname(hoManifest), { recursive: true });
+  fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
+  const cliHo = (...args) => spawnSync(process.execPath, [MIGRATE, hoManifest, ...args], { encoding: "utf8" });
+  const hoFolder = path.dirname(hoDir);
+  fs.mkdirSync(hoFolder, { recursive: true });
+  fs.writeFileSync(path.join(hoFolder, "decisions.md"), "# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n"
+    + `- Decision: build the plan\n- Approved by: user\n- Plan version: \`${RUN.planVersion}\`\n`);
+  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n");
+  cliHo("--tasks", hoDir);
+  for (const f of RECORD_FILES) fs.rmSync(path.join(hoFolder, f), { force: true });
+  const handedOff = cliHo("--tasks", hoDir, "--handoff");
+  check("record files: `--handoff` recreates deleted record files with EVERY published id — the fresh session's first builder files into a file that exists",
+    () => handedOff.status === 0 && fs.existsSync(path.join(hoFolder, "resume.md"))
+      && ["evidence.json", "judge.json"].every((f) => PLAN.evidenceIds.every((id) => Object.hasOwn(readJson(hoFolder, f), id)))
+      && PLAN.builderRecorded.every((b) => Object.hasOwn(readJson(hoFolder, "recorded.json"), b.reachabilityKey)),
+    () => ({ status: handedOff.status, stdout: (handedOff.stdout || "").slice(0, 600), stderr: handedOff.stderr, state: recordState(hoFolder) }));
+  fs.rmSync(hoBase, { recursive: true, force: true });
+
+  // A record file that parses as JSON but not as an OBJECT — `[]` or `null` — is as unreadable as broken JSON.
+  for (const [label, text] of [["an array", "[]\n"], ["null", "null\n"]]) {
+    const seededBase = tmp("records-non-object");
+    const seededDir = path.join(seededBase, "build-tasks");
+    fs.mkdirSync(seededBase, { recursive: true });
+    fs.writeFileSync(path.join(seededBase, "evidence.json"), text);
+    const seeded = cliTasks(["--tasks", seededDir], MANIFEST);
+    check(`record files: \`evidence.json\` holding ${label} stays BYTE-IDENTICAL after \`--tasks\`, and the run names it as unreadable`,
+      () => seeded.status === 0 && fs.readFileSync(path.join(seededBase, "evidence.json"), "utf8") === text
+        && /`evidence\.json`[^\n]*could not be read as a JSON object/.test(seeded.stdout || ""),
+      () => ({ status: seeded.status, back: fs.readFileSync(path.join(seededBase, "evidence.json"), "utf8"), stdout: (seeded.stdout || "").slice(-500) }));
+    fs.rmSync(seededBase, { recursive: true, force: true });
+  }
+
+  // `--reads` runs the same merge: it adds an id the file lacks and keeps every filed value.
+  const filedAgain = readJson(base, "evidence.json");
+  filedAgain[ownId] = filed;
+  delete filedAgain[added[0]];
+  fs.writeFileSync(path.join(base, "evidence.json"), JSON.stringify(filedAgain, null, 2) + "\n");
+  const reads = cliTasks(["--reads", base], MANIFEST2);
+  const ev3 = readJson(base, "evidence.json");
+  check("record files: `--reads` merges the same way — the missing id is added and the filed value survives",
+    () => reads.status === 0 && added[0] in ev3 && JSON.stringify(ev3[ownId]) === JSON.stringify(filed),
+    () => ({ status: reads.status, stderr: reads.stderr, keys: Object.keys(ev3) }));
+
+  // A record file the process cannot read or write at all — here a DIRECTORY where `evidence.json` belongs — is
+  // a warning on the mode's answer, never a crash of the mode.
+  const blockedBase = tmp("records-blocked");
+  const blockedDir = path.join(blockedBase, "build-tasks");
+  fs.mkdirSync(path.join(blockedBase, "evidence.json"));
+  const blockedTasks = cliTasks(["--tasks", blockedDir], MANIFEST2);
+  const blockedNext = cliTasks(["--tasks", blockedDir, "--next"], MANIFEST2);
+  const failureWarned = (r) => /NOT brought up to date/.test(r.stdout || "") && (r.stdout || "").includes(blockedBase);
+  check("record files: a record file the engine cannot touch (a directory named `evidence.json`) makes `--tasks` print the failure as a warning and exit normally",
+    () => blockedTasks.status === 0 && failureWarned(blockedTasks) && /--- progress ---/.test(blockedTasks.stdout),
+    () => ({ status: blockedTasks.status, stdout: (blockedTasks.stdout || "").slice(-600), stderr: (blockedTasks.stderr || "").slice(0, 600) }));
+  check("record files: …and `--next` still names the startable task with its `--start` command, the warning beside it",
+    () => [0, 2].includes(blockedNext.status) && failureWarned(blockedNext) && /--start /.test(blockedNext.stdout),
+    () => ({ status: blockedNext.status, stdout: (blockedNext.stdout || "").slice(-600), stderr: (blockedNext.stderr || "").slice(0, 600) }));
+  fs.rmSync(blockedBase, { recursive: true, force: true });
+  fs.rmSync(base, { recursive: true, force: true });
+
+  // A builder filing a record WHILE a mode merges. The racer writes the builder's value into `evidence.json` each
+  // time the merge reads that file, up to `fires` times — between the merge's read and its replace.
+  const raceBase = tmp("records-race");
+  const evFile = path.join(raceBase, "evidence.json");
+  const [builderId, missingId] = [PLAN.evidenceIds[0], PLAN.evidenceIds.at(-1)];
+  const seedRace = () => {
+    for (const f of fs.readdirSync(raceBase)) fs.rmSync(path.join(raceBase, f), { force: true });
+    const seed = Object.fromEntries(PLAN.evidenceIds.filter((id) => id !== missingId).map((id) => [id, { referencePage: "" }]));
+    fs.writeFileSync(evFile, JSON.stringify(seed, null, 2) + "\n");
+  };
+  const withRacer = (fires, fn) => {
+    const realRead = fs.readFileSync;
+    let fired = 0;
+    fs.readFileSync = (p, ...rest) => {
+      const out = realRead(p, ...rest);
+      if (path.resolve(String(p)) === path.resolve(evFile) && fired < fires) {
+        fired += 1;
+        const doc = JSON.parse(realRead(evFile, "utf8"));
+        doc[builderId] = { referencePage: "Raced_FormPage", components: ["crt.Input"], findings: ["mine"], findingsRaised: [], n: fired };
+        fs.writeFileSync(evFile, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return out;
+    };
+    try { return fn(); } finally { fs.readFileSync = realRead; }
+  };
+  const tempsLeft = () => fs.readdirSync(raceBase).filter((f) => f.endsWith(".tmp"));
+  check("record files (anti-vacuity): the plan publishes at least two evidence ids, so one can be filed and another missing",
+    () => builderId && missingId && builderId !== missingId, () => PLAN.evidenceIds);
+  seedRace();
+  const raced = withRacer(1, () => ensureRecordFiles(raceBase, PLAN));
+  const racedDoc = JSON.parse(fs.readFileSync(evFile, "utf8"));
+  check("record files: a builder that files a record between the merge's read and its replace KEEPS that record — the merge re-reads the fresh file and adds only the id still missing",
+    () => raced.written.includes("evidence.json") && racedDoc[builderId]?.referencePage === "Raced_FormPage"
+      && racedDoc[builderId]?.n === 1 && Object.hasOwn(racedDoc, missingId) && tempsLeft().length === 0,
+    () => ({ raced, builder: racedDoc[builderId], missing: Object.hasOwn(racedDoc, missingId), temps: tempsLeft() }));
+  seedRace();
+  const contended = withRacer(Infinity, () => ensureRecordFiles(raceBase, PLAN));
+  const contendedDoc = JSON.parse(fs.readFileSync(evFile, "utf8"));
+  check("record files: a file that changes under EVERY merge attempt is left to the other writer and reported as contended — its latest record stands and no temp file is left behind",
+    () => contended.contended.includes("evidence.json") && !contended.written.includes("evidence.json")
+      && contendedDoc[builderId]?.n >= MERGE_ATTEMPTS && !Object.hasOwn(contendedDoc, missingId) && tempsLeft().length === 0
+      && /was busy/.test(recordFilesWarning(raceBase, contended) || ""),
+    () => ({ contended, builder: contendedDoc[builderId], temps: tempsLeft() }));
+
+  // A rename the OS refuses while another process holds the file (EPERM / EBUSY / EACCES on Windows) is retried,
+  // then the file is reported as contended; any other rename error is not a busy file.
+  const lockError = (code) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+  const withLockedRename = (failures, code, fn) => {
+    const realRename = fs.renameSync;
+    let calls = 0;
+    fs.renameSync = (...args) => {
+      calls += 1;
+      if (calls <= failures) throw lockError(code);
+      return realRename(...args);
+    };
+    try { return { result: fn(), calls }; } finally { fs.renameSync = realRename; }
+  };
+  check("record files: `isRenameLockError` classifies EPERM, EBUSY and EACCES as a busy file, and nothing else",
+    () => ["EPERM", "EBUSY", "EACCES"].every((c) => isRenameLockError(lockError(c)))
+      && !["ENOSPC", "EISDIR", "ENOENT"].some((c) => isRenameLockError(lockError(c))) && !isRenameLockError(null),
+    () => "classification");
+  seedRace();
+  const brief = withLockedRename(RENAME_ATTEMPTS - 1, "EPERM", () => ensureRecordFiles(raceBase, PLAN));
+  check("record files: a rename refused fewer times than the retry budget succeeds on a later try — the file is written with the missing id",
+    () => brief.result.written.includes("evidence.json") && Object.hasOwn(JSON.parse(fs.readFileSync(evFile, "utf8")), missingId)
+      && tempsLeft().length === 0,
+    () => ({ result: brief.result, calls: brief.calls, temps: tempsLeft() }));
+  seedRace();
+  const seededBytes = fs.readFileSync(evFile, "utf8");
+  const held = withLockedRename(Infinity, "EBUSY", () => ensureRecordFiles(raceBase, PLAN));
+  check("record files: a rename refused on every try reports the file as contended — the file keeps its bytes, no temp file is left, and nothing throws",
+    () => held.result.contended.includes("evidence.json") && fs.readFileSync(evFile, "utf8") === seededBytes && tempsLeft().length === 0,
+    () => ({ result: held.result, calls: held.calls, temps: tempsLeft() }));
+  check("record files: the merge keeps its own short budget — RENAME_ATTEMPTS renames per contended file, not the ledger's longer LEDGER_RENAME",
+    () => held.result.contended.length > 0 && held.calls === RENAME_ATTEMPTS * held.result.contended.length,
+    () => ({ calls: held.calls, contended: held.result.contended }));
+  // The rename stub patches this process's `fs`, so the merge runs in-process through `ensureRecordFiles`, the call
+  // every mode makes, `--reads` included.
+  check("record files: …and that contended result renders the warning line every mode prints, `--reads` included, rather than an exception",
+    () => /was busy/.test(recordFilesWarning(raceBase, held.result) || ""), () => held.result);
+
+  // A file that does not parse on the first read because a builder is mid-write, and parses on the second: the
+  // merge treats it as raced and retries, so it is merged rather than reported as unreadable.
+  seedRace();
+  const halfWritten = Buffer.from("{ \"half\": ");
+  const realRead = fs.readFileSync;
+  let midReads = 0;
+  fs.readFileSync = (p, ...rest) => {
+    if (path.resolve(String(p)) !== path.resolve(evFile)) return realRead(p, ...rest);
+    midReads += 1;
+    return midReads === 1 ? halfWritten : realRead(p, ...rest);
+  };
+  let midWrite;
+  try { midWrite = ensureRecordFiles(raceBase, PLAN); } finally { fs.readFileSync = realRead; }
+  check("record files: a file unparseable on the first read and whole on the second is MERGED, not reported unreadable — only bytes that stay unparseable are",
+    () => midWrite.written.includes("evidence.json") && !midWrite.unreadable.includes("evidence.json")
+      && Object.hasOwn(JSON.parse(fs.readFileSync(evFile, "utf8")), missingId),
+    () => ({ midWrite, reads: midReads }));
+  fs.rmSync(raceBase, { recursive: true, force: true });
+}
+
+console.log("\n===== the filed half of a page's quality gate belongs to the page's LAST build task =====");
+// The `quality:ran` row says the design pass ran and its record was filed. Filing is the builder's act and the
+// review only judges it, so the row goes to the build task that finishes the page and the review keeps the judged
+// row alone.
+{
+  const FILED = "quality:ran", JUDGED = "quality:judged";
+  const hasRow = (t, id) => t.rows.some((r) => r.deliverableId === id);
+  const writersOf = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact).sort((a, b) => a.order - b.order);
+  const mainWriters = writersOf(SET5, "page:main");
+  check("filed gate (anti-vacuity): the bulk fixture really cuts `page:main` into several build tasks",
+    () => mainWriters.length > 1, () => SET5.tasks.map((t) => `${t.order}:${t.artifact}·${t.group}`));
+  check("filed gate: a page cut into several build tasks carries `quality:ran` in its LAST build task only",
+    () => hasRow(mainWriters.at(-1), FILED) && mainWriters.slice(0, -1).every((t) => !hasRow(t, FILED)),
+    () => mainWriters.map((t) => ({ order: t.order, rows: t.rows.map((r) => r.deliverableId || "—") })));
+  check("filed gate: …and it is that task's LAST row — the design pass looks at the page every other row of the task built",
+    () => mainWriters.at(-1).rows.at(-1).deliverableId === FILED,
+    () => mainWriters.at(-1).rows.map((r) => r.deliverableId || r.label.slice(0, 30)));
+  check("filed gate: the page's review task carries the judged row and nothing else of the gate",
+    () => {
+      const review = SET5.tasks.find((t) => t.artifact === "review:main");
+      return review && hasRow(review, JUDGED) && !hasRow(review, FILED) && review.writesTo === "";
+    }, () => SET5.tasks.find((t) => t.artifact === "review:main")?.rows.map((r) => r.deliverableId));
+  check("filed gate: the review still waits on EVERY build task of the page it judges, the one that files the record included",
+    () => {
+      const review = SET5.tasks.find((t) => t.artifact === "review:main");
+      return mainWriters.every((w) => review.dependsOn.includes(w.id));
+    }, () => ({ deps: SET5.tasks.find((t) => t.artifact === "review:main")?.dependsOn, writers: mainWriters.map((t) => t.id) }));
+  check("filed gate: on every page of the per-artifact cut exactly ONE task owns `quality:ran`, and it is that page's last writer",
+    () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
+      const owners = SET.tasks.filter((t) => t.rows.some((r) => r.deliverableId === FILED && r.pageKey === k));
+      // A wiring task writes the child entities' add-ons, not this page, so it is not one of the page's writers.
+      const writers = SET.tasks.filter((t) => t.writesTo && !t.writesTo.startsWith("wiring:") && t.rows.some((r) => r.pageKey === k));
+      const last = writers.sort((a, b) => a.order - b.order).at(-1);
+      return owners.length === 1 && owners[0] === last;
+    }), () => SET.tasks.map((t) => `${t.order}:${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
+  const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+  const whole = collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+  const wholeReview = collapsed.tasks.find((t) => t.artifact === "review:whole");
+  check("filed gate: in a COLLAPSED run the Whole-migration task owns every page's `quality:ran` and the review owns only the judged rows",
+    () => whole && wholeReview
+      && ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => whole.rows.some((r) => r.deliverableId === FILED && r.pageKey === k))
+      && !hasRow(wholeReview, FILED) && hasRow(wholeReview, JUDGED),
+    () => collapsed.tasks.map((t) => `${t.artifact}[${t.rows.map((r) => r.deliverableId || "·").join(",")}]`));
+  check("filed gate: the row text is unchanged by the move — it is the plan's row, so `--verify` resolves it as before",
+    () => {
+      const plan = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows.find((r) => r.deliverableId === FILED);
+      return SET.tasks.some((t) => t.writesTo && t.rows.some((r) => r.label === plan.label && r.group === "Quality gates"));
+    }, () => "the filed row by label");
+
+  // A folder whose review task holds the filed row with an Outcome on it: re-slicing moves the row to the page's
+  // last build task, and the Outcome moves with it.
+  const d = path.join(tmp("filed-carry"), "build-tasks");
+  const first = syncTaskDir(d, RUN5, OPTS5);
+  const lastBuild = writersOf(first, "page:main").at(-1);
+  const review = first.tasks.find((t) => t.artifact === "review:main");
+  const filedRow = lastBuild.rows.find((r) => r.deliverableId === FILED);
+  let carried = null;
+  if (filedRow && review) {
+    // The filed row in the review task, and absent from the build task.
+    const oldReview = { ...review, rows: [filedRow, ...review.rows] };
+    const oldBuild = { ...lastBuild, rows: lastBuild.rows.filter((r) => r !== filedRow) };
+    fs.writeFileSync(path.join(d, oldBuild.file), renderTaskFile(oldBuild, first));
+    fs.writeFileSync(path.join(d, oldReview.file), setOutcome(renderTaskFile(oldReview, first), 1, "built"));
+    syncTaskDir(d, RUN5, OPTS5);
+    const after = readTaskDir(d).find((t) => t.id === lastBuild.id);
+    carried = after?.rows.find((r) => r.label === filedRow.label);
+  }
+  check("filed gate: re-slicing a folder whose REVIEW task recorded an Outcome on the filed row carries that Outcome to the build task that now owns the row",
+    () => carried?.outcomeKind === "built",
+    () => ({ filedRow: !!filedRow, review: !!review, carried }));
+  fs.rmSync(path.dirname(d), { recursive: true, force: true });
+
+  // A RETIRED file still listing the filed row: its task id is not in the current plan, so the file is reported
+  // stale and never rewritten, and its mark stays in the folder while another task owns the row.
+  const filedAt = (t) => t.rows.findIndex((r) => r.deliverableId === FILED) + 1;
+  const retire = (dir, set, task, id, mark) => {
+    const file = `task-${id}.md`;
+    fs.writeFileSync(path.join(dir, file), setOutcome(renderTaskFile({ ...task, id, file }, set), filedAt(task), mark));
+  };
+  const filedOf = (dir, id) => readTaskDir(dir).find((t) => t.id === id)?.rows.find((r) => r.deliverableId === FILED || r.label === filedRow?.label);
+  const editOwn = (dir, task, mark) => {
+    const f = path.join(dir, readTaskDir(dir).find((t) => t.id === task.id).file);
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), filedAt(task), mark));
+  };
+
+  // The owner's Outcome cleared by hand stays cleared: the owner's own file lists the row, so nothing is carried in.
+  const dc = path.join(tmp("filed-cleared"), "build-tasks");
+  const setC = syncTaskDir(dc, RUN5, OPTS5);
+  const ownerC = writersOf(setC, "page:main").at(-1);
+  retire(dc, setC, ownerC, "retiredfiled01", "built");
+  editOwn(dc, ownerC, "built");
+  syncTaskDir(dc, RUN5, OPTS5);
+  editOwn(dc, ownerC, "");
+  syncTaskDir(dc, RUN5, OPTS5);
+  const clearedOnce = filedOf(dc, ownerC.id);
+  syncTaskDir(dc, RUN5, OPTS5);
+  const clearedTwice = filedOf(dc, ownerC.id);
+  check("filed gate: an Outcome CLEARED on the row's current owner stays cleared across two syncs — a retired file that still lists the row with a mark is not carried back in",
+    () => clearedOnce && clearedTwice && !clearedOnce.outcomeKind && !clearedTwice.outcomeKind,
+    () => ({ once: clearedOnce?.outcome, twice: clearedTwice?.outcome }));
+
+  // The owner's own mark wins over a retired file's.
+  editOwn(dc, ownerC, NOT_BUILT_BLOCKED);
+  syncTaskDir(dc, RUN5, OPTS5);
+  check("filed gate: the owner's OWN mark on the filed row wins over a retired file's mark for the same row",
+    () => filedOf(dc, ownerC.id)?.outcomeKind === "not-built", () => filedOf(dc, ownerC.id));
+  fs.rmSync(path.dirname(dc), { recursive: true, force: true });
+
+  // The row moved into a task with no file yet (a new task id after a re-slice): the previous owner is the retired
+  // file, and its outcome and reason carry over, onto the filed row only.
+  const dn = path.join(tmp("filed-new-id"), "build-tasks");
+  const setN = syncTaskDir(dn, RUN5, OPTS5);
+  const ownerN = writersOf(setN, "page:main").at(-1);
+  retire(dn, setN, ownerN, "retiredfiled02", NOT_BUILT_BLOCKED);
+  fs.rmSync(path.join(dn, ownerN.file));
+  syncTaskDir(dn, RUN5, OPTS5);
+  const fresh = readTaskDir(dn).find((t) => t.id === ownerN.id);
+  const carriedNew = fresh?.rows.find((r) => r.label === ownerN.rows[filedAt(ownerN) - 1].label);
+  const freshText = fresh ? fs.readFileSync(path.join(dn, fresh.file), "utf8") : "";
+  check("filed gate: a filed row that moved into a NEW task id carries its previous owner's outcome and reason, on that row only and listed once",
+    () => carriedNew?.outcomeKind === "not-built" && carriedNew.outcome === NOT_BUILT_BLOCKED
+      && fresh.rows.filter((r) => r.outcome === NOT_BUILT_BLOCKED).length === 1
+      && freshText.split(carriedNew.label).length === 2,
+    () => ({ carried: carriedNew, marked: fresh?.rows.filter((r) => r.outcome).map((r) => [r.label.slice(0, 40), r.outcome]) }));
+  fs.rmSync(path.dirname(dn), { recursive: true, force: true });
+}
+
+console.log("\n===== a split must give the filed gate row to the page's last writer =====");
+{
+  const rows = allRows("main");
+  const gates = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows;
+  const filedRow = gates.find((r) => r.deliverableId === "quality:ran").label;
+  const judgedRow = gates.find((r) => r.deliverableId === "quality:judged").label;
+  const rest = rows.filter((r) => r !== filedRow && r !== judgedRow);
+  const others = FULL_SPLIT.items.filter((i) => i.pageKey !== "main");
+  const refused = (items) => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items }, OPTS);
+  const readOnly = refused([splitItem("the-build", "main", "main", rest), ...others,
+    splitItem("the-review", "main", "", [filedRow, judgedRow])]);
+  check("split: the filed `quality:ran` row claimed by a READ-ONLY item is refused, naming the row, its page and the item to move it into",
+    () => readOnly.refused && readOnly.problems.some((p) => /quality:ran/.test(p) && p.includes("the-review")
+      && p.includes("`main`") && p.includes("the-build")),
+    () => readOnly.problems);
+  const half = Math.ceil(rest.length / 2);
+  const early = refused([splitItem("first-half", "main", "main", [...rest.slice(0, half), filedRow]),
+    splitItem("second-half", "main", "main", rest.slice(half)), ...others,
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split: the filed row in a writer that a LATER item still writes after is refused, naming that later item as the owner",
+    () => early.refused && early.problems.some((p) => /quality:ran/.test(p) && p.includes("first-half") && p.includes("second-half")),
+    () => early.problems);
+  // The child pages come first: `main` carries the rows that wire its related lists to them.
+  const right = refused([...others, splitItem("first-half", "main", "main", rest.slice(0, half)),
+    splitItem("second-half", "main", "main", [...rest.slice(half), filedRow]),
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split: the filed row in the page's last writer and the judged row in a later read-only review is accepted — and the writer is not mistaken for a review",
+    () => {
+      if (right.refused) return false;
+      const set = mergeTaskSet(right, []);
+      const owner = set.tasks.find((t) => t.id === "second-half");
+      const rev = set.tasks.find((t) => t.id === "the-review");
+      return !(owner.reviewsArtifacts || []).length && rev.dependsOn.includes("second-half") && rev.dependsOn.includes("first-half");
+    }, () => right.problems || mergeTaskSet(right, []).tasks.map((t) => `${t.id}→${t.dependsOn.join(",")}`));
+
+  // An item that writes ANOTHER page is never the home of this page's filed row.
+  const otherWriter = others.find((i) => i.writesTo && i.writesTo !== "main");
+  const onMain = (label) => `main::${label}`;
+  const filedMentions = (problems) => problems.filter((p) => /quality:ran/.test(p) && p.includes("of `main`"));
+  const crossed = refused([splitItem("the-build", "main", "main", rest),
+    ...others.map((i) => (i === otherWriter ? { ...i, rows: [...i.rows, onMain(filedRow)] } : i)),
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split (anti-vacuity): the fixture has a writer of a page other than `main` to misplace the filed row into",
+    () => !!otherWriter, () => others.map((i) => [i.id, i.writesTo]));
+  check("split: `main`'s filed row in an item writing ANOTHER page, beside a real `main` writer, is refused — the message names that item, the page it writes, and the `main` writer to move it into",
+    () => crossed.refused && filedMentions(crossed.problems).some((p) => p.includes(`\`${otherWriter.id}\``)
+      && p.includes(`writes \`${otherWriter.writesTo}\``) && p.includes("`the-build`, the last item that writes `main`")),
+    () => crossed.problems);
+  // No item declares `writesTo: main`: main's rows ride in writers of other pages. The last WRITING item that
+  // carries main's rows finishes the page, so it holds the filed row; an earlier carrier is refused, and the
+  // refusal never says that either item writes `main`.
+  const carriers = others.filter((i) => i.writesTo && i.writesTo !== "main");
+  const [firstCarrier, lastCarrier] = [carriers[0], carriers.at(-1)];
+  const restHalf = Math.ceil(rest.length / 2);
+  const carrying = (filedIn) => refused([
+    ...others.map((i) => {
+      if (i === firstCarrier) return { ...i, rows: [...i.rows, ...rest.slice(0, restHalf).map(onMain), ...(filedIn === i ? [onMain(filedRow)] : [])] };
+      if (i === lastCarrier) return { ...i, rows: [...i.rows, ...rest.slice(restHalf).map(onMain), ...(filedIn === i ? [onMain(filedRow)] : [])] };
+      return i;
+    }),
+    splitItem("the-review", "main", "", [judgedRow])]);
+  check("split (anti-vacuity): the fixture has two writers of pages other than `main` to carry main's rows",
+    () => carriers.length >= 2 && firstCarrier !== lastCarrier, () => others.map((i) => [i.id, i.writesTo]));
+  const inLastCarrier = carrying(lastCarrier);
+  check("split: when NO item declares `writesTo: main`, `main`'s filed row in the LAST writing item that carries `main` rows is accepted, even though that item writes another page",
+    () => !inLastCarrier.refused, () => inLastCarrier.problems);
+  const inFirstCarrier = carrying(firstCarrier);
+  const firstFiled = filedMentions(inFirstCarrier.problems || []);
+  check("split: …and in an EARLIER carrier it is refused, naming the last carrier as \"the last item that carries `main` rows\" — never claiming either item writes `main`",
+    () => inFirstCarrier.refused && firstFiled.length === 1 && firstFiled[0].includes(`\`${firstCarrier.id}\``)
+      && firstFiled[0].includes(`\`${lastCarrier.id}\`, the last item that carries \`main\` rows`)
+      && !/writes `main`/.test(firstFiled[0]),
+    () => inFirstCarrier.problems);
+  // No item declares `writesTo: main` and no WRITING item carries any `main` row: every one sits in a read-only
+  // item. There is no item to move the filed row into, so the remedy is to declare the writer.
+  const readOnlyMain = refused([...others, splitItem("main-read-only", "main", "", [...rest, filedRow, judgedRow])]);
+  const readOnlyFiled = filedMentions(readOnlyMain.problems || []);
+  check("split: when no WRITING item carries `main` rows at all, the filed row is refused naming the row, its page and the item, with the remedy to give the item that builds that page `writesTo: main`",
+    () => readOnlyMain.refused && readOnlyFiled.length === 1 && /quality:ran/.test(readOnlyFiled[0])
+      && readOnlyFiled[0].includes("of `main`") && readOnlyFiled[0].includes("`main-read-only`")
+      && readOnlyFiled[0].includes("give the item that builds that page `writesTo: main`"),
+    () => readOnlyMain.problems);
+  // The same seam on the list page: two writers, the filed row in the first.
+  const listGates = GROUPS.find((g) => g.pageKey === LIST_PAGE_KEY && g.baseTitle === "Quality gates").rows;
+  const listFiled = listGates.find((r) => r.deliverableId === "quality:ran").label;
+  const listJudged = listGates.find((r) => r.deliverableId === "quality:judged").label;
+  const listRest = allRows(LIST_PAGE_KEY).filter((r) => r !== listFiled && r !== listJudged);
+  const listHalf = Math.ceil(listRest.length / 2);
+  const notList = FULL_SPLIT.items.filter((i) => i.pageKey !== LIST_PAGE_KEY);
+  const listEarly = refused([...notList,
+    splitItem("list-first", LIST_PAGE_KEY, LIST_PAGE_KEY, [...listRest.slice(0, listHalf), listFiled]),
+    splitItem("list-second", LIST_PAGE_KEY, LIST_PAGE_KEY, listRest.slice(listHalf)),
+    splitItem("list-review", LIST_PAGE_KEY, "", [listJudged])]);
+  check("split: the list page's filed row in a list writer that a LATER list writer follows is refused, naming the later writer as the owner",
+    () => listRest.length > 1 && listEarly.refused && listEarly.problems.some((p) => /quality:ran/.test(p)
+      && p.includes(`of \`${LIST_PAGE_KEY}\``) && p.includes("list-first") && p.includes(`\`list-second\`, the last item that writes \`${LIST_PAGE_KEY}\``)),
+    () => ({ rest: listRest.length, problems: listEarly.problems }));
+}
+
+/* ================================================================================================
+   LEDGER DURABILITY. Every ledger file is replaced through a temp file and a rename, so a write killed
+   halfway leaves the previous file whole; and every read-modify-write of `timings.json` holds an
+   exclusive lock, so two engine processes cannot each write the clocks THEY read and drop the other's.
+   ================================================================================================ */
+console.log("\n===== ledger durability: atomic writes and the clock lock =====");
+{
+  const tempsIn = (d) => fs.readdirSync(d).filter((f) => f.endsWith(".tmp"));
+  const busy = (code) => Object.assign(new Error(`${code}: simulated`), { code });
+  // Swaps one `fs` function for the duration of `fn`. The engine and this runner share the one `node:fs` object, so
+  // the stub reaches every call the engine makes.
+  const withStub = (name, stub, fn) => {
+    const real = fs[name];
+    fs[name] = (...args) => stub(real, ...args);
+    try { return fn(); } finally { fs[name] = real; }
+  };
+  const attempt = (fn) => { try { return { value: fn() }; } catch (e) { return { error: e }; } };
+  const lockOf = (d) => path.join(d, TIMINGS_LOCK_FILE);
+  // The file's bytes, or null when there is none: a folder nobody dispatched from yet has no `timings.json`.
+  const bytesOf = (f) => (fs.existsSync(f) ? fs.readFileSync(f) : null);
+  const sameAs = (f, b) => { const now = bytesOf(f); return now === null || b === null ? now === b : now.equals(b); };
+  const QUICK = { waitMs: 120, staleMs: 30000 };
+
+  // T1 — the primitive itself.
+  {
+    const d = tmp("atomic");
+    const f = path.join(d, "ledger.md");
+    fs.writeFileSync(f, "previous ✓ bytes\n");
+    const before = fs.readFileSync(f);
+    const failed = withStub("renameSync", () => { throw busy("ENOSPC"); }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    check("atomic (T1): a rename that fails with a non-retryable error throws, leaves the previous file byte-identical and leaves no temp file in the folder",
+      () => failed.error?.code === "ENOSPC" && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+      () => ({ error: failed.error?.message, temps: tempsIn(d), now: fs.readFileSync(f, "utf8") }));
+    const held = withStub("renameSync", () => { throw busy("EBUSY"); }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    check("atomic (T1): a target kept busy through every retry throws rather than returning as if written, and the previous file and the folder are unchanged",
+      () => held.error?.code === "EBUSY" && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+      () => ({ error: held.error?.message, temps: tempsIn(d) }));
+    let renames = 0;
+    const brief = withStub("renameSync", (real, ...args) => {
+      renames += 1;
+      if (renames < RENAME_ATTEMPTS) { throw busy("EPERM"); }
+      return real(...args);
+    },
+      () => attempt(() => writeFileAtomic(f, "next ✓\n")));
+    const plain = path.join(d, "plain.md");
+    fs.writeFileSync(plain, "next ✓\n");
+    check("atomic (T1): a rename refused fewer times than the retry budget succeeds, and the file holds exactly the bytes a plain write of the same text holds",
+      () => !brief.error && renames === RENAME_ATTEMPTS && fs.readFileSync(f).equals(fs.readFileSync(plain)) && tempsIn(d).length === 0,
+      () => ({ error: brief.error?.message, renames, now: fs.readFileSync(f, "utf8") }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // T2 — a ledger write killed mid-way. The stub writes half the bytes and throws, the way a killed process leaves a
+  // file; written straight to `index.md` that half would BE the index.
+  {
+    const d = path.join(tmp("torn"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const idx = path.join(d, TASK_INDEX_FILE);
+    fs.writeFileSync(idx, readIndex(d) + "\nhand-edited, so the next sync rewrites it\n");
+    const before = fs.readFileSync(idx);
+    let halfWritten = false;
+    const torn = withStub("writeFileSync", (real, p, data, ...rest) => {
+      if (String(p).includes(TASK_INDEX_FILE)) {
+        real(p, String(data).slice(0, 20), ...rest);
+        halfWritten = true;
+        throw busy("EIO");
+      }
+      return real(p, data, ...rest);
+    }, () => attempt(() => syncTaskDir(d, RUN, OPTS)));
+    check("atomic (T2): a sync whose `index.md` write dies halfway leaves the previous `index.md` byte-identical, not a fragment, and no temp file behind",
+      () => halfWritten && torn.error?.code === "EIO" && fs.readFileSync(idx).equals(before) && tempsIn(d).length === 0,
+      () => ({ halfWritten, error: torn.error?.message, head: fs.readFileSync(idx, "utf8").slice(0, 80), temps: tempsIn(d) }));
+    check("atomic (T2): …and the next sync, with nothing failing, regenerates it",
+      () => { syncTaskDir(d, RUN, OPTS); return !fs.readFileSync(idx).equals(before) && !/hand-edited/.test(readIndex(d)); });
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  check("atomic: no bare `fs.writeFileSync` remains in tasks.mjs — every ledger file it writes goes through `writeFileAtomic`",
+    () => !/fs\.writeFileSync\(/.test(fs.readFileSync(path.join(ENGINE_DIR, "tasks.mjs"), "utf8")));
+
+  // T3 — a lock another process holds.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("locked"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    clearDepsOf(d, id, RUN, OPTS);
+    const timings = path.join(d, TIMINGS_FILE);
+    const before = bytesOf(timings);
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const t0 = Date.now();
+    const synced = syncTaskDir(d, RUN, { ...OPTS, timingsLock: QUICK });
+    const waited = Date.now() - t0;
+    const started = startTask(d, id, RUN, { ...OPTS, timingsLock: QUICK }, null, at(50));
+    check("lock (T3): while another process holds `timings.json.lock`, a sync WAITS the bounded time and then refuses as `timings-locked`, naming the lock — and `timings.json` is byte-identical",
+      () => synced.refused === true && synced.refusal === REFUSED_TIMINGS_LOCKED && waited >= QUICK.waitMs
+        && synced.problems.some((p) => p.includes(TIMINGS_LOCK_FILE)) && sameAs(timings, before),
+      () => ({ refusal: synced.refusal, problems: synced.problems, waited }));
+    check("lock (T3): `--start` under the same held lock opens no clock and leaves `timings.json` byte-identical",
+      () => started.started === null && started.refused === true && !readTimingsFile(d).running[id] && sameAs(timings, before),
+      () => ({ started: started.started?.id, refusal: started.refusal, running: Object.keys(readTimingsFile(d).running) }));
+    check("lock (T3): the holder's lock file is left alone — only its owner removes it",
+      () => fs.readFileSync(lockOf(d), "utf8") === "another-holder");
+    const cli = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("lock (T3): the CLI answers the held lock with exit 2 and NOTHING WRITTEN, naming the lock file and the wait remedy",
+      () => cli.status === 2 && /NOTHING WRITTEN/.test(cli.stdout + cli.stderr) && (cli.stdout + cli.stderr).includes(TIMINGS_LOCK_FILE)
+        && /another engine process/.test(cli.stdout + cli.stderr) && sameAs(timings, before),
+      () => ({ status: cli.status, out: (cli.stdout + cli.stderr).slice(0, 600) }));
+    // The lock taken AFTER `--start`'s sync and before its own clock write: the refusal is `--start`'s own shape.
+    fs.rmSync(lockOf(d));
+    let lockOpens = 0;
+    const late = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 2) {
+        const fd = real(p, "wx");
+        fs.writeSync(fd, "late-holder");
+        fs.closeSync(fd);
+      }
+      return real(p, ...rest);
+    }, () => startTask(d, id, RUN, { ...OPTS, timingsLock: QUICK }, null, at(51)));
+    check("lock (T3): a lock taken between `--start`'s sync and its clock write refuses as `timingsLocked`, naming the lock, with no clock opened",
+      () => lockOpens >= 2 && late.started === null && late.timingsLocked === lockOf(d) && !readTimingsFile(d).running[id],
+      () => ({ lockOpens, timingsLocked: late.timingsLocked, started: late.started?.id }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T3b — the same late lock through the CLI, which renders `--start`'s own refusal rather than the sync's. The
+  // folder is sliced by the CLI so the id is one the CLI's own build holds. A preload in the child process takes the
+  // lock on the second `wx` create: the first is the sync's `closeClocks`, the second is `--start`'s clock write.
+  {
+    const d = path.join(tmp("late-cli"), "build-tasks");
+    cliTasksEarly(["--tasks", d], MANIFEST);
+    const tasks = readTaskDir(d);
+    const id = tasks.find((t) => t.status === "todo" && !(t.dependsOn || []).length)?.id;
+    const preload = path.join(path.dirname(d), "late-lock-preload.mjs");
+    fs.writeFileSync(preload, [
+      'import fs from "node:fs";',
+      "const real = fs.openSync;",
+      "let opens = 0;",
+      "fs.openSync = (p, ...rest) => {",
+      `  if (String(p).endsWith(${JSON.stringify(TIMINGS_LOCK_FILE)}) && rest[0] === "wx" && ++opens === 2) {`,
+      '    const fd = real(p, "wx");',
+      '    fs.writeSync(fd, "late-holder-cli");',
+      "    fs.closeSync(fd);",
+      "  }",
+      "  return real(p, ...rest);",
+      "};",
+      "",
+    ].join("\n"));
+    const timings = path.join(d, TIMINGS_FILE);
+    const before = bytesOf(timings);
+    const lateCli = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, MIGRATE, "-", "--tasks", d, "--start", id],
+      { cwd: DIR, input: JSON.stringify(MANIFEST), encoding: "utf8" });
+    const lateOut = (lateCli.stdout || "") + (lateCli.stderr || "");
+    check("lock (T3b): the CLI answers a lock taken after `--start`'s sync with exit 2 and NOTHING WAS STARTED, not the sync's NOTHING WRITTEN, naming the lock file and another engine process, with no clock opened",
+      () => !!id && lateCli.status === 2 && /NOTHING WAS STARTED/.test(lateOut) && !/NOTHING WRITTEN/.test(lateOut)
+        && lateOut.includes(lockOf(d)) && /another engine process/.test(lateOut)
+        && fs.readFileSync(lockOf(d), "utf8") === "late-holder-cli" && !readTimingsFile(d).running[id] && sameAs(timings, before)
+        && readTaskDir(d).find((t) => t.id === id)?.status === "todo",
+      () => ({ id, status: lateCli.status, out: lateOut.slice(0, 600), running: Object.keys(readTimingsFile(d).running) }));
+    fs.rmSync(lockOf(d));
+    const control = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("lock (T3b, control): with no lock taken, the same `--start` opens the clock — the refusal above is the lock's, not the id's",
+      () => control.status === 0 && !!readTimingsFile(d).running[id],
+      () => ({ status: control.status, out: (control.stdout + control.stderr).slice(0, 600) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T3c — EPERM/EACCES from the `wx` create with NO lock file is the folder refusing the write, not a holder.
+  {
+    const d = path.join(tmp("denied"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const deny = (code) => (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx") throw busy(code);
+      return real(p, ...rest);
+    };
+    for (const code of ["EPERM", "EACCES"]) {
+      const t0 = Date.now();
+      const direct = withStub("openSync", deny(code), () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+      const waited = Date.now() - t0;
+      const synced = withStub("openSync", deny(code), () => attempt(() => syncTaskDir(d, RUN, { ...OPTS, timingsLock: QUICK })));
+      check(`lock (T3c): ${code} from the lock create with no lock file rethrows the real ${code} at once — no \`timings-locked\` refusal, no wait, nothing run under the lock`,
+        () => direct.error?.code === code && direct.value === undefined && waited < QUICK.waitMs
+          && synced.error?.code === code && !fs.existsSync(lockOf(d)),
+        () => ({ direct: direct.error?.code ?? direct.value, waited, synced: synced.error?.code ?? synced.value?.refusal }));
+    }
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const held = withStub("openSync", deny("EPERM"), () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+    check("lock (T3c): EPERM while the lock file exists is still a held lock — the bounded wait ends in `TimingsLockedError` naming it",
+      () => held.error?.lockFile === lockOf(d) && held.error?.code === undefined,
+      () => ({ error: held.error?.message, code: held.error?.code }));
+    fs.rmSync(lockOf(d));
+    let denials = 0;
+    const once = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++denials === 1) throw busy("EPERM");
+      return real(p, ...rest);
+    }, () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+    check("lock (T3c): a single EPERM with no lock file (a holder's delete finishing) is retried once and the lock is then taken",
+      () => once.value === "ran" && denials === 2 && !fs.existsSync(lockOf(d)),
+      () => ({ value: once.value, error: once.error?.message, denials }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T4 — a lock left behind by a killed process, and release on every path.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("stale"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    clearDepsOf(d, id, RUN, OPTS);
+    fs.writeFileSync(lockOf(d), "killed-holder");
+    const old = new Date(Date.now() - (TIMINGS_LOCK.staleMs + 5000));
+    fs.utimesSync(lockOf(d), old, old);
+    const started = startTask(d, id, RUN, OPTS, null, at(60));
+    check("lock (T4): a lock older than the stale threshold is taken over — the start succeeds, its clock is written, and no lock file is left",
+      () => started.started?.id === id && readTimingsFile(d).running[id]?.startedAt === at(60) && !fs.existsSync(lockOf(d))
+        && tempsIn(d).length === 0,
+      () => ({ started: started.started?.id, refusal: started.refusal, lock: fs.existsSync(lockOf(d)), temps: tempsIn(d) }));
+    const thrown = attempt(() => withTimingsLock(d, () => { throw new Error("inside the lock"); }));
+    check("lock (T4): the lock is released when the work under it throws, and the error reaches the caller",
+      () => thrown.error?.message === "inside the lock" && !fs.existsSync(lockOf(d)));
+    withTimingsLock(d, () => fs.writeFileSync(lockOf(d), "taken-over-by-another"));
+    check("lock (T4): a holder whose lock was taken over does not remove the new holder's lock on release",
+      () => fs.readFileSync(lockOf(d), "utf8") === "taken-over-by-another");
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5 — the race the lock closes. A clock for the engine's `page:main` writer is opened by "another process" at the
+  // last moment before `--start` takes the lock for an orchestrator task that writes the same page. The overlap check
+  // has to read that clock, and the write has to keep it.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("race"), "build-tasks");
+    const writer = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.writesTo === "page:main");
+    fs.writeFileSync(path.join(d, "zz-orchestrator-main.md"),
+      "---\nid: orch0005\nstatus: todo\norigin: orchestrator\npageKey: main\ngroup: Extra main work\norder: 0\nwritesTo: page:main\n---\n\n## Notes\nAdded by the orchestrator.\n");
+    const orch = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === "orch0005");
+    check("race (T5, anti-vacuity): the orchestrator task writes the same artifact as the engine's writer and does not wait on it — otherwise `deps` would answer before the overlap check",
+      () => !!writer && !!orch && orch.writesTo === writer.writesTo && !(orch.dependsOn || []).includes(writer.id),
+      () => ({ writer: writer?.id, orch: orch && { writesTo: orch.writesTo, dependsOn: orch.dependsOn } }));
+    let lockOpens = 0;
+    const res = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 2) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { version: 1, samples: [], running: {} };
+        doc.running = { ...doc.running, [writer.id]: { startedAt: at(70), token: "tok-other-process" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => startTask(d, "orch0005", RUN, OPTS, null, at(71)));
+    const running = readTimingsFile(d).running;
+    check("race (T5): a clock opened between `--start`'s sync and its lock is seen under the lock — the overlapping task is refused with `blockedByOverlap` naming the writer, and the other process's clock survives",
+      () => lockOpens >= 2 && res.started === null && (res.blockedByOverlap || []).some((x) => x.id === writer.id)
+        && running[writer.id]?.token === "tok-other-process" && !running.orch0005,
+      () => ({ lockOpens, started: res.started?.id, overlap: (res.blockedByOverlap || []).map((x) => x.id), running }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T6 — a repair task in a FRESH folder (not a pre-gate one) is held to a dispatch record like any other task.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("repair-gate"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const rep = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written[0];
+    closeCells(d, rep.id);
+    const set = syncTaskDir(d, RUN, { ...OPTS, now: at(80) });
+    const other = set.tasks.find((t) => t.status === "todo" && t.id !== rep.id);
+    const res = other && startTask(d, other.id, RUN, OPTS, null, at(81));
+    check("gate (T6): a repair task written by `syncRepairDir` into a fresh folder and closed with no clock is in `dispatch.failing`, and `--start` then refuses with `blockedByDispatch`",
+      () => !!rep && set.dispatch.failing.some((t) => t.id === rep.id) && res?.started === null
+        && res.blockedByDispatch?.failing.some((t) => t.id === rep.id) && !readTimingsFile(d).running[other.id],
+      () => ({ rep: rep?.id, failing: set.dispatch.failing.map((t) => t.id), refused: res && Object.keys(res).filter((k) => k.startsWith("blocked")) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+  // T1, ledger budget — the ledger's own busy budget. A ledger write has no fallback the way the record-file merge has, so it
+  // waits much longer for a file an antivirus scan or an editor holds, and its final refusal names the file.
+  {
+    const d = tmp("ledger-busy");
+    const f = path.join(d, TASK_INDEX_FILE);
+    fs.writeFileSync(f, "previous\n");
+    const before = fs.readFileSync(f);
+    let renames = 0;
+    const t0 = Date.now();
+    const held = withStub("renameSync", () => {
+      renames += 1;
+      throw busy("EBUSY");
+    }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    const waited = Date.now() - t0;
+    check("atomic (T1, ledger budget): a ledger file busy on every rename is tried LEDGER_RENAME.attempts times over at least 1 s — far past the merge's RENAME_ATTEMPTS — and then refused as `FileBusyError` naming the file and the re-run, the file unchanged",
+      () => held.error instanceof FileBusyError && held.error.code === "EBUSY" && held.error.file === f
+        && held.error.message === `rename refused (EBUSY) after ${LEDGER_RENAME.attempts} attempts replacing ${f}; re-run`
+        && LEDGER_RENAME.attempts > RENAME_ATTEMPTS && renames === LEDGER_RENAME.attempts && waited >= 1000
+        && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+      () => ({ error: held.error?.message, renames, waited, temps: tempsIn(d) }));
+    // A target the OS refuses for good (read-only, no delete right) raises the same codes a busy file does. The
+    // error has to carry the code the OS gave, not a synthetic EBUSY, and the LAST attempt's error as its cause.
+    for (const code of ["EPERM", "EACCES"]) {
+      const raised = [];
+      const refused = withStub("renameSync", () => {
+        const e = busy(code);
+        raised.push(e);
+        throw e;
+      }, () => attempt(() => writeFileAtomic(f, "next\n")));
+      check(`atomic (T1, real code): a rename refused with ${code} on every attempt throws \`FileBusyError\` keeping ${code} as its code and the last rename error as its cause, its message naming the code, the attempts, the file and the re-run`,
+        () => refused.error instanceof FileBusyError && refused.error.code === code && refused.error.cause === raised.at(-1)
+          && raised.length === LEDGER_RENAME.attempts
+          && refused.error.message === `rename refused (${code}) after ${LEDGER_RENAME.attempts} attempts replacing ${f}; re-run`
+          && fs.readFileSync(f).equals(before) && tempsIn(d).length === 0,
+        () => ({ error: refused.error?.message, code: refused.error?.code, raised: raised.length, temps: tempsIn(d) }));
+    }
+    let tries = 0;
+    const longer = withStub("renameSync", (real, ...args) => {
+      tries += 1;
+      if (tries <= RENAME_ATTEMPTS + 1) {
+        throw busy("EPERM");
+      }
+      return real(...args);
+    }, () => attempt(() => writeFileAtomic(f, "next\n")));
+    check("atomic (T1, ledger budget): a file held for longer than the merge budget but within the ledger budget is written — the in-place write this replaced would have succeeded there too",
+      () => !longer.error && tries === RENAME_ATTEMPTS + 2 && fs.readFileSync(f, "utf8") === "next\n" && tempsIn(d).length === 0,
+      () => ({ error: longer.error?.message, tries }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // T7 — a ledger file kept busy past the budget, through every caller that writes the folder. The stub refuses
+  // only the rename onto one named file, so everything else in the call behaves as it does for real.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const busyOnto = (name) => (real, from, to, ...rest) => {
+      if (String(to).endsWith(name)) {
+        throw busy("EBUSY");
+      }
+      return real(from, to, ...rest);
+    };
+    const d = path.join(tmp("busy-ledger"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    clearDepsOf(d, id, RUN, OPTS);
+    const idx = path.join(d, TASK_INDEX_FILE);
+    fs.writeFileSync(idx, readIndex(d) + "\nhand-edited, so the next sync rewrites it\n");
+    const idxBefore = fs.readFileSync(idx);
+    const synced = withStub("renameSync", busyOnto(TASK_INDEX_FILE), () => attempt(() => syncTaskDir(d, RUN, OPTS)));
+    check("busy (T7): a sync whose `index.md` stays busy returns the named `ledger-busy` refusal instead of throwing, naming the file — and `index.md` keeps its previous bytes",
+      () => !synced.error && synced.value?.refused === true && synced.value.refusal === REFUSED_LEDGER_BUSY
+        && synced.value.busyFile === idx && synced.value.problems.some((p) => p.includes(idx) && p.includes("re-run"))
+        && fs.readFileSync(idx).equals(idxBefore) && tempsIn(d).length === 0,
+      () => ({ error: synced.error?.message, refusal: synced.value?.refusal, busyFile: synced.value?.busyFile, problems: synced.value?.problems }));
+    check("busy (T7): …and the re-run with the file released finishes the write",
+      () => { const again = syncTaskDir(d, RUN, OPTS); return !again.refused && !/hand-edited/.test(readIndex(d)); });
+    const timings = path.join(d, TIMINGS_FILE);
+    const timingsBefore = bytesOf(timings);
+    const started = withStub("renameSync", busyOnto(TIMINGS_FILE), () => attempt(() => startTask(d, id, RUN, OPTS, null, at(40))));
+    check("busy (T7): `--start` whose clock write finds `timings.json` busy returns the `ledger-busy` refusal with nothing started — no clock, `timings.json` unchanged, the task still `todo`",
+      () => !started.error && started.value?.refusal === REFUSED_LEDGER_BUSY && started.value.started === null
+        && started.value.busyFile === timings && !readTimingsFile(d).running[id] && sameAs(timings, timingsBefore)
+        && readTaskDir(d).find((t) => t.id === id)?.status === "todo",
+      () => ({ error: started.error?.message, refusal: started.value?.refusal, running: Object.keys(readTimingsFile(d).running) }));
+    const cliDir = path.join(path.dirname(d), "cli-tasks");
+    cliTasksEarly(["--tasks", cliDir], MANIFEST);
+    const cliIdx = path.join(cliDir, TASK_INDEX_FILE);
+    fs.writeFileSync(cliIdx, readIndex(cliDir) + "\nhand-edited, so the next sync rewrites it\n");
+    const cliBefore = fs.readFileSync(cliIdx);
+    const preload = path.join(path.dirname(d), "busy-index-preload.mjs");
+    fs.writeFileSync(preload, [
+      'import fs from "node:fs";',
+      "const real = fs.renameSync;",
+      "fs.renameSync = (from, to, ...rest) => {",
+      `  if (String(to).endsWith(${JSON.stringify(TASK_INDEX_FILE)})) {`,
+      '    throw Object.assign(new Error("EBUSY: simulated"), { code: "EBUSY" });',
+      "  }",
+      "  return real(from, to, ...rest);",
+      "};",
+      "",
+    ].join("\n"));
+    const cli = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, MIGRATE, "-", "--tasks", cliDir],
+      { cwd: DIR, input: JSON.stringify(MANIFEST), encoding: "utf8" });
+    const cliOut = (cli.stdout || "") + (cli.stderr || "");
+    check("busy (T7): the CLI answers a busy `index.md` with exit 2 and the named refusal — not fully written, which file another process holds, and the re-run — rather than a stack trace or a NOTHING WRITTEN it cannot claim",
+      () => cli.status === 2 && /THE TASK FOLDER WAS NOT FULLY WRITTEN/.test(cliOut) && !/NOTHING WRITTEN/.test(cliOut)
+        && cliOut.includes(`another process holds ${cliIdx}`) && /re-run the same command/.test(cliOut)
+        && fs.readFileSync(cliIdx).equals(cliBefore),
+      () => ({ status: cli.status, out: cliOut.slice(0, 800) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T8 — the held lock through the callers of `syncTaskDir` other than `--start`: `addTasks` (`--add`) and `--next`.
+  {
+    const d = path.join(tmp("add-locked"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const listing = () => fs.readdirSync(d).filter((f) => f !== TIMINGS_LOCK_FILE).sort();
+    const filesBefore = listing();
+    const idxBefore = fs.readFileSync(path.join(d, TASK_INDEX_FILE));
+    fs.writeFileSync(lockOf(d), "another-holder");
+    const added = addTasks(d, RUN, DECL, { ...OPTS, timingsLock: QUICK });
+    check("lock (T8): `addTasks` under a held lock refuses as `timings-locked` naming the lock, reports nothing written, and leaves no minted file behind — the folder listing and `index.md` are as they were",
+      () => added.refused === true && added.refusal === REFUSED_TIMINGS_LOCKED && added.lockFile === lockOf(d)
+        && added.written.length === 0 && JSON.stringify(listing()) === JSON.stringify(filesBefore)
+        && fs.readFileSync(path.join(d, TASK_INDEX_FILE)).equals(idxBefore) && !readTaskDir(d).some((t) => t.id === DECL.id)
+        && fs.readFileSync(lockOf(d), "utf8") === "another-holder",
+      () => ({ refusal: added.refusal, written: added.written.map((t) => t.file), extra: listing().filter((f) => !filesBefore.includes(f)) }));
+    fs.rmSync(lockOf(d));
+    const again = addTasks(d, RUN, DECL, OPTS);
+    check("lock (T8): …and the same declaration, re-run once the lock is gone, is minted and indexed — the refusal freed the id it claimed",
+      () => !again.refused && again.written[0]?.id === DECL.id && fs.existsSync(path.join(d, again.written[0].file))
+        && readIndex(d).includes(again.written[0].file),
+      () => ({ refused: again.refused, problems: again.problems, written: again.written.map((t) => t.file) }));
+
+    const cliDir = path.join(path.dirname(d), "cli-tasks");
+    cliTasksEarly(["--tasks", cliDir], MANIFEST);
+    const decl = path.join(path.dirname(d), "add.json");
+    fs.writeFileSync(decl, JSON.stringify({ ...DECL, id: "cli-orch-locked", order: 9, deliverables: ["A minimal page proven to render"] }));
+    const cliListing = () => fs.readdirSync(cliDir).filter((f) => f !== TIMINGS_LOCK_FILE).sort();
+    const cliBefore = cliListing();
+    const cliIdxBefore = fs.readFileSync(path.join(cliDir, TASK_INDEX_FILE));
+    fs.writeFileSync(lockOf(cliDir), "another-holder");
+    const cliAdd = cliTasksEarly(["--tasks", cliDir, "--add", decl], MANIFEST);
+    const cliNext = cliTasksEarly(["--tasks", cliDir, "--next"], MANIFEST);
+    check("lock (T8): `--add` under a held lock exits 1 with `--add wrote nothing`, naming another engine process and the lock file, and no minted file stays in the folder",
+      () => cliAdd.status === 1 && /--add wrote nothing/.test(cliAdd.stderr) && /another engine process/.test(cliAdd.stderr)
+        && cliAdd.stderr.includes(lockOf(cliDir)) && JSON.stringify(cliListing()) === JSON.stringify(cliBefore)
+        && fs.readFileSync(path.join(cliDir, TASK_INDEX_FILE)).equals(cliIdxBefore),
+      () => ({ status: cliAdd.status, err: (cliAdd.stderr || "").slice(0, 600), extra: cliListing().filter((f) => !cliBefore.includes(f)) }));
+    check("lock (T8): `--next` under a held lock exits 2 with NOTHING WRITTEN naming the lock file and names no task to start — `index.md` unchanged",
+      () => cliNext.status === 2 && /NOTHING WRITTEN/.test(cliNext.stdout + cliNext.stderr)
+        && (cliNext.stdout + cliNext.stderr).includes(lockOf(cliDir)) && !/--start/.test(cliNext.stdout)
+        && fs.readFileSync(path.join(cliDir, TASK_INDEX_FILE)).equals(cliIdxBefore),
+      () => ({ status: cliNext.status, out: (cliNext.stdout + cliNext.stderr).slice(0, 600) }));
+    fs.rmSync(lockOf(cliDir));
+    const cliControl = cliTasksEarly(["--tasks", cliDir, "--add", decl], MANIFEST);
+    check("lock (T8, control): with the lock gone the same `--add` exits 0 — the refusal above was the lock's, not the declaration's",
+      () => cliControl.status === 0 && readTaskDir(cliDir).some((t) => t.id === "cli-orch-locked"),
+      () => ({ status: cliControl.status, err: (cliControl.stderr || "").slice(0, 600) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5b — `closeClocks` against a concurrent `--start`. Another process opens a clock at the last moment before this
+  // sync takes the lock to close a finished task's clock. The close reads the clocks under the lock, so the clock the
+  // other process wrote is in the state it rewrites, and survives it.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("close-race"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    const m = clearDepsOf(d, id, RUN, OPTS);
+    const started = startTask(d, id, RUN, OPTS, null, at(m + 10));
+    closeCells(d, id);
+    const other = readTaskDir(d).find((t) => t.id !== id && t.status === "todo");
+    const samplesBefore = readTimingsFile(d).samples.length;
+    let lockOpens = 0;
+    const synced = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 1) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = JSON.parse(fs.readFileSync(f, "utf8"));
+        doc.running = { ...doc.running, [other.id]: { startedAt: at(m + 11), token: "tok-concurrent-start" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => syncTaskDir(d, RUN, { ...OPTS, now: at(m + 15) }));
+    const after = readTimingsFile(d);
+    check("race (T5b): a clock another process opens just before a sync's `closeClocks` takes the lock survives the close — the finished task's clock is closed into a sample beside it",
+      () => started.started?.id === id && !!other && lockOpens >= 1 && !synced.refused
+        && after.running[other.id]?.token === "tok-concurrent-start" && !after.running[id]
+        && after.samples.length === samplesBefore + 1 && after.samples.at(-1).id === id,
+      () => ({ started: started.started?.id, other: other?.id, lockOpens, running: after.running, samples: after.samples.map((s) => s.id) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T5c — `closeClocks` decides from task files read BEFORE it takes the lock. A task this sync read as finished can
+  // be re-opened and re-started by another process between that read and the lock (its cells cleared, then
+  // `--start`). That clock is not the one the finished file answers for, so the close must leave it running; the
+  // clock of a task that genuinely finished while it ran is still closed into a sample.
+  {
+    const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+    const d = path.join(tmp("close-stale-read"), "build-tasks");
+    const id = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD).id;
+    const m = clearDepsOf(d, id, RUN, OPTS);
+    const started = startTask(d, id, RUN, OPTS, null, at(m + 10));
+    closeCells(d, id);
+    const reopened = readTaskDir(d).find((t) => t.id !== id && t.status === "todo");
+    closeCells(d, reopened.id);
+    const samplesBefore = readTimingsFile(d).samples.length;
+    let lockOpens = 0;
+    const synced = withStub("openSync", (real, p, ...rest) => {
+      if (String(p).endsWith(TIMINGS_LOCK_FILE) && rest[0] === "wx" && ++lockOpens === 1) {
+        const f = path.join(d, TIMINGS_FILE);
+        const doc = JSON.parse(fs.readFileSync(f, "utf8"));
+        doc.running = { ...doc.running, [reopened.id]: { startedAt: at(m + 12), token: "tok-reopened-start" } };
+        fs.writeFileSync(f, JSON.stringify(doc, null, 2) + "\n");
+      }
+      return real(p, ...rest);
+    }, () => syncTaskDir(d, RUN, { ...OPTS, now: at(m + 15) }));
+    const after = readTimingsFile(d);
+    check("race (T5c, anti-vacuity): the sync read the re-opened task as finished — the clock below is one a stale read would close",
+      () => synced.tasks?.find((t) => t.id === reopened.id)?.status === "done",
+      () => ({ status: synced.tasks?.find((t) => t.id === reopened.id)?.status, refusal: synced.refusal }));
+    check("race (T5c): a clock another process opens after the sync read the task files, before `closeClocks` takes the lock, survives the close although the sync read that task as finished — and the genuinely finished task's clock is still closed into a sample",
+      () => started.started?.id === id && lockOpens >= 1 && !synced.refused
+        && after.running[reopened.id]?.token === "tok-reopened-start" && !after.samples.some((x) => x.id === reopened.id)
+        && !after.running[id] && after.samples.length === samplesBefore + 1 && after.samples.at(-1).id === id,
+      () => ({ lockOpens, running: after.running, samples: after.samples.map((x) => x.id) }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
+
+  // T4b — the token write fails after the lock was created. The lock this process just made must not outlive the
+  // failure: left behind, it reads as another process's lock for the whole stale threshold, and every run in that
+  // window waits and refuses, this one included.
+  {
+    const d = path.join(tmp("token-write"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    for (const code of ["EPERM", "ENOSPC"]) {
+      let writes = 0;
+      const t0 = Date.now();
+      const failed = withStub("writeSync", () => {
+        writes += 1;
+        throw busy(code);
+      }, () => attempt(() => withTimingsLock(d, () => "ran", QUICK)));
+      const waited = Date.now() - t0;
+      check(`lock (T4b): a token write that fails with ${code} after the lock create rethrows the real ${code} at once — not a \`timings-locked\` refusal, nothing run under the lock — and removes the lock it created`,
+        () => failed.error?.code === code && failed.error.lockFile === undefined && failed.value === undefined
+          && writes === 1 && waited < QUICK.waitMs && !fs.existsSync(lockOf(d)),
+        () => ({ error: failed.error?.message, writes, waited, lock: fs.existsSync(lockOf(d)) }));
+    }
+    const t1 = Date.now();
+    const next = attempt(() => withTimingsLock(d, () => "ran", QUICK));
+    check("lock (T4b): the next run takes the lock at once — no orphaned lock to wait out",
+      () => next.value === "ran" && Date.now() - t1 < QUICK.waitMs && !fs.existsSync(lockOf(d)),
+      () => ({ error: next.error?.message }));
+    fs.rmSync(path.dirname(d), { recursive: true, force: true });
+  }
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

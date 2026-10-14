@@ -128,7 +128,38 @@ menu items whose click hands a report descriptor to `downloadPrintForm`, then `d
 **Means:** the record's registered print forms are surfaced as menu entries.
 
 **Where next:** the reports themselves are data (`SysModuleReport` rows), not code — treat their
-existence as a data question, not a source claim.
+existence as a data question, not a source claim. A print button whose menu a client layer binds
+to its own collection does not read these rows at all — see *Rebinding an inherited element*.
+
+## Rebinding an inherited element (`merge` onto an element a lower layer inserts)
+
+**Looks like:** a client layer's diff `merge` on an element that a lower layer or the
+parent-template chain inserts, whose `values` bind one of the element's properties to a member the
+client declares — `controlConfig.menu.items: {"bindTo": "SomeCollection"}`, or a `click`,
+`caption`, `visible` or `enabled` bound to a client attribute or method.
+
+**Means:** the client REPLACES a standard behaviour of an element it did not create. The element
+stays where the base put it; what it shows or does now comes from the client's member. A card that
+describes only the client member (for example the method that fills the collection) describes half
+the unit: its reader cannot tell that the standard source is no longer used, and a rebuild that
+restores the standard element brings back the standard behaviour.
+
+**Where next:**
+1. **The standard side.** Find the element's defining insert in the parent chain (lookup order in
+   `05-reference-following.md`) and read the property's standard binding and what fills it — the
+   base attribute, the base method that loads it, and the data that method reads. Cite them as
+   `context` rows.
+2. **The client side.** Find the member the new binding names and the method that WRITES it (search
+   the fetched chains for `set("<Name>"`; a migration plan's method evidence lists it under
+   `writesAttrs`). That method, its trigger and the data it reads are the unit's customization.
+3. **Per host.** A section and its record page have different parent chains. The same `merge` block
+   copied into both reaches the host whose chain inserts the element and does nothing on the other:
+   `JsonApplier.merge` finds no item, returns `false`, and nothing reports it. State for each host
+   which case it is, read from that host's own chain — never inferred from the other host, and never
+   from a migration engine's note about the op.
+4. **The other rendering mode.** A button's combined-mode twin is a separate element (*Container
+   names encode the host*) and may be rebound by its own `merge`; look for it before stating the
+   surfaces the behaviour appears on.
 
 ## Detail wiring
 
