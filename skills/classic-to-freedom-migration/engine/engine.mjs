@@ -801,8 +801,33 @@ function externalMethodFact(name, fn) {
     externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false };
 }
 
+// A body that is ONE `return { Key: <string> }` statement — the shape of a Classic hook that hands a lookup table to
+// the platform (`onGetPageTips` returns a tip per connection column). Each value is a page string
+// (`this.get("Resources.Strings.X")` → `{ resource: "X" }`) or a literal (`{ literal }`). Null when the body has any
+// other shape or a value is neither: a partial map would read as the whole one.
+function returnedStringMap(fn) {
+  const body = fn.body?.type === "BlockStatement" ? fn.body.body : null;
+  const ret = body?.length === 1 && body[0].type === "ReturnStatement" ? body[0].argument : null;
+  if (ret?.type !== "ObjectExpression") return null;
+  const out = {};
+  for (const p of ret.properties) {
+    const key = staticPropKey(p);
+    const value = key == null ? null : stringValueOf(p.value);
+    if (!value) return null;
+    out[key] = value;
+  }
+  return out;
+}
+function stringValueOf(node) {
+  if (node?.type === "Literal" && typeof node.value === "string") return { literal: node.value };
+  if (node?.type !== "CallExpression" || !/^this\.get$/.test(calleePath(node.callee) || "")) return null;
+  const arg = firstStringArg(node);
+  return arg?.startsWith("Resources.Strings.") ? { resource: arg.slice("Resources.Strings.".length) } : null;
+}
+
 function ownMethodFact(name, fn) {
   const facts = walkMethodBody(fn);
+  const returnsStrings = returnedStringMap(fn);
   const startLine = fn.loc?.start?.line ?? null;
   const endLine = fn.loc?.end?.line ?? null;
   return {
@@ -813,6 +838,7 @@ function ownMethodFact(name, fn) {
     ...facts,
     callParentOnly: isCallParentOnly(fn, facts),
     isEmpty: fn.body?.type === "BlockStatement" && fn.body.body.length === 0,
+    ...(returnsStrings ? { returnsStrings } : {}),
   };
 }
 

@@ -670,9 +670,13 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
   // it is the warning that it does not. Those are checked the other way round below.
   const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
-  const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t));
+  // A row marked `requiresRegistry` names a component newer than every indexed platform version on purpose: the mapper
+  // builds it only when the run's own registry carries it, so its absence from the vendored index is the expected
+  // state, not a typo. The doc and the code may both name it.
+  const REGISTRY_GATED = new Set(MAPPING_ROWS.filter((r) => r.meta?.requiresRegistry).map((r) => r.verify?.componentType).filter(Boolean));
+  const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t) && !REGISTRY_GATED.has(t));
   const unknownDocTypes = docTypes.filter((t) => !index.components[t]);
-  check(`doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index`,
+  check(`doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index (the registry-gated rows' types excepted)`,
     docTypes.length >= 5 && unknownDocTypes.length === 0,
     () => ({ checked: docTypes.length, unknown: unknownDocTypes, excludedAsRequests: allDocTypes.filter((t) => !isComponentName(t)) }));
   // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
@@ -712,9 +716,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
   const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
-    .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
+    .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t) && !REGISTRY_GATED.has(t));
   const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
-  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers and the crt.Tab acceptance spelling)",
+  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers, the crt.Tab acceptance spelling and the registry-gated rows' types)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as

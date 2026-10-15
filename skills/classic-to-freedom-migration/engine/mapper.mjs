@@ -3,7 +3,7 @@
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey, HEADER_TOP_REGION } from "./engine.mjs";
 import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
-  widgetsByMatch, profileCardsByEntity, knownCardActions,
+  widgetsByMatch, profileCardsByEntity, knownCardActions, FEATURE_CONNECTIONS,
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
@@ -341,6 +341,7 @@ export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
 function featureView(r) {
   return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
     templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null,
+    requiresRegistry: !!r.meta.requiresRegistry, titled: !!r.meta.titled,
     // the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
     // package/feature prerequisite BY KIND instead of parsing it out of `note`/`freedom`. null when the row gates
     // nothing (a plain component).
@@ -540,7 +541,8 @@ export function mapToFreedom(eff, opts = {}) {
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
   const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor, pageLabelFor,
-    index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage };
+    index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage,
+    componentAvailable: opts.componentAvailable || (() => false), registrySource: opts.registrySource || null };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -589,7 +591,8 @@ export function mapToFreedom(eff, opts = {}) {
   _ca.accountedFor.forEach(a => accountedFor.add(a));
 
   // feature toggles / charts / methods → handler stubs / removals / referenced modules
-  const _rl = mapRemainingLogic(eff, payloadMethods, payloadComponents);
+  // a method a mapped component carries (its settings moved into the component) is not a handler to port
+  const _rl = mapRemainingLogic(eff, payloadMethods.filter((m) => !D.carriedMethods.has(m.name)), payloadComponents);
   const handlerStubs = _rl.handlerStubs;
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
@@ -1322,9 +1325,9 @@ function detectDetailAddMechanism(dinfo) {
 }
 
 function mapDetails(ctx, containers, profileRegion) {
-  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails } = ctx;
+  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails, componentAvailable, registrySource } = ctx;
   const { ensureTab } = containers;
-  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set();
+  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set(), carriedMethods = new Set();
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
   // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
   // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
@@ -1357,8 +1360,14 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
   const emitStandardFeature = (d, dentity, tab, feat, featByEntity, listTitle = null) => {
+    const settings = feat.feature === FEATURE_CONNECTIONS ? connectionSettings(d, ctx) : null;
+    if (settings) {
+      settings.needsDecision.forEach((x) => needsDecision.push(x));
+      settings.carriedMethods.forEach((m) => { carriedMethods.add(m); accountedFor.add(m); });
+    }
     standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null,
-      caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null });
+      caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null,
+      ...(settings ? { element: d.key, connections: settings.connections } : {}) });
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1410,8 +1419,8 @@ function mapDetails(ctx, containers, profileRegion) {
   // A list-shaped standard feature is titled like any related list: its Classic title in every culture. No title is
   // a `detail-caption` decision only when the page names one (`captionName`) or the detail's strings were supplied;
   // with neither, the list keeps its standard title. Component-shaped features carry no list title.
-  const standardListTitle = (d, dinfo, feat) => {
-    if ((feat.uiShape || "list") !== "list") return null;
+  const standardFeatureTitle = (d, dinfo, feat) => {
+    if ((feat.uiShape || "list") !== "list" && !feat.titled) return null;
     const title = classicDetailTitle(d, dinfo, pageText);
     if (title) registerText(title.key, title);
     else if (d.captionName || dinfo?.strings) needsDecision.push(detailCaptionDecision(d));
@@ -1424,14 +1433,74 @@ function mapDetails(ctx, containers, profileRegion) {
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
-    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity, standardListTitle(d, dinfo, feat)); return; }
+    if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
+      needsDecision.push(unavailableFeatureDecision(d, feat, registrySource));
+      return;
+    }
+    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity, standardFeatureTitle(d, dinfo, feat)); return; }
     const detailTitle = classicDetailTitle(d, dinfo, pageText);
     const detailTexts = classicDetailTexts(d, dinfo);
     flagDetailIssues(d, dinfo, dentity, tab, detailTitle, detailTexts);
     buildCustomDetail(d, dinfo, dentity, tab, detailTitle, detailTexts);
   };
   for (const entry of bySig.values()) emitDetail(entry);
-  return { details, standardFeatures, needsDecision, accountedFor };
+  return { details, standardFeatures, needsDecision, accountedFor, carriedMethods };
+}
+
+// Classic hands the "Connected to" detail a tip per connection column through the page hook `onGetPageTips`
+// (BasePageV2 subscribes it for the detail and the detail merges each tip into that connection's field). The Freedom
+// component reads the same setting from its `connections` entry: `{ code, tooltip }`, the tooltip a page string
+// `<Element>_<Code>_tooltip`. The method is then carried, not ported. A hook whose body is not one static map is
+// left as a method to port, and named in a decision so the tips are not lost silently.
+// The component shows the connections its `connections` lists FIRST, in that order, then the rest of the object's —
+// so a page that carries tips for some connections shows those first; the decision says so.
+const CONNECTION_TIPS_METHOD = "onGetPageTips";
+const COLUMN_CODE = /^[A-Za-z_]\w{0,127}$/;
+function connectionSettings(d, ctx) {
+  const { eff, pageText, registerText } = ctx;
+  const out = { connections: [], needsDecision: [], carriedMethods: [] };
+  const hook = (eff.methods || []).find((m) => m.name === CONNECTION_TIPS_METHOD);
+  if (!hook) return out;
+  const tips = hook.facts?.returnsStrings;
+  if (!tips) {
+    out.needsDecision.push({ kind: "connection-settings", item: CONNECTION_TIPS_METHOD,
+      reason: `'${CONNECTION_TIPS_METHOD}' sets the tips of the "Connected to" connections, but its body is not one static \`return { Column: text }\` map — port each tip by hand to the \`connections\` entry of '${d.key}' (\`{ code, tooltip }\`)` });
+    return out;
+  }
+  for (const [code, value] of Object.entries(tips)) {
+    // the code becomes part of a page-string key and a `#ResourceString(...)#` macro, so only a column-name shape passes
+    if (!COLUMN_CODE.test(code)) {
+      out.needsDecision.push({ kind: "connection-settings", item: CONNECTION_TIPS_METHOD,
+        reason: `'${CONNECTION_TIPS_METHOD}' names a tip for '${code}', which is not a column name — port that tip by hand` });
+      continue;
+    }
+    const key = `${d.key}_${code}_tooltip`;
+    const hit = value.resource ? pageText(value.resource) : { text: value.literal, cultures: null, source: `${CONNECTION_TIPS_METHOD} literal` };
+    if (hit) registerText(key, { ...hit, key });
+    else out.needsDecision.push({ kind: "connection-settings", item: key,
+      reason: `the tip of connection '${code}' is the page string '${value.resource}', which the manifest does not carry — supply the page resources, or author \`${key}\` by hand` });
+    out.connections.push({ code, tooltip: `#ResourceString(${key})#` });
+  }
+  out.carriedMethods.push(CONNECTION_TIPS_METHOD);
+  out.needsDecision.push({ kind: "connection-settings", item: d.key,
+    reason: `the tips of ${out.connections.length} connection(s) (${out.connections.map((c) => c.code).join(", ")}) are carried to the \`connections\` property of '${d.key}'; the component shows the listed connections first, then the rest of the object's — reorder the list in the Page designer if the object's order matters` });
+  return out;
+}
+
+// A standard feature whose component the run's registry does not carry: nothing is built in the detail's place —
+// neither the component nor a related list over the storage entity, which shows the object's settings, not the
+// record's connections. The decision names which registry answered, so "your stand lacks it" reads apart from
+// "nobody asked your stand".
+const REGISTRY_ANSWER = {
+  "stand-export": "the target stand's component registry does not carry it",
+  "vendored-pinned": "the vendored component index does not carry it for the pinned platform version",
+  "unreadable-export": "the component registry the manifest named could not be read, so the run fell back to the vendored index and its presence on the target stand is unknown",
+};
+function unavailableFeatureDecision(d, feat, registrySource) {
+  const answer = REGISTRY_ANSWER[registrySource]
+    || "no registry of the target stand was supplied (`manifest.componentRegistry`), so its presence is unknown";
+  return { kind: "feature-component-unavailable", item: d.schemaName || d.key,
+    reason: `classic '${d.schemaName || d.key}' is the ${feat.feature} feature → ${feat.freedom}, and ${answer}. Nothing is built in its place: keep the page without it, or — on a stand that carries \`${feat.componentType}\` — re-run the plan with that stand's component registry export in \`manifest.componentRegistry\` (the export inline, \`{ resolvedTargetVersion, components: [{ componentType, inputs, outputs }] }\`, or \`{ "file": "<path>" }\`)` };
 }
 
 // A related list's title in Classic's order (`BaseEntityPage.getDetailInfo`, then `BaseDetailV2.initDefaultCaption`):
