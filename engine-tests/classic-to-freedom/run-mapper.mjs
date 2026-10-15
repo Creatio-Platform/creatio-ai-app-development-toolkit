@@ -11419,6 +11419,184 @@ try {
     && (rgFull.changeSet.tableElements || []).length === 0,
     () => ({ lines: rgSpec.split("\n").filter((l) => /IsPrimary/.test(l)), tableElements: rgFull.changeSet.tableElements }));
 
+  // ---- RADIO_GROUP -> crt.RadioGroup where the run's registry carries it ---------------------------------------
+  // The vendored index predates crt.RadioGroup, so "a stand that carries it" is a registry EXPORT built from the
+  // index's `latest` slice plus the two components from the test-only fixture (fixtures/README.md).
+  const rgIdx = vendoredIndex();
+  const rgLatestBit = 1 << rgIdx.meta.versions.indexOf("latest");
+  const rgOnLatest = (o) => Object.fromEntries(Object.entries(o || {})
+    .filter(([, m]) => m.v == null || (m.v & rgLatestBit) !== 0)
+    .map(([k, m]) => { const { v, ...meta } = m; return [k, meta]; }));
+  const rgFixture = JSON.parse(fs.readFileSync(path.join(FIX, "registry", "radio-group-components.json"), "utf8"));
+  const rgExport = {
+    components: [
+      ...Object.entries(rgIdx.components).filter(([, c]) => (c.v & rgLatestBit) !== 0)
+        .map(([componentType, c]) => ({ componentType, compositeOnly: c.compositeOnly, inputs: rgOnLatest(c.inputs), outputs: rgOnLatest(c.outputs) })),
+      ...rgFixture.components,
+    ],
+    references: { baseInputs: rgOnLatest(rgIdx.baseInputs) },
+  };
+  const rgGroupOp = (name, attr, extra = "") => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"${attr}"},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
+  const rgOptOp = (name, parent, value, extra = "") => `{operation:"insert",name:"${name}",parentName:"${parent}",propertyName:"items",values:{value:${JSON.stringify(value)},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
+  const rgCols = { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" }, Priority: { type: "Integer" },
+    Mode: { type: "ShortText" }, Owner: { type: "Lookup" } };
+  const rgRes = { IsPrimaryCaption: "Is primary", OptYesCaption: "Yes", OptNoCaption: "No" };
+  const rgDiff = [rgGroupOp("IsPrimary", "IsPrimary"), rgOptOp("OptYes", "IsPrimary", true), rgOptOp("OptNo", "IsPrimary", false)].join(",");
+  const rgUp = (diff, extra = {}) => gmRun(diff, "", { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport, ...extra });
+  const rgOps = (run) => run.changeSet.viewConfigDiff;
+  const rgOp = (run, name) => rgOps(run).find((o) => o.name === name);
+  const rgKids = (run, group) => rgOps(run).filter((o) => o.parentName === group && o.values?.type === "crt.RadioGroupItem");
+  const rgDecisions = (run, kind) => run.changeSet.needsDecision.filter((d) => d.kind === kind);
+
+  // T1 / R1 — the group and its named option children.
+  const up = rgUp(rgDiff);
+  const upEl = rgOp(up, "IsPrimary");
+  check("radio group T1: on a registry that carries crt.RadioGroup, a column-bound RADIO_GROUP is built as crt.RadioGroup — control bound, valuesSource custom, items [], label from the caption",
+    upEl?.values?.type === "crt.RadioGroup" && upEl.values.control === "$IsPrimary" && upEl.values.valuesSource === "custom"
+    && Array.isArray(upEl.values.items) && upEl.values.items.length === 0 && upEl.values.label === "$Resources.Strings.IsPrimaryCaption",
+    () => upEl);
+  const upKids = rgKids(up, "IsPrimary");
+  check("radio group T1: one crt.RadioGroupItem insert per classic option, named after it, under the group's `items`, with a #ResourceString(<name>_caption)# caption",
+    upKids.map((o) => o.name).join(",") === "OptYes,OptNo"
+    && upKids.every((o) => o.operation === "insert" && o.propertyName === "items" && o.values.caption === `#ResourceString(${o.name}_caption)#`),
+    () => upKids);
+  check("radio group T1: each option's caption resource carries the classic option caption text",
+    up.changeSet.resources?.OptYes_caption === "Yes" && up.changeSet.resources?.OptNo_caption === "No",
+    () => up.changeSet.resources);
+  check("radio group T1: the entity-column group keeps the PDS attribute + column, the options are accounted for and nothing is reported as dropped",
+    up.changeSet.viewModelConfigDiff[0].values.IsPrimary?.modelConfig?.path === "PDS.IsPrimary"
+    && up.changeSet.modelConfigDiff[0].values.IsPrimary?.path === "IsPrimary"
+    && ["IsPrimary", "OptYes", "OptNo"].every((n) => up.changeSet.accountedFor.includes(n))
+    && !up.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" || d.kind === "registry-target"),
+    () => up.changeSet.needsDecision.filter((d) => ["unmapped-component", "registry-target"].includes(d.kind)));
+  // RISK3: the option children must not become Layout rows of their own — one row per emitted control.
+  const upSpec = renderDesignSpec(up, {});
+  check("radio group T1: the crt.RadioGroup control is reported ONCE in the design spec and its options add no Layout rows",
+    upSpec.split("\n").filter((l) => /\|/.test(l) && /IsPrimary/.test(l)).length === 1
+    && !upSpec.split("\n").some((l) => /\|/.test(l) && /\bOpt(Yes|No)\b/.test(l))
+    && (up.changeSet.tableElements || []).length === 0,
+    () => upSpec.split("\n").filter((l) => /IsPrimary|OptYes|OptNo/.test(l)));
+
+  // T2 / R2 — option values keep their classic type.
+  const typed = rgUp([rgDiff,
+    rgGroupOp("Priority", "Priority"), rgOptOp("PrioLow", "Priority", 1), rgOptOp("PrioHigh", "Priority", 2),
+    rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a"), rgOptOp("ModeB", "Mode", "b")].join(","));
+  const valTypes = (g) => rgKids(typed, g).map((o) => typeof o.values.value).join(",");
+  check("radio group T2: Boolean / Integer / Text option values are emitted as boolean / number / string — never stringified",
+    valTypes("IsPrimary") === "boolean,boolean" && valTypes("Priority") === "number,number" && valTypes("Mode") === "string,string"
+    && rgKids(typed, "IsPrimary")[1].values.value === false && rgKids(typed, "Priority")[1].values.value === 2,
+    () => ({ IsPrimary: rgKids(typed, "IsPrimary"), Priority: rgKids(typed, "Priority"), Mode: rgKids(typed, "Mode") }));
+
+  // T3 / R3 — a page attribute (no entity column), also through a ContentBuilder `$` binding.
+  const pa = rgUp([rgGroupOp("Choice", "UsrChoice"), rgOptOp("ChoiceA", "Choice", "a"), rgOptOp("ChoiceB", "Choice", "b"),
+    rgGroupOp("CbChoice", "$UsrCb"), rgOptOp("CbA", "CbChoice", 1), rgOptOp("CbB", "CbChoice", 2)].join(","));
+  const paAttrs = pa.changeSet.viewModelConfigDiff[0].values;
+  const paPds = pa.changeSet.modelConfigDiff[0].values;
+  check("radio group T3: a group bound to a page attribute gets an attribute with NO PDS path and no PDS column (also for a ContentBuilder `$Attr`)",
+    rgOp(pa, "Choice")?.values?.control === "$UsrChoice" && rgOp(pa, "CbChoice")?.values?.control === "$UsrCb"
+    && paAttrs.UsrChoice && !paAttrs.UsrChoice.modelConfig && paAttrs.UsrCb && !paAttrs.UsrCb.modelConfig
+    && !("UsrChoice" in paPds) && !("UsrCb" in paPds) && !("$UsrCb" in paAttrs),
+    () => ({ paAttrs, paPds, ops: rgOps(pa).filter((o) => /Choice/.test(o.name)) }));
+
+  // T4 / R4 — static `enabled: false` vs a bound `enabled`.
+  const en = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",enabled:false"),
+    rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"CanPickB"}`), rgOptOp("ModeC", "Mode", "c")].join(","));
+  const enKid = (n) => rgOp(en, n)?.values || {};
+  const enRule = rgDecisions(en, "radio-option-rule");
+  check("radio group T4: an option with enabled:false emits disabled:true; the others carry no disabled flag",
+    enKid("ModeA").disabled === true && !("disabled" in enKid("ModeB")) && !("disabled" in enKid("ModeC")),
+    () => ({ ModeA: enKid("ModeA"), ModeB: enKid("ModeB"), ModeC: enKid("ModeC") }));
+  check("radio group T4: an option whose enabled is bound to an attribute raises ONE business-rule decision naming the option and the attribute",
+    enRule.length === 1 && enRule[0].item === "ModeB" && /CanPickB/.test(enRule[0].reason) && /business rule/.test(enRule[0].reason),
+    () => enRule);
+
+  // T5 / R5 — a split group: two classic groups on one attribute.
+  const sp = rgUp([rgGroupOp("PrioA", "Priority"), rgOptOp("P1", "PrioA", 1), rgOptOp("P2", "PrioA", 2),
+    rgGroupOp("PrioB", "Priority"), rgOptOp("P3", "PrioB", 3), rgOptOp("P4", "PrioB", 4)].join(","));
+  const spSplit = rgDecisions(sp, "radio-group-split");
+  check("radio group T5: two groups bound to one attribute become two crt.RadioGroup elements, each with ITS OWN options",
+    rgOp(sp, "PrioA")?.values?.type === "crt.RadioGroup" && rgOp(sp, "PrioB")?.values?.type === "crt.RadioGroup"
+    && rgKids(sp, "PrioA").map((o) => o.name).join(",") === "P1,P2" && rgKids(sp, "PrioB").map((o) => o.name).join(",") === "P3,P4",
+    () => rgOps(sp).filter((o) => /^P/.test(o.name)));
+  check("radio group T5: each split group carries ONE split-group decision that names the shared attribute and the extra-disabled-option behaviour",
+    spSplit.map((d) => d.item).sort((a, b) => a.localeCompare(b)).join(",") === "PrioA,PrioB"
+    && spSplit.every((d) => /'Priority'/.test(d.reason) && /extra, disabled option/.test(d.reason))
+    && rgDecisions(up, "radio-group-split").length === 0,
+    () => spSplit);
+
+  // T6 / R6 — the usage types that cannot be migrated are typed warnings, never half-configured elements.
+  const gapCase = (diff) => {
+    const run = rgUp(diff);
+    const row = run.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "G");
+    const emitted = rgOps(run).filter((o) => ["crt.RadioGroup", "crt.RadioGroupItem", "crt.IconRadioButton"].includes(o.values?.type));
+    return { row, emitted };
+  };
+  const inCode = gapCase(rgGroupOp("G", "Mode"));
+  const legacy = gapCase([rgGroupOp("G", "Mode"), `{operation:"insert",name:"GOpt",parentName:"G",propertyName:"items",values:{caption:{bindTo:"Resources.Strings.GOptCaption"}}}`].join(","));
+  const lookup = gapCase([rgGroupOp("G", "Owner"), rgOptOp("GOwnerA", "G", "6b7c1d2e-0000-0000-0000-000000000001")].join(","));
+  const typedGap = (c, re) => c.row?.itemKind === "RADIO_GROUP" && /classic RADIO_GROUP 'G'/.test(c.row.reason) && re.test(c.row.reason) && c.emitted.length === 0;
+  check("radio group T6: options built in code (no option children) -> a typed RADIO_GROUP warning naming crt.RadioGroup, no element emitted",
+    typedGap(inCode, /crt\.RadioGroup/) && /built in code/.test(inCode.row.reason), () => inCode);
+  check("radio group T6: child items carrying no literal value (legacy card format) -> a typed RADIO_GROUP warning, no element emitted",
+    typedGap(legacy, /legacy card format/), () => legacy);
+  check("radio group T6: a lookup (Guid)-bound group -> a typed RADIO_GROUP warning naming the column, no element emitted",
+    typedGap(lookup, /lookup \(Guid\) column 'Owner'/), () => lookup);
+
+  // T7 / R7 — no registry evidence for crt.RadioGroup keeps today's crt.IconRadioButton output unchanged.
+  const fbRun = (extra) => gmRun(rgDiff, "", { entityColumns: rgCols, resources: rgRes, ...extra });
+  const fbShape = (run) => JSON.stringify({ v: run.changeSet.viewConfigDiff, a: run.changeSet.viewModelConfigDiff, m: run.changeSet.modelConfigDiff });
+  const fbUnion = fbRun({});
+  const fbPinned = fbRun({ platformVersion: "8.3.4" });
+  const fbExport = fbRun({ componentRegistry: { components: rgExport.components.filter((c) => !c.componentType.startsWith("crt.RadioGroup")), references: rgExport.references } });
+  check("radio group T7: the unpinned union run, an 8.3.4-pinned run and a stand export without crt.RadioGroup all build crt.IconRadioButton with its folded items",
+    [fbUnion, fbPinned, fbExport].every((r) => rgOp(r, "IsPrimary")?.values?.type === "crt.IconRadioButton"
+      && rgOp(r, "IsPrimary").values.items?.length === 2 && rgKids(r, "IsPrimary").length === 0),
+    () => [fbUnion, fbPinned, fbExport].map((r) => rgOp(r, "IsPrimary")));
+  check("radio group T7: the fallback output is byte-identical across those runs and to the pre-upgrade golden shape (rgFull)",
+    fbShape(fbUnion) === fbShape(fbPinned) && fbShape(fbUnion) === fbShape(fbExport)
+    // the golden names its option captions YesCaption/NoCaption, this input OptYesCaption/OptNoCaption
+    && JSON.stringify(rgOp(fbUnion, "IsPrimary").values).replace(/Opt(Yes|No)Caption/g, "$1Caption") === JSON.stringify(rgEl.values)
+    && !fbUnion.changeSet.needsDecision.some((d) => d.kind === "registry-upgrade-available"),
+    () => ({ union: rgOp(fbUnion, "IsPrimary"), pinned: rgOp(fbPinned, "IsPrimary"), golden: rgEl }));
+  // The union fallback names the upgrade ONLY when the index carries it on some version — driven at the mapper seam
+  // with a two-version index, because the vendored one does not carry crt.RadioGroup yet.
+  const rgUnionIdx = { meta: { versions: ["8.3.4", "latest"] }, components: {
+    "crt.IconRadioButton": { v: 3, inputs: {}, outputs: {} }, "crt.RadioGroup": { v: 2, inputs: {}, outputs: {} },
+    "crt.RadioGroupItem": { v: 2, inputs: {}, outputs: {} } } };
+  const rgEff = mergeHierarchy([parseSchema(gmBody("", rgDiff), "P")]);
+  const viaMapper = (registry) => mapToFreedom(rgEff, { entityColumns: rgCols, resources: rgRes, registry });
+  const unionCs = viaMapper({ index: rgUnionIdx, version: null, source: "vendored-union" });
+  const pinnedCs = viaMapper({ index: rgUnionIdx, version: "latest", source: "vendored-pinned" });
+  const oldPinnedCs = viaMapper({ index: rgUnionIdx, version: "8.3.4", source: "vendored-pinned" });
+  const upAvail = unionCs.needsDecision.filter((d) => d.kind === "registry-upgrade-available");
+  check("radio group T7: a union index that carries crt.RadioGroup only on `latest` still builds crt.IconRadioButton and says which versions would get crt.RadioGroup",
+    unionCs.viewConfigDiff.find((o) => o.name === "IsPrimary")?.values?.type === "crt.IconRadioButton"
+    && upAvail.length === 1 && upAvail[0].item === "IsPrimary" && /crt\.RadioGroup/.test(upAvail[0].reason) && /latest/.test(upAvail[0].reason),
+    () => ({ op: unionCs.viewConfigDiff.find((o) => o.name === "IsPrimary"), upAvail }));
+  check("radio group T7: the same index pinned to `latest` builds crt.RadioGroup, pinned to 8.3.4 it keeps crt.IconRadioButton without offering the upgrade (the pin already answered for the stand)",
+    pinnedCs.viewConfigDiff.find((o) => o.name === "IsPrimary")?.values?.type === "crt.RadioGroup"
+    && oldPinnedCs.viewConfigDiff.find((o) => o.name === "IsPrimary")?.values?.type === "crt.IconRadioButton"
+    && !oldPinnedCs.needsDecision.some((d) => d.kind === "registry-upgrade-available"),
+    () => [pinnedCs, oldPinnedCs].map((cs) => cs.viewConfigDiff.find((o) => o.name === "IsPrimary")));
+
+  // The registry check covers the upgrade target too: an index that carries crt.RadioGroup validates its propMap
+  // keys (a typo there would ship to every stand that has the component); the vendored index, which does not carry
+  // it yet, records an advisory instead of failing the table.
+  const rgTableRow = rowForItemType(VIEW_ITEM_TYPE.RADIO_GROUP);
+  const rgStandIdx = indexFromRegistryExport(rgExport, { version: "latest" });
+  const badUpgradeRow = { ...rgTableRow, upgrade: { ...rgTableRow.upgrade, propMap: { ...rgTableRow.upgrade.propMap, notAnInput: { from: SOURCE.LITERAL, value: 1 } } } };
+  check("radio group: the RADIO_GROUP upgrade validates clean against an index that carries crt.RadioGroup, and an unknown upgrade input is a HARD error there",
+    validateRow(rgTableRow, { index: rgStandIdx }).filter((f) => !isAdvisory(f)).length === 0
+    && validateRow(badUpgradeRow, { index: rgStandIdx }).some((f) => f.kind === "unknown-input" && f.prop === "notAnInput" && !isAdvisory(f)),
+    () => ({ clean: validateRow(rgTableRow, { index: rgStandIdx }), bad: validateRow(badUpgradeRow, { index: rgStandIdx }) }));
+  check("radio group: against the vendored index (no crt.RadioGroup yet) the upgrade is an `upgrade-unindexed` ADVISORY, so the table check stays green",
+    validateRow(rgTableRow).some((f) => f.kind === "upgrade-unindexed" && f.componentType === "crt.RadioGroup" && isAdvisory(f))
+    && validateTable({}).errors.length === 0,
+    () => validateRow(rgTableRow));
+  check("radio group R8: the RADIO_GROUP row notes state the Required decision and the Designer re-edit caveat",
+    /Required: no required validator/.test(rgTableRow.notes) && /Designer/.test(rgTableRow.notes),
+    () => rgTableRow.notes);
+
   // A BUTTON with a click handler and a MENU: tier B. The view is built (caption + menuItems), and the imperative
   // part is published as a `clicked` request on the worklist rather than left implicit.
   const btnRun = gmRun([

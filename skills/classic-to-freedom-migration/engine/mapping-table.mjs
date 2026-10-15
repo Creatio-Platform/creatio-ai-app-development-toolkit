@@ -91,6 +91,14 @@ export const SOURCE = {
   OPTION_CHILDREN: "optionChildren",  // child items carrying a literal `value` -> the option array
   MENU_CHILDREN: "menuChildren",      // MENU / MENU_ITEM descendants -> the owning button's menuItems
   LITERAL: "literal",                 // a constant stated on the row itself (`value`)
+  // The OPTION-ELEMENT sources of an `upgrade` target whose options are child elements of their own (see `upgrade`
+  // on the RADIO_GROUP row). `OPTION_ELEMENTS` is the group's side: the group carries `items: []` and each option
+  // becomes a named child insert, so the source is required (no options = no group, exactly as `OPTION_CHILDREN`).
+  // The other three are read off ONE option child each: its literal value, its caption and its static enablement.
+  OPTION_ELEMENTS: "optionElements",
+  OPTION_VALUE: "optionValue",
+  OPTION_CAPTION: "optionCaption",
+  OPTION_DISABLED: "optionDisabled",
 };
 
 // GATE KIND — the STRUCTURED {kind,id} intent a row carries about WHY its Freedom target might not resolve on a
@@ -126,8 +134,14 @@ export const FEATURE_FEED = "Feed";
 
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
-function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
+// `upgrade` is a SECOND, version-gated target: `{ componentType, slot, propMap, children? }`, emitted INSTEAD of
+// `target` only when the run's registry positively carries it (and its `children.componentType`) on the version the
+// run targets — `resolveRowTarget` in mapping-registry.mjs decides. `target` stays the fallback every indexed version
+// renders, so a row with an upgrade still validates clean against the oldest index, and a stand without the newer
+// component keeps today's output unchanged.
+function row({ match, role, tier, ownedBy, target = null, upgrade = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
   return Object.freeze({ match: Object.freeze(match), role, tier, ownedBy, target: target && Object.freeze(target),
+    upgrade: upgrade && Object.freeze({ ...upgrade, children: upgrade.children && Object.freeze(upgrade.children) }),
     verify: verify && Object.freeze(verify), uiShape, notes, meta: meta && Object.freeze(meta), gate: gate && Object.freeze(gate) });
 }
 const byItemType = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType }, ...rest });
@@ -209,8 +223,23 @@ const ITEM_TYPE_ROWS = [
         // Required for a reason: a radio group emitted WITHOUT its options renders as an empty control, which is
         // the silent drop this row exists to prevent. No options ⇒ the instance degrades to a typed decision.
         items: { from: SOURCE.OPTION_CHILDREN, required: true } } },
+    // crt.RadioGroup (creatio-ui#3450) stores options the way Classic does: each option is a NAMED child element
+    // (`crt.RadioGroupItem`, caption resource `<option name>_caption`), so business rules and packages can address one
+    // option. It is not in every platform version, so it is the version-gated upgrade and crt.IconRadioButton stays
+    // the fallback. `valuesSource: "custom"` because the options are value/caption pairs; the lookup values source is
+    // out of scope (a lookup-bound classic group is reported, not migrated).
+    upgrade: { componentType: "crt.RadioGroup", slot: "items",
+      propMap: { control: { from: SOURCE.VALUE_ATTR, required: true }, label: { from: SOURCE.CAPTION },
+        valuesSource: { from: SOURCE.LITERAL, value: "custom" },
+        items: { from: SOURCE.OPTION_ELEMENTS, required: true } },
+      children: { componentType: "crt.RadioGroupItem", slot: "items",
+        propMap: { value: { from: SOURCE.OPTION_VALUE }, caption: { from: SOURCE.OPTION_CAPTION },
+          disabled: { from: SOURCE.OPTION_DISABLED } } } },
     verify: { componentType: "crt.IconRadioButton" },
-    notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become `items[]` and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning.",
+    notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become the options and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning. "
+      + "Where the run's registry carries crt.RadioGroup (a stand export, or a pinned platform version that has it), the group is built as crt.RadioGroup with `valuesSource: custom`, `items: []` and one named crt.RadioGroupItem child per classic option (caption `#ResourceString(<option name>_caption)#`, the classic `enabled: false` as `disabled: true`); elsewhere — including an unpinned run over the vendored union index — it stays crt.IconRadioButton. "
+      + "Option values keep their classic TYPE (true/false, numbers, text), because the group writes the option value back unchanged; re-editing an option in the Designer stores it as text, so a Boolean/Integer group must not be re-edited there. "
+      + "Required: no required validator is added for a Boolean/Integer group — a new record already holds false / 0, which preselects an option exactly as in Classic and which the required validator treats as filled anyway.",
   }),
   // HYPERLINK -> crt.Link. The caption is derivable; the destination is not — a classic hyperlink navigates from
   // its click METHOD, so `href` cannot be read off the schema. `mode: "preventDefault"` is the registry's own

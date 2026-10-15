@@ -2686,21 +2686,15 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 // The branch's OUTCOME is covered end-to-end regardless (`run-mapper.mjs` asserts the `registry-composite-only`
 // items `runMigration` does and does not push); this export exists solely so the tableElements SOURCE has a
 // non-vacuous test of its own. Do not call it from production code.
-export function reportRegistryFindings(changeSet, manifest, baseDir) {
-  // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
-  // against the registry it could resolve — the stand's own export when the manifest carries one, else the
-  // vendored index. Same severity rule as the CI check, so a finding cannot mean two things.
-  //
-  // A missing component is a needsDecision item, not a gate block, and the reason is that the source can be
-  // WEAKER than the run: with no `componentRegistry` and no `platformVersion` the check runs against a UNION of
-  // seven versions, and blocking a plan on a union check would stop a migration whose stand is simply newer than
-  // the vendored index. The item states which source answered, so an operator can tell "your stand does not carry
-  // this" from "nobody asked your stand".
-  // The reader is CONTAINED the same way `bodyOf` contains a schema entry's `file`: a RELATIVE path must resolve
-  // under the manifest's base dir, an ABSOLUTE one is an explicit caller choice (the harvested manifests live in a
-  // temp dir outside the repo, so absolute paths are the normal case). A manifest is operator-supplied, not the
-  // untrusted stand input the parser pin guards — but the repo already treats manifest paths this way and one
-  // surface behaving differently is how the next reader learns the wrong rule.
+// The run's component registry, resolved ONCE per run: the mapper reads it to choose a version-gated target
+// (`resolveRowTarget`) and `reportRegistryFindings` judges the emitted types against the same answer, so the two
+// cannot disagree about which registry this run had.
+// The reader is CONTAINED the same way `bodyOf` contains a schema entry's `file`: a RELATIVE path must resolve
+// under the manifest's base dir, an ABSOLUTE one is an explicit caller choice (the harvested manifests live in a
+// temp dir outside the repo, so absolute paths are the normal case). A manifest is operator-supplied, not the
+// untrusted stand input the parser pin guards — but the repo already treats manifest paths this way and one
+// surface behaving differently is how the next reader learns the wrong rule.
+function resolveRunRegistry(manifest, baseDir) {
   const readRegistryFile = (f) => {
     if (!path.isAbsolute(f)) {
       const base = path.resolve(baseDir);
@@ -2711,7 +2705,19 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
     }
     return fs.readFileSync(f, "utf8");
   };
-  const reg = resolveRunIndex(manifest, { readFile: readRegistryFile });
+  return resolveRunIndex(manifest, { readFile: readRegistryFile });
+}
+
+export function reportRegistryFindings(changeSet, manifest, baseDir, reg = resolveRunRegistry(manifest, baseDir)) {
+  // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
+  // against the registry it could resolve — the stand's own export when the manifest carries one, else the
+  // vendored index. Same severity rule as the CI check, so a finding cannot mean two things.
+  //
+  // A missing component is a needsDecision item, not a gate block, and the reason is that the source can be
+  // WEAKER than the run: with no `componentRegistry` and no `platformVersion` the check runs against a UNION of
+  // seven versions, and blocking a plan on a union check would stop a migration whose stand is simply newer than
+  // the vendored index. The item states which source answered, so an operator can tell "your stand does not carry
+  // this" from "nobody asked your stand".
   const regRun = validateRun(changeSet, { index: reg.index, version: reg.version });
   const REG_SOURCE_NOTE = {
     "stand-export": `checked against the TARGET STAND's own component registry (version ${reg.version})`,
@@ -2830,8 +2836,10 @@ export function runMigration(manifest, opts = {}) {
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   const pageStrings = pageStringsOf(manifest);
+  const registry = resolveRunRegistry(manifest, baseDir);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
+    registry,                                 // the run's component registry — picks a version-gated target (crt.RadioGroup)
     resources: pageStrings.resources,        // #5/#13 — localizable strings for tab/group/detail captions
     resourceStrings: pageStrings.resourceStrings, // the same strings in every Classic culture, or null
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
@@ -2895,7 +2903,7 @@ export function runMigration(manifest, opts = {}) {
   if (driftAdvisory.newMembers.length)
     changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
       reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
-  reportRegistryFindings(changeSet, manifest, baseDir);
+  reportRegistryFindings(changeSet, manifest, baseDir, registry);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions, mapSectionView(sectionEff));

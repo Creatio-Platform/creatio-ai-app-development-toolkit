@@ -108,6 +108,37 @@ For each Classic page/detail, record:
 | Section grid | Freedom list page or list component bound to the target data source. |
 | Actions menu | Freedom actions, buttons, or handler-backed commands. |
 | Mini page | Freedom mini page, modal, side panel, or explicit UX decision if the Classic interaction has no direct analog. |
+| Radio group (`ViewItemType.RADIO_GROUP`) | `crt.RadioGroup` with named `crt.RadioGroupItem` options where the target stand carries it, else `crt.IconRadioButton` — see *Radio groups* below. |
+
+### Radio groups
+
+The engine builds a Classic `RADIO_GROUP` as `crt.RadioGroup` only when the run's component registry shows the target
+stand carries `crt.RadioGroup` and `crt.RadioGroupItem`: a stand registry export (`manifest.componentRegistry`) or a
+pinned `manifest.platformVersion` that has them. Otherwise it keeps `crt.IconRadioButton`, which every indexed
+version renders; an unpinned run never assumes the newer component.
+
+- **Shape.** The group gets `control`, `label`, `valuesSource: "custom"` and `items: []`; each Classic option becomes
+  its own `crt.RadioGroupItem` insert (`parentName` = the group, `propertyName: "items"`), named after the Classic
+  option element, with `caption: "#ResourceString(<option name>_caption)#"`. Named options are what lets a business
+  rule ("Hide elements", "Make read-only") or a package address one option.
+- **Values keep their Classic type.** Boolean options are `true` / `false`, Integer options numbers, Text options
+  strings: the group writes the option value back unchanged, so the bound column gets a value of its own type.
+  Re-editing an option in the Designer stores it as text, so do not re-edit the options of a Boolean / Integer group
+  there.
+- **Binding.** A group bound to an entity column keeps the PDS attribute and column. A group bound to a page
+  attribute (including a ContentBuilder `$Attr`) gets a page attribute with no PDS path.
+- **Disabled options.** A Classic `enabled: false` option is emitted with `disabled: true`. An option whose `enabled`
+  is bound to an attribute is emitted without it and raises a `radio-option-rule` decision: add a page business rule
+  that makes that option read-only.
+- **Split groups.** Several Classic groups on one attribute become separate `crt.RadioGroup` elements, each with its
+  own options. Each raises a `radio-group-split` decision: a value chosen in another group shows as an extra, disabled
+  "no longer available" option, where Classic left the group empty. No group property hides it yet.
+- **Required.** No required validator is added for a Boolean / Integer group: a new record already holds `false` /
+  `0`, which preselects an option exactly as in Classic, and the required validator treats that value as filled
+  anyway.
+- **Not migrated, reported.** A group whose options are not in the schema (built in code), whose child items carry no
+  literal option value (the legacy card format), or that is bound to a lookup (Guid) column is reported as a typed
+  `RADIO_GROUP` warning and no element is emitted. Port it by hand (a lookup group: Values source Lookup).
 
 ## Standard features, widgets & actions
 
