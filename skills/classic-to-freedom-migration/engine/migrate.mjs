@@ -115,6 +115,15 @@ function childPageIssue(c) {
   return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run \`list-pages\` by the CHILD entity, then ${CHILD_PAGE_ANSWERS}`;
 }
 
+// One token per resolved registry OBJECT: every run resolves its registry once, so object identity is exactly
+// "the same registry", and two exports that happen to share a version string stay distinct.
+const REGISTRY_TOKENS = new WeakMap();
+let registryTokenSeq = 0;
+function registryToken(reg) {
+  if (!reg) return "";
+  if (!REGISTRY_TOKENS.has(reg)) REGISTRY_TOKENS.set(reg, `reg${++registryTokenSeq}`);
+  return REGISTRY_TOKENS.get(reg);
+}
 // ONE resolve → cycle-check → memo → recurse → cache sequence for folding a nested sub-page (child / typed /
 // mini), so the three call sites cannot drift on cycle or memo semantics (a change to one is easy to
 // miss in the other two). Callers pass the resolved `key` + its schema map + the shared fold context, and only
@@ -136,7 +145,9 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
   // wrong-flavor spec. (The sub-run receives the full `...extra`, so the key must reflect all of it.)
   const flagKey = Object.entries(extra).filter(([, v]) => v !== undefined && v !== false && v !== null)
     .sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(",");
-  const memoKey = flagKey ? `${key}::${flagKey}` : key;
+  // The registry a fold inherits decides which components it builds, and two branches can hand the same page
+  // different registries (one bundle pins its own platform version), so the registry is part of the identity.
+  const memoKey = [key, flagKey, registryToken(ctx.runRegistry)].filter(Boolean).join("::");
   if (ctx.memo.has(memoKey)) { ctx.memoStats.hits++; return { status: "ok", res: ctx.memo.get(memoKey) }; }
   try {
     ctx.memoStats.misses++;

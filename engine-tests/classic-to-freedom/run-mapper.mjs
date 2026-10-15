@@ -15327,6 +15327,30 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       && decisionsOf(partialTips, "connection-settings").some((d) => d.item === "onGetPageTips"),
     () => ({ connections: partialTips.changeSet.standardFeatures[0].connections, decisions: decisionsOf(partialTips, "connection-settings") }));
 
+  // One child page reached from two typed pages that resolve DIFFERENT registries: the fold cache must not hand
+  // one branch the other's result, whichever branch is folded first. Observed through the child's carried tips
+  // method: built Connections carry `onGetPageTips`, the unavailable decision leaves it a method to port.
+  const sharedKid = () => ({ entity: "KidE", noParentTemplate: true, resources: { EntityConnectionsDetailCaptionOnPage: "Connected to" },
+    schemas: [{ pkg: "P", body: connBody({ schema: "KidPage", methods: `onGetPageTips: function() { return { "Contact": "tip" }; }` }) }] });
+  const typedWithKid = (extra) => ({ entity: "Activity", noParentTemplate: true, ...extra,
+    schemas: [{ pkg: "P", body: `define("TypedPage",[],function(){return{entitySchemaName:"Activity",details:{Kids:{schemaName:"KidDetail",entitySchemaName:"KidE",detailColumn:"Activity"}},diff:[{operation:"insert",name:"T",parentName:"Tabs",propertyName:"tabs",values:{items:[]}},{operation:"insert",name:"Kids",parentName:"T",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.DETAIL}}]};});` }],
+    detailSchemas: { KidDetail: { entity: "KidE", editPage: "KidPage" } }, childPageSchemas: { KidPage: sharedKid() } });
+  const kidStubs = (order) => {
+    const m = { entity: "Activity", noParentTemplate: true, componentRegistry: CONN_REG,
+      schemas: [{ pkg: "P", body: connBody({ schema: "RootPage", detail: "SomeOtherDetail" }) }],
+      typedPages: order.map((schema) => ({ schema, type: schema })),
+      typedPageSchemas: { Pinned: typedWithKid({ platformVersion: "8.3.4" }), Inherits: typedWithKid({}) } };
+    runMigration(m, { baseDir: FIX });
+    const stubsOf = (schema) => (m.typedPages.find((t) => t.schema === schema)?.childStubScopes || [])
+      .filter((sc) => sc.schema === "KidPage").flatMap((sc) => (sc.stubs || []).map((h) => h.method));
+    return { pinned: stubsOf("Pinned"), inherits: stubsOf("Inherits") };
+  };
+  for (const order of [["Pinned", "Inherits"], ["Inherits", "Pinned"]]) {
+    const r = kidStubs(order);
+    check(`Connected to: a child page shared by two typed pages with different registries gets each branch's own answer (${order.join(" first, then ")})`,
+      () => r.pinned.includes("onGetPageTips") && !r.inherits.includes("onGetPageTips"), () => r);
+  }
+
   // The --verify gate looks for the component on the built page.
   const connRows = checklistGroups(stand, checklistOpts({ entity: "Activity" })).flatMap((g) => g.rows).filter((r) => r.vk?.ftype === "crt.Connections");
   const connPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "Activity", viewConfig: { items } } } }, "main");
