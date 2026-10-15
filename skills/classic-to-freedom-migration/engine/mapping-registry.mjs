@@ -128,11 +128,27 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
   checkComponent(ctx);
   checkInputs(row.target?.propMap, ctx);
   checkOutputs(row.target?.events, ctx);
+  for (const t of upgradeTargets(row)) validateUpgradeTarget(t, { index, add });
   return findings;
 }
 
+// A row's version-gated `upgrade` target and its option-child target, as `{ componentType, propMap }` pairs.
+const upgradeTargets = (row) => [row?.upgrade, row?.upgrade?.children].filter((t) => t?.componentType);
+
+// An UPGRADE target is emitted only where the registry carries it (`resolveRowTarget`), so being absent from a
+// version is its design, not a defect: no `component-absent-in-version` here. What is still a hard error is a
+// propMap key the component does not declare in ANY indexed version — that would be emitted wherever the upgrade
+// fires. An index that does not carry the component at all can check nothing, which is recorded as an advisory
+// rather than an error: the vendored index predates the component until it is regenerated.
+function validateUpgradeTarget(t, { index, add }) {
+  const c = index.components?.[t.componentType];
+  if (!c) { add("upgrade-unindexed", { componentType: t.componentType }); return; }
+  checkInputs(t.propMap, { c, ctype: t.componentType, version: null, bit: null, index, add });
+  checkOutputs(t.events, { c, ctype: t.componentType, version: null, bit: null, index, add });
+}
+
 // Severity, kept in ONE place so the CI check, a run-time gate and a reader cannot disagree about what blocks.
-const ADVISORY = new Set(["deprecated-input", "deprecated-output", "composite-only", "component-unindexed"]);
+const ADVISORY = new Set(["deprecated-input", "deprecated-output", "composite-only", "component-unindexed", "upgrade-unindexed"]);
 export const isAdvisory = (f) => ADVISORY.has(f.kind);
 
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
@@ -266,6 +282,34 @@ export function carriesComponent(reg, componentType) {
   const c = reg?.index?.components?.[componentType];
   const bit = reg?.version ? versionBit(reg.version, reg.index) : null;
   return !!c && bit !== null && (c.v & bit) !== 0;
+}
+
+// Does the index CARRY `ctype` on `version`? Only a positive answer counts: no version (the union of every indexed
+// version) proves nothing about the target stand, and a version the index never saw is unknown, not "present".
+export function carriedOn(index, ctype, version) {
+  const c = index?.components?.[ctype];
+  if (!c || !version) return false;
+  const bit = versionBit(version, index);
+  return bit !== null && (c.v & bit) !== 0;
+}
+
+// Which target a row emits on THIS run. A row with an `upgrade` emits it only when the run's registry positively
+// carries the upgrade component AND its option-child component on the version the run targets — a stand export,
+// or a pinned platform version. Everything else (no registry, the unpinned union, an unreadable export that fell
+// back to the union) keeps `row.target`: a page built on a type the stand cannot resolve does not render, so the
+// fallback is the safe default. `availableIn` lists the indexed versions that DO carry the upgrade, so a run that
+// fell back can say a newer stand would get it.
+export function resolveRowTarget(row, registry) {
+  const types = upgradeTargets(row).map((t) => t.componentType);
+  if (!types.length) return { target: row?.target || null, upgraded: false, availableIn: [] };
+  const index = registry?.index || null;
+  const version = registry?.source === "vendored-union" ? null : registry?.version || null;
+  if (index && types.every((t) => carriedOn(index, t, version))) return { target: row.upgrade, upgraded: true, availableIn: [] };
+  // Only an unversioned run can be told "a newer stand would get it": a pinned version or a stand export that lacks
+  // the upgrade has answered the question for the target stand already.
+  const names = version ? [] : index?.meta?.versions || [];
+  const availableIn = names.filter((v) => types.every((t) => carriedOn(index, t, v)));
+  return { target: row.target, upgraded: false, availableIn };
 }
 
 // The `crt.*` types THIS RUN actually emits or gates on — not the whole table. Validating every row on every run
