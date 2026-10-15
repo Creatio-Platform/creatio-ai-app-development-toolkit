@@ -2695,6 +2695,11 @@ function resolveRunRegistry(manifest, baseDir) {
   };
   return resolveRunIndex(manifest, { readFile: readRegistryFile });
 }
+// RUN-level registry: a fold inherits the root's resolved registry unless its own bundle names one.
+function runRegistryFor(manifest, baseDir, inherited) {
+  const ownsRegistry = manifest.componentRegistry != null || manifest.platformVersion != null;
+  return !ownsRegistry && inherited ? inherited : resolveRunRegistry(manifest, baseDir);
+}
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
 // that function's nesting weight.
@@ -2838,9 +2843,7 @@ export function runMigration(manifest, opts = {}) {
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   const pageStrings = pageStringsOf(manifest);
-  // RUN-level registry: a fold inherits the root's resolved registry unless its own bundle names one.
-  const ownsRegistry = manifest.componentRegistry != null || manifest.platformVersion != null;
-  const runRegistry = !ownsRegistry && opts.inheritedRunRegistry ? opts.inheritedRunRegistry : resolveRunRegistry(manifest, baseDir);
+  const runRegistry = runRegistryFor(manifest, baseDir, opts.inheritedRunRegistry);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     resources: pageStrings.resources,        // #5/#13 — localizable strings for tab/group/detail captions
