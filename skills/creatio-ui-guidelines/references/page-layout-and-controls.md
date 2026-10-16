@@ -17,7 +17,7 @@ Scope the catalog to the target platform version by passing `environment-name`; 
 Jump to the section you need:
 
 - **Component names** → "Choosing the component (source of truth)" (above) — resolve via `get-component-info`.
-- **Record/form page** → General product fit · Text, labels, and messages · Page composition (incl. *Choosing the page template*) · Analytics and metric widgets · Field-driven companions · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
+- **Record/form page** → General product fit · Text, labels, and messages · Page composition (incl. *Choosing the page template*) · Analytics and metric widgets · Field-driven companions · Record connections · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
 - **List/section page** → List (section) page layout.
 - **Dialogs** → Dialogs and modals.
 - **Review** → Default Freedom UI behaviors that silently violate the guidelines (below). The full audit checklist (anti-patterns folded in) lives in `./review-checklists.md`.
@@ -224,6 +224,15 @@ Mechanics behind the layout rules in `SKILL.md` — read this when a page shows 
 - **Why a gap appears:** `layoutConfig` is relative to the immediate parent container, and rows/columns restart at `1` in each nested container. A field at `row: 3` while `row: 2` is empty reserves a blank row → vertical gap; a `column`/`colSpan` beyond the container's column count wraps to a new row and leaves a blank half.
 - **Let containers size to content:** use `rows: "auto"` + `gap`; never a fixed `rows` count or an oversized `rowSpan`. One titled group = one container — stack groups with `gap`, not with empty rows.
 - **Sanity-check before saving:** in each container, `row` numbers run 1..N with no skips, every `column`/`colSpan` is within that container's column count, and every field's `parentName` is its real group container.
+
+## Record connections ("Connected to") — one `crt.Connections`, not a ComboBox per link
+
+- **Applies to** a request to show or add the record's **connections** — "add the record connections", "show what this record is connected to", the Classic **Connected to** block, or a group of links to other records (Contact, Account, Opportunity, Case, …) shown together where only the filled ones need room.
+- Place **one `crt.Connections` element** (resolve it with `get-component-info search='connections'` and read its documentation — the page contract lives there). By default it goes into a `crt.ExpansionPanel` titled "Connections" in the side/profile column; the panel title is its heading, so the element carries no `caption`. Do **not** place a `crt.ComboBox` per connection, and do not declare attributes, datasources or child elements for them: the platform generates a field per connection of the object at page load.
+- **Which connections exist is a property of the OBJECT, not of the page** — its Connections list in the Object designer. To add, remove or reorder a connection, change the object (clio `get-entity-connections` → `update-entity-connections`, a read-modify-write of the full ordered list; only lookup columns can be connections). Change the page only for per-connection display settings, in the element's `connections` property (`{ code, label, required, pinned, readonly, … }`); the order of those entries does not change the order of the fields.
+- **It renders only with the `UseConnectionsComponent` feature ON** (OFF by default). Check the feature on the target environment before placing the element; if it is off, tell the user the block stays invisible until the feature is turned on — do not fall back to separate ComboBoxes and do not turn the feature on without their consent.
+- **Keep `crt.ComboBox`** for a lookup that is part of the form's own task flow — a field the user must always see and fill in a specific place (Owner, Stage, Type), or one with a filtered/custom list. A column already shown by `crt.Connections` must not also get its own ComboBox on the same page (both bind the same attribute, so the value is shown twice).
+- Anti-patterns: a column of five unrelated empty lookups ("Contact", "Account", "Opportunity", "Order", "Case") on a record page where a Connections block would show only the filled ones; adding a connection by inserting a field into `crt.Connections` `items`; editing the page to add a connection the object does not list.
 
 ## Fields
 
