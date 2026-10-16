@@ -1466,8 +1466,10 @@ function connectionSettings(d, ctx) {
   // column-name shape passes; one key that does not leaves the whole map a method to port — never carried in part
   const badKeys = tips ? [d.key, ...Object.keys(tips)].filter((k) => !COLUMN_CODE.test(k ?? "")) : [];
   if (!tips || badKeys.length) {
+    const quote = (k) => `'${k}'`;
+    const quotedKeys = badKeys.map(quote).join(", ");
     const why = tips
-      ? `names ${badKeys.map((k) => `'${k}'`).join(", ")}, which is not a column name, so no tip is carried`
+      ? `names ${quotedKeys}, which is not a column name, so no tip is carried`
       : "has a body that is not one static `return { Column: text }` map";
     out.needsDecision.push({ kind: "connection-settings", item: CONNECTION_TIPS_METHOD,
       reason: `'${CONNECTION_TIPS_METHOD}' sets the tips of the "Connected to" connections, but ${why} — port each tip by hand to the \`connections\` entry of '${d.key}' (\`{ code, tooltip }\`)` });
