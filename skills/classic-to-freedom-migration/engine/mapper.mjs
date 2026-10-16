@@ -1462,18 +1462,18 @@ function connectionSettings(d, ctx) {
   const hook = (eff.methods || []).find((m) => m.name === CONNECTION_TIPS_METHOD);
   if (!hook) return out;
   const tips = hook.facts?.returnsStrings;
-  if (!tips) {
+  // the detail key and each code become part of a page-string key and a `#ResourceString(...)#` macro, so only a
+  // column-name shape passes; one key that does not leaves the whole map a method to port — never carried in part
+  const badKeys = tips ? [d.key, ...Object.keys(tips)].filter((k) => !COLUMN_CODE.test(k ?? "")) : [];
+  if (!tips || badKeys.length) {
+    const why = tips
+      ? `names ${badKeys.map((k) => `'${k}'`).join(", ")}, which is not a column name, so no tip is carried`
+      : "has a body that is not one static `return { Column: text }` map";
     out.needsDecision.push({ kind: "connection-settings", item: CONNECTION_TIPS_METHOD,
-      reason: `'${CONNECTION_TIPS_METHOD}' sets the tips of the "Connected to" connections, but its body is not one static \`return { Column: text }\` map — port each tip by hand to the \`connections\` entry of '${d.key}' (\`{ code, tooltip }\`)` });
+      reason: `'${CONNECTION_TIPS_METHOD}' sets the tips of the "Connected to" connections, but ${why} — port each tip by hand to the \`connections\` entry of '${d.key}' (\`{ code, tooltip }\`)` });
     return out;
   }
   for (const [code, value] of Object.entries(tips)) {
-    // the code becomes part of a page-string key and a `#ResourceString(...)#` macro, so only a column-name shape passes
-    if (!COLUMN_CODE.test(code)) {
-      out.needsDecision.push({ kind: "connection-settings", item: CONNECTION_TIPS_METHOD,
-        reason: `'${CONNECTION_TIPS_METHOD}' names a tip for '${code}', which is not a column name — port that tip by hand` });
-      continue;
-    }
     const key = `${d.key}_${code}_tooltip`;
     const hit = value.resource ? pageText(value.resource) : { text: value.literal, cultures: null, source: `${CONNECTION_TIPS_METHOD} literal` };
     if (hit) registerText(key, { ...hit, key });
@@ -1482,6 +1482,7 @@ function connectionSettings(d, ctx) {
     out.connections.push({ code, tooltip: `#ResourceString(${key})#` });
   }
   out.carriedMethods.push(CONNECTION_TIPS_METHOD);
+  if (!out.connections.length) return out;
   out.needsDecision.push({ kind: "connection-settings", item: d.key,
     reason: `the tips of ${out.connections.length} connection(s) (${out.connections.map((c) => c.code).join(", ")}) are carried to the \`connections\` property of '${d.key}'; the component shows the listed connections first, then the rest of the object's — reorder the list in the Page designer if the object's order matters` });
   return out;

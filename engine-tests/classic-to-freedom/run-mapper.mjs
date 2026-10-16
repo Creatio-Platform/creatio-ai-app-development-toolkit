@@ -15293,10 +15293,21 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
 
   const oddKey = connRun({ componentRegistry: CONN_REG },
     { methods: `onGetPageTips: function() { return { "Contact": "ok", "a)#b": "bad" }; }` });
-  check("Connected to: a tip keyed by something that is not a column name is not written into a page-string key; it is a decision",
-    () => JSON.stringify(oddKey.changeSet.standardFeatures[0].connections.map((c) => c.code)) === '["Contact"]'
-      && decisionsOf(oddKey, "connection-settings").some((d) => d.reason.includes("'a)#b', which is not a column name")),
-    () => ({ connections: oddKey.changeSet.standardFeatures[0].connections, decisions: decisionsOf(oddKey, "connection-settings") }));
+  check("Connected to: a tip keyed by something that is not a column name is not carried in part — no entries, no page string, the method stays to port, one decision",
+    () => oddKey.changeSet.standardFeatures[0].connections.length === 0
+      && !Object.keys(oddKey.changeSet.resources || {}).some((k) => /_tooltip$/.test(k))
+      && oddKey.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && !oddKey.changeSet.accountedFor.includes("onGetPageTips")
+      && decisionsOf(oddKey, "connection-settings").length === 1
+      && decisionsOf(oddKey, "connection-settings")[0].reason.includes("'a)#b', which is not a column name"),
+    () => ({ connections: oddKey.changeSet.standardFeatures[0].connections, stubs: oddKey.changeSet.handlerStubs.map((h) => h.sourceMethod), decisions: decisionsOf(oddKey, "connection-settings") }));
+
+  const emptyTips = connRun({ componentRegistry: CONN_REG }, { methods: `onGetPageTips: function() { return {}; }` });
+  check("Connected to: an onGetPageTips that returns an empty map is carried (nothing to port) and raises no '0 connection(s)' summary",
+    () => emptyTips.changeSet.standardFeatures[0].connections.length === 0
+      && !emptyTips.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && decisionsOf(emptyTips, "connection-settings").length === 0,
+    () => ({ stubs: emptyTips.changeSet.handlerStubs.map((h) => h.sourceMethod), decisions: decisionsOf(emptyTips, "connection-settings") }));
 
   // A typed page folded under the root inherits the root's registry: the stand export is supplied once.
   const typedManifest = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
