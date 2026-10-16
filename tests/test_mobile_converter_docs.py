@@ -107,19 +107,26 @@ class MobileConverterDocsTests(unittest.TestCase):
                 "%s still names a blocked reason that became unreachable when the feature flag "
                 "was removed" % path.name)
 
-    def test_the_tablet_limit_is_stated_as_experimental_not_as_missing(self):
+    def test_the_tablet_canvas_is_stated_as_supported_with_its_limit(self):
         text = read(PLAYBOOK)
         notice = re.search(r"^  ⚠️ The \*\*web-Freedom-page.*$", text, re.MULTILINE)
         self.assertIsNotNone(
             notice, "the plan's scope notice must still be present and printed verbatim")
-        line = notice.group(0)
+        line = notice.group(0).lower()
         self.assertIn(
-            "experimental", line.lower(),
-            "tablet layout IS generated, so the notice must mark it experimental; a user told the "
-            "rendering does not exist yet has no reason to go and check it")
+            "tablet", line,
+            "the notice must name the tablet as a supported canvas")
+        self.assertIn(
+            "line up", line,
+            "the notice must name the tablet limit the plan cannot show: rows in neighbouring columns "
+            "do not line up on the device")
+        for word in ("experimental", "roadmap", "outside the supported scope"):
+            self.assertNotIn(
+                word, line,
+                "the tablet is a supported canvas, so the notice must not call it '%s'" % word)
         self.assertNotIn(
-            "roadmap", line.lower(),
-            "'on the roadmap' describes a feature that produces nothing, which is not this one")
+            "tablet layout is experimental", text.lower(),
+            "the adaptive-layout gate line must state the tablet columns as fact, not as an experiment")
 
 
 if __name__ == "__main__":
