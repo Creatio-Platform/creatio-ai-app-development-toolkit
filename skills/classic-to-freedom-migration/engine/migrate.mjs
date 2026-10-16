@@ -54,7 +54,7 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView, defaultCultureText,
   SECTION_VIEW_METHODS } from "./mapper.mjs";
-import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
+import { resolveRunIndex, validateRun, carriesComponent } from "./mapping-registry.mjs";
 import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
@@ -115,6 +115,15 @@ function childPageIssue(c) {
   return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run \`list-pages\` by the CHILD entity, then ${CHILD_PAGE_ANSWERS}`;
 }
 
+// One token per resolved registry OBJECT: every run resolves its registry once, so object identity is exactly
+// "the same registry", and two exports that happen to share a version string stay distinct.
+const REGISTRY_TOKENS = new WeakMap();
+let registryTokenSeq = 0;
+function registryToken(reg) {
+  if (!reg) return "";
+  if (!REGISTRY_TOKENS.has(reg)) REGISTRY_TOKENS.set(reg, `reg${++registryTokenSeq}`);
+  return REGISTRY_TOKENS.get(reg);
+}
 // ONE resolve → cycle-check → memo → recurse → cache sequence for folding a nested sub-page (child / typed /
 // mini), so the three call sites cannot drift on cycle or memo semantics (a change to one is easy to
 // miss in the other two). Callers pass the resolved `key` + its schema map + the shared fold context, and only
@@ -136,7 +145,9 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
   // wrong-flavor spec. (The sub-run receives the full `...extra`, so the key must reflect all of it.)
   const flagKey = Object.entries(extra).filter(([, v]) => v !== undefined && v !== false && v !== null)
     .sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(",");
-  const memoKey = flagKey ? `${key}::${flagKey}` : key;
+  // The registry a fold inherits decides which components it builds, and two branches can hand the same page
+  // different registries (one bundle pins its own platform version), so the registry is part of the identity.
+  const memoKey = [key, flagKey, registryToken(ctx.runRegistry)].filter(Boolean).join("::");
   if (ctx.memo.has(memoKey)) { ctx.memoStats.hits++; return { status: "ok", res: ctx.memo.get(memoKey) }; }
   try {
     ctx.memoStats.misses++;
@@ -155,7 +166,10 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // signal-driven row — the DCM widget gate, and the on-save duplicate check — would silently vanish
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
+    // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
+    // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
+    // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -2671,6 +2685,32 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
       reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${sourceNote}.` });
   }
 }
+// The component registry ONE run uses, resolved once: the mapper reads it to decide whether a component newer than
+// the vendored index can be built (`carriesComponent`), and `reportRegistryFindings` judges the emitted types against
+// the same answer, so the build decision and the check cannot read two different exports.
+// The reader is CONTAINED the same way `bodyOf` contains a schema entry's `file`: a RELATIVE path must resolve
+// under the manifest's base dir, an ABSOLUTE one is an explicit caller choice (the harvested manifests live in a
+// temp dir outside the repo, so absolute paths are the normal case). A manifest is operator-supplied, not the
+// untrusted stand input the parser pin guards — but the repo already treats manifest paths this way and one
+// surface behaving differently is how the next reader learns the wrong rule.
+function resolveRunRegistry(manifest, baseDir) {
+  const readRegistryFile = (f) => {
+    if (!path.isAbsolute(f)) {
+      const base = path.resolve(baseDir);
+      const resolved = path.resolve(base, f);
+      if (resolved !== base && !resolved.startsWith(base + path.sep))
+        throw new Error(`relative path '${f}' escapes the manifest base directory`);
+      return fs.readFileSync(resolved, "utf8");
+    }
+    return fs.readFileSync(f, "utf8");
+  };
+  return resolveRunIndex(manifest, { readFile: readRegistryFile });
+}
+// RUN-level registry: a fold inherits the root's resolved registry unless its own bundle names one.
+function runRegistryFor(manifest, baseDir, inherited) {
+  const ownsRegistry = manifest.componentRegistry != null || manifest.platformVersion != null;
+  return !ownsRegistry && inherited ? inherited : resolveRunRegistry(manifest, baseDir);
+}
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
 // that function's nesting weight.
@@ -2686,7 +2726,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 // The branch's OUTCOME is covered end-to-end regardless (`run-mapper.mjs` asserts the `registry-composite-only`
 // items `runMigration` does and does not push); this export exists solely so the tableElements SOURCE has a
 // non-vacuous test of its own. Do not call it from production code.
-export function reportRegistryFindings(changeSet, manifest, baseDir) {
+export function reportRegistryFindings(changeSet, manifest, baseDir, reg = resolveRunRegistry(manifest, baseDir)) {
   // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
   // against the registry it could resolve — the stand's own export when the manifest carries one, else the
   // vendored index. Same severity rule as the CI check, so a finding cannot mean two things.
@@ -2696,22 +2736,6 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   // seven versions, and blocking a plan on a union check would stop a migration whose stand is simply newer than
   // the vendored index. The item states which source answered, so an operator can tell "your stand does not carry
   // this" from "nobody asked your stand".
-  // The reader is CONTAINED the same way `bodyOf` contains a schema entry's `file`: a RELATIVE path must resolve
-  // under the manifest's base dir, an ABSOLUTE one is an explicit caller choice (the harvested manifests live in a
-  // temp dir outside the repo, so absolute paths are the normal case). A manifest is operator-supplied, not the
-  // untrusted stand input the parser pin guards — but the repo already treats manifest paths this way and one
-  // surface behaving differently is how the next reader learns the wrong rule.
-  const readRegistryFile = (f) => {
-    if (!path.isAbsolute(f)) {
-      const base = path.resolve(baseDir);
-      const resolved = path.resolve(base, f);
-      if (resolved !== base && !resolved.startsWith(base + path.sep))
-        throw new Error(`relative path '${f}' escapes the manifest base directory`);
-      return fs.readFileSync(resolved, "utf8");
-    }
-    return fs.readFileSync(f, "utf8");
-  };
-  const reg = resolveRunIndex(manifest, { readFile: readRegistryFile });
   const regRun = validateRun(changeSet, { index: reg.index, version: reg.version });
   const REG_SOURCE_NOTE = {
     "stand-export": `checked against the TARGET STAND's own component registry (version ${reg.version})`,
@@ -2830,6 +2854,7 @@ export function runMigration(manifest, opts = {}) {
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   const pageStrings = pageStringsOf(manifest);
+  const runRegistry = runRegistryFor(manifest, baseDir, opts.inheritedRunRegistry);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     resources: pageStrings.resources,        // #5/#13 — localizable strings for tab/group/detail captions
@@ -2841,6 +2866,9 @@ export function runMigration(manifest, opts = {}) {
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
+    componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
+    registrySource: runRegistry.source,
+    registryUnindexedVersion: runRegistry.unindexedVersion || null, // a pinned platformVersion the vendored index does not know
   });
   attachDetailAddModes(changeSet, detailSchemas);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
@@ -2895,7 +2923,7 @@ export function runMigration(manifest, opts = {}) {
   if (driftAdvisory.newMembers.length)
     changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
       reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
-  reportRegistryFindings(changeSet, manifest, baseDir);
+  reportRegistryFindings(changeSet, manifest, baseDir, runRegistry);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions, mapSectionView(sectionEff));
@@ -2954,7 +2982,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.

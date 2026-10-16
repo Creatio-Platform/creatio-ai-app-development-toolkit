@@ -263,6 +263,14 @@ function nativeFeatureSource(guided, templateProvided, formTemplate) {
   if (guided) return guidedSource(formTemplate);
   return templateProvided ? "template-provided" : "native — confirm component on-stand";
 }
+// A component that replaces a Classic detail is built under the detail's name, so its page strings
+// (`<Element>_<Code>_tooltip`) resolve; the `connections` entries are the per-connection settings the Classic page set.
+function connectionsNote(s) {
+  if (!s.element) return null;
+  const entries = (s.connections || []).map((c) => `\`${esc(c.code)}\` → tooltip \`${esc(c.tooltip)}\``);
+  const list = entries.length ? `; \`connections\`: ${entries.join(", ")}` : "; no `connections` entries";
+  return `element \`${esc(s.element)}\`${list}`;
+}
 function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
   return (standardFeatures || []).map((s) => {
     const isList = s.uiShape === "list";
@@ -275,8 +283,8 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : null;
     const noteCell = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
-    const add = [noteCell, isList ? detailTextsNote(s) : null].filter(Boolean).join(" · ") || DASH;
-    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc((isList && s.caption) || s.feature), type, src, DASH, add] };
+    const add = [noteCell, isList ? detailTextsNote(s) : null, connectionsNote(s)].filter(Boolean).join(" · ") || DASH;
+    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.caption || s.feature), type, src, DASH, add] };
   });
 }
 function widgetSource(w, formTemplate = null) {
