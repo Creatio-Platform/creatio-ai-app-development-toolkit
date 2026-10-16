@@ -252,7 +252,11 @@ export function resolveRunIndex(manifest, { readFile = null } = {}) {
   }
   const idx = vendoredIndex();
   const pinned = manifest?.platformVersion && idx.meta.versions.includes(manifest.platformVersion) ? manifest.platformVersion : null;
-  return { index: idx, version: pinned, source: pinned ? "vendored-pinned" : "vendored-union" };
+  if (pinned) return { index: idx, version: pinned, source: "vendored-pinned" };
+  // a pinned version the vendored index does not know is still the union, but the run must not read as "no version
+  // given": the reader asked for a version, and only the stand's registry export can answer for it
+  const unindexedVersion = manifest?.platformVersion || null;
+  return { index: idx, version: null, source: "vendored-union", ...(unindexedVersion && { unindexedVersion }) };
 }
 
 // Does the registry a run resolved POSITIVELY carry `componentType` on the version it targets? Only a stand export or

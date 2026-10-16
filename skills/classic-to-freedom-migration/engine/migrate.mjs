@@ -2868,6 +2868,7 @@ export function runMigration(manifest, opts = {}) {
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
+    registryUnindexedVersion: runRegistry.unindexedVersion || null, // a pinned platformVersion the vendored index does not know
   });
   attachDetailAddModes(changeSet, detailSchemas);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table

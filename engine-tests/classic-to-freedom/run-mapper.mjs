@@ -10998,7 +10998,9 @@ try {
     strip(resolveRunIndex({ componentRegistry: exportJson })).source === "stand-export"
     && strip(resolveRunIndex({ platformVersion: "8.3.3" })).source === "vendored-pinned"
     && strip(resolveRunIndex({})).source === "vendored-union"
-    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).source === "vendored-union",
+    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).source === "vendored-union"
+    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).unindexedVersion === "99.9.9"
+    && !("unindexedVersion" in strip(resolveRunIndex({}))),
     () => [resolveRunIndex({ componentRegistry: exportJson }), resolveRunIndex({ platformVersion: "8.3.3" }), resolveRunIndex({})].map(strip));
   // A registry the manifest NAMED but the engine could not read must be REPORTED, never silently downgraded: the
   // operator asked for the stand's answer and has to know they did not get it.
@@ -15259,6 +15261,7 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   const fallbacks = {
     "no registry (vendored union)": [connRun(), /no registry of the target stand was supplied/],
     "pinned 8.3.4": [connRun({ platformVersion: "8.3.4" }), /vendored component index does not carry it for the pinned platform version/],
+    "pinned version not in the vendored index": [connRun({ platformVersion: "99.9.9" }), /pinned platform version '99\.9\.9' is not in the engine's vendored component index(?![\s\S]*no registry of the target stand was supplied)/],
     "unreadable registry export": [connRun({ componentRegistry: { file: "/definitely/not/here.json" } }), /registry the manifest named could not be read/],
     "stand registry without it": [connRun({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: CONN_REG.components.filter((c) => c.componentType !== "crt.Connections") } }),
       /target stand's component registry does not carry it/],

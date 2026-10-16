@@ -542,7 +542,8 @@ export function mapToFreedom(eff, opts = {}) {
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
   const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor, pageLabelFor,
     index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage,
-    componentAvailable: opts.componentAvailable || (() => false), registrySource: opts.registrySource || null };
+    componentAvailable: opts.componentAvailable || (() => false), registrySource: opts.registrySource || null,
+    registryUnindexedVersion: opts.registryUnindexedVersion || null };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -1325,7 +1326,7 @@ function detectDetailAddMechanism(dinfo) {
 }
 
 function mapDetails(ctx, containers, profileRegion) {
-  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails, componentAvailable, registrySource } = ctx;
+  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails, componentAvailable, registrySource, registryUnindexedVersion } = ctx;
   const { ensureTab } = containers;
   const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set(), carriedMethods = new Set();
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
@@ -1434,7 +1435,7 @@ function mapDetails(ctx, containers, profileRegion) {
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
-      needsDecision.push(unavailableFeatureDecision(d, feat, registrySource));
+      needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion));
       return;
     }
     if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity, standardFeatureTitle(d, dinfo, feat)); return; }
@@ -1499,9 +1500,11 @@ const REGISTRY_ANSWER = {
   "vendored-pinned": "the vendored component index does not carry it for the pinned platform version",
   "unreadable-export": "the component registry the manifest named could not be read, so the run fell back to the vendored index and its presence on the target stand is unknown",
 };
-function unavailableFeatureDecision(d, feat, registrySource) {
+function unavailableFeatureDecision(d, feat, registrySource, unindexedVersion) {
   const answer = REGISTRY_ANSWER[registrySource]
-    || "no registry of the target stand was supplied (`manifest.componentRegistry`), so its presence is unknown";
+    || (unindexedVersion
+      ? `the pinned platform version '${unindexedVersion}' is not in the engine's vendored component index, so its presence on the target stand is unknown — only that stand's component registry export can confirm it`
+      : "no registry of the target stand was supplied (`manifest.componentRegistry`), so its presence is unknown");
   return { kind: "feature-component-unavailable", item: d.schemaName || d.key,
     reason: `classic '${d.schemaName || d.key}' is the ${feat.feature} feature → ${feat.freedom}, and ${answer}. Nothing is built in its place: keep the page without it, or — on a stand that carries \`${feat.componentType}\` — re-run the plan with that stand's component registry export in \`manifest.componentRegistry\` (the export inline, \`{ resolvedTargetVersion, components: [{ componentType, inputs, outputs }] }\`, or \`{ "file": "<path>" }\`)` };
 }
