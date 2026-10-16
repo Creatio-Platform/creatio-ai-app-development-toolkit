@@ -56,6 +56,37 @@ step.
 
 ### 4. Place the app in the navigation
 
+#### Provision the planned roles and users first
+
+The placement and the portal grants below name roles as their audience, so create the roles the plan
+lists under `roles to create:` before any navigation write. Skip this part when the plan says
+`roles to create: none` and `users to create: none`.
+
+Call `get-guidance name=administration` FIRST and follow it — it owns the identity model, the
+parent rules for functional roles, manager groups, password handling and the version boundaries. Before
+assigning users to an external organization, also read `get-guidance name=external-organizations`.
+Resolve `inspect-role` / `manage-role`, `inspect-user` / `manage-user` and `inspect-license` /
+`manage-license` through `get-tool-contract`; the `manage-*` tools are destructive, and the approved
+plan is the authorization for exactly the roles and accounts it names — nothing more.
+
+- **Roles.** Read the role tree first and reuse a role the plan names when it already exists under the
+  same parent; ask when a name matches more than one role. Create each missing role with a new GUID,
+  its kind and its parent. Add managers with `ensure-manager` on the unit, then `add-member` on the
+  returned manager group — never by creating a role named "Managers". clio cannot create a missing
+  manager group under an external parent: report it and leave it to the administrator UI.
+- **Users.** Each account needs an existing contact. The password never passes through the agent: ask
+  the developer to put a temporary password into a `CLIO_ADMIN_PASSWORD_<SUFFIX>` variable of the clio
+  process and pass only that variable's name. Account creation and password changes need Creatio
+  `10.1.585` or newer; on an older environment, report the accounts as not created rather than working
+  around the check. Create the account (`external` for a portal user), then add its roles, then assign
+  the license the plan names. When no license package is available, report it — never treat an
+  unlicensed account as a usable login.
+- **Verify** every role and account by reading it back (`members`, and `memberships` with
+  `effective=true`) and list the created GUIDs in the report. Accounts and memberships are
+  environment data: do not bind them into the package.
+
+#### Place the app
+
 `create-app` leaves the section in the `My applications` workplace, which is granted to
 `System administrators` only — so until this step runs, the app is invisible to ordinary users no
 matter how complete the schema and pages are. Apply the placement the approved plan states in
@@ -149,8 +180,8 @@ For each dashboard in the plan:
   `dashboard-rights` so it survives a package transfer (grants are data, not schema, and are otherwise
   lost on transfer). The **§7.2 home page has no per-page access grant** — its audience is the
   workplace it is bound to (`SysAdminUnitInWorkplace`), so do not create `dashboard-rights` for it.
-  Role-scoped (least-privilege) access is out of scope for now and belongs to the future roles work —
-  do not attempt to derive per-role grants here.
+  Role-scoped (least-privilege) dashboard access is out of scope — do not derive per-role grants here,
+  not even for the roles created in step 4.
 
 Widgets may draw on any site object named in the plan — the app's own entities and standard platform
 entities alike.
