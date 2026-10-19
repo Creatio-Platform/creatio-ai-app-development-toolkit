@@ -270,13 +270,18 @@ const profileCardRow = (entity, componentType, pkg, shows) => row({
   verify: { componentType }, gate: pkg ? { kind: GATE_KIND.COMPOSITE, id: pkg } : null,
   meta: { profileCard: { type: componentType, pkg, shows } },
 });
-const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null, gate = null }) =>
+// `requiresRegistry` marks a component newer than every platform version the vendored index carries: the mapper
+// builds it only when the run's own registry (a stand export, or a pinned version) positively carries it, and the
+// table check reports its absence from the vendored index as an advisory rather than an error. `titled` gives a
+// component-shaped feature the Classic detail's title, for a component that replaces the whole detail and has a
+// caption of its own.
+const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null, gate = null, requiresRegistry = false, titled = false }) =>
   row({
     match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix, ...(qualifiers ? { qualifiers } : {}) },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape,
     verify: componentType ? { componentType, ...(satisfies ? { satisfies } : {}) } : null,
     notes, gate,
-    meta: { feature: name, freedom, templateProvided, uiShape },
+    meta: { feature: name, freedom, templateProvided, uiShape, ...(requiresRegistry ? { requiresRegistry } : {}), ...(titled ? { titled } : {}) },
   });
 // The Communication-options note is shared by the SCHEMA row and the ENTITY fallback row: the entity fallback is
 // how a real site's detail is usually recognised (its schema is an auto-named `SchemaNDetail`), so pointing the
@@ -290,6 +295,8 @@ const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed. The human-relevant part is the on-stand
 // PREREQUISITE / decision, which the short note keeps.
 const COMMS_NOTE = "Native Communication-options component — requires the CrtCustomer360App package + CommonCommunicationsBehavior feature on-stand; confirm, or raise adding it.";
+export const FEATURE_CONNECTIONS = "Connections";
+const CONNECTIONS_NOTE = "One crt.Connections element in the Classic detail's place; the platform builds a field per connection of the object at run time, so the page stores no child element per connection. It renders only with the UseConnectionsComponent feature ON (OFF by default) — enable it on the stand, or the page shows no connections.";
 const FEATURE_ROWS = [
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
   // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
@@ -329,6 +336,14 @@ const FEATURE_ROWS = [
     satisfies: ["crt.ContactCommunication"],
     gate: COMMS_GATE,
     notes: COMMS_NOTE }),
+  // "Connected to" (`EntityConnectionsDetailV2`, and `EmailEntityConnectionsDetailV2` by suffix) is NOT a related
+  // list over `EntityConnection`: that entity stores which lookup columns of the OBJECT are connections, and each
+  // connection is an ordinary lookup column of the record. Its Freedom analog takes the same set from the object,
+  // so one `crt.Connections` element replaces the whole detail — no field per connection and no stored children.
+  feature("EntityConnectionsDetailV2", { feature: FEATURE_CONNECTIONS,
+    freedom: "Freedom Connections component (crt.Connections)", componentType: "crt.Connections", uiShape: "component",
+    requiresRegistry: true, titled: true,
+    notes: CONNECTIONS_NOTE }),
   // Feed. Its classic origin is the ESN feed CONTAINER, not a detail schema, so it is keyed by container name —
   // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry holds.
   // Without it the Feed row silently left the `--verify` gate when that map was absorbed.

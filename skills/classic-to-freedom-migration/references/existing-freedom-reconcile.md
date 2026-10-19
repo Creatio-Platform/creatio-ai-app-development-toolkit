@@ -135,7 +135,7 @@ are NOT client customizations and NOT plain related lists — the platform owns 
 | --- | --- |
 | **Feed** (`crt.Feed` + its tab/panel) | ESN / Feed tab (`ESNTab`, the `ESNFeedContainer`) |
 | **Attachments** (`crt.FileList` + its expansion panel / toolbar) | files detail (`FileDetailV2`, "Attachments and notes") |
-| **Connected to** (the connection group the Freedom page ships) | connections detail (`EntityConnectionsDetailV2`, «Связи объекта» / "Connected to") |
+| **Connected to** (`crt.Connections`, or the group of connection lookups an older Freedom page ships) | connections detail (`EntityConnectionsDetailV2`, «Связи объекта» / "Connected to") |
 | **Timeline** (`crt.Timeline` + its tab/panel) | Timeline tab (`TimelineTab`) |
 
 The rule, **in both `overlay` and `classic-layout`**:
