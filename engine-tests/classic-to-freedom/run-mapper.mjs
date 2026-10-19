@@ -11,7 +11,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes, carriesComponent } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
@@ -10998,7 +10998,9 @@ try {
     strip(resolveRunIndex({ componentRegistry: exportJson })).source === "stand-export"
     && strip(resolveRunIndex({ platformVersion: "8.3.3" })).source === "vendored-pinned"
     && strip(resolveRunIndex({})).source === "vendored-union"
-    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).source === "vendored-union",
+    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).source === "vendored-union"
+    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).unindexedVersion === "99.9.9"
+    && !("unindexedVersion" in strip(resolveRunIndex({}))),
     () => [resolveRunIndex({ componentRegistry: exportJson }), resolveRunIndex({ platformVersion: "8.3.3" }), resolveRunIndex({})].map(strip));
   // A registry the manifest NAMED but the engine could not read must be REPORTED, never silently downgraded: the
   // operator asked for the stand's answer and has to know they did not get it.
@@ -15202,6 +15204,190 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       && /Won't do — D3/.test(line(sameDropped, "Related list `D1@E1`"))
       && ["D1", "D1@E1#3"].every((id) => /✅ Done/.test(line(sameDropped, `Related list \`${id}\``))) && sameDropped.complete === true,
     () => IDS.map((id) => line(sameDropped, `Related list \`${id}\``)));
+}
+
+/* ---- "Connected to" (EntityConnectionsDetailV2) → one crt.Connections element, only where the run's registry carries it ---- */
+{
+  const connBody = ({ schema = "CallPageV2", detail = "EntityConnectionsDetailV2", methods = "" } = {}) => `define("${schema}", [], function() { return {
+    entitySchemaName: "Activity",
+    details: { EntityConnections: { schemaName: "${detail}", entitySchemaName: "EntityConnection",
+      filter: { masterColumn: "Id", detailColumn: "SysModuleEntity" } } },
+    methods: { ${methods} },
+    diff: [
+      { operation: "insert", name: "GeneralInfoTab", parentName: "Tabs", propertyName: "tabs", values: { caption: { bindTo: "Resources.Strings.GeneralInfoTabCaption" }, items: [] } },
+      { operation: "insert", name: "EntityConnections", parentName: "GeneralInfoTab", propertyName: "items", values: { itemType: Terrasoft.ViewItemType.DETAIL } },
+      { operation: "insert", name: "Title", parentName: "Header", propertyName: "items", values: { bindTo: "Title" } }
+    ] }; });`;
+  const TIPS = `onGetPageTips: function() { return { "Contact": this.get("Resources.Strings.ContactTip"), "Account": "Account tip" }; }`;
+  const CONN_REG = { resolvedTargetVersion: "8.3.9", components: ["crt.Connections", "crt.Input", "crt.TabContainer", "crt.GridContainer", "crt.TabPanel"]
+    .map((componentType) => ({ componentType, inputs: componentType === "crt.Connections" ? { caption: {} } : {}, outputs: {} })) };
+  const connRun = (extra = {}, body = {}) => runMigration({ entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+    resources: { ContactTip: "Who the call is with", GeneralInfoTabCaption: "General", EntityConnectionsDetailCaptionOnPage: "Connected to" },
+    ...extra, schemas: [{ pkg: "P", body: connBody(body) }] }, { baseDir: FIX });
+  const decisionsOf = (r, kind) => r.changeSet.needsDecision.filter((d) => d.kind === kind);
+  const noEntityConnectionList = (r) => !r.changeSet.details.some((d) => d.entity === "EntityConnection")
+    && !r.changeSet.needsDecision.some((d) => /^detail-/.test(d.kind));
+  const noStoredConnectionFields = (r) => !r.changeSet.viewConfigDiff.some((o) => /Connections|ComboBox/.test(o.values?.type || ""));
+
+  const stand = connRun({ componentRegistry: CONN_REG }, { methods: TIPS });
+  const feat = stand.changeSet.standardFeatures.find((f) => f.feature === "Connections");
+  check("Connected to (stand registry carries crt.Connections): one Connections feature in the Classic tab, titled like the Classic detail, built under the detail's name",
+    () => stand.changeSet.standardFeatures.length === 1 && feat?.tab === "GeneralInfoTab" && feat.caption === "Connected to"
+      && feat.element === "EntityConnections" && featureVerifyType(feat.feature) === "crt.Connections",
+    () => stand.changeSet.standardFeatures);
+  check("Connected to: no related list over EntityConnection, no detail-* decision, and no field or child element per connection in the page body",
+    () => noEntityConnectionList(stand) && noStoredConnectionFields(stand),
+    () => ({ details: stand.changeSet.details, kinds: stand.changeSet.needsDecision.map((d) => d.kind), ops: stand.changeSet.viewConfigDiff.map((o) => o.values?.type) }));
+  check("Connected to: each onGetPageTips tip becomes a `connections` entry whose tooltip is the page string <Element>_<Code>_tooltip, carrying the Classic text",
+    () => JSON.stringify(feat.connections) === JSON.stringify([
+      { code: "Contact", tooltip: "#ResourceString(EntityConnections_Contact_tooltip)#" },
+      { code: "Account", tooltip: "#ResourceString(EntityConnections_Account_tooltip)#" }])
+      && stand.changeSet.resources.EntityConnections_Contact_tooltip === "Who the call is with"
+      && stand.changeSet.resources.EntityConnections_Account_tooltip === "Account tip",
+    () => ({ connections: feat?.connections, resources: stand.changeSet.resources }));
+  check("Connected to: the carried onGetPageTips is not a handler to port, is accounted for, and the order consequence of a partial list is stated",
+    () => !stand.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips") && stand.changeSet.accountedFor.includes("onGetPageTips")
+      && decisionsOf(stand, "connection-settings").some((d) => /listed connections first/.test(d.reason)),
+    () => ({ stubs: stand.changeSet.handlerStubs.map((h) => h.sourceMethod), decisions: decisionsOf(stand, "connection-settings") }));
+  check("Connected to: the design spec row names the caption, the component, the feature toggle and the connection settings",
+    () => stand.designSpec.split("\n").some((l) => /\| Connected to \| Connections \|/.test(l) && /UseConnectionsComponent/.test(l)
+      && /element `EntityConnections`/.test(l) && /`Contact` → tooltip/.test(l)),
+    () => stand.designSpec.split("\n").filter((l) => /Connect/.test(l)));
+  check("Connected to: a stand registry that carries crt.Connections raises no registry-target ⚠ for it",
+    () => !stand.changeSet.needsDecision.some((d) => d.kind.startsWith("registry-") && /crt\.Connections/.test(d.item || "")),
+    () => stand.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // Without positive evidence that the target carries the component, nothing is built in the detail's place.
+  const fallbacks = {
+    "no registry (vendored union)": [connRun(), /no registry of the target stand was supplied/],
+    "pinned 8.3.4": [connRun({ platformVersion: "8.3.4" }), /vendored component index does not carry it for the pinned platform version/],
+    "pinned version not in the vendored index": [connRun({ platformVersion: "99.9.9" }), /pinned platform version '99\.9\.9' is not in the engine's vendored component index(?![\s\S]*no registry of the target stand was supplied)/],
+    "unreadable registry export": [connRun({ componentRegistry: { file: "/definitely/not/here.json" } }), /registry the manifest named could not be read/],
+    "stand registry without it": [connRun({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: CONN_REG.components.filter((c) => c.componentType !== "crt.Connections") } }),
+      /target stand's component registry does not carry it/],
+  };
+  for (const [label, [r, why]] of Object.entries(fallbacks)) {
+    check(`Connected to (${label}): one feature-component-unavailable decision naming which registry answered; no Connections feature and no related list over EntityConnection`,
+      () => decisionsOf(r, "feature-component-unavailable").length === 1 && why.test(decisionsOf(r, "feature-component-unavailable")[0].reason)
+        && !r.changeSet.standardFeatures.length && noEntityConnectionList(r) && noStoredConnectionFields(r)
+        && !r.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.Connections"),
+      () => ({ decisions: r.changeSet.needsDecision.map((d) => [d.kind, d.item]), features: r.changeSet.standardFeatures, details: r.changeSet.details }));
+  }
+
+  const email = connRun({ componentRegistry: CONN_REG }, { schema: "EmailPageV2", detail: "EmailEntityConnectionsDetailV2" });
+  check("Connected to: EmailEntityConnectionsDetailV2 resolves to the same Connections feature by suffix, with no `connections` entries when the page sets no tips",
+    () => email.changeSet.standardFeatures.length === 1 && email.changeSet.standardFeatures[0].feature === "Connections"
+      && email.changeSet.standardFeatures[0].connections.length === 0 && noEntityConnectionList(email),
+    () => email.changeSet.standardFeatures);
+
+  const dynamicTips = connRun({ componentRegistry: CONN_REG },
+    { methods: `onGetPageTips: function() { var tips = {}; tips.Contact = this.get("Resources.Strings.ContactTip"); return tips; }` });
+  check("Connected to: an onGetPageTips that is not one static map stays a method to port and is named in a connection-settings decision",
+    () => dynamicTips.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && decisionsOf(dynamicTips, "connection-settings").some((d) => d.item === "onGetPageTips")
+      && dynamicTips.changeSet.standardFeatures[0].connections.length === 0,
+    () => ({ stubs: dynamicTips.changeSet.handlerStubs.map((h) => h.sourceMethod), decisions: decisionsOf(dynamicTips, "connection-settings") }));
+
+  const missingText = connRun({ componentRegistry: CONN_REG, resources: { GeneralInfoTabCaption: "General" } }, { methods: TIPS });
+  check("Connected to: a tip whose page string the manifest does not carry still becomes an entry, and its text is a decision",
+    () => missingText.changeSet.standardFeatures[0].connections.length === 2
+      && decisionsOf(missingText, "connection-settings").some((d) => d.item === "EntityConnections_Contact_tooltip"),
+    () => decisionsOf(missingText, "connection-settings"));
+
+  const oddKey = connRun({ componentRegistry: CONN_REG },
+    { methods: `onGetPageTips: function() { return { "Contact": "ok", "a)#b": "bad" }; }` });
+  check("Connected to: a tip keyed by something that is not a column name is not carried in part — no entries, no page string, the method stays to port, one decision",
+    () => oddKey.changeSet.standardFeatures[0].connections.length === 0
+      && !Object.keys(oddKey.changeSet.resources || {}).some((k) => /_tooltip$/.test(k))
+      && oddKey.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && !oddKey.changeSet.accountedFor.includes("onGetPageTips")
+      && decisionsOf(oddKey, "connection-settings").length === 1
+      && decisionsOf(oddKey, "connection-settings")[0].reason.includes("'a)#b', which is not a column name"),
+    () => ({ connections: oddKey.changeSet.standardFeatures[0].connections, stubs: oddKey.changeSet.handlerStubs.map((h) => h.sourceMethod), decisions: decisionsOf(oddKey, "connection-settings") }));
+
+  const emptyTips = connRun({ componentRegistry: CONN_REG }, { methods: `onGetPageTips: function() { return {}; }` });
+  check("Connected to: an onGetPageTips that returns an empty map is carried (nothing to port) and raises no '0 connection(s)' summary",
+    () => emptyTips.changeSet.standardFeatures[0].connections.length === 0
+      && !emptyTips.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && decisionsOf(emptyTips, "connection-settings").length === 0,
+    () => ({ stubs: emptyTips.changeSet.handlerStubs.map((h) => h.sourceMethod), decisions: decisionsOf(emptyTips, "connection-settings") }));
+
+  // A typed page folded under the root inherits the root's registry: the stand export is supplied once.
+  const typedManifest = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+    componentRegistry: CONN_REG, schemas: [{ pkg: "P", body: connBody({ schema: "ActivityPageV2", detail: "SomeOtherDetail" }) }],
+    typedPages: [{ schema: "CallPageV2", type: "Call" }],
+    typedPageSchemas: { CallPageV2: { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      resources: { EntityConnectionsDetailCaptionOnPage: "Connected to" }, schemas: [{ pkg: "P", body: connBody() }] } } };
+  runMigration(typedManifest, { baseDir: FIX });
+  const typedSpec = typedManifest.typedPages[0].spec || "";
+  check("Connected to: a typed page folded under a root that supplies the stand registry builds the Connections feature, not a feature-component-unavailable decision",
+    () => /\| Connected to \| Connections \|/.test(typedSpec) && !/feature-component-unavailable/.test(typedSpec),
+    () => ({ resolved: typedManifest.typedPages[0].resolved, lines: typedSpec.split("\n").filter((l) => /Connect/.test(l)) }));
+
+  // …and a typed bundle that names its own platform version resolves its own registry instead.
+  const ownVersionManifest = { ...typedManifest, typedPages: [{ schema: "CallPageV2", type: "Call" }],
+    typedPageSchemas: { CallPageV2: { ...typedManifest.typedPageSchemas.CallPageV2, platformVersion: "8.3.4" } } };
+  runMigration(ownVersionManifest, { baseDir: FIX });
+  const ownSpec = ownVersionManifest.typedPages[0].spec || "";
+  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — no Connections row, a feature-component-unavailable item",
+    () => !/\| Connected to \| Connections \|/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
+    () => ownSpec.split("\n").filter((l) => /Connect/.test(l)));
+
+  const partialTips = connRun({ componentRegistry: CONN_REG },
+    { methods: `onGetPageTips: function() { return { "Contact": this.get("Resources.Strings.ContactTip"), "Account": this.get("SomeAttr") }; }` });
+  check("Connected to: a tip map with one value that is not a page string or literal is not carried in part — no entries, the method stays to port",
+    () => partialTips.changeSet.standardFeatures[0].connections.length === 0
+      && partialTips.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && decisionsOf(partialTips, "connection-settings").some((d) => d.item === "onGetPageTips"),
+    () => ({ connections: partialTips.changeSet.standardFeatures[0].connections, decisions: decisionsOf(partialTips, "connection-settings") }));
+
+  // One child page reached from two typed pages that resolve DIFFERENT registries: the fold cache must not hand
+  // one branch the other's result, whichever branch is folded first. Observed through the child's carried tips
+  // method: built Connections carry `onGetPageTips`, the unavailable decision leaves it a method to port.
+  const sharedKid = () => ({ entity: "KidE", noParentTemplate: true, resources: { EntityConnectionsDetailCaptionOnPage: "Connected to" },
+    schemas: [{ pkg: "P", body: connBody({ schema: "KidPage", methods: `onGetPageTips: function() { return { "Contact": "tip" }; }` }) }] });
+  const typedWithKid = (extra) => ({ entity: "Activity", noParentTemplate: true, ...extra,
+    schemas: [{ pkg: "P", body: `define("TypedPage",[],function(){return{entitySchemaName:"Activity",details:{Kids:{schemaName:"KidDetail",entitySchemaName:"KidE",detailColumn:"Activity"}},diff:[{operation:"insert",name:"T",parentName:"Tabs",propertyName:"tabs",values:{items:[]}},{operation:"insert",name:"Kids",parentName:"T",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.DETAIL}}]};});` }],
+    detailSchemas: { KidDetail: { entity: "KidE", editPage: "KidPage" } }, childPageSchemas: { KidPage: sharedKid() } });
+  const kidStubs = (order) => {
+    const m = { entity: "Activity", noParentTemplate: true, componentRegistry: CONN_REG,
+      schemas: [{ pkg: "P", body: connBody({ schema: "RootPage", detail: "SomeOtherDetail" }) }],
+      typedPages: order.map((schema) => ({ schema, type: schema })),
+      typedPageSchemas: { Pinned: typedWithKid({ platformVersion: "8.3.4" }), Inherits: typedWithKid({}) } };
+    runMigration(m, { baseDir: FIX });
+    const stubsOf = (schema) => (m.typedPages.find((t) => t.schema === schema)?.childStubScopes || [])
+      .filter((sc) => sc.schema === "KidPage").flatMap((sc) => (sc.stubs || []).map((h) => h.method));
+    return { pinned: stubsOf("Pinned"), inherits: stubsOf("Inherits") };
+  };
+  for (const order of [["Pinned", "Inherits"], ["Inherits", "Pinned"]]) {
+    const r = kidStubs(order);
+    check(`Connected to: a child page shared by two typed pages with different registries gets each branch's own answer (${order.join(" first, then ")})`,
+      () => r.pinned.includes("onGetPageTips") && !r.inherits.includes("onGetPageTips"), () => r);
+  }
+
+  // The --verify gate looks for the component on the built page.
+  const connRows = checklistGroups(stand, checklistOpts({ entity: "Activity" })).flatMap((g) => g.rows).filter((r) => r.vk?.ftype === "crt.Connections");
+  const connPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "Activity", viewConfig: { items } } } }, "main");
+  check("Connected to --verify: the Connections row closes on a page carrying crt.Connections and reads ❌ MISSING without it",
+    () => connRows.length === 1 && resolveVk(connRows[0].vk, connPage([{ type: "crt.Connections", name: "EntityConnections" }]))[0] === "✅ Done"
+      && resolveVk(connRows[0].vk, connPage([{ type: "crt.DataGrid", name: "EntityConnectionsGrid" }]))[0] === "❌ MISSING",
+    () => connRows);
+
+  // The table and registry checks.
+  const connRow = MAPPING_ROWS.find((r) => r.meta?.feature === "Connections");
+  check("registry: a requiresRegistry row absent from the vendored index is a `component-unindexed` advisory, and the table stays free of errors",
+    () => validateRow(connRow).map((f) => f.kind).join() === "component-unindexed" && isAdvisory(validateRow(connRow)[0])
+      && validateTable({}).errors.length === 0,
+    () => ({ row: validateRow(connRow), errors: validateTable({}).errors }));
+  check("registry (anti-vacuity): the same row WITHOUT requiresRegistry is an `unknown-component` error",
+    () => validateRow({ ...connRow, meta: { ...connRow.meta, requiresRegistry: false } }).map((f) => f.kind).join() === "unknown-component");
+  const exportReg = resolveRunIndex({ componentRegistry: CONN_REG });
+  const unionWithIt = { index: { meta: { versions: ["8.3.4", "latest"] }, components: { "crt.Connections": { v: 2 } } }, version: null, source: "vendored-union" };
+  check("carriesComponent: yes only on positive evidence — a stand export that lists the type, or a pinned version whose bit is set; never a union of versions",
+    () => carriesComponent(exportReg, "crt.Connections") && !carriesComponent(exportReg, "crt.Nope")
+      && !carriesComponent(unionWithIt, "crt.Connections")
+      && carriesComponent({ ...unionWithIt, version: "latest", source: "vendored-pinned" }, "crt.Connections")
+      && !carriesComponent({ ...unionWithIt, version: "8.3.4", source: "vendored-pinned" }, "crt.Connections"));
 }
 
 // Every deliverable of every run above has an id, unique on its page.

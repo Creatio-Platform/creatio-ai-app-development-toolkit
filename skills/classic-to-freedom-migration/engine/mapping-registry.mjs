@@ -118,7 +118,12 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
   const c = index.components?.[ctype];
   const where = `${row.match.by}=${row.match[row.match.by]}`;
   const add = (kind, detail) => findings.push({ kind, row: where, ...detail });
-  if (!c) { add("unknown-component", { componentType: ctype }); return findings; }
+  if (!c) {
+    // A row that waits for its component on a newer platform is built only when the run's registry carries it
+    // (`carriesComponent`), so its absence from this index is expected and recorded, not a broken row.
+    add(row.meta?.requiresRegistry ? "component-unindexed" : "unknown-component", { componentType: ctype });
+    return findings;
+  }
   const ctx = { c, ctype, version, bit: version ? versionBit(version, index) : null, index, add };
   checkComponent(ctx);
   checkInputs(row.target?.propMap, ctx);
@@ -127,7 +132,7 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
 }
 
 // Severity, kept in ONE place so the CI check, a run-time gate and a reader cannot disagree about what blocks.
-const ADVISORY = new Set(["deprecated-input", "deprecated-output", "composite-only"]);
+const ADVISORY = new Set(["deprecated-input", "deprecated-output", "composite-only", "component-unindexed"]);
 export const isAdvisory = (f) => ADVISORY.has(f.kind);
 
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
@@ -247,7 +252,20 @@ export function resolveRunIndex(manifest, { readFile = null } = {}) {
   }
   const idx = vendoredIndex();
   const pinned = manifest?.platformVersion && idx.meta.versions.includes(manifest.platformVersion) ? manifest.platformVersion : null;
-  return { index: idx, version: pinned, source: pinned ? "vendored-pinned" : "vendored-union" };
+  if (pinned) return { index: idx, version: pinned, source: "vendored-pinned" };
+  // a pinned version the vendored index does not know is still the union, but the run must not read as "no version
+  // given": the reader asked for a version, and only the stand's registry export can answer for it
+  const unindexedVersion = manifest?.platformVersion || null;
+  return { index: idx, version: null, source: "vendored-union", ...(unindexedVersion && { unindexedVersion }) };
+}
+
+// Does the registry a run resolved POSITIVELY carry `componentType` on the version it targets? Only a stand export or
+// a pinned version can answer yes: a union of versions passes a type present in ANY of them, which says nothing about
+// the target stand, so it answers no — as does an unreadable export, which fell back to that union.
+export function carriesComponent(reg, componentType) {
+  const c = reg?.index?.components?.[componentType];
+  const bit = reg?.version ? versionBit(reg.version, reg.index) : null;
+  return !!c && bit !== null && (c.v & bit) !== 0;
 }
 
 // The `crt.*` types THIS RUN actually emits or gates on — not the whole table. Validating every row on every run
