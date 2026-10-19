@@ -761,6 +761,23 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn(value, read_text(ROOT / "runbooks/02-requirements-gathering.md"),
                           f"the runbook must document the record-scope value '{value}'")
 
+    def test_portal_sections_are_built_through_the_portal_sections_guide(self):
+        # The plan's Portal section only decides WHAT is exposed; the writes that open a section to every
+        # external user are sequenced and guarded by the clio guide, so the build must route there after the
+        # navigation placement and the roles it relies on.
+        impl = read_text(ROOT / "runbooks/03-app-implementation.md")
+        portal = impl.index("#### Open the portal sections to external users")
+        self.assertLess(impl.index("#### Place the app"), portal,
+                        "the portal step runs after the navigation placement")
+        self.assertLess(portal, impl.index("### 5. Build analytics dashboards"),
+                        "the portal step belongs to the navigation step")
+        for literal in ("get-guidance name=portal-sections", "external access:", "external record scope:",
+                        "unknown-topic error", "do not report the portal section as done"):
+            self.assertIn(literal, impl[portal:], f"the portal step must state '{literal}'")
+        self.assertIn("get-guidance name=portal-sections",
+                      read_text(ROOT / "runbooks/02-requirements-gathering.md"),
+                      "the plan handoff must name the guide the build applies §8 through")
+
     def test_role_and_user_provisioning_contract_is_in_lockstep(self):
         # The navigation placement grants the planned roles, so a runbook that provisions them later
         # would place the app for an audience that does not exist yet.

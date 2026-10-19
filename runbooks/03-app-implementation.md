@@ -115,6 +115,41 @@ ask the developer (see `../context/business-checklist.md`, "Users, access and ow
 Tell the developer that navigation is cached, so they must log out and back in to see the app — a
 browser refresh is not enough.
 
+#### Open the portal sections to external users
+
+Run this only when the approved plan has a `## 8. Portal section`; skip it otherwise. It needs the
+section pages from step 3 and the roles provisioned above.
+
+Call `get-guidance name=portal-sections` FIRST and follow it for each section the plan lists under
+`portal sections:`. It sequences the separate portal page, its binding for `All external users`, the
+workplace placement, the object grant and the record rules, and routes each step to the guide that owns
+it. Do not improvise these writes from the tool contracts alone: an object grant to `All external users`
+reaches every external user at once. The approved plan names the audience and the scope; it does not
+replace the per-write preview and confirmation that guide requires.
+
+The plan answers the questions that guide asks the developer:
+
+- the section's external surface (its `list columns:`, `form groups:` / `form fields:`, `add page:` /
+  `edit page:` lines) is the scope of the dedicated portal page — design that page with exactly those
+  fields, never by reusing the internal page;
+- `external access:` is the set of operations of the object grant on the section's object;
+- `external record scope:` is the record-access decision: `all` keeps every record visible to every
+  external user, `own contact` and `own account` need record permissions ON and the record rule that
+  guide routes to.
+
+Everything the plan does not settle is still asked as that guide says — a shared lookup the portal page
+shows, an object not yet administered by operation permissions, applying rules to existing records. When
+a step cannot be applied with the available tools (for example a record rule filtered by the user's
+contact or account), tell the developer that step is manual and do not report the portal section as done
+without it.
+
+If `get-guidance name=portal-sections` returns an unknown-topic error, STOP: the installed clio carries
+a knowledge library older than `1.15.161`. Tell the developer the portal sections cannot be opened safely
+until clio is updated, and leave the sections internal-only rather than granting access piecemeal.
+
+Tell the developer that a portal user must log in again after the placement to see the section, and that
+the real check is a portal-licensed external user opening it with data visible.
+
 ### 5. Build analytics dashboards
 
 Build the analytics from the plan's `## 7. Analytics` section. **Run this only after step 3 has

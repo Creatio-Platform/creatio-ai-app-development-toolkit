@@ -498,5 +498,5 @@ It is consumed by the implementation stage that runs after Gate R approval with 
 ### Population rules
 
 - Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
-- When `## 8. Portal section` is present, the implementation stage reads each section's `external access:` and `external record scope:` from §8 directly. `own contact` / `own account` needs record-level rights, which the current tooling does not set up: the implementation must tell the developer that step is manual and must not report the portal as done without it.
+- When `## 8. Portal section` is present, the implementation stage reads each section's external surface, `external access:` and `external record scope:` from §8 directly and applies them through `get-guidance name=portal-sections` (`runbooks/03-app-implementation.md`, "Open the portal sections to external users"). `own contact` / `own account` needs a record rule filtered by the user's contact or account; when the available tools cannot set it up, the implementation must tell the developer that step is manual and must not report the portal as done without it.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.

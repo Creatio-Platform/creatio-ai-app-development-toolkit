@@ -21,13 +21,14 @@ EXTERNAL_ACCESS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external access:")
 # Which records of the section the external audience may see. An object operation grant to
 # `All external users` reaches EVERY record, so one customer seeing another's records is the default
 # unless the plan decides otherwise. There is deliberately no default value: the developer chooses.
-EXTERNAL_RECORD_SCOPE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external record scope:[ \t]*(?P<value>.*)$")
+EXTERNAL_RECORD_SCOPE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external record scope:(?P<value>.*)$")
 EXTERNAL_RECORD_SCOPE_VALUES = ("own contact", "own account", "all")
 # A heading that LOOKS like the Portal section but is not the exact contract heading (wrong case,
 # plural, wrong number). Without this the plan is silently treated as portal-absent.
 PORTAL_HEADING_NEAR_MISS_RE = re.compile(r"(?im)^#{1,6}\s*\d+\.?\s*portal\s+sections?\s*$")
 PORTAL_SECTIONS_COUNT_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:\s*(?P<count>\d+)")
 EXTERNAL_AUDIENCE_ROLE = "All external users"
+OBJECT_MODEL_HEADING = "## 3. Object Model"
 EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
 EDGE_CASES_HEADING_WITH_PORTAL = "## 9. Edge Cases and Exceptions"
 
@@ -37,7 +38,7 @@ EDGE_CASES_HEADING_WITH_PORTAL = "## 9. Edge Cases and Exceptions"
 REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 1. Business Outcome",
     "## 2. Roles and Permissions",
-    "## 3. Object Model",
+    OBJECT_MODEL_HEADING,
     "## 4. Lifecycle and Statuses",
     "## 5. Business Logic",
     UX_HEADING,
@@ -219,7 +220,7 @@ def validate_portal_section(text, portal_text):
                 + ", ".join(EXTERNAL_RECORD_SCOPE_VALUES)
                 + " (which records external users may see — decided with the developer, no default)"
             )
-    section2_text = extract_section(text, "## 2. Roles and Permissions", "## 3. Object Model")
+    section2_text = extract_section(text, "## 2. Roles and Permissions", OBJECT_MODEL_HEADING)
     if EXTERNAL_AUDIENCE_ROLE not in section2_text:
         raise WorkflowError(
             f"Requirements doc failed: section 2 Roles and Permissions must carry the external audience ('{EXTERNAL_AUDIENCE_ROLE}') when section 8 Portal section is present"
@@ -285,7 +286,7 @@ def validate_requirements_doc(content: str) -> None:
             )
         portal_text = extract_section(text, PORTAL_HEADING, edge_cases_heading)
         validate_portal_section(text, portal_text)
-    section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
+    section3_text = extract_section(text, OBJECT_MODEL_HEADING, "## 4. Lifecycle and Statuses")
     section6_text = extract_section(text, UX_HEADING, ANALYTICS_HEADING)
     analytics_end_heading = PORTAL_HEADING if portal_present else edge_cases_heading
     section7_analytics_text = extract_section(text, ANALYTICS_HEADING, analytics_end_heading)
