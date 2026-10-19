@@ -359,11 +359,10 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
 - **Scope notice (show FIRST, verbatim)** — print this notice at the very top of the plan, before
   anything else, exactly as written (do not paraphrase or drop it). Print it as a PLAIN paragraph: no
   blockquote, no leading `>` — terminals whose font lacks the quote bar draw it as a missing-glyph box
-  on every wrapped line of the notice. It names the one limit a developer cannot discover from the plan
-  itself. Tablet output is generated, not absent, so the notice asks the user to CHECK it rather than to
-  wait for it:
+  on every wrapped line of the notice. It names the supported canvases and the one tablet limit a
+  developer cannot discover from the plan itself:
 
-  ⚠️ The **web-Freedom-page → mobile-Freedom-page conversion** is supported for the **Mobile canvas** only. Tablet layout IS generated, but it remains **experimental** and is outside the supported scope — check the page on a tablet before relying on it.
+  ⚠️ The **web-Freedom-page → mobile-Freedom-page conversion** supports the **Mobile** and **Tablet** canvases. On a tablet, rows in neighbouring columns do not line up — check pages with dense multi-column forms on a device.
 - **Target** — the registered environment, the target page name (**with the environment
   `SchemaNamePrefix`**), the recommended mobile template, and the target package (propose one; the
   developer makes the final choice).
@@ -396,8 +395,7 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   `sectionRegistration.probeOk` is false, say the environment could not be queried and registration
   must be verified manually.
 - **Adaptive layout (per-screen)** — when `guide.adaptiveLayout` is present, state it in plain words:
-  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet — the
-  tablet layout is experimental, check it on a device."* State it
+  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* State it
   as what the conversion DID, not as something to accept or decline: both the container columns and each
   child's placement are already in the pasted `values`, there is nothing separate to apply, and there is no
   mechanism to honour a refusal. A different layout is an edit to those `values` before pasting.
