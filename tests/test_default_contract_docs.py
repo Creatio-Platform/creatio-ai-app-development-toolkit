@@ -761,6 +761,22 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn(value, read_text(ROOT / "runbooks/02-requirements-gathering.md"),
                           f"the runbook must document the record-scope value '{value}'")
 
+    def test_schema_naming_runs_before_the_object_model_is_drafted(self):
+        # The plan's Object Model fixes the codes and titles the implementation creates, so the naming
+        # skill has to shape them while the plan is drafted, not only when the schemas are written.
+        runbook = read_text(ROOT / "runbooks/02-requirements-gathering.md")
+        read_first = runbook[runbook.index("## Read First"):runbook.index("## Preconditions")]
+        self.assertIn("`creatio-schema-naming` skill, before drafting `## 3. Object Model`", read_first,
+                      "the BA stage must load the naming skill before the Object Model")
+        object_model = runbook.index("`## 3. Object Model` must define the core business objects.")
+        rule = runbook.index("Before drafting it, invoke the `creatio-schema-naming` skill")
+        self.assertLess(object_model, rule, "the rule belongs to the Object Model contract")
+        self.assertLess(rule, runbook.index("For each object block, include:", object_model),
+                        "the rule comes before the object block contract it governs")
+        skill = read_text(ROOT / "skills/creatio-app-orchestrator/SKILL.md")
+        self.assertIn("invoke it **before drafting `## 3. Object Model`** of the Business Plan", skill,
+                      "the orchestrator's naming rule must cover the planning stage")
+
     def test_portal_sections_are_built_through_the_portal_sections_guide(self):
         # The plan's Portal section only decides WHAT is exposed; the writes that open a section to every
         # external user are sequenced and guarded by the clio guide, so the build must route there after the

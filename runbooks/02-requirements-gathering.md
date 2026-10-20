@@ -22,6 +22,7 @@ Read these repository files for the BA stage:
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md` (only the sections needed for the current question batch)
+- `context/naming-conventions.md` and the `creatio-schema-naming` skill, before drafting `## 3. Object Model`
 
 ## Preconditions
 
@@ -251,6 +252,9 @@ Use this exact visible skeleton for the Business Plan:
   say so when the developer expects them on another environment.
 
 `## 3. Object Model` must define the core business objects.
+Before drafting it, invoke the `creatio-schema-naming` skill and apply its rules with
+`context/naming-conventions.md` to every object, field and lookup code and title in this section: the
+implementation creates exactly these names, and a published schema name is hard to change.
 For each object block, include:
 
 - title
