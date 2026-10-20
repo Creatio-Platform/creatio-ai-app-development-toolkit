@@ -74,6 +74,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Labels are short, clear, and in Sentence case.
 - [ ] Abbreviations, units, codes, and formats are explained in tooltip/placeholder/help.
 - [ ] Lookup fields are filtered to relevant values.
+- [ ] The record's connections are one `crt.Connections` element, not a separate `crt.ComboBox` per connection, and no column is shown by both.
 - [ ] Small enum-like lookups (status, type, category, ~<20 rows) are simple lookups → render as dropdowns (`simple-lookup: true`); large/related lookups (Contact, Account, parent) use the selection window.
 - [ ] Date-only business fields are not rendered with a time picker.
 - [ ] Read-only fields explain why/how/when they are filled (tooltip) and show units/scale (placeholder).
