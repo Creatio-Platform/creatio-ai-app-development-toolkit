@@ -247,7 +247,8 @@ Use this exact visible skeleton for the Business Plan:
   the unit's own child, not a separate role to list.
 - `users to create:` — `none` unless the developer asked for accounts (for example demo or test users
   per role). Per account, state the login, the contact it belongs to, whether it is an external
-  (portal) user, its roles and the license it needs. Never put a password in the plan. Accounts and
+  (portal) user, its roles and the license it needs. An external account gets only external roles —
+  ones under `All external users`; never plan an internal role for it. Never put a password in the plan. Accounts and
   memberships stay on the environment where they are created and are not shipped with the package —
   say so when the developer expects them on another environment.
 
@@ -332,24 +333,26 @@ Structure it EXACTLY like `## 6. UX Expectations` — no explanatory prose, just
 structure. It describes the EXTERNAL audience's view (the `All external users` role):
 
 - lead line `portal sections:` — how many of the app's sections are exposed to external users, named by
-  `Title`, e.g. `portal sections: 2 (Requests, Knowledge Base)`.
+  `Title`, e.g. `portal sections: 2 (Requests, Knowledge Base)`. It starts with the number.
+- `external workplace:` — where external users find these sections: a new Portal or Self-service
+  workplace named for the app, or a named existing one, e.g. `external workplace: new Portal workplace
+  Service portal`. Ask the developer, as for the internal placement in `## 2. Roles and Permissions`.
 - one `- **`Section <name>`** ` block per exposed section (reuse an existing section `Title`, so it has a
   carrier in `## 3. Object Model`), each describing the EXTERNAL surface with the SAME labels as §6
   (`list columns:`, `form groups:` / `form fields:`, `add page:` / `edit page:`).
 - `external access:` per exposed section — the object operations granted to `All external users`, e.g.
   `external access: read` or `external access: read, create, edit`. Default `read`; widen only where
-  external users genuinely author records.
+  external users genuinely author records. List operations only from `read`, `create`, `edit`, `delete`.
 - `external record scope:` per exposed section — WHICH records the external audience sees: `own contact`
   (records of the portal user themselves), `own account` (records of the user's company), or `all`
   (shared reference data every external user may read). There is NO default — ask the developer. An
   object grant to `All external users` reaches EVERY record, so without this decision one customer
   sees another's records.
 
-Keep the external field set DELIBERATELY SMALL — significantly fewer fields than the internal page.
-Expose only what the customer needs; NEVER surface internal-only information to external users (assigned
-agent/owner, internal notes/comments, costs/margins, internal status or reason codes, other customers'
-data). Choosing the external `list columns:` and form fields is data minimisation, not a copy of the
-internal surface.
+Keep the external field set small — fewer fields than the internal page, only what the external user
+needs. Leave internal working fields (assigned agent/owner, internal notes/comments, costs/margins,
+internal status or reason codes) off the external surface, and design it for the external audience
+rather than copying the internal page.
 
 `## 7. Analytics` is mandatory and the agent ALWAYS proposes it — never wait for the developer to ask. Propose analytics **as a domain expert**: for each role and section, propose exactly the dashboards, metrics, and charts that an experienced practitioner in the app's business domain would expect to see, so the boards are meaningful out of the box rather than generic filler. When the request does not pin a concrete widget set, use domain-aware judgment to propose one (same posture as the domain-baseline rule for the object model). The section must be populated — an empty or `TBD` `## 7. Analytics` fails the draft.
 
@@ -388,6 +391,8 @@ Widgets may draw on any business object visible on the site — the app's own ob
 
 Before finalizing the BA draft, verify at minimum:
 
+- `## 2. Roles and Permissions` states `roles to create:` and `users to create:`, each with the planned items or `none` — the validator rejects a missing or value-less line
+- when `## 8. Portal section` is present, it states `portal sections:` starting with the number of exposed sections and an `external workplace:` line, and each exposed section's block states `external access:` (operations from `read`, `create`, `edit`, `delete`) and `external record scope:` (exactly `own contact`, `own account` or `all`) — the validator rejects anything else
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
@@ -502,5 +507,5 @@ It is consumed by the implementation stage that runs after Gate R approval with 
 ### Population rules
 
 - Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
-- When `## 8. Portal section` is present, the implementation stage reads each section's external surface, `external access:` and `external record scope:` from §8 directly and applies them through `get-guidance name=portal-sections` (`runbooks/03-app-implementation.md`, "Open the portal sections to external users"). `own contact` / `own account` needs a record rule filtered by the user's contact or account; when the available tools cannot set it up, the implementation must tell the developer that step is manual and must not report the portal as done without it.
+- When `## 8. Portal section` is present, the implementation stage reads each section's external surface, `external access:` and `external record scope:` from §8 directly and applies them through `get-guidance name=portal-sections` (`runbooks/03-app-implementation.md`, "Open the portal sections to external users"). `own contact` / `own account` needs record permissions ON for the section's object before its object grant is written, plus a record rule filtered by the user's contact or account. When record permissions cannot be turned on, the implementation leaves the section internal-only; when only the rule cannot be set up, it tells the developer that step is manual and does not report the portal as done without it.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.

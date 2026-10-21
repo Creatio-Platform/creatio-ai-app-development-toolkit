@@ -741,6 +741,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             wv.PORTAL_HEADING,
             wv.EDGE_CASES_HEADING_WITH_PORTAL,
             "portal sections:",
+            "external workplace:",
             "external access:",
             "external record scope:",
             wv.EXTERNAL_AUDIENCE_ROLE,
@@ -751,11 +752,16 @@ class DefaultContractDocsTests(unittest.TestCase):
                 self.assertIn(literal, doc, f"{path} must carry the Portal section literal '{literal}'")
         for path in (ROOT / "AGENTS.md", ROOT / "context/business-checklist.md"):
             doc = read_text(path)
-            for literal in (wv.PORTAL_HEADING, "external record scope:"):
+            for literal in (wv.PORTAL_HEADING, "external workplace:", "external record scope:"):
                 self.assertIn(literal, doc, f"{path} must carry the Portal section literal '{literal}'")
         # The validator's label regexes must accept the literals the docs prescribe.
         self.assertRegex("- portal sections: 1 (Requests)", wv.PORTAL_SECTIONS_LABEL_RE)
+        self.assertRegex("- portal sections: 1 (Requests)", wv.PORTAL_SECTIONS_COUNT_RE)
+        self.assertRegex("- external workplace: new Portal workplace Service portal", wv.EXTERNAL_WORKPLACE_LABEL_RE)
         self.assertRegex("  - external access: read", wv.EXTERNAL_ACCESS_LABEL_RE)
+        for operation in wv.EXTERNAL_ACCESS_OPERATIONS:
+            self.assertIn(f"`{operation}`", read_text(ROOT / "runbooks/02-requirements-gathering.md"),
+                          f"the runbook must document the external access operation '{operation}'")
         for value in wv.EXTERNAL_RECORD_SCOPE_VALUES:
             self.assertRegex(f"  - external record scope: {value}", wv.EXTERNAL_RECORD_SCOPE_LABEL_RE)
             self.assertIn(value, read_text(ROOT / "runbooks/02-requirements-gathering.md"),
@@ -787,9 +793,11 @@ class DefaultContractDocsTests(unittest.TestCase):
                         "the portal step runs after the navigation placement")
         self.assertLess(portal, impl.index("### 5. Build analytics dashboards"),
                         "the portal step belongs to the navigation step")
-        for literal in ("get-guidance name=portal-sections", "external access:", "external record scope:",
-                        "unknown-topic error", "do not report the portal section as done"):
-            self.assertIn(literal, impl[portal:], f"the portal step must state '{literal}'")
+        portal_step = impl[portal:impl.index("### 5. Build analytics dashboards")]
+        for literal in ("get-guidance name=portal-sections", "external workplace:", "external access:",
+                        "external record scope:", "unknown-topic error", "do not report the portal section as done",
+                        "leave the section internal-only"):
+            self.assertIn(literal, portal_step, f"the portal step must state '{literal}'")
         self.assertIn("get-guidance name=portal-sections",
                       read_text(ROOT / "runbooks/02-requirements-gathering.md"),
                       "the plan handoff must name the guide the build applies §8 through")
@@ -811,9 +819,13 @@ class DefaultContractDocsTests(unittest.TestCase):
         provision = impl.index("#### Provision the planned roles and users first")
         self.assertLess(provision, impl.index("#### Place the app"),
                         "roles must be provisioned before the navigation placement that grants them")
+        provision_step = impl[provision:impl.index("#### Place the app")]
         for literal in ("get-guidance name=administration", "manage-role", "manage-user", "manage-license",
-                        "ensure-manager", "CLIO_ADMIN_PASSWORD_<SUFFIX>", "10.1.585"):
-            self.assertIn(literal, impl, f"the implementation runbook must state '{literal}'")
+                        "never passes through the agent", "only the external roles"):
+            self.assertIn(literal, provision_step, f"the provisioning step must state '{literal}'")
+        import workflow_validators as wv  # runtime/scripts is on sys.path (set above)
+        self.assertRegex("- roles to create: none", wv.ROLES_TO_CREATE_LABEL_RE)
+        self.assertRegex("- users to create: none", wv.USERS_TO_CREATE_LABEL_RE)
         self.assertIn("Provision the planned roles and users first",
                       read_text(ROOT / "skills/creatio-app-orchestrator/SKILL.md"))
 

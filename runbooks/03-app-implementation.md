@@ -59,31 +59,27 @@ step.
 #### Provision the planned roles and users first
 
 The placement and the portal grants below name roles as their audience, so create the roles the plan
-lists under `roles to create:` before any navigation write. Skip this part when the plan says
-`roles to create: none` and `users to create: none`.
+lists under `roles to create:`, then the accounts under `users to create:`, before any navigation
+write. Skip this part when the plan says `roles to create: none` and `users to create: none`.
 
-Call `get-guidance name=administration` FIRST and follow it — it owns the identity model, the
-parent rules for functional roles, manager groups, password handling and the version boundaries. Before
-assigning users to an external organization, also read `get-guidance name=external-organizations`.
-Resolve `inspect-role` / `manage-role`, `inspect-user` / `manage-user` and `inspect-license` /
+Call `get-guidance name=administration` FIRST and follow it — it owns the identity model, role kinds and
+parents, manager groups, password handling, licenses and the version boundaries. Before assigning users
+to an external organization, also read `get-guidance name=external-organizations`. Resolve
+`inspect-role` / `manage-role`, `inspect-user` / `manage-user` and `inspect-license` /
 `manage-license` through `get-tool-contract`; the `manage-*` tools are destructive, and the approved
 plan is the authorization for exactly the roles and accounts it names — nothing more.
 
-- **Roles.** Read the role tree first and reuse a role the plan names when it already exists under the
-  same parent; ask when a name matches more than one role. Create each missing role with a new GUID,
-  its kind and its parent. Add managers with `ensure-manager` on the unit, then `add-member` on the
-  returned manager group — never by creating a role named "Managers". clio cannot create a missing
-  manager group under an external parent: report it and leave it to the administrator UI.
-- **Users.** Each account needs an existing contact. The password never passes through the agent: ask
-  the developer to put a temporary password into a `CLIO_ADMIN_PASSWORD_<SUFFIX>` variable of the clio
-  process and pass only that variable's name. Account creation and password changes need Creatio
-  `10.1.585` or newer; on an older environment, report the accounts as not created rather than working
-  around the check. Create the account (`external` for a portal user), then add its roles, then assign
-  the license the plan names. When no license package is available, report it — never treat an
-  unlicensed account as a usable login.
-- **Verify** every role and account by reading it back (`members`, and `memberships` with
-  `effective=true`) and list the created GUIDs in the report. Accounts and memberships are
-  environment data: do not bind them into the package.
+- Read the role tree before creating anything: reuse a role the plan names when it already exists under
+  the same parent, and ask when a name matches more than one role.
+- Create the roles, then each account, then its roles, then its license.
+- An external (portal) account gets only the external roles the plan names. When the plan gives it an
+  internal role, stop and ask the developer instead of assigning it.
+- The password never passes through the agent and never appears in the plan, a file or the report;
+  use only the mechanism the guide prescribes.
+- When the guide or the environment refuses to create an account or assign its license, report the
+  account as not created or not licensed — never work around the check.
+- Verify every role and account by reading it back and list the created GUIDs in the report. Accounts
+  and memberships are environment data: do not bind them into the package.
 
 #### Place the app
 
@@ -132,16 +128,23 @@ The plan answers the questions that guide asks the developer:
 - the section's external surface (its `list columns:`, `form groups:` / `form fields:`, `add page:` /
   `edit page:` lines) is the scope of the dedicated portal page — design that page with exactly those
   fields, never by reusing the internal page;
+- `external workplace:` is the workplace the sections are placed in for `All external users` — create
+  it or reuse the named one as the plan says;
 - `external access:` is the set of operations of the object grant on the section's object;
 - `external record scope:` is the record-access decision: `all` keeps every record visible to every
   external user, `own contact` and `own account` need record permissions ON and the record rule that
   guide routes to.
 
+For `own contact` and `own account`, turn record permissions ON for the section's object before the
+section is placed or its object is granted: with them OFF, the grant opens every record to every
+external user. If they cannot be turned on with the available tools, write neither the placement nor
+the grant — leave the section internal-only and tell the developer, as for a missing guide below.
+
 Everything the plan does not settle is still asked as that guide says — a shared lookup the portal page
 shows, an object not yet administered by operation permissions, applying rules to existing records. When
-a step cannot be applied with the available tools (for example a record rule filtered by the user's
-contact or account), tell the developer that step is manual and do not report the portal section as done
-without it.
+another step cannot be applied with the available tools (for example a record rule filtered by the
+user's contact or account, once record permissions are ON), tell the developer that step is manual
+and do not report the portal section as done without it.
 
 If `get-guidance name=portal-sections` returns an unknown-topic error, STOP: the installed clio carries
 a knowledge library older than `1.15.161`. Tell the developer the portal sections cannot be opened safely

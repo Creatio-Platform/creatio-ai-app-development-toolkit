@@ -22,6 +22,8 @@ Provide a shared task registry.
 ## 2. Roles and Permissions
 
 - Team member: creates and updates tasks
+- roles to create: none
+- users to create: none
 
 ## 3. Object Model
 
@@ -680,6 +682,7 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
 PORTAL_BLOCK = (
     "## 8. Portal section\n\n"
     "- portal sections: 1 (Tasks)\n"
+    "- external workplace: new Portal workplace Task portal\n"
     "- **`Section Tasks`** — external self-service view.\n"
     "  - list columns: Name, Status\n"
     "  - form fields: Name\n"
@@ -831,6 +834,81 @@ class TestValidateRequirementsDocPortalSection(unittest.TestCase):
         self.assertNotIn("## 8. Portal section", VALID_DOC)
         validate_requirements_doc(VALID_DOC)  # must not raise
 
+    def test_portal_list_columns_do_not_stand_in_for_section_6(self):
+        # §6 describes the internal surface; a §8 `list columns:` line must not satisfy its gate.
+        doc = PORTAL_DOC.replace("- list columns: Name, Status\n- list filters: Status\n", "- list filters: Status\n", 1)
+        self.assertIn("  - list columns: Name, Status", doc)
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("list columns:", str(ctx.exception))
+
+    def test_portal_sections_line_without_a_count_is_rejected(self):
+        for line in ("- portal sections: Tasks, Reports\n", "- portal sections:\n"):
+            with self.subTest(line=line):
+                doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", line)
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("must start with the number", str(ctx.exception))
+
+    def test_missing_or_empty_external_workplace_is_rejected(self):
+        for line in ("", "- external workplace:\n"):
+            with self.subTest(line=line):
+                doc = PORTAL_DOC.replace("- external workplace: new Portal workplace Task portal\n", line)
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("external workplace:", str(ctx.exception))
+
+    def test_external_access_outside_the_operation_set_is_rejected(self):
+        for value in ("", "full", "TBD", "read, approve"):
+            with self.subTest(value=value):
+                doc = PORTAL_DOC.replace("external access: read, create", f"external access: {value}".rstrip())
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("read, create, edit, delete", str(ctx.exception))
+
+    def test_external_access_operations_accept_backticks_and_case(self):
+        for value in ("`read`", "Read, Create", "read, create, edit, delete"):
+            with self.subTest(value=value):
+                validate_requirements_doc(PORTAL_DOC.replace("external access: read, create", f"external access: {value}"))
+
+    def test_external_record_scope_accepts_backticks_and_case(self):
+        for value in ("`own contact`", "Own Contact", "own account", "ALL"):
+            with self.subTest(value=value):
+                validate_requirements_doc(PORTAL_DOC.replace("external record scope: own contact", f"external record scope: {value}"))
+
+    def test_annotated_external_record_scope_is_rejected_with_the_value(self):
+        # The build reads the value as one of three decisions, so an annotation is not accepted.
+        doc = PORTAL_DOC.replace("external record scope: own contact", "external record scope: own contact (their tasks)")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("'external record scope: own contact (their tasks)'", str(ctx.exception))
+
+
+class TestValidateRequirementsDocProvisioning(unittest.TestCase):
+    def test_missing_or_value_less_provisioning_line_is_rejected(self):
+        for label in ("roles to create:", "users to create:"):
+            for replacement in ("", f"- {label}\n"):
+                with self.subTest(label=label, replacement=replacement):
+                    doc = VALID_DOC.replace(f"- {label} none\n", replacement)
+                    with self.assertRaises(WorkflowError) as ctx:
+                        validate_requirements_doc(doc)
+                    self.assertIn(label, str(ctx.exception))
+
+    def test_roles_to_create_outside_section_2_does_not_count(self):
+        doc = VALID_DOC.replace("- roles to create: none\n", "").replace(
+            "## 5. Business Logic\n", "## 5. Business Logic\n\n- roles to create: none\n"
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("roles to create:", str(ctx.exception))
+
+    def test_planned_roles_and_users_pass(self):
+        doc = VALID_DOC.replace(
+            "- roles to create: none\n- users to create: none\n",
+            "- roles to create: Support agents (team, under Support)\n"
+            "- users to create: demo.agent (contact Demo Agent, internal, Support agents, Creatio license)\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
 
 if __name__ == "__main__":
     unittest.main()

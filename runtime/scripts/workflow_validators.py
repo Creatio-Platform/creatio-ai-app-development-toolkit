@@ -17,7 +17,13 @@ PORTAL_HEADING_RE = re.compile(r"(?m)^## 8\. Portal section\s*$")
 # (e.g. "no external access:" in a narrative line), letting a non-conforming portal block pass the
 # only machine gate. The `[\s\-*>#\`]*` prefix allows the bullet/quote lead-ins §8 actually uses.
 PORTAL_SECTIONS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:")
-EXTERNAL_ACCESS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external access:")
+EXTERNAL_ACCESS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external access:(?P<value>.*)$")
+# `external access:` becomes the operations of the object grant to `All external users`, so its value is
+# a closed set of operation names rather than free text.
+EXTERNAL_ACCESS_OPERATIONS = ("read", "create", "edit", "delete")
+# The workplace the exposed sections are placed in for the external audience: a new Portal or
+# Self-service workplace, or a named existing one.
+EXTERNAL_WORKPLACE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external workplace:[ \t]*\S")
 # Which records of the section the external audience may see. An object operation grant to
 # `All external users` reaches EVERY record, so one customer seeing another's records is the default
 # unless the plan decides otherwise. There is deliberately no default value: the developer chooses.
@@ -26,7 +32,10 @@ EXTERNAL_RECORD_SCOPE_VALUES = ("own contact", "own account", "all")
 # A heading that LOOKS like the Portal section but is not the exact contract heading (wrong case,
 # plural, wrong number). Without this the plan is silently treated as portal-absent.
 PORTAL_HEADING_NEAR_MISS_RE = re.compile(r"(?im)^#{1,6}\s*\d+\.?\s*portal\s+sections?\s*$")
-PORTAL_SECTIONS_COUNT_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:\s*(?P<count>\d+)")
+PORTAL_SECTIONS_COUNT_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:[ \t]*`?(?P<count>\d+)")
+# Every plan states whether it provisions roles and accounts, as a value or `none`; the build reads both.
+ROLES_TO_CREATE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*roles to create:[ \t]*\S")
+USERS_TO_CREATE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*users to create:[ \t]*\S")
 EXTERNAL_AUDIENCE_ROLE = "All external users"
 OBJECT_MODEL_HEADING = "## 3. Object Model"
 EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
@@ -190,33 +199,55 @@ def iter_surface_blocks(section_text, kind):
         yield line.strip(), "\n".join(block_lines)
 
 
+def label_value(match):
+    """The value after a label, without surrounding backticks and whitespace, lower-cased."""
+    return match.group("value").strip().strip("`").strip().lower() if match else ""
+
+
 def validate_portal_section(text, portal_text):
-    """§8 Portal section: a `portal sections:` line, then one `Section <name>` block per exposed
-    section, EACH with its own `external access:` and `external record scope:` decision."""
+    """§8 Portal section: a `portal sections:` line and an `external workplace:` line, then one
+    `Section <name>` block per exposed section, EACH with its own `external access:` and
+    `external record scope:` decision."""
     if not PORTAL_SECTIONS_LABEL_RE.search(portal_text):
         raise WorkflowError(
             "Requirements doc failed: section 8 Portal section must state a 'portal sections:' line (how many sections are exposed to external users, named)"
+        )
+    count_match = PORTAL_SECTIONS_COUNT_RE.search(portal_text)
+    if not count_match:
+        raise WorkflowError(
+            "Requirements doc failed: section 8 'portal sections:' must start with the number of exposed sections, e.g. 'portal sections: 2 (Requests, Knowledge Base)'"
+        )
+    if not EXTERNAL_WORKPLACE_LABEL_RE.search(portal_text):
+        raise WorkflowError(
+            "Requirements doc failed: section 8 Portal section must state an 'external workplace:' line (a new Portal or Self-service workplace, or a named existing one)"
         )
     blocks = list(iter_surface_blocks(portal_text, "section"))
     if not blocks:
         raise WorkflowError(
             "Requirements doc failed: section 8 Portal section must describe each exposed section in its own 'Section <name>' block"
         )
-    count_match = PORTAL_SECTIONS_COUNT_RE.search(portal_text)
-    if count_match and int(count_match.group("count")) != len(blocks):
+    if int(count_match.group("count")) != len(blocks):
         raise WorkflowError(
             f"Requirements doc failed: section 8 says 'portal sections: {count_match.group('count')}' but describes {len(blocks)} 'Section <name>' block(s)"
         )
     for heading, block in blocks:
-        if not EXTERNAL_ACCESS_LABEL_RE.search(block):
+        access = EXTERNAL_ACCESS_LABEL_RE.search(block)
+        if not access:
             raise WorkflowError(
-                f"Requirements doc failed: section 8 Portal section block '{heading}' must state its own 'external access:' level (default read — do not surface internal fields to external users)"
+                f"Requirements doc failed: section 8 Portal section block '{heading}' must state its own 'external access:' level (default read)"
+            )
+        operations = [op.strip().strip("`").strip() for op in label_value(access).split(",")]
+        if not all(op in EXTERNAL_ACCESS_OPERATIONS for op in operations):
+            raise WorkflowError(
+                f"Requirements doc failed: section 8 Portal section block '{heading}' has 'external access: {access.group('value').strip()}'; list operations from "
+                + ", ".join(EXTERNAL_ACCESS_OPERATIONS)
+                + ", comma-separated"
             )
         scope = EXTERNAL_RECORD_SCOPE_LABEL_RE.search(block)
-        value = scope.group("value").strip().strip("`").strip().lower() if scope else ""
-        if value not in EXTERNAL_RECORD_SCOPE_VALUES:
+        if label_value(scope) not in EXTERNAL_RECORD_SCOPE_VALUES:
+            found = f"'external record scope: {scope.group('value').strip()}'" if scope else "no 'external record scope:' line"
             raise WorkflowError(
-                f"Requirements doc failed: section 8 Portal section block '{heading}' must state 'external record scope:' as one of "
+                f"Requirements doc failed: section 8 Portal section block '{heading}' has {found}; state exactly one of "
                 + ", ".join(EXTERNAL_RECORD_SCOPE_VALUES)
                 + " (which records external users may see — decided with the developer, no default)"
             )
@@ -257,8 +288,14 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError(
             "Requirements doc failed: retired label 'default list columns:'/'default list filters:' is no longer accepted; use 'list columns:' / 'list filters:' (drop the 'default ' prefix)"
         )
-    if not LIST_COLUMNS_LABEL_RE.search(text):
-        raise WorkflowError("Requirements doc failed: missing required marker: list columns:")
+    if not LIST_COLUMNS_LABEL_RE.search(extract_section(text, UX_HEADING, ANALYTICS_HEADING)):
+        raise WorkflowError("Requirements doc failed: missing required marker: list columns: (in section 6 UX Expectations)")
+    section2_text = extract_section(text, "## 2. Roles and Permissions", OBJECT_MODEL_HEADING)
+    for label, label_re in (("roles to create:", ROLES_TO_CREATE_LABEL_RE), ("users to create:", USERS_TO_CREATE_LABEL_RE)):
+        if not label_re.search(section2_text):
+            raise WorkflowError(
+                f"Requirements doc failed: section 2 Roles and Permissions must state '{label}' with the planned items or 'none'"
+            )
     if not SECTION_OBJECT_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
