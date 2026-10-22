@@ -63,7 +63,9 @@ lists under `roles to create:`, then the accounts under `users to create:`, befo
 write. Skip this part when the plan says `roles to create: none` and `users to create: none`.
 
 Call `get-guidance name=administration` FIRST and follow it — it owns the identity model, role kinds and
-parents, manager groups, password handling, licenses and the version boundaries. Before assigning users
+parents, manager groups, password handling, licenses and the version boundaries. If it returns an
+unknown-topic error, STOP: report the planned roles and users as not created, and ask the developer
+before placing the app for an audience that does not exist yet. Before assigning users
 to an external organization, also read `get-guidance name=external-organizations`. Resolve
 `inspect-role` / `manage-role`, `inspect-user` / `manage-user` and `inspect-license` /
 `manage-license` through `get-tool-contract`; the `manage-*` tools are destructive, and the approved
@@ -151,7 +153,9 @@ a knowledge library older than `1.15.161`. Tell the developer the portal section
 until clio is updated, and leave the sections internal-only rather than granting access piecemeal.
 
 Tell the developer that a portal user must log in again after the placement to see the section, and that
-the real check is a portal-licensed external user opening it with data visible.
+the real check is a portal-licensed external user opening it with data visible. For `own contact` and
+`own account`, read the record rule back, and tell the developer that the scope is proven only when a
+second external user from another contact or account does not see the first user's records.
 
 ### 5. Build analytics dashboards
 

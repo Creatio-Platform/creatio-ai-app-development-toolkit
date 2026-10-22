@@ -762,10 +762,13 @@ class DefaultContractDocsTests(unittest.TestCase):
         for operation in wv.EXTERNAL_ACCESS_OPERATIONS:
             self.assertIn(f"`{operation}`", read_text(ROOT / "runbooks/02-requirements-gathering.md"),
                           f"the runbook must document the external access operation '{operation}'")
+        runbook = read_text(ROOT / "runbooks/02-requirements-gathering.md")
+        scope_start = runbook.index("- `external record scope:` per exposed section")
+        scope_bullet = runbook[scope_start:runbook.index("\n\n", scope_start)]
         for value in wv.EXTERNAL_RECORD_SCOPE_VALUES:
             self.assertRegex(f"  - external record scope: {value}", wv.EXTERNAL_RECORD_SCOPE_LABEL_RE)
-            self.assertIn(value, read_text(ROOT / "runbooks/02-requirements-gathering.md"),
-                          f"the runbook must document the record-scope value '{value}'")
+            self.assertIn(f"`{value}`", scope_bullet,
+                          f"the record-scope bullet must document the value '{value}'")
 
     def test_schema_naming_runs_before_the_object_model_is_drafted(self):
         # The plan's Object Model fixes the codes and titles the implementation creates, so the naming
@@ -821,7 +824,7 @@ class DefaultContractDocsTests(unittest.TestCase):
                         "roles must be provisioned before the navigation placement that grants them")
         provision_step = impl[provision:impl.index("#### Place the app")]
         for literal in ("get-guidance name=administration", "manage-role", "manage-user", "manage-license",
-                        "never passes through the agent", "only the external roles"):
+                        "never passes through the agent", "only the external roles", "unknown-topic error"):
             self.assertIn(literal, provision_step, f"the provisioning step must state '{literal}'")
         import workflow_validators as wv  # runtime/scripts is on sys.path (set above)
         self.assertRegex("- roles to create: none", wv.ROLES_TO_CREATE_LABEL_RE)

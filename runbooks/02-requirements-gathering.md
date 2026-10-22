@@ -341,13 +341,22 @@ structure. It describes the EXTERNAL audience's view (the `All external users` r
   carrier in `## 3. Object Model`), each describing the EXTERNAL surface with the SAME labels as §6
   (`list columns:`, `form groups:` / `form fields:`, `add page:` / `edit page:`).
 - `external access:` per exposed section — the object operations granted to `All external users`, e.g.
-  `external access: read` or `external access: read, create, edit`. Default `read`; widen only where
-  external users genuinely author records. List operations only from `read`, `create`, `edit`, `delete`.
+  `external access: read` or `external access: read, create, edit`. List operations only from `read`,
+  `create`, `edit`, `delete`. Recommend `read` and widen only where external users genuinely author
+  records.
 - `external record scope:` per exposed section — WHICH records the external audience sees: `own contact`
   (records of the portal user themselves), `own account` (records of the user's company), or `all`
-  (shared reference data every external user may read). There is NO default — ask the developer. An
-  object grant to `All external users` reaches EVERY record, so without this decision one customer
-  sees another's records.
+  (every record of the object, for every external user). There is NO default: an object grant to
+  `All external users` reaches EVERY record, so without this decision one customer sees another's
+  records. Recommend `all` only for shared reference data (a knowledge base, a catalog), with `read`.
+
+Agree the external access with the developer — the labels above carry their decision, and the
+recommendations are only the starting proposal. For each exposed section, propose `external access:`
+and `external record scope:` together and describe the proposal in plain words before approval: who
+sees which records and what they may change, for example "each customer sees and edits only their own
+company's requests" or "every customer can read every article". When the developer widens the
+recommendation — for example `all` with `create` or `edit`, which lets every external user add to or
+change every record — state that consequence in the same plain words and carry their choice.
 
 Keep the external field set small — fewer fields than the internal page, only what the external user
 needs. Leave internal working fields (assigned agent/owner, internal notes/comments, costs/margins,

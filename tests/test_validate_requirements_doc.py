@@ -732,8 +732,7 @@ class TestValidateRequirementsDocPortalSection(unittest.TestCase):
     def test_external_access_marker_only_in_prose_is_rejected(self):
         # The markers are line-anchored labels, NOT bare substrings: a prose line that
         # merely CONTAINS "external access:" (e.g. a "no external access:" narrative) must
-        # NOT satisfy the gate. Guards against the retired-`default list columns:`-style
-        # substring anti-pattern for the portal markers.
+        # NOT satisfy the gate.
         doc = PORTAL_DOC.replace(
             "  - external access: read, create\n",
             "  - customers have no external access: internal fields stay hidden\n",
@@ -828,11 +827,38 @@ class TestValidateRequirementsDocPortalSection(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("All external users", str(ctx.exception))
 
-    def test_internal_only_doc_keeps_edge_cases_at_8(self):
-        # No portal section → Edge Cases stays `## 8` and the doc is valid: the number-agnostic
-        # Edge Cases check accepts an internal-only plan.
-        self.assertNotIn("## 8. Portal section", VALID_DOC)
-        validate_requirements_doc(VALID_DOC)  # must not raise
+    def test_edge_cases_at_9_without_portal_is_rejected(self):
+        # Edge Cases moves to §9 only when the Portal section takes §8.
+        doc = VALID_DOC.replace("## 8. Edge Cases and Exceptions", "## 9. Edge Cases and Exceptions")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("missing required section: ## 8. Edge Cases and Exceptions", str(ctx.exception))
+
+    def test_near_miss_portal_headings_are_rejected(self):
+        # Each of these would otherwise be read as an internal-only plan, skipping every §8 check.
+        for heading in ("## 8. Portal section (conditional)", "## 8. Portal section:", "## 8. Portal section - external",
+                        "## 8. Portal sections", "## 9. Portal section", "### 8. Portal section", "## 8 Portal section"):
+            with self.subTest(heading=heading):
+                doc = PORTAL_DOC.replace("## 8. Portal section", heading).replace(
+                    "## 9. Edge Cases and Exceptions", "## 8. Edge Cases and Exceptions"
+                )
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("looks like the Portal section", str(ctx.exception))
+
+    def test_edge_cases_heading_with_trailing_text_is_rejected(self):
+        # The §8 slice ends at a whole-line heading, so trailing text would stretch it to the end of the plan.
+        doc = PORTAL_DOC.replace("## 9. Edge Cases and Exceptions", "## 9. Edge Cases and Exceptions (draft)")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("missing required section: ## 9. Edge Cases and Exceptions", str(ctx.exception))
+
+    def test_all_scope_with_write_operations_is_left_to_the_developer(self):
+        # Read-only is the recommended default for `all`; widening it is the developer's agreed decision.
+        doc = PORTAL_DOC.replace("external access: read, create", "external access: read, create, edit").replace(
+            "external record scope: own contact", "external record scope: all"
+        )
+        validate_requirements_doc(doc)  # must not raise
 
     def test_portal_list_columns_do_not_stand_in_for_section_6(self):
         # §6 describes the internal surface; a §8 `list columns:` line must not satisfy its gate.
