@@ -22,9 +22,5 @@ Provenance (important):
 - `tasks-aggregate-rows/` — a task folder (its build task only) in the one-row coverage format (`Fields — N expected`,
   `Related lists — N expected`) with a `built` cell on the main page's Fields row and a `wont-do (D3)` cell on its
   Related lists row. `run-tasks.mjs` copies it and never edits it in place.
-- `registry/radio-group-components.json` — **test-only** registry-export entries for `crt.RadioGroup` and
-  `crt.RadioGroupItem` (creatio-ui#3450), which the published CDN registries did not carry yet when the RADIO_GROUP
-  upgrade landed. `run-mapper.mjs` appends them to an export built from the vendored index's `latest` slice to
-  exercise the "stand carries crt.RadioGroup" path. Delete it once `component-index.json` carries both.
 
 `employeescore/` was removed — no runner loaded it.

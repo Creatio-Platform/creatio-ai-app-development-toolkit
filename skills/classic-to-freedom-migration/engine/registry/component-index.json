@@ -32,22 +32,22 @@
    },
    {
     "version": "8.3.4",
-    "sha256": "abb8dc2d9794a3b69b476aadb763bd3bc246969d2a8bad6a863072e124a328b0",
-    "bytes": 590581
+    "sha256": "293532dc20648f476e421d4c24ae0009e9e47f9c4bf7a9aaba408d64aec0cafe",
+    "bytes": 595431
    },
    {
     "version": "10.0.0",
-    "sha256": "123003772e12499739ab0ad29e9f318ce614e0073547afd7936992a3843a6488",
-    "bytes": 627178
+    "sha256": "d051a1e19c714eef77f020753bab8ed2ab825802699b2a0e7cad5eae1a9b3753",
+    "bytes": 629446
    },
    {
     "version": "latest",
-    "sha256": "3378ede466bae323e79c74ef67605303fdedab1e40516535a062d28b12c35f95",
-    "bytes": 660164
+    "sha256": "d1565561d18cb934b2260285f40347eb97f0b42e3373fcafbe9fded9c82a2944",
+    "bytes": 721596
    }
   ],
-  "componentCount": 207,
-  "taxonomyCount": 8,
+  "componentCount": 220,
+  "taxonomyCount": 13,
   "generator": "scripts/build-registry-index.mjs",
   "note": "Generated from the CDN component registries. Do not hand-edit: regenerate with --src <static-files checkout>."
  },
@@ -77,7 +77,7 @@
    ]
   },
   "styles": {
-   "v": 127,
+   "v": 63,
    "type": "Record"
   },
   "tabIndex": {
@@ -454,6 +454,10 @@
      "v": 127,
      "type": "string"
     },
+    "rowEditingDisabledAttributeName": {
+     "v": 64,
+     "type": "string"
+    },
     "rowToolbarItems": {
      "v": 127,
      "type": "array",
@@ -486,6 +490,10 @@
       "glassmorphism"
      ],
      "default": "plain-white"
+    },
+    "styles": {
+     "v": 64,
+     "type": "Record"
     },
     "title": {
      "v": 127,
@@ -559,6 +567,11 @@
     "tileSizeClasses": {
      "v": 127,
      "type": "array"
+    },
+    "useTileColors": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
     }
    },
    "outputs": {}
@@ -1664,6 +1677,17 @@
     }
    }
   },
+  "crt.CallDialer": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {},
+   "outputs": {
+    "calleeSelected": {
+     "v": 64
+    }
+   }
+  },
   "crt.CampaignViewer": {
    "v": 127,
    "compositeOnly": false,
@@ -1734,7 +1758,9 @@
   "crt.ChartWidget": {
    "v": 127,
    "compositeOnly": false,
-   "taxonomy": {},
+   "taxonomy": {
+    "whenNotToUse": "The request is a sales pipeline / opportunity funnel over Opportunity stages — use crt.FunnelWidget; or a full pipeline over Lead and Opportunity stages (\"leads and opportunities in each stage\") — use crt.FullPipelineWidget. A `tsfunnel` series here is only for funnels over other entities or groupings."
+   },
    "inputs": {
     "config": {
      "v": 127,
@@ -2541,6 +2567,78 @@
     }
    }
   },
+  "crt.CodeDesignerCodeCell": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "rowId": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    },
+    "value": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    }
+   },
+   "outputs": {}
+  },
+  "crt.CodeDesignerImageCell": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "name": {
+     "v": 64
+    },
+    "rowId": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    },
+    "url": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    }
+   },
+   "outputs": {}
+  },
+  "crt.CodeDesignerValueCell": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "cellKey": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    },
+    "emptyText": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    },
+    "rowId": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    },
+    "showHiddenCultures": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "value": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    }
+   },
+   "outputs": {}
+  },
   "crt.ColorPicker": {
    "v": 127,
    "compositeOnly": false,
@@ -2628,7 +2726,8 @@
     },
     "tooltip": {
      "v": 127,
-     "type": "string"
+     "type": "string",
+     "default": ""
     }
    },
    "outputs": {
@@ -2916,7 +3015,7 @@
     },
     "details": {
      "v": 127,
-     "type": "unknown"
+     "type": "object"
     },
     "disabled": {
      "v": 127,
@@ -3063,12 +3162,273 @@
      "v": 127,
      "type": "any"
     },
+    "styles": {
+     "v": 64,
+     "type": "Record"
+    },
     "viewModels": {
      "v": 127,
      "type": "BaseViewModelCollection"
     }
    },
    "outputs": {}
+  },
+  "crt.Connections": {
+   "v": 64,
+   "compositeOnly": false,
+   "taxonomy": {
+    "whenToUse": "Use on a record page to show the connections of the main record (the lookup and other columns listed for its object in the Object designer, Connections) in one place, instead of a separate `crt.ComboBox` for each of them. Works only while the `UseConnectionsComponent` feature is on."
+   },
+   "inputs": {
+    "availableConnections": {
+     "v": 64,
+     "type": "array"
+    },
+    "caption": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "connections": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
+    "items": {
+     "v": 64,
+     "type": "unknown",
+     "default": []
+    },
+    "labelPosition": {
+     "v": 64,
+     "type": "LabelPositionType<DisplayLabelPositionType>",
+     "values": [
+      "left",
+      "right",
+      "above",
+      "hidden",
+      "auto"
+     ],
+     "default": "auto"
+    },
+    "numberOfColumns": {
+     "v": 64,
+     "type": "number | string",
+     "default": 1
+    },
+    "readonly": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "showAllConnections": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    }
+   },
+   "outputs": {
+    "connectionAdded": {
+     "v": 64
+    }
+   }
+  },
+  "crt.ConnectionsItem": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "appearance": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "legacy",
+      "outline"
+     ],
+     "default": "legacy"
+    },
+    "ariaLabel": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "autofocus": {
+     "v": 64,
+     "type": "boolean"
+    },
+    "control": {
+     "v": 64,
+     "type": "FormControl"
+    },
+    "controlActions": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
+    "debounceTime": {
+     "v": 64,
+     "type": "number",
+     "default": 500
+    },
+    "disabled": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "filteringFn": {
+     "v": 64,
+     "type": "(items: Array<LookupValue>, filterValue: string) => Observable<Array<LookupValue>>"
+    },
+    "groupControlActions": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "isAddAllowed": {
+     "v": 64,
+     "type": "boolean",
+     "default": false,
+     "deprecated": true,
+     "deprecationReason": "Use an item of ."
+    },
+    "isGoToSourceAllowed": {
+     "v": 64,
+     "type": "boolean",
+     "default": false,
+     "deprecated": true,
+     "deprecationReason": "Use an item of ."
+    },
+    "items": {
+     "v": 64,
+     "type": "LookupValue[] | BaseViewModelCollection | null"
+    },
+    "label": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "labelPosition": {
+     "v": 64,
+     "type": "LabelPositionType<DisplayLabelPositionType>",
+     "values": [
+      "left",
+      "right",
+      "above",
+      "hidden",
+      "auto"
+     ]
+    },
+    "linkViewConfig": {
+     "v": 64,
+     "type": "unknown"
+    },
+    "listActions": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
+    "mode": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "List",
+      "SelectionWindow"
+     ],
+     "default": "List"
+    },
+    "placeholder": {
+     "v": 64,
+     "type": "string"
+    },
+    "readonly": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "referenceSchemaName": {
+     "v": 64,
+     "type": "string"
+    },
+    "showSecondaryDisplayValue": {
+     "v": 64,
+     "type": "boolean"
+    },
+    "showValueAsLink": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "sortFilteringFn": {
+     "v": 64,
+     "type": "(items: Array<LookupValue>, filterValue: string) => Observable<Array<LookupValue>>"
+    },
+    "tooltip": {
+     "v": 64,
+     "type": "string"
+    },
+    "tooltipConfig": {
+     "v": 64,
+     "type": "TooltipOverlayConfig"
+    },
+    "useMultiChoice": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "useStaticFiltering": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "value": {
+     "v": 64,
+     "type": "LookupValue | null | LookupValue[]"
+    },
+    "valueDetails": {
+     "v": 64,
+     "type": "string"
+    }
+   },
+   "outputs": {
+    "addRecord": {
+     "v": 64,
+     "deprecated": true
+    },
+    "blurred": {
+     "v": 64
+    },
+    "closed": {
+     "v": 64
+    },
+    "focused": {
+     "v": 64
+    },
+    "goToSource": {
+     "v": 64,
+     "deprecated": true
+    },
+    "keyDown": {
+     "v": 64
+    },
+    "keyUp": {
+     "v": 64
+    },
+    "opened": {
+     "v": 64
+    },
+    "paginationChange": {
+     "v": 64
+    },
+    "selectionWindowIconPressed": {
+     "v": 64
+    },
+    "showList": {
+     "v": 64
+    },
+    "valueChange": {
+     "v": 64
+    }
+   }
   },
   "crt.ContactCompactProfile": {
    "v": 127,
@@ -3636,6 +3996,10 @@
      "v": 127,
      "type": "string"
     },
+    "rowEditingDisabledAttributeName": {
+     "v": 64,
+     "type": "string"
+    },
     "rowToolbarItems": {
      "v": 127,
      "type": "array",
@@ -3668,6 +4032,10 @@
       "glassmorphism"
      ],
      "default": "plain-white"
+    },
+    "styles": {
+     "v": 64,
+     "type": "Record"
     },
     "title": {
      "v": 127,
@@ -3890,6 +4258,10 @@
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
+    "ariaLabel": {
+     "v": 64,
+     "type": "string"
+    },
     "control": {
      "v": 127,
      "type": "FormControl"
@@ -4437,7 +4809,7 @@
      "default": false
     },
     "needHandleSave": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },
@@ -4585,7 +4957,8 @@
     },
     "tooltip": {
      "v": 127,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "unmaskingDisabled": {
      "v": 127,
@@ -4638,9 +5011,26 @@
      "v": 127,
      "type": "array"
     },
+    "facetFilters": {
+     "v": 64,
+     "type": "boolean"
+    },
+    "hideStringSpecifications": {
+     "v": 64,
+     "type": "boolean"
+    },
+    "multiValueSpecifications": {
+     "v": 64,
+     "type": "array"
+    },
     "nodes": {
      "v": 127,
      "type": "array"
+    },
+    "predefinedFilter": {
+     "v": 64,
+     "type": "JsonObject",
+     "default": false
     },
     "searchResultNodes": {
      "v": 124,
@@ -5460,7 +5850,8 @@
     },
     "tooltip": {
      "v": 127,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "value": {
      "v": 127,
@@ -5606,6 +5997,10 @@
      "v": 127,
      "type": "string"
     },
+    "rowEditingDisabledAttributeName": {
+     "v": 64,
+     "type": "string"
+    },
     "rowToolbarItems": {
      "v": 127,
      "type": "array",
@@ -5638,6 +6033,10 @@
       "glassmorphism"
      ],
      "default": "plain-white"
+    },
+    "styles": {
+     "v": 64,
+     "type": "Record"
     },
     "tag": {
      "v": 127,
@@ -5745,6 +6144,10 @@
      "v": 127,
      "type": "array",
      "default": []
+    },
+    "styles": {
+     "v": 64,
+     "type": "Record"
     }
    },
    "outputs": {
@@ -5786,12 +6189,17 @@
     },
     "data": {
      "v": 120,
-     "type": "FilterBuilderSourceData<TFilter>"
+     "type": "FilterBuilderSourceData<TFilter>",
+     "default": null
     },
     "filterStorage": {
      "v": 96,
      "type": "string",
      "default": null
+    },
+    "folderTreeName": {
+     "v": 64,
+     "type": "string"
     },
     "headerTemplate": {
      "v": 96,
@@ -5806,8 +6214,7 @@
     },
     "resizable": {
      "v": 64,
-     "type": "boolean",
-     "default": true
+     "type": "boolean"
     },
     "schemaName": {
      "v": 120,
@@ -5827,6 +6234,12 @@
    "outputs": {
     "changed": {
      "v": 120
+    },
+    "rootStamped": {
+     "v": 64
+    },
+    "savedAsFolder": {
+     "v": 64
     },
     "visibilityChanged": {
      "v": 112
@@ -5979,6 +6392,10 @@
      "v": 127,
      "type": "boolean",
      "default": false
+    },
+    "styles": {
+     "v": 64,
+     "type": "Record"
     },
     "visiblePadding": {
      "v": 127,
@@ -6152,6 +6569,10 @@
    "compositeOnly": false,
    "taxonomy": {},
    "inputs": {
+    "_forecastChipState": {
+     "v": 64,
+     "type": "unknown"
+    },
     "actionDone": {
      "v": 96,
      "type": "number",
@@ -6207,6 +6628,11 @@
      "type": "array",
      "default": []
     },
+    "hierarchyRootsOverflow": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
     "hierarchyState": {
      "v": 96,
      "type": "HierarchyStateCollapsed | HierarchyStateExpanded",
@@ -6249,9 +6675,19 @@
      "type": "array",
      "default": []
     },
+    "periodsOverflow": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
     "profileScope": {
      "v": 96,
      "type": "string"
+    },
+    "recordPanel": {
+     "v": 64,
+     "type": "PersistedForecastRecordPanelState",
+     "default": null
     },
     "toolbar": {
      "v": 96,
@@ -6298,6 +6734,9 @@
     },
     "paginationRequested": {
      "v": 96
+    },
+    "recordPanelChanged": {
+     "v": 64
     },
     "rowsStateChanged": {
      "v": 96
@@ -6376,6 +6815,11 @@
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
+    "actionsLocked": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
     "building": {
      "v": 96,
      "type": "boolean",
@@ -6413,6 +6857,11 @@
     },
     "masterRecordColumnValue": {
      "v": 96,
+     "type": "string",
+     "default": ""
+    },
+    "missingParentColumnName": {
+     "v": 64,
      "type": "string",
      "default": ""
     },
@@ -6491,7 +6940,27 @@
   "crt.FullPipelineWidget": {
    "v": 127,
    "compositeOnly": false,
-   "taxonomy": {},
+   "taxonomy": {
+    "category": "chart",
+    "synonyms": [
+     "full pipeline",
+     "full pipeline chart",
+     "full pipeline widget",
+     "full funnel",
+     "end-to-end pipeline",
+     "lead to opportunity funnel",
+     "multi-entity funnel"
+    ],
+    "useCases": [
+     "Show the number of leads and opportunities in each stage of the end-to-end pipeline",
+     "Show a full pipeline chart connecting Lead stages to Opportunity stages",
+     "Compare lead-stage and opportunity-stage volumes in a single funnel, optionally filtered by period"
+    ],
+    "whenToUse": "The request spans more than one pipeline entity — \"full pipeline\", \"full pipeline chart\", \"leads and opportunities in each stage\", \"lead-to-opportunity funnel\", \"end-to-end pipeline\".",
+    "whenNotToUse": "Only Opportunity stages are needed (crt.FunnelWidget), or the funnel is over some OTHER entity or grouping such as cases by status (crt.ChartWidget with a `tsfunnel` series).",
+    "appliesToCustomEntities": false,
+    "entityCouplingNote": "Lead/Opportunity-pipeline-specific: the connected stages come from the platform pipeline service and cannot be repointed at other entities."
+   },
    "inputs": {
     "config": {
      "v": 127,
@@ -6541,7 +7010,30 @@
   "crt.FunnelWidget": {
    "v": 127,
    "compositeOnly": false,
-   "taxonomy": {},
+   "taxonomy": {
+    "category": "chart",
+    "synonyms": [
+     "funnel",
+     "funnel chart",
+     "funnel widget",
+     "sales funnel",
+     "pipeline",
+     "sales pipeline",
+     "pipeline chart",
+     "opportunity funnel",
+     "opportunity pipeline",
+     "conversion funnel"
+    ],
+    "useCases": [
+     "Show a sales pipeline / opportunity funnel with the number of opportunities in each stage",
+     "Show stage-to-stage or to-first-stage conversion rates across the opportunity pipeline",
+     "Show the total amount of opportunities per pipeline stage, optionally filtered by period or owner"
+    ],
+    "whenToUse": "The request is a funnel, funnel chart or pipeline over Opportunity stages — including \"sales pipeline\", \"opportunity funnel\", \"opportunities by stage\" and \"conversion by stage\".",
+    "whenNotToUse": "The funnel must also show Lead stages / \"leads and opportunities in each stage\" (crt.FullPipelineWidget), or it is a funnel over some OTHER entity or grouping such as cases by status (crt.ChartWidget with a `tsfunnel` series).",
+    "appliesToCustomEntities": false,
+    "entityCouplingNote": "Opportunity-pipeline-specific: the slices are Opportunity stages resolved by the platform pipeline service. It cannot be pointed at another entity — route those requests to crt.ChartWidget with a `tsfunnel` series."
+   },
    "inputs": {
     "config": {
      "v": 127,
@@ -6696,6 +7188,10 @@
      "v": 127,
      "type": "Record"
     },
+    "itemViewConfig": {
+     "v": 64,
+     "type": "array"
+    },
     "mode": {
      "v": 127,
      "type": "string",
@@ -6703,7 +7199,9 @@
       "view-element-config",
       "component-type"
      ],
-     "default": "component-type"
+     "default": "component-type",
+     "deprecated": true,
+     "deprecationReason": "Use `itemViewConfig` to compose the tile from view elements."
     },
     "multiselect": {
      "v": 127,
@@ -6722,6 +7220,11 @@
     "selectionState": {
      "v": 127,
      "type": "AllSelectionState | SpecificSelectionState"
+    },
+    "updateItemsInPlace": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
     }
    },
    "outputs": {
@@ -6785,7 +7288,8 @@
     },
     "errorMessage": {
      "v": 120,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "isDesignTime": {
      "v": 31,
@@ -6955,6 +7459,10 @@
      "type": "boolean",
      "default": false
     },
+    "styles": {
+     "v": 64,
+     "type": "Record"
+    },
     "visiblePadding": {
      "v": 127,
      "type": "boolean",
@@ -7011,6 +7519,10 @@
      "v": 127,
      "type": "boolean",
      "default": false
+    },
+    "styles": {
+     "v": 64,
+     "type": "Record"
     },
     "title": {
      "v": 127,
@@ -7316,6 +7828,11 @@
      "type": "string",
      "default": ""
     },
+    "stretchToContent": {
+     "v": 96,
+     "type": "boolean",
+     "default": false
+    },
     "urlContent": {
      "v": 127,
      "type": "string"
@@ -7401,7 +7918,7 @@
      "default": false
     },
     "displayTools": {
-     "v": 126,
+     "v": 62,
      "type": "boolean"
     },
     "id": {
@@ -7409,7 +7926,7 @@
      "type": "unknown"
     },
     "inputType": {
-     "v": 127,
+     "v": 63,
      "type": "string",
      "default": "text"
     },
@@ -7436,7 +7953,7 @@
      "default": "auto"
     },
     "mask": {
-     "v": 127,
+     "v": 63,
      "type": "InputMaskConfig"
     },
     "maxFileSize": {
@@ -7444,7 +7961,7 @@
      "type": "number"
     },
     "multiline": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },
@@ -7491,7 +8008,8 @@
     },
     "tooltip": {
      "v": 127,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "value": {
      "v": 127,
@@ -7606,7 +8124,8 @@
     },
     "errorMessage": {
      "v": 120,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "isDesignTime": {
      "v": 31,
@@ -8136,6 +8655,10 @@
      "v": 127,
      "type": "string"
     },
+    "rowEditingDisabledAttributeName": {
+     "v": 64,
+     "type": "string"
+    },
     "rowToolbarItems": {
      "v": 127,
      "type": "array",
@@ -8312,7 +8835,8 @@
     },
     "tooltip": {
      "v": 96,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "value": {
      "v": 96,
@@ -8486,6 +9010,124 @@
     }
    },
    "outputs": {}
+  },
+  "crt.LogoField": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "color": {
+     "v": 64,
+     "type": "string"
+    },
+    "colorLabel": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "description": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "label": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "position": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "UpperPanel",
+      "LoginPage",
+      "Configuration",
+      "MainPage"
+     ],
+     "default": "UpperPanel"
+    },
+    "readonly": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "showColor": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "usesDefaultLogo": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "value": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    }
+   },
+   "outputs": {
+    "colorChange": {
+     "v": 64
+    },
+    "logoChange": {
+     "v": 64
+    }
+   }
+  },
+  "crt.LogoPreview": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "backgroundUrl": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "configurationLogo": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "loginPageLogo": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "mainPageLogo": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "position": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "UpperPanel",
+      "LoginPage",
+      "Configuration",
+      "MainPage"
+     ],
+     "default": "UpperPanel"
+    },
+    "underlayColor": {
+     "v": 64,
+     "type": "string",
+     "default": "transparent"
+    },
+    "upperPanelLogo": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    }
+   },
+   "outputs": {
+    "positionChange": {
+     "v": 64
+    }
+   }
   },
   "crt.LookupQuickFilterMenuItem": {
    "v": 127,
@@ -8683,7 +9325,7 @@
    "inputs": {
     "attachments": {
      "v": 120,
-     "type": "array",
+     "type": "(File | ChatDraftFile)[]",
      "default": []
     },
     "chatInput": {
@@ -8694,6 +9336,11 @@
      "v": 120,
      "type": "MessageEditorTooltipState",
      "default": null
+    },
+    "hasPendingUploads": {
+     "v": 80,
+     "type": "boolean",
+     "default": false
     },
     "inputs": {
      "v": 127,
@@ -8738,7 +9385,7 @@
     },
     "attachments": {
      "v": 120,
-     "type": "array",
+     "type": "(File | ChatDraftFile)[]",
      "default": []
     },
     "chatInput": {
@@ -8766,6 +9413,11 @@
     "isFocused": {
      "v": 127,
      "type": "boolean"
+    },
+    "maxFilesCount": {
+     "v": 80,
+     "type": "number",
+     "default": 10
     },
     "mentionService": {
      "v": 127,
@@ -8821,7 +9473,7 @@
     },
     "instanceConfig": {
      "v": 127,
-     "type": "any"
+     "type": "Record"
     },
     "module": {
      "v": 127,
@@ -9228,6 +9880,11 @@
      "v": 120,
      "type": "array",
      "default": []
+    },
+    "useTileColors": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
     }
    },
    "outputs": {
@@ -9252,6 +9909,11 @@
     "tileSizeClasses": {
      "v": 127,
      "type": "array"
+    },
+    "useTileColors": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
     }
    },
    "outputs": {}
@@ -9562,7 +10224,8 @@
     },
     "tooltip": {
      "v": 127,
-     "type": "string"
+     "type": "string",
+     "default": ""
     },
     "validations": {
      "v": 127,
@@ -9689,7 +10352,7 @@
      "default": false
     },
     "needHandleSave": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },
@@ -9798,7 +10461,23 @@
   "crt.PivotWidget": {
    "v": 96,
    "compositeOnly": false,
-   "taxonomy": {},
+   "taxonomy": {
+    "category": "chart",
+    "synonyms": [
+     "pivot table",
+     "cross-tab",
+     "crosstab",
+     "matrix report"
+    ],
+    "useCases": [
+     "Break a measure down by two dimensions at once, e.g. case count by status and by priority",
+     "Compare aggregates across a row/column grid with grand totals",
+     "Show a per-group calculated ratio, e.g. the share of each contact's cases that are still open"
+    ],
+    "whenToUse": "One or more measures have to be grouped by rows and columns at the same time.",
+    "whenNotToUse": "A single aggregate is enough (crt.IndicatorWidget), the request asks for a graphical series (crt.ChartWidget), or it needs a flat list of records rather than aggregates (crt.ListWidget).",
+    "appliesToCustomEntities": true
+   },
    "inputs": {
     "config": {
      "v": 96,
@@ -9819,8 +10498,11 @@
      "type": "boolean"
     },
     "loading": {
-     "v": 96,
+     "v": 32,
      "type": "boolean"
+    },
+    "name": {
+     "v": 64
     }
    },
    "outputs": {}
@@ -9894,6 +10576,160 @@
      "v": 127
     }
    }
+  },
+  "crt.RadioGroup": {
+   "v": 64,
+   "compositeOnly": false,
+   "taxonomy": {},
+   "inputs": {
+    "appearance": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "legacy",
+      "outline"
+     ],
+     "default": "legacy"
+    },
+    "ariaLabel": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "control": {
+     "v": 64,
+     "type": "FormControl"
+    },
+    "direction": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "vertical",
+      "horizontal"
+     ],
+     "default": "vertical"
+    },
+    "disabled": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "items": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
+    "label": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "labelPosition": {
+     "v": 64,
+     "type": "LabelPositionType<DisplayLabelPositionType>",
+     "values": [
+      "left",
+      "right",
+      "above",
+      "hidden",
+      "auto"
+     ],
+     "default": "auto"
+    },
+    "optionLabelPosition": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "before",
+      "after",
+      "above"
+     ],
+     "default": "after"
+    },
+    "placeholder": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "readonly": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "titleStyle": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "default",
+      "h2",
+      "h3",
+      "h4",
+      "h5"
+     ],
+     "default": "default"
+    },
+    "tooltip": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "valuesSource": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "lookup",
+      "custom"
+     ],
+     "default": "lookup"
+    }
+   },
+   "outputs": {
+    "blurred": {
+     "v": 64
+    },
+    "focused": {
+     "v": 64
+    },
+    "keyDown": {
+     "v": 64
+    },
+    "keyUp": {
+     "v": 64
+    },
+    "valueChange": {
+     "v": 64
+    }
+   }
+  },
+  "crt.RadioGroupItem": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "caption": {
+     "v": 64,
+     "type": "string",
+     "default": ""
+    },
+    "disabled": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "name": {
+     "v": 64
+    },
+    "readonly": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
+    "value": {
+     "v": 64,
+     "type": "string | number | boolean"
+    }
+   },
+   "outputs": {}
   },
   "crt.RichTextEditor": {
    "v": 127,
@@ -10516,6 +11352,95 @@
     }
    }
   },
+  "crt.Stepper": {
+   "v": 64,
+   "compositeOnly": false,
+   "taxonomy": {},
+   "inputs": {
+    "activeStep": {
+     "v": 64,
+     "type": "string",
+     "default": null
+    },
+    "items": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
+    "linear": {
+     "v": 64,
+     "type": "boolean",
+     "default": true
+    },
+    "showStepHeader": {
+     "v": 64,
+     "type": "boolean",
+     "default": true
+    }
+   },
+   "outputs": {}
+  },
+  "crt.StepperIndicator": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "for": {
+     "v": 64,
+     "type": "string"
+    },
+    "markerType": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "number",
+      "icon",
+      "dot"
+     ]
+    },
+    "orientation": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "horizontal",
+      "vertical"
+     ]
+    },
+    "titlePosition": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "side",
+      "below"
+     ]
+    }
+   },
+   "outputs": {}
+  },
+  "crt.StepperItem": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "canGoNext": {
+     "v": 64,
+     "type": "boolean"
+    },
+    "caption": {
+     "v": 64,
+     "type": "string"
+    },
+    "description": {
+     "v": 64,
+     "type": "string"
+    },
+    "icon": {
+     "v": 64,
+     "type": "string"
+    }
+   },
+   "outputs": {}
+  },
   "crt.Summaries": {
    "v": 127,
    "compositeOnly": false,
@@ -10648,7 +11573,8 @@
     },
     "tooltip": {
      "v": 96,
-     "type": "string"
+     "type": "string",
+     "default": ""
     }
    },
    "outputs": {
@@ -12075,36 +13001,36 @@
    "outputs": {}
   },
   "crt.ToggleContainer": {
-   "v": 127,
+   "v": 63,
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
     "borderRadius": {
-     "v": 127,
+     "v": 63,
      "type": "SizeEnum | number | string",
      "default": "none"
     },
     "color": {
-     "v": 127,
+     "v": 63,
      "type": "string",
      "default": "transparent"
     },
     "elementResponsiveWidth": {
-     "v": 127,
+     "v": 63,
      "type": "number",
      "default": 0
     },
     "fitContent": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": true
     },
     "items": {
-     "v": 127,
+     "v": 63,
      "type": "array"
     },
     "padding": {
-     "v": 127,
+     "v": 63,
      "type": "ContainerPadding | SizeEnum | string | number",
      "default": {
       "top": "none",
@@ -12114,60 +13040,60 @@
      }
     },
     "preserveContent": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": true
     },
     "responsiveWidth": {
-     "v": 127,
+     "v": 63,
      "type": "unknown"
     },
     "selectedTab": {
-     "v": 127,
+     "v": 63,
      "type": "unknown",
      "default": null
     },
     "selectedTabIndex": {
-     "v": 127,
+     "v": 63,
      "type": "unknown"
     },
     "slidingAnimation": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },
     "stretch": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },
     "visiblePadding": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": true
     }
    },
    "outputs": {
     "selectedTabChange": {
-     "v": 127
+     "v": 63
     },
     "selectedTabIndexChange": {
-     "v": 127
+     "v": 63
     }
    }
   },
   "crt.ToggleContainerItem": {
-   "v": 127,
+   "v": 63,
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
     "allowToggleClose": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": true
     },
     "backgroundColor": {
-     "v": 127,
+     "v": 63,
      "type": "string",
      "values": [
       "auto",
@@ -12184,36 +13110,36 @@
      "default": "primary-contrast-500"
     },
     "borderRadius": {
-     "v": 127,
+     "v": 63,
      "type": "SizeEnum | number | string",
      "default": "none"
     },
     "color": {
-     "v": 127,
+     "v": 63,
      "type": "string",
      "default": "transparent"
     },
     "elementResponsiveWidth": {
-     "v": 127,
+     "v": 63,
      "type": "number",
      "default": 0
     },
     "fitContent": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": true
     },
     "isToggleTabHeaderVisible": {
-     "v": 127,
+     "v": 63,
      "type": "boolean"
     },
     "items": {
-     "v": 127,
+     "v": 63,
      "type": "ContainerViewElements",
      "default": []
     },
     "padding": {
-     "v": 127,
+     "v": 63,
      "type": "ContainerPadding | SizeEnum | string | number",
      "default": {
       "top": "none",
@@ -12223,23 +13149,23 @@
      }
     },
     "responsiveWidth": {
-     "v": 127,
+     "v": 63,
      "type": "unknown"
     },
     "stretch": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },
     "visiblePadding": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": true
     }
    },
    "outputs": {
     "closeContainer": {
-     "v": 127
+     "v": 63
     }
    }
   },
@@ -12685,7 +13611,7 @@
      "default": false
     },
     "needHandleSave": {
-     "v": 127,
+     "v": 63,
      "type": "boolean",
      "default": false
     },

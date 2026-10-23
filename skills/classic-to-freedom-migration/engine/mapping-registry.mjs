@@ -124,7 +124,10 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
     add(row.meta?.requiresRegistry ? "component-unindexed" : "unknown-component", { componentType: ctype });
     return findings;
   }
-  const ctx = { c, ctype, version, bit: version ? versionBit(version, index) : null, index, add };
+  // A `requiresRegistry` row is built only where the run's registry carries its component, so being absent from an
+  // OLDER version is its design, exactly like an `upgrade` target below: it is judged against the union of versions.
+  const atVersion = row.meta?.requiresRegistry ? null : version;
+  const ctx = { c, ctype, version: atVersion, bit: atVersion ? versionBit(atVersion, index) : null, index, add };
   checkComponent(ctx);
   checkInputs(row.target?.propMap, ctx);
   checkOutputs(row.target?.events, ctx);
@@ -279,36 +282,38 @@ export function resolveRunIndex(manifest, { readFile = null } = {}) {
 // a pinned version can answer yes: a union of versions passes a type present in ANY of them, which says nothing about
 // the target stand, so it answers no — as does an unreadable export, which fell back to that union.
 export function carriesComponent(reg, componentType) {
-  const c = reg?.index?.components?.[componentType];
-  const bit = reg?.version ? versionBit(reg.version, reg.index) : null;
-  return !!c && bit !== null && (c.v & bit) !== 0;
+  return carriedOn(reg?.index, componentType, reg?.version || null);
 }
 
-// Does the index CARRY `ctype` on `version`? Only a positive answer counts: no version (the union of every indexed
-// version) proves nothing about the target stand, and a version the index never saw is unknown, not "present".
-export function carriedOn(index, ctype, version) {
+// Does the index CARRY `ctype` on `version` — and, when `inputs` are named, every one of those inputs on that version?
+// Only a positive answer counts: no version (the union of every indexed version) proves nothing about the target
+// stand, and a version the index never saw is unknown, not "present". An input record without a mask (`v == null`)
+// states no version membership, so its presence is enough.
+export function carriedOn(index, ctype, version, inputs = []) {
   const c = index?.components?.[ctype];
   if (!c || !version) return false;
   const bit = versionBit(version, index);
-  return bit !== null && (c.v & bit) !== 0;
+  const onVersion = (m) => !!m && (m.v == null || (m.v & bit) !== 0);
+  return bit !== null && (c.v & bit) !== 0 && inputs.every((k) => onVersion(c.inputs?.[k]));
 }
 
 // Which target a row emits on THIS run. A row with an `upgrade` emits it only when the run's registry positively
-// carries the upgrade component AND its option-child component on the version the run targets — a stand export,
-// or a pinned platform version. Everything else (no registry, the unpinned union, an unreadable export that fell
-// back to the union) keeps `row.target`: a page built on a type the stand cannot resolve does not render, so the
-// fallback is the safe default. `availableIn` lists the indexed versions that DO carry the upgrade, so a run that
+// carries the upgrade component AND its option-child component on the version the run targets, each with the inputs
+// its `gateInputs` names (crt.RadioGroupItem's `caption`) — a stand export, or a pinned platform version.
+// Everything else (no registry, the unpinned union, an unreadable export that fell back to the union) keeps
+// `row.target`: a page built on a type the stand cannot resolve does not render, so the fallback is the safe default. `availableIn` lists the indexed versions that DO carry the upgrade, so a run that
 // fell back can say a newer stand would get it.
 export function resolveRowTarget(row, registry) {
-  const types = upgradeTargets(row).map((t) => t.componentType);
-  if (!types.length) return { target: row?.target || null, upgraded: false, availableIn: [] };
+  const targets = upgradeTargets(row);
+  if (!targets.length) return { target: row?.target || null, upgraded: false, availableIn: [] };
   const index = registry?.index || null;
   const version = registry?.source === "vendored-union" ? null : registry?.version || null;
-  if (index && types.every((t) => carriedOn(index, t, version))) return { target: row.upgrade, upgraded: true, availableIn: [] };
+  const carriedAll = (v) => targets.every((t) => carriedOn(index, t.componentType, v, t.gateInputs || []));
+  if (index && carriedAll(version)) return { target: row.upgrade, upgraded: true, availableIn: [] };
   // Only an unversioned run can be told "a newer stand would get it": a pinned version or a stand export that lacks
   // the upgrade has answered the question for the target stand already.
   const names = version ? [] : index?.meta?.versions || [];
-  const availableIn = names.filter((v) => types.every((t) => carriedOn(index, t, v)));
+  const availableIn = names.filter(carriedAll);
   return { target: row.target, upgraded: false, availableIn };
 }
 

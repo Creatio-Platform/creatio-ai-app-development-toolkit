@@ -113,18 +113,21 @@ For each Classic page/detail, record:
 ### Radio groups
 
 The engine builds a Classic `RADIO_GROUP` as `crt.RadioGroup` only when the run's component registry shows the target
-stand carries `crt.RadioGroup` and `crt.RadioGroupItem`: a stand registry export (`manifest.componentRegistry`) or a
-pinned `manifest.platformVersion` that has them. Otherwise it keeps `crt.IconRadioButton`, which every indexed
-version renders; an unpinned run never assumes the newer component.
+stand carries `crt.RadioGroup` and a `crt.RadioGroupItem` with the `caption` input: a stand registry export
+(`manifest.componentRegistry`) or a pinned `manifest.platformVersion` that has them. A build whose `crt.RadioGroupItem`
+has no `caption` would show each option's raw value as its caption, so it keeps `crt.IconRadioButton` too, as does every
+other run: every indexed version renders it, and an unpinned run never assumes the newer component. An unpinned run
+raises a `registry-upgrade-available` decision naming the indexed versions that would get `crt.RadioGroup`. A folded
+page (mini page, typed or child page) uses the root run's registry unless its own bundle names one.
 
 - **Shape.** The group gets `control`, `label`, `valuesSource: "custom"` and `items: []`; each Classic option becomes
   its own `crt.RadioGroupItem` insert (`parentName` = the group, `propertyName: "items"`), named after the Classic
   option element, with `caption: "#ResourceString(<option name>_caption)#"`. Named options are what lets a business
   rule ("Hide elements", "Make read-only") or a package address one option.
 - **Values keep their Classic type.** Boolean options are `true` / `false`, Integer options numbers, Text options
-  strings: the group writes the option value back unchanged, so the bound column gets a value of its own type.
-  Re-editing an option in the Designer stores it as text, so do not re-edit the options of a Boolean / Integer group
-  there.
+  strings: the group writes the option value back unchanged, so the bound column gets a value of its own type. A
+  business rule that compares the column with an option value compares typed values too.
+- **Designer.** The Page Designer cannot edit a group with custom values: change its options in the page schema.
 - **Binding.** A group bound to an entity column keeps the PDS attribute and column. A group bound to a page
   attribute (including a ContentBuilder `$Attr`) gets a page attribute with no PDS path.
 - **Disabled options.** A Classic `enabled: false` option is emitted with `disabled: true`. An option whose `enabled`

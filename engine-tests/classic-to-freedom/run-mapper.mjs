@@ -11422,22 +11422,29 @@ try {
     () => ({ lines: rgSpec.split("\n").filter((l) => /IsPrimary/.test(l)), tableElements: rgFull.changeSet.tableElements }));
 
   // ---- RADIO_GROUP -> crt.RadioGroup where the run's registry carries it ---------------------------------------
-  // The vendored index predates crt.RadioGroup, so "a stand that carries it" is a registry EXPORT built from the
-  // index's `latest` slice plus the two components from the test-only fixture (fixtures/README.md).
+  // "A stand that carries it" is a registry EXPORT built from the vendored index's `latest` slice, which carries
+  // crt.RadioGroup and a crt.RadioGroupItem with the `caption` input; "a build without the caption input" is the same
+  // export with that one input removed.
   const rgIdx = vendoredIndex();
   const rgLatestBit = 1 << rgIdx.meta.versions.indexOf("latest");
   const rgOnLatest = (o) => Object.fromEntries(Object.entries(o || {})
     .filter(([, m]) => m.v == null || (m.v & rgLatestBit) !== 0)
     .map(([k, m]) => { const { v, ...meta } = m; return [k, meta]; }));
-  const rgFixture = JSON.parse(fs.readFileSync(path.join(FIX, "registry", "radio-group-components.json"), "utf8"));
   const rgExport = {
-    components: [
-      ...Object.entries(rgIdx.components).filter(([, c]) => (c.v & rgLatestBit) !== 0)
-        .map(([componentType, c]) => ({ componentType, compositeOnly: c.compositeOnly, inputs: rgOnLatest(c.inputs), outputs: rgOnLatest(c.outputs) })),
-      ...rgFixture.components,
-    ],
+    components: Object.entries(rgIdx.components).filter(([, c]) => (c.v & rgLatestBit) !== 0)
+      .map(([componentType, c]) => ({ componentType, compositeOnly: c.compositeOnly, inputs: rgOnLatest(c.inputs), outputs: rgOnLatest(c.outputs) })),
     references: { baseInputs: rgOnLatest(rgIdx.baseInputs) },
   };
+  const rgNoCaptionExport = { ...rgExport, components: rgExport.components.map((c) => {
+    if (c.componentType !== "crt.RadioGroupItem") return c;
+    const { caption, ...inputs } = c.inputs;
+    return { ...c, inputs };
+  }) };
+  check("radio group: the vendored index's `latest` carries crt.RadioGroup and a crt.RadioGroupItem with the caption input (the export the cases below stand on)",
+    rgExport.components.some((c) => c.componentType === "crt.RadioGroup")
+    && "caption" in (rgExport.components.find((c) => c.componentType === "crt.RadioGroupItem")?.inputs || {})
+    && !("caption" in (rgNoCaptionExport.components.find((c) => c.componentType === "crt.RadioGroupItem")?.inputs || { caption: 1 })),
+    () => rgExport.components.filter((c) => c.componentType.startsWith("crt.RadioGroup")));
   const rgGroupOp = (name, attr, extra = "") => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"${attr}"},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
   const rgOptOp = (name, parent, value, extra = "") => `{operation:"insert",name:"${name}",parentName:"${parent}",propertyName:"items",values:{value:${JSON.stringify(value)},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
   const rgCols = { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" }, Priority: { type: "Integer" },
@@ -11550,26 +11557,69 @@ try {
   const fbUnion = fbRun({});
   const fbPinned = fbRun({ platformVersion: "8.3.4" });
   const fbExport = fbRun({ componentRegistry: { components: rgExport.components.filter((c) => !c.componentType.startsWith("crt.RadioGroup")), references: rgExport.references } });
-  check("radio group T7: the unpinned union run, an 8.3.4-pinned run and a stand export without crt.RadioGroup all build crt.IconRadioButton with its folded items",
-    [fbUnion, fbPinned, fbExport].every((r) => rgOp(r, "IsPrimary")?.values?.type === "crt.IconRadioButton"
+  const fbNoCaption = fbRun({ componentRegistry: rgNoCaptionExport });
+  const fbAll = [fbUnion, fbPinned, fbExport, fbNoCaption];
+  check("radio group T7: the unpinned union run, an 8.3.4-pinned run, a stand export without crt.RadioGroup and one whose crt.RadioGroupItem lacks the caption input all build crt.IconRadioButton with its folded items",
+    fbAll.every((r) => rgOp(r, "IsPrimary")?.values?.type === "crt.IconRadioButton"
       && rgOp(r, "IsPrimary").values.items?.length === 2 && rgKids(r, "IsPrimary").length === 0),
-    () => [fbUnion, fbPinned, fbExport].map((r) => rgOp(r, "IsPrimary")));
+    () => fbAll.map((r) => rgOp(r, "IsPrimary")));
   check("radio group T7: the fallback output is byte-identical across those runs and to the pre-upgrade golden shape (rgFull)",
-    fbShape(fbUnion) === fbShape(fbPinned) && fbShape(fbUnion) === fbShape(fbExport)
+    fbAll.every((r) => fbShape(r) === fbShape(fbUnion))
     // the golden names its option captions YesCaption/NoCaption, this input OptYesCaption/OptNoCaption
-    && JSON.stringify(rgOp(fbUnion, "IsPrimary").values).replace(/Opt(Yes|No)Caption/g, "$1Caption") === JSON.stringify(rgEl.values)
-    && !fbUnion.changeSet.needsDecision.some((d) => d.kind === "registry-upgrade-available"),
+    && JSON.stringify(rgOp(fbUnion, "IsPrimary").values).replace(/Opt(Yes|No)Caption/g, "$1Caption") === JSON.stringify(rgEl.values),
     () => ({ union: rgOp(fbUnion, "IsPrimary"), pinned: rgOp(fbPinned, "IsPrimary"), golden: rgEl }));
+  // Only the unpinned union can be told a newer stand would get crt.RadioGroup: a pin or a stand export has answered
+  // for the target stand already.
+  const fbUpAvail = fbUnion.changeSet.needsDecision.filter((d) => d.kind === "registry-upgrade-available");
+  check("radio group T7: the union run says which indexed versions would get crt.RadioGroup; the pinned run and the stand exports raise no such item",
+    fbUpAvail.length === 1 && fbUpAvail[0].item === "IsPrimary" && /\blatest\b/.test(fbUpAvail[0].reason) && !/8\.3\.4/.test(fbUpAvail[0].reason)
+    && [fbPinned, fbExport, fbNoCaption].every((r) => !r.changeSet.needsDecision.some((d) => d.kind === "registry-upgrade-available")),
+    () => ({ union: fbUpAvail, others: [fbPinned, fbExport, fbNoCaption].map((r) => r.changeSet.needsDecision.filter((d) => d.kind === "registry-upgrade-available")) }));
+  const fbLatest = fbRun({ platformVersion: "latest" });
+  check("radio group T7: a run pinned to the vendored `latest` (which carries crt.RadioGroup with the caption input) builds crt.RadioGroup",
+    rgOp(fbLatest, "IsPrimary")?.values?.type === "crt.RadioGroup" && rgKids(fbLatest, "IsPrimary").length === 2,
+    () => rgOps(fbLatest).filter((o) => /IsPrimary|Opt/.test(o.name)));
+  // A folded mini page inherits the ROOT run's registry: the stand export is supplied once, on the root manifest.
+  const rgMiniDiff = [rgGroupOp("IsPrimary", "IsPrimary").replace('parentName:"Header"', 'parentName:"ProfileContainer"'),
+    rgOptOp("OptYes", "IsPrimary", true), rgOptOp("OptNo", "IsPrimary", false)].join(",");
+  const rgMiniBody = `define("XMiniPage",[],function(){return{entitySchemaName:"X",diff:[${rgMiniDiff}]};});`;
+  const rgMiniRun = (root, mini = {}) => runMigration({ entity: "X", noParentTemplate: true, entityColumns: rgCols, resources: rgRes, ...root,
+    addRecordMiniPage: { schema: "XMiniPage" },
+    miniPageSchemas: { XMiniPage: { entity: "X", seed: CLEAN_SEED, entityColumns: rgCols, resources: rgRes, ...mini, schemas: [{ pkg: "P", body: rgMiniBody }] } },
+    schemas: [{ pkg: "P", body: gmBody("", nameOp) }],
+    section: [{ pkg: "P", body: `define("X1Section",[],function(){return{entitySchemaName:"X",methods:{},diff:[]};});` }] }, { baseDir: FIX });
+  const miniUp = rgMiniRun({ componentRegistry: rgExport });
+  const miniSpec = miniUp.miniPage?.spec || "";
+  check("radio group T7: a mini page folded under a root whose registry carries crt.RadioGroup builds crt.RadioGroup and asks for no registry",
+    /crt\.RadioGroup\b/.test(miniSpec) && !/crt\.IconRadioButton/.test(miniSpec)
+    && !/registry-upgrade-available|componentRegistry/.test(miniSpec),
+    () => ({ keys: Object.keys(miniUp), lines: miniSpec.split("\n").filter((l) => /Radio|IsPrimary|registry/i.test(l)) }));
+  const miniOwn = rgMiniRun({ componentRegistry: rgExport }, { platformVersion: "8.3.4" });
+  check("radio group T7 (anti-vacuity): the same mini page whose bundle pins its own 8.3.4 keeps crt.IconRadioButton",
+    /crt\.IconRadioButton/.test(miniOwn.miniPage?.spec || "") && !/crt\.RadioGroup\b/.test(miniOwn.miniPage?.spec || ""),
+    () => (miniOwn.miniPage?.spec || "").split("\n").filter((l) => /Radio|IsPrimary/i.test(l)));
   // The union fallback names the upgrade ONLY when the index carries it on some version — driven at the mapper seam
   // with a two-version index, because the vendored one does not carry crt.RadioGroup yet.
   const rgUnionIdx = { meta: { versions: ["8.3.4", "latest"] }, components: {
     "crt.IconRadioButton": { v: 3, inputs: {}, outputs: {} }, "crt.RadioGroup": { v: 2, inputs: {}, outputs: {} },
-    "crt.RadioGroupItem": { v: 2, inputs: {}, outputs: {} } } };
+    "crt.RadioGroupItem": { v: 2, inputs: { caption: { v: 2 } }, outputs: {} } } };
+  // …and one whose crt.RadioGroupItem gained `caption` only after the version that introduced the component.
+  const rgLateCaptionIdx = { meta: { versions: ["10.0.0", "latest"] }, components: {
+    "crt.IconRadioButton": { v: 3, inputs: {}, outputs: {} }, "crt.RadioGroup": { v: 3, inputs: {}, outputs: {} },
+    "crt.RadioGroupItem": { v: 3, inputs: { caption: { v: 2 } }, outputs: {} } } };
   const rgEff = mergeHierarchy([parseSchema(gmBody("", rgDiff), "P")]);
   const viaMapper = (registry) => mapToFreedom(rgEff, { entityColumns: rgCols, resources: rgRes, registry });
   const unionCs = viaMapper({ index: rgUnionIdx, version: null, source: "vendored-union" });
   const pinnedCs = viaMapper({ index: rgUnionIdx, version: "latest", source: "vendored-pinned" });
   const oldPinnedCs = viaMapper({ index: rgUnionIdx, version: "8.3.4", source: "vendored-pinned" });
+  const lateType = (version) => viaMapper({ index: rgLateCaptionIdx, version, source: "vendored-pinned" })
+    .viewConfigDiff.find((o) => o.name === "IsPrimary")?.values?.type;
+  const lateUnion = viaMapper({ index: rgLateCaptionIdx, version: null, source: "vendored-union" })
+    .needsDecision.filter((d) => d.kind === "registry-upgrade-available");
+  check("radio group T7: the gate keys on the crt.RadioGroupItem `caption` input — a version that carries both components but no caption keeps crt.IconRadioButton, and the union names only the version with caption",
+    lateType("10.0.0") === "crt.IconRadioButton" && lateType("latest") === "crt.RadioGroup"
+    && lateUnion.length === 1 && /\blatest\b/.test(lateUnion[0].reason) && !/10\.0\.0/.test(lateUnion[0].reason),
+    () => ({ v10: lateType("10.0.0"), latest: lateType("latest"), lateUnion }));
   const upAvail = unionCs.needsDecision.filter((d) => d.kind === "registry-upgrade-available");
   check("radio group T7: a union index that carries crt.RadioGroup only on `latest` still builds crt.IconRadioButton and says which versions would get crt.RadioGroup",
     unionCs.viewConfigDiff.find((o) => o.name === "IsPrimary")?.values?.type === "crt.IconRadioButton"
@@ -11582,8 +11632,8 @@ try {
     () => [pinnedCs, oldPinnedCs].map((cs) => cs.viewConfigDiff.find((o) => o.name === "IsPrimary")));
 
   // The registry check covers the upgrade target too: an index that carries crt.RadioGroup validates its propMap
-  // keys (a typo there would ship to every stand that has the component); the vendored index, which does not carry
-  // it yet, records an advisory instead of failing the table.
+  // keys (a typo there would ship to every stand that has the component); an index that does not carry it records
+  // an advisory instead of failing the table.
   const rgTableRow = rowForItemType(VIEW_ITEM_TYPE.RADIO_GROUP);
   const rgStandIdx = indexFromRegistryExport(rgExport, { version: "latest" });
   const badUpgradeRow = { ...rgTableRow, upgrade: { ...rgTableRow.upgrade, propMap: { ...rgTableRow.upgrade.propMap, notAnInput: { from: SOURCE.LITERAL, value: 1 } } } };
@@ -11591,12 +11641,18 @@ try {
     validateRow(rgTableRow, { index: rgStandIdx }).filter((f) => !isAdvisory(f)).length === 0
     && validateRow(badUpgradeRow, { index: rgStandIdx }).some((f) => f.kind === "unknown-input" && f.prop === "notAnInput" && !isAdvisory(f)),
     () => ({ clean: validateRow(rgTableRow, { index: rgStandIdx }), bad: validateRow(badUpgradeRow, { index: rgStandIdx }) }));
-  check("radio group: against the vendored index (no crt.RadioGroup yet) the upgrade is an `upgrade-unindexed` ADVISORY, so the table check stays green",
-    validateRow(rgTableRow).some((f) => f.kind === "upgrade-unindexed" && f.componentType === "crt.RadioGroup" && isAdvisory(f))
-    && validateTable({}).errors.length === 0,
-    () => validateRow(rgTableRow));
-  check("radio group R8: the RADIO_GROUP row notes state the Required decision and the Designer re-edit caveat",
-    /Required: no required validator/.test(rgTableRow.notes) && /Designer/.test(rgTableRow.notes),
+  const rgPreIdx = { ...rgIdx, components: Object.fromEntries(Object.entries(rgIdx.components).filter(([k]) => !k.startsWith("crt.RadioGroup"))) };
+  check("radio group: against an index without crt.RadioGroup the upgrade is an `upgrade-unindexed` ADVISORY, so the table check stays green",
+    validateRow(rgTableRow, { index: rgPreIdx }).some((f) => f.kind === "upgrade-unindexed" && f.componentType === "crt.RadioGroup" && isAdvisory(f))
+    && validateTable({ index: rgPreIdx }).errors.length === 0,
+    () => validateRow(rgTableRow, { index: rgPreIdx }));
+  check("radio group: against the vendored index (crt.RadioGroup on `latest`) the upgrade validates clean, at the oldest version too",
+    validateRow(rgTableRow).filter((f) => !isAdvisory(f)).length === 0 && !validateRow(rgTableRow).some((f) => f.kind === "upgrade-unindexed")
+    && validateRow(rgTableRow, { version: rgIdx.meta.versions[0] }).filter((f) => !isAdvisory(f)).length === 0,
+    () => validateRow(rgTableRow, { version: rgIdx.meta.versions[0] }));
+  check("radio group R8: the RADIO_GROUP row notes state the Required decision, the Designer limitation and the caption-keyed gate",
+    /Required: no required validator/.test(rgTableRow.notes) && /Page Designer cannot edit a group with custom values/.test(rgTableRow.notes)
+    && /`caption` input/.test(rgTableRow.notes),
     () => rgTableRow.notes);
 
   // A BUTTON with a click handler and a MENU: tier B. The view is built (caption + menuItems), and the imperative
@@ -15553,12 +15609,22 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
 
   // The table and registry checks.
   const connRow = MAPPING_ROWS.find((r) => r.meta?.feature === "Connections");
-  check("registry: a requiresRegistry row absent from the vendored index is a `component-unindexed` advisory, and the table stays free of errors",
-    () => validateRow(connRow).map((f) => f.kind).join() === "component-unindexed" && isAdvisory(validateRow(connRow)[0])
-      && validateTable({}).errors.length === 0,
-    () => ({ row: validateRow(connRow), errors: validateTable({}).errors }));
+  const vIdx = vendoredIndex();
+  const preConnIdx = { ...vIdx, components: Object.fromEntries(Object.entries(vIdx.components).filter(([k]) => k !== "crt.Connections")) };
+  check("registry: a requiresRegistry row absent from the index is a `component-unindexed` advisory, and the table stays free of errors",
+    () => validateRow(connRow, { index: preConnIdx }).map((f) => f.kind).join() === "component-unindexed" && isAdvisory(validateRow(connRow, { index: preConnIdx })[0])
+      && validateTable({ index: preConnIdx }).errors.length === 0,
+    () => ({ row: validateRow(connRow, { index: preConnIdx }), errors: validateTable({ index: preConnIdx }).errors }));
   check("registry (anti-vacuity): the same row WITHOUT requiresRegistry is an `unknown-component` error",
-    () => validateRow({ ...connRow, meta: { ...connRow.meta, requiresRegistry: false } }).map((f) => f.kind).join() === "unknown-component");
+    () => validateRow({ ...connRow, meta: { ...connRow.meta, requiresRegistry: false } }, { index: preConnIdx }).map((f) => f.kind).join() === "unknown-component");
+  // A requiresRegistry component the index carries on a NEWER version only is not a defect at an older one: the row
+  // is built only where the run's registry carries it. Without the flag the same row is an error at that version.
+  const connOldest = vIdx.meta.versions[0];
+  check("registry: a requiresRegistry row whose component is indexed on a newer version only validates clean at the oldest version, and is an error there without the flag",
+    () => validateRow(connRow, { version: connOldest }).filter((f) => !isAdvisory(f)).length === 0
+      && (!vIdx.components["crt.Connections"] || validateRow({ ...connRow, meta: { ...connRow.meta, requiresRegistry: false } }, { version: connOldest })
+        .some((f) => f.kind === "component-absent-in-version")),
+    () => validateRow(connRow, { version: connOldest }));
   const exportReg = resolveRunIndex({ componentRegistry: CONN_REG });
   const unionWithIt = { index: { meta: { versions: ["8.3.4", "latest"] }, components: { "crt.Connections": { v: 2 } } }, version: null, source: "vendored-union" };
   check("carriesComponent: yes only on positive evidence — a stand export that lists the type, or a pinned version whose bit is set; never a union of versions",
