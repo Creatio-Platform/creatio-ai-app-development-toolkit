@@ -56,6 +56,35 @@ step.
 
 ### 4. Place the app in the navigation
 
+#### Provision the planned roles and users first
+
+The placement and the portal grants below name roles as their audience, so create the roles the plan
+lists under `roles to create:`, then the accounts under `users to create:`, before any navigation
+write. Skip this part when the plan says `roles to create: none` and `users to create: none`.
+
+Call `get-guidance name=administration` FIRST and follow it — it owns the identity model, role kinds and
+parents, manager groups, password handling, licenses and the version boundaries. If it returns an
+unknown-topic error, STOP: report the planned roles and users as not created, and ask the developer
+before placing the app for an audience that does not exist yet. Before assigning users
+to an external organization, also read `get-guidance name=external-organizations`. Resolve
+`inspect-role` / `manage-role`, `inspect-user` / `manage-user` and `inspect-license` /
+`manage-license` through `get-tool-contract`; the `manage-*` tools are destructive, and the approved
+plan is the authorization for exactly the roles and accounts it names — nothing more.
+
+- Read the role tree before creating anything: reuse a role the plan names when it already exists under
+  the same parent, and ask when a name matches more than one role.
+- Create the roles, then each account, then its roles, then its license.
+- An external (portal) account gets only the external roles the plan names. When the plan gives it an
+  internal role, stop and ask the developer instead of assigning it.
+- The password never passes through the agent and never appears in the plan, a file or the report;
+  use only the mechanism the guide prescribes.
+- When the guide or the environment refuses to create an account or assign its license, report the
+  account as not created or not licensed — never work around the check.
+- Verify every role and account by reading it back and list the created GUIDs in the report. Accounts
+  and memberships are environment data: do not bind them into the package.
+
+#### Place the app
+
 `create-app` leaves the section in the `My applications` workplace, which is granted to
 `System administrators` only — so until this step runs, the app is invisible to ordinary users no
 matter how complete the schema and pages are. Apply the placement the approved plan states in
@@ -83,6 +112,50 @@ ask the developer (see `../context/business-checklist.md`, "Users, access and ow
 
 Tell the developer that navigation is cached, so they must log out and back in to see the app — a
 browser refresh is not enough.
+
+#### Open the portal sections to external users
+
+Run this only when the approved plan has a `## 8. Portal section`; skip it otherwise. It needs the
+section pages from step 3 and the roles provisioned above.
+
+Call `get-guidance name=portal-sections` FIRST and follow it for each section the plan lists under
+`portal sections:`. It sequences the separate portal page, its binding for `All external users`, the
+workplace placement, the object grant and the record rules, and routes each step to the guide that owns
+it. Do not improvise these writes from the tool contracts alone: an object grant to `All external users`
+reaches every external user at once. The approved plan names the audience and the scope; it does not
+replace the per-write preview and confirmation that guide requires.
+
+The plan answers the questions that guide asks the developer:
+
+- the section's external surface (its `list columns:`, `form groups:` / `form fields:`, `add page:` /
+  `edit page:` lines) is the scope of the dedicated portal page — design that page with exactly those
+  fields, never by reusing the internal page;
+- `external workplace:` is the workplace the sections are placed in for `All external users` — create
+  it or reuse the named one as the plan says;
+- `external access:` is the set of operations of the object grant on the section's object;
+- `external record scope:` is the record-access decision: `all` keeps every record visible to every
+  external user, `own contact` and `own account` need record permissions ON and the record rule that
+  guide routes to.
+
+For `own contact` and `own account`, turn record permissions ON for the section's object before the
+section is placed or its object is granted: with them OFF, the grant opens every record to every
+external user. If they cannot be turned on with the available tools, write neither the placement nor
+the grant — leave the section internal-only and tell the developer, as for a missing guide below.
+
+Everything the plan does not settle is still asked as that guide says — a shared lookup the portal page
+shows, an object not yet administered by operation permissions, applying rules to existing records. When
+another step cannot be applied with the available tools (for example a record rule filtered by the
+user's contact or account, once record permissions are ON), tell the developer that step is manual
+and do not report the portal section as done without it.
+
+If `get-guidance name=portal-sections` returns an unknown-topic error, STOP: the installed clio carries
+a knowledge library older than `1.15.161`. Tell the developer the portal sections cannot be opened safely
+until clio is updated, and leave the sections internal-only rather than granting access piecemeal.
+
+Tell the developer that a portal user must log in again after the placement to see the section, and that
+the real check is a portal-licensed external user opening it with data visible. For `own contact` and
+`own account`, read the record rule back, and tell the developer that the scope is proven only when a
+second external user from another contact or account does not see the first user's records.
 
 ### 5. Build analytics dashboards
 
@@ -149,8 +222,8 @@ For each dashboard in the plan:
   `dashboard-rights` so it survives a package transfer (grants are data, not schema, and are otherwise
   lost on transfer). The **§7.2 home page has no per-page access grant** — its audience is the
   workplace it is bound to (`SysAdminUnitInWorkplace`), so do not create `dashboard-rights` for it.
-  Role-scoped (least-privilege) access is out of scope for now and belongs to the future roles work —
-  do not attempt to derive per-role grants here.
+  Role-scoped (least-privilege) dashboard access is out of scope — do not derive per-role grants here,
+  not even for the roles created in step 4.
 
 Widgets may draw on any site object named in the plan — the app's own entities and standard platform
 entities alike.

@@ -22,6 +22,8 @@ Provide a shared task registry.
 ## 2. Roles and Permissions
 
 - Team member: creates and updates tasks
+- roles to create: none
+- users to create: none
 
 ## 3. Object Model
 
@@ -676,6 +678,311 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
         )
         validate_requirements_doc(doc)  # must not raise
 
+
+PORTAL_BLOCK = (
+    "## 8. Portal section\n\n"
+    "- portal sections: 1 (Tasks)\n"
+    "- external workplace: new Portal workplace Task portal\n"
+    "- **`Section Tasks`** — external self-service view.\n"
+    "  - list columns: Name, Status\n"
+    "  - form fields: Name\n"
+    "  - add page: mini page (Name)\n"
+    "  - edit page: full record page\n"
+    "  - external access: read, create\n"
+    "  - external record scope: own contact\n\n"
+    "## 9. Edge Cases and Exceptions"
+)
+# The conditional Portal section (§8) pushes Edge Cases to §9, and §2 carries the external audience.
+PORTAL_DOC = VALID_DOC.replace("## 8. Edge Cases and Exceptions", PORTAL_BLOCK).replace(
+    "- Team member: creates and updates tasks\n",
+    "- Team member: creates and updates tasks\n- All external users: see their own tasks in the portal\n",
+)
+SECOND_PORTAL_SECTION = (
+    "- **`Section Reports`** — external read-only view.\n"
+    "  - list columns: Name\n"
+)
+
+
+class TestValidateRequirementsDocPortalSection(unittest.TestCase):
+    def test_portal_doc_passes(self):
+        # A plan that exposes a section to external users carries `## 8. Portal
+        # section` and renumbers Edge Cases to `## 9`; both present and populated.
+        validate_requirements_doc(PORTAL_DOC)  # must not raise
+
+    def test_portal_present_but_edge_cases_not_renumbered_is_rejected(self):
+        # With `## 8. Portal section` present, Edge Cases MUST be `## 9`. Leaving it
+        # at `## 8` (a numbering clash) must fail with the expected §9 heading.
+        doc = PORTAL_DOC.replace("## 9. Edge Cases and Exceptions", "## 8. Edge Cases and Exceptions")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("## 9. Edge Cases and Exceptions", str(ctx.exception))
+
+    def test_portal_section_missing_portal_sections_marker_is_rejected(self):
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("portal sections:", str(ctx.exception))
+
+    def test_portal_section_missing_external_access_marker_is_rejected(self):
+        doc = PORTAL_DOC.replace("  - external access: read, create\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("external access:", str(ctx.exception))
+
+    def test_external_access_marker_only_in_prose_is_rejected(self):
+        # The markers are line-anchored labels, NOT bare substrings: a prose line that
+        # merely CONTAINS "external access:" (e.g. a "no external access:" narrative) must
+        # NOT satisfy the gate.
+        doc = PORTAL_DOC.replace(
+            "  - external access: read, create\n",
+            "  - customers have no external access: internal fields stay hidden\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("external access:", str(ctx.exception))
+
+    def test_portal_block_terminates_analytics_slice(self):
+        # The §7 Analytics slice must END at `## 8. Portal section`, never fold §8 into the
+        # §7.2 home-page check. Put an `- access rights:` line INSIDE the Portal block: a
+        # home page must have NO access rights, so if the slice wrongly included §8 this
+        # would fail. It must still PASS, proving the boundary terminates at the heading.
+        doc = PORTAL_DOC.replace(
+            "- portal sections: 1 (Tasks)\n",
+            "- portal sections: 1 (Tasks)\n- access rights: All Employees\n",
+        )
+        validate_requirements_doc(doc)  # must not raise (analytics slice stops at ## 8. Portal section)
+
+    def test_two_section_portal_missing_one_external_access_is_rejected(self):
+        # `external access:` is required PER exposed section, not once for the whole §8.
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n").replace(
+            "  - external record scope: own contact\n\n",
+            "  - external record scope: own contact\n" + SECOND_PORTAL_SECTION + "  - external record scope: all\n\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Section Reports", str(ctx.exception))
+        self.assertIn("external access:", str(ctx.exception))
+
+    def test_two_section_portal_with_both_levels_passes(self):
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n").replace(
+            "  - external record scope: own contact\n\n",
+            "  - external record scope: own contact\n" + SECOND_PORTAL_SECTION
+            + "  - external access: read\n  - external record scope: all\n\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_portal_sections_count_must_match_blocks(self):
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("portal sections: 2", str(ctx.exception))
+
+    def test_missing_external_record_scope_is_rejected(self):
+        # Which records external users see is a decision with no default: an operation grant to
+        # All external users reaches every record, so the plan must state the scope.
+        doc = PORTAL_DOC.replace("  - external record scope: own contact\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("external record scope:", str(ctx.exception))
+
+    def test_unknown_external_record_scope_value_is_rejected(self):
+        doc = PORTAL_DOC.replace("external record scope: own contact", "external record scope: TBD")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("own contact, own account, all", str(ctx.exception))
+
+    def test_near_miss_portal_heading_is_rejected(self):
+        # `## 8. Portal Section` (wrong case) must not be treated as portal-absent.
+        doc = PORTAL_DOC.replace("## 8. Portal section", "## 8. Portal Section")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("must be exactly '## 8. Portal section'", str(ctx.exception))
+
+    def test_leftover_edge_cases_8_next_to_portal_is_rejected(self):
+        doc = PORTAL_DOC.replace("## 9. Edge Cases and Exceptions", "## 8. Edge Cases and Exceptions\n\n## 9. Edge Cases and Exceptions")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("leftover", str(ctx.exception))
+
+    def test_portal_after_edge_cases_is_rejected(self):
+        # Move §8 Portal to the END, after §9 Edge Cases.
+        head, _, tail = PORTAL_DOC.partition(PORTAL_BLOCK)
+        portal_only = PORTAL_BLOCK.replace("\n\n## 9. Edge Cases and Exceptions", "")
+        doc = head + "## 9. Edge Cases and Exceptions" + tail + "\n\n" + portal_only + "\n"
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("must come before", str(ctx.exception))
+
+    def test_portal_list_column_without_carrier_is_rejected(self):
+        # The external surface reuses §6 labels, so its titles need a §3 carrier too.
+        doc = PORTAL_DOC.replace("  - list columns: Name, Status\n  - form fields: Name\n",
+                                 "  - list columns: Name, Invented Field\n  - form fields: Name\n")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Portal title 'Invented Field'", str(ctx.exception))
+
+    def test_portal_without_external_audience_in_roles_is_rejected(self):
+        doc = PORTAL_DOC.replace("- All external users: see their own tasks in the portal\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("All external users", str(ctx.exception))
+
+    def test_edge_cases_at_9_without_portal_is_rejected(self):
+        # Edge Cases moves to §9 only when the Portal section takes §8.
+        doc = VALID_DOC.replace("## 8. Edge Cases and Exceptions", "## 9. Edge Cases and Exceptions")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("missing required section: ## 8. Edge Cases and Exceptions", str(ctx.exception))
+
+    def test_near_miss_portal_headings_are_rejected(self):
+        # Each of these would otherwise be read as an internal-only plan, skipping every §8 check.
+        for heading in ("## 8. Portal section (conditional)", "## 8. Portal section:", "## 8. Portal section - external",
+                        "## 8. Portal sections", "## 9. Portal section", "### 8. Portal section", "## 8 Portal section"):
+            with self.subTest(heading=heading):
+                doc = PORTAL_DOC.replace("## 8. Portal section", heading).replace(
+                    "## 9. Edge Cases and Exceptions", "## 8. Edge Cases and Exceptions"
+                )
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("looks like the Portal section", str(ctx.exception))
+
+    def test_edge_cases_heading_with_trailing_text_is_rejected(self):
+        # The §8 slice ends at a whole-line heading, so trailing text would stretch it to the end of the plan.
+        doc = PORTAL_DOC.replace("## 9. Edge Cases and Exceptions", "## 9. Edge Cases and Exceptions (draft)")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("missing required section: ## 9. Edge Cases and Exceptions", str(ctx.exception))
+
+    def test_all_scope_with_write_operations_is_left_to_the_developer(self):
+        # Read-only is the recommended default for `all`; widening it is the developer's agreed decision.
+        doc = PORTAL_DOC.replace("external access: read, create", "external access: read, create, edit").replace(
+            "external record scope: own contact", "external record scope: all"
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_portal_list_columns_do_not_stand_in_for_section_6(self):
+        # §6 describes the internal surface; a §8 `list columns:` line must not satisfy its gate.
+        doc = PORTAL_DOC.replace("- list columns: Name, Status\n- list filters: Status\n", "- list filters: Status\n", 1)
+        self.assertIn("  - list columns: Name, Status", doc)
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("list columns:", str(ctx.exception))
+
+    def test_portal_sections_line_without_a_count_is_rejected(self):
+        for line in ("- portal sections: Tasks, Reports\n", "- portal sections:\n"):
+            with self.subTest(line=line):
+                doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", line)
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("must start with the number", str(ctx.exception))
+
+    def test_missing_or_empty_external_workplace_is_rejected(self):
+        for line in ("", "- external workplace:\n"):
+            with self.subTest(line=line):
+                doc = PORTAL_DOC.replace("- external workplace: new Portal workplace Task portal\n", line)
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("external workplace:", str(ctx.exception))
+
+    def test_external_access_outside_the_operation_set_is_rejected(self):
+        for value in ("", "full", "TBD", "read, approve"):
+            with self.subTest(value=value):
+                doc = PORTAL_DOC.replace("external access: read, create", f"external access: {value}".rstrip())
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("read, create, edit, delete", str(ctx.exception))
+
+    def test_external_access_operations_accept_backticks_and_case(self):
+        for value in ("`read`", "Read, Create", "read, create, edit, delete"):
+            with self.subTest(value=value):
+                validate_requirements_doc(PORTAL_DOC.replace("external access: read, create", f"external access: {value}"))
+
+    def test_external_record_scope_accepts_backticks_and_case(self):
+        for value in ("`own contact`", "Own Contact", "own account", "ALL"):
+            with self.subTest(value=value):
+                validate_requirements_doc(PORTAL_DOC.replace("external record scope: own contact", f"external record scope: {value}"))
+
+    def test_annotated_external_record_scope_is_rejected_with_the_value(self):
+        # The build reads the value as one of three decisions, so an annotation is not accepted.
+        doc = PORTAL_DOC.replace("external record scope: own contact", "external record scope: own contact (their tasks)")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("'external record scope: own contact (their tasks)'", str(ctx.exception))
+
+
+class TestValidateRequirementsDocProvisioning(unittest.TestCase):
+    def test_missing_or_value_less_provisioning_line_is_rejected(self):
+        for label in ("roles to create:", "users to create:"):
+            for replacement in ("", f"- {label}\n"):
+                with self.subTest(label=label, replacement=replacement):
+                    doc = VALID_DOC.replace(f"- {label} none\n", replacement)
+                    with self.assertRaises(WorkflowError) as ctx:
+                        validate_requirements_doc(doc)
+                    self.assertIn(label, str(ctx.exception))
+
+    def test_roles_to_create_outside_section_2_does_not_count(self):
+        doc = VALID_DOC.replace("- roles to create: none\n", "").replace(
+            "## 5. Business Logic\n", "## 5. Business Logic\n\n- roles to create: none\n"
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("roles to create:", str(ctx.exception))
+
+    def test_planned_roles_and_users_pass(self):
+        doc = VALID_DOC.replace(
+            "- roles to create: none\n- users to create: none\n",
+            "- roles to create: Support agents (team, under Support)\n"
+            "- users to create: demo.agent (contact Demo Agent, internal, Support agents, Creatio license)\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+class TestValidateRequirementsDocListLabels(unittest.TestCase):
+    def test_roles_and_users_listed_as_sub_bullets_pass(self):
+        doc = VALID_DOC.replace(
+            "- roles to create: none\n- users to create: none\n",
+            "- roles to create:\n"
+            "  - Support agents — team, under Support\n"
+            "  - Customers — functional role, under All external users\n"
+            "- users to create:\n"
+            "  - demo.customer — contact Demo Customer, external, Customers, portal license\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_external_workplace_as_a_sub_bullet_passes(self):
+        doc = PORTAL_DOC.replace(
+            "- external workplace: new Portal workplace Task portal\n",
+            "- external workplace:\n  - new Portal workplace Task portal\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_label_followed_by_a_sibling_bullet_is_value_less(self):
+        # A sibling at the same depth is the next item of the list, not the label's value.
+        doc = VALID_DOC.replace("- roles to create: none\n", "- roles to create:\n")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("roles to create:", str(ctx.exception))
+
+    def test_second_section_without_record_scope_is_rejected_by_name(self):
+        # Record scope has no default, so every block carries its own; the first block's must not cover the second.
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n").replace(
+            "  - external record scope: own contact\n",
+            "  - external record scope: own contact\n" + SECOND_PORTAL_SECTION + "  - external access: read\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Section Reports", str(ctx.exception))
+        self.assertIn("no 'external record scope:' line", str(ctx.exception))
+
+    def test_second_section_with_unknown_record_scope_is_rejected_by_name(self):
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n").replace(
+            "  - external record scope: own contact\n",
+            "  - external record scope: own contact\n" + SECOND_PORTAL_SECTION
+            + "  - external access: read\n  - external record scope: everyone\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Section Reports", str(ctx.exception))
+        self.assertIn("'external record scope: everyone'", str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main()
