@@ -248,9 +248,10 @@ Use this exact visible skeleton for the Business Plan:
 - `users to create:` — `none` unless the developer asked for accounts (for example demo or test users
   per role). Per account, state the login, the contact it belongs to, whether it is an external
   (portal) user, its roles and the license it needs. An external account gets only external roles —
-  ones under `All external users`; never plan an internal role for it. Never put a password in the plan. Accounts and
-  memberships stay on the environment where they are created and are not shipped with the package —
-  say so when the developer expects them on another environment.
+  ones under `All external users`; never plan an internal role for it. Never put a password in the
+  plan. Accounts and memberships stay on the environment where they are created and are not shipped
+  with the package — say so when the developer expects them on another environment.
+- List several roles or accounts inline or as sub-bullets under their label; either form is valid.
 
 `## 3. Object Model` must define the core business objects.
 Before drafting it, invoke the `creatio-schema-naming` skill and apply its rules with

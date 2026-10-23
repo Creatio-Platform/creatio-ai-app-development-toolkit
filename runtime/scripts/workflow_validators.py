@@ -24,7 +24,7 @@ EXTERNAL_ACCESS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external access:(?P<val
 EXTERNAL_ACCESS_OPERATIONS = ("read", "create", "edit", "delete")
 # The workplace the exposed sections are placed in for the external audience: a new Portal or
 # Self-service workplace, or a named existing one.
-EXTERNAL_WORKPLACE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external workplace:[ \t]*\S")
+EXTERNAL_WORKPLACE_LABEL_RE = re.compile(r"(?i)^[ \t\-*>#`]*external workplace:(?P<value>.*)$")
 # Which records of the section the external audience may see. An object operation grant to
 # `All external users` reaches EVERY record, so one customer seeing another's records is the default
 # unless the plan decides otherwise. There is deliberately no default value: the developer chooses.
@@ -36,8 +36,9 @@ EXTERNAL_RECORD_SCOPE_VALUES = ("own contact", "own account", "all")
 PORTAL_HEADING_NEAR_MISS_RE = re.compile(r"(?im)^#{1,6}[ \t]*\d+\.?[ \t]*portal\b[^\n]*$")
 PORTAL_SECTIONS_COUNT_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:[ \t]*`?(?P<count>\d+)")
 # Every plan states whether it provisions roles and accounts, as a value or `none`; the build reads both.
-ROLES_TO_CREATE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*roles to create:[ \t]*\S")
-USERS_TO_CREATE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*users to create:[ \t]*\S")
+# These labels list several items, so their value may sit inline or in sub-bullets under the label.
+ROLES_TO_CREATE_LABEL_RE = re.compile(r"(?i)^[ \t\-*>#`]*roles to create:(?P<value>.*)$")
+USERS_TO_CREATE_LABEL_RE = re.compile(r"(?i)^[ \t\-*>#`]*users to create:(?P<value>.*)$")
 EXTERNAL_AUDIENCE_ROLE = "All external users"
 OBJECT_MODEL_HEADING = "## 3. Object Model"
 EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
@@ -201,6 +202,22 @@ def iter_surface_blocks(section_text, kind):
         yield line.strip(), "\n".join(block_lines)
 
 
+def has_labeled_value(text, label_re):
+    """A label line with a value after the colon, or with at least one item indented under it."""
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        match = label_re.match(line)
+        if not match:
+            continue
+        if match.group("value").strip():
+            return True
+        indent = len(line) - len(line.lstrip())
+        following = next((nxt for nxt in lines[idx + 1:] if nxt.strip()), "")
+        if len(following) - len(following.lstrip()) > indent and following.strip().lstrip("-*").strip():
+            return True
+    return False
+
+
 def heading_line_re(heading):
     """A heading that stands alone on its line, the way `extract_section` matches its boundaries."""
     return re.compile(r"(?m)^" + re.escape(heading) + r"[ \t]*$")
@@ -224,7 +241,7 @@ def validate_portal_section(text, portal_text):
         raise WorkflowError(
             "Requirements doc failed: section 8 'portal sections:' must start with the number of exposed sections, e.g. 'portal sections: 2 (Requests, Knowledge Base)'"
         )
-    if not EXTERNAL_WORKPLACE_LABEL_RE.search(portal_text):
+    if not has_labeled_value(portal_text, EXTERNAL_WORKPLACE_LABEL_RE):
         raise WorkflowError(
             "Requirements doc failed: section 8 Portal section must state an 'external workplace:' line (a new Portal or Self-service workplace, or a named existing one)"
         )
@@ -305,7 +322,7 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: missing required marker: list columns: (in section 6 UX Expectations)")
     section2_text = extract_section(text, ROLES_HEADING, OBJECT_MODEL_HEADING)
     for label, label_re in (("roles to create:", ROLES_TO_CREATE_LABEL_RE), ("users to create:", USERS_TO_CREATE_LABEL_RE)):
-        if not label_re.search(section2_text):
+        if not has_labeled_value(section2_text, label_re):
             raise WorkflowError(
                 f"Requirements doc failed: section 2 Roles and Permissions must state '{label}' with the planned items or 'none'"
             )

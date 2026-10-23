@@ -936,5 +936,53 @@ class TestValidateRequirementsDocProvisioning(unittest.TestCase):
         )
         validate_requirements_doc(doc)  # must not raise
 
+class TestValidateRequirementsDocListLabels(unittest.TestCase):
+    def test_roles_and_users_listed_as_sub_bullets_pass(self):
+        doc = VALID_DOC.replace(
+            "- roles to create: none\n- users to create: none\n",
+            "- roles to create:\n"
+            "  - Support agents — team, under Support\n"
+            "  - Customers — functional role, under All external users\n"
+            "- users to create:\n"
+            "  - demo.customer — contact Demo Customer, external, Customers, portal license\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_external_workplace_as_a_sub_bullet_passes(self):
+        doc = PORTAL_DOC.replace(
+            "- external workplace: new Portal workplace Task portal\n",
+            "- external workplace:\n  - new Portal workplace Task portal\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_label_followed_by_a_sibling_bullet_is_value_less(self):
+        # A sibling at the same depth is the next item of the list, not the label's value.
+        doc = VALID_DOC.replace("- roles to create: none\n", "- roles to create:\n")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("roles to create:", str(ctx.exception))
+
+    def test_second_section_without_record_scope_is_rejected_by_name(self):
+        # Record scope has no default, so every block carries its own; the first block's must not cover the second.
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n").replace(
+            "  - external record scope: own contact\n",
+            "  - external record scope: own contact\n" + SECOND_PORTAL_SECTION + "  - external access: read\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Section Reports", str(ctx.exception))
+        self.assertIn("no 'external record scope:' line", str(ctx.exception))
+
+    def test_second_section_with_unknown_record_scope_is_rejected_by_name(self):
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "- portal sections: 2 (Tasks, Reports)\n").replace(
+            "  - external record scope: own contact\n",
+            "  - external record scope: own contact\n" + SECOND_PORTAL_SECTION
+            + "  - external access: read\n  - external record scope: everyone\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Section Reports", str(ctx.exception))
+        self.assertIn("'external record scope: everyone'", str(ctx.exception))
+
 if __name__ == "__main__":
     unittest.main()
