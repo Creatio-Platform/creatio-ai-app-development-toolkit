@@ -287,6 +287,23 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.caption || s.feature), type, src, DASH, add] };
   });
 }
+// A Classic block the run does not build keeps its Classic place in the Layout, with the status that says why: open
+// (decide it in ⚠ Confirm) or closed by its planning decision. A `build` decision never reaches here — the mapper
+// then emits the feature like any other.
+function rowsForWithheldFeatures(withheld, tabRegion, opts, ctx) {
+  const pageKey = withheldPageKey(opts);
+  return (withheld || []).map((s) => {
+    const featureId = withheldFeatureId(s.feature);
+    const st = withheldFeatureStatus(ctx.deliverableStatus, [featureId, withheldConfirmId(s.item)], pageKey);
+    const closed = st?.status === STATUS_WONT_DO ? statusText({ kind: STATUS_WONT_DO, decision: st.decision }, ctx) : null;
+    if (closed && pageKey) for (const id of [featureId, withheldConfirmId(s.item)]) ctx.printedStatus?.add(statusKey(pageKey, id));
+    const src = closed ? "not built" : `⚠ not built — no evidence the stand carries \`${esc(s.componentType)}\``;
+    const decide = `⚠ Confirm \`[feature-component-unavailable] ${esc(s.item)}\` — record the answer as \`manifest.deliverableStatus\``
+      + ` \`${esc(pageKey ?? "<this page's key>")}#${esc(featureId)}\` (\`${STATUS_BUILD}\` or \`${STATUS_WONT_DO}\` with a D<N>)`;
+    const add = [closed || decide, connectionsNote(s)].filter(Boolean).join(" · ");
+    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: 2, cells: [esc(s.caption || s.feature), esc(s.feature), src, DASH, add] };
+  });
+}
 function widgetSource(w, formTemplate = null) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
@@ -1179,6 +1196,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
     ...rowsForFeatures(cs.standardFeatures, tabRegion, formTpl),
+    ...rowsForWithheldFeatures(cs.withheldFeatures, tabRegion, opts, statusCtx(result, opts)),
     ...rowsForWidgets(cs.widgets, cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present), formTpl),
     ...rowsForCardWidgets(cs.cardWidgets, regionOf),
     ...rowsForCardActions(cs.cardActions, result, opts),
@@ -2813,10 +2831,11 @@ export function deliverableStatusOf(pageKey, row, ctx = {}) {
   if (row.na) return { kind: "not-applicable", reason: row.na };
   const reason = engineStatusReason(row, ctx);
   if (reason) return { kind: "not-applicable", reason };
-  const entry = row.deliverableId ? ctx.deliverableStatus?.[statusKey(pageKey, row.deliverableId)] : null;
-  if (entry?.status === STATUS_WONT_DO || entry?.status === STATUS_BUILD) return { kind: entry.status, decision: entry.decision || null };
-  return null;
+  const entry = [row.deliverableId, ...(row.aliasIds || [])].filter(Boolean)
+    .map((id) => ctx.deliverableStatus?.[statusKey(pageKey, id)]).find(isStatusEntry);
+  return entry ? { kind: entry.status, decision: entry.decision || null } : null;
 }
+const isStatusEntry = (e) => e?.status === STATUS_WONT_DO || e?.status === STATUS_BUILD;
 // A closed status as plan text: `**Won't do** — D6: <title>` or `**Won't do** — <engine reason>`.
 function statusText(st, ctx) {
   if (st.kind === "not-applicable") return `**Won't do** — ${st.reason}`;
@@ -2901,7 +2920,26 @@ function confirmWorklistRows(pageKey, cs) {
   return (cs.needsDecision || [])
     .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(nn.kind))
     .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,
-      { deliverableId: `confirm:${d.kind}:${d.item}`, confirm: { kind: d.kind, item: d.item }, ...cardField(d) }));
+      { deliverableId: `confirm:${d.kind}:${d.item}`, confirm: { kind: d.kind, item: d.item }, ...cardField(d), ...featureAlias(d) }));
+}
+// A withheld feature's decision is recorded once, on either of its two ids: its Layout row's `feature:<Feature>` or
+// this confirm item. The confirm row answers to both, so one entry closes the row and the Layout line alike.
+export const withheldFeatureId = (feature) => `feature:${feature}`;
+export const withheldConfirmId = (item) => `confirm:feature-component-unavailable:${item}`;
+// The page a withheld feature's decision is read on. A nested fold is mapped and rendered before the root walk
+// assigns its page key, so it has none (null) and reads the entries of every sub-page key.
+export const withheldPageKey = (opts) => opts.pageKey || (isNestedFold(opts) ? null : "main");
+export function withheldFeatureStatus(map, ids, pageKey) {
+  const onPage = (k) => (pageKey ? k.startsWith(`${pageKey}#`) : k.includes("#") && !k.startsWith("main#"));
+  const entries = Object.entries(map || {}).filter(([k, e]) => onPage(k) && isStatusEntry(e));
+  for (const id of ids) {
+    const hit = entries.find(([k]) => k.slice(k.indexOf("#") + 1) === id);
+    if (hit) return { status: hit[1].status, decision: hit[1].decision || null, key: hit[0] };
+  }
+  return null;
+}
+function featureAlias(d) {
+  return d.kind === "feature-component-unavailable" && d.feature ? { aliasIds: [withheldFeatureId(d.feature)] } : {};
 }
 // Quality gates — ALWAYS present, one per page. See the label for what it demands. It is an evidence row, never a vk-less `skip`
 // row: visible, tallied in nothing, closable by asserting it in prose — which is exactly how "native components →

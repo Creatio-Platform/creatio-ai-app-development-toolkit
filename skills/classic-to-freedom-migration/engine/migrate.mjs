@@ -59,7 +59,7 @@ import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
@@ -832,7 +832,9 @@ function deliverableStatusIssues(groups, opts) {
   const entries = Object.entries(plainObject(opts.deliverableStatus));
   if (!entries.length) return [];
   const rows = (groups || []).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, groupTitle: g.baseTitle })));
-  const byKey = new Map(rows.filter((r) => r.deliverableId).map((r) => [statusKey(r.pageKey, r.deliverableId), r]));
+  // an alias (a withheld feature's `feature:<Feature>` on its confirm row) never shadows a deliverable of that id
+  const byKey = new Map(rows.flatMap((r) => (r.aliasIds || []).map((id) => [statusKey(r.pageKey, id), r])));
+  for (const r of rows) if (r.deliverableId) byKey.set(statusKey(r.pageKey, r.deliverableId), r);
   const own = entries.flatMap(([key, entry]) => entryProblems(key, entry, byKey, rows, opts));
   return own.length ? own : relatedStatusIssues(rows, opts.deliverableStatus);
 }
@@ -853,7 +855,7 @@ function noDeliverableProblems(d, wontDo, { decisions, decisionsOptional }) {
   return [];
 }
 function validIdsOf(page, rows) {
-  const ids = rows.filter((r) => r.pageKey === page && r.deliverableId).map((r) => statusKey(page, r.deliverableId));
+  const ids = rows.filter((r) => r.pageKey === page && r.deliverableId).flatMap((r) => [r.deliverableId, ...(r.aliasIds || [])].map((id) => statusKey(page, id)));
   return ids.length ? ids : [...new Set(rows.map((r) => r.pageKey))].map((k) => `${k}#…`);
 }
 function entryProblems(key, entry, byKey, rows, opts) {
@@ -2869,6 +2871,8 @@ export function runMigration(manifest, opts = {}) {
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
     registryUnindexedVersion: runRegistry.unindexedVersion || null, // a pinned platformVersion the vendored index does not know
+    // read BEFORE mapping, so a `build` answer on a withheld feature is mapped like any feature (strings, tips)
+    featureStatus: (ids) => withheldFeatureStatus({ ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) }, ids, withheldPageKey(opts)),
   });
   attachDetailAddModes(changeSet, detailSchemas);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table

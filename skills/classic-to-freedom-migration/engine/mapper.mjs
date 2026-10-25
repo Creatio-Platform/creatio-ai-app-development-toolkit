@@ -543,7 +543,7 @@ export function mapToFreedom(eff, opts = {}) {
   const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor, pageLabelFor,
     index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage,
     componentAvailable: opts.componentAvailable || (() => false), registrySource: opts.registrySource || null,
-    registryUnindexedVersion: opts.registryUnindexedVersion || null };
+    registryUnindexedVersion: opts.registryUnindexedVersion || null, featureStatus: opts.featureStatus || (() => null) };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -627,6 +627,8 @@ export function mapToFreedom(eff, opts = {}) {
     resourceSources,
     // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
     standardFeatures: D.standardFeatures,
+    // standard features the run has no evidence to build (see `withheldFeature`): a Layout row each, nothing built.
+    withheldFeatures: D.withheldFeatures,
     // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
     // compact-profile component wired by `referenceColumn`, or the read-only-fields island fallback.
     profileCards,
@@ -1326,9 +1328,9 @@ function detectDetailAddMechanism(dinfo) {
 }
 
 function mapDetails(ctx, containers, profileRegion) {
-  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails, componentAvailable, registrySource, registryUnindexedVersion } = ctx;
+  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails, componentAvailable, registrySource, registryUnindexedVersion, featureStatus } = ctx;
   const { ensureTab } = containers;
-  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set(), carriedMethods = new Set();
+  const needsDecision = [], details = [], standardFeatures = [], withheldFeatures = [], accountedFor = new Set(), carriedMethods = new Set();
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
   // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
   // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
@@ -1435,8 +1437,10 @@ function mapDetails(ctx, containers, profileRegion) {
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
-      needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion));
-      return;
+      const decided = featureStatus([`feature:${feat.feature}`, `confirm:${FEATURE_UNAVAILABLE}:${d.schemaName || d.key}`]);
+      needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
+      // A `build` answer builds it as if the registry carried it; anything else keeps its Classic place on record.
+      if (decided?.status !== "build") { withheldFeatures.push(withheldFeature(d, dentity, tab, feat, dinfo, ctx, registrySource)); return; }
     }
     if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity, standardFeatureTitle(d, dinfo, feat)); return; }
     const detailTitle = classicDetailTitle(d, dinfo, pageText);
@@ -1445,7 +1449,22 @@ function mapDetails(ctx, containers, profileRegion) {
     buildCustomDetail(d, dinfo, dentity, tab, detailTitle, detailTexts);
   };
   for (const entry of bySig.values()) emitDetail(entry);
-  return { details, standardFeatures, needsDecision, accountedFor, carriedMethods };
+  return { details, standardFeatures, withheldFeatures, needsDecision, accountedFor, carriedMethods };
+}
+
+// A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and
+// element name, and the `connections` tips. Nothing is registered or carried for it — no page string, no method
+// marked carried — so a page that never gets the component owes nothing for it.
+const FEATURE_UNAVAILABLE = "feature-component-unavailable";
+function withheldFeature(d, dentity, tab, feat, dinfo, ctx, registrySource) {
+  const quiet = { ...ctx, registerText: () => {} };
+  const title = (feat.uiShape || "list") !== "list" || feat.titled ? classicDetailTitle(d, dinfo, ctx.pageText) : null;
+  const settings = feat.feature === FEATURE_CONNECTIONS ? connectionSettings(d, quiet) : null;
+  return { feature: feat.feature, freedom: feat.freedom, componentType: feat.componentType, classicDetail: d.schemaName,
+    item: d.schemaName || d.key, entity: dentity, tab, uiShape: feat.uiShape || "list",
+    caption: title?.text ?? null, captionKey: title?.key ?? null, captionSource: title?.source ?? null,
+    ...(settings ? { element: d.key, connections: settings.connections } : {}),
+    withheld: { kind: FEATURE_UNAVAILABLE, registrySource: registrySource || null } };
 }
 
 // Classic hands the "Connected to" detail a tip per connection column through the page hook `onGetPageTips`
@@ -1500,12 +1519,17 @@ const REGISTRY_ANSWER = {
   "vendored-pinned": "the vendored component index does not carry it for the pinned platform version",
   "unreadable-export": "the component registry the manifest named could not be read, so the run fell back to the vendored index and its presence on the target stand is unknown",
 };
-function unavailableFeatureDecision(d, feat, registrySource, unindexedVersion) {
+function unavailableFeatureDecision(d, feat, registrySource, unindexedVersion, decided = null) {
+  const item = d.schemaName || d.key;
+  if (decided?.status === "build") {
+    return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature,
+      reason: `classic '${item}' is the ${feat.feature} feature → ${feat.freedom}; no registry of the target stand shows \`${feat.componentType}\`, and the planning decision ${decided.decision || "(no D<N>)"} (\`${decided.key}\`) builds it anyway. Before building, confirm on the stand that \`${feat.componentType}\` resolves (\`get-component-info\`) and that every feature flag it needs is ON; \`--verify\` gates the built component` };
+  }
   const answer = REGISTRY_ANSWER[registrySource]
     || (unindexedVersion
       ? `the pinned platform version '${unindexedVersion}' is not in the engine's vendored component index, so its presence on the target stand is unknown — only that stand's component registry export can confirm it`
       : "no registry of the target stand was supplied (`manifest.componentRegistry`), so its presence is unknown");
-  return { kind: "feature-component-unavailable", item: d.schemaName || d.key,
+  return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature,
     reason: `classic '${d.schemaName || d.key}' is the ${feat.feature} feature → ${feat.freedom}, and ${answer}. Nothing is built in its place: keep the page without it, or — on a stand that carries \`${feat.componentType}\` — re-run the plan with that stand's component registry export in \`manifest.componentRegistry\` (the export inline, \`{ resolvedTargetVersion, components: [{ componentType, inputs, outputs }] }\`, or \`{ "file": "<path>" }\`)` };
 }
 

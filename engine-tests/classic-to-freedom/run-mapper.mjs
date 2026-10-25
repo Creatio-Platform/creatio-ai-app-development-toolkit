@@ -15274,6 +15274,67 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       () => ({ decisions: r.changeSet.needsDecision.map((d) => [d.kind, d.item]), features: r.changeSet.standardFeatures, details: r.changeSet.details }));
   }
 
+  // A block the run does not build keeps its Classic place in the Layout, with a status; the decision on it is one
+  // `manifest.deliverableStatus` entry, on either `feature:Connections` or its confirm item.
+  const CONN_DEC = new Map([["D6", "Connections block on, UseConnectionsComponent turned on"], ["D7", "Connected to is not carried over"]]);
+  const CONFIRM_ID = "confirm:feature-component-unavailable:EntityConnectionsDetailV2";
+  const withRun = (deliverableStatus) => {
+    const m = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      resources: { ContactTip: "Who the call is with", GeneralInfoTabCaption: "General", EntityConnectionsDetailCaptionOnPage: "Connected to" },
+      deliverableStatus, schemas: [{ pkg: "P", body: connBody({ methods: TIPS }) }] };
+    const r = runMigration(m, { baseDir: FIX, decisions: CONN_DEC });
+    return { r, opts: { ...checklistOpts(m), decisions: CONN_DEC } };
+  };
+  const connLine = (spec) => spec.split("\n").find((l) => /\| Connected to \| Connections \|/.test(l)) || "";
+  const rowsOf = ({ r, opts }) => checklistGroups(r, opts).flatMap((g) => g.rows);
+  const withheld = withRun(undefined);
+  const wLine = connLine(withheld.r.designSpec);
+  const wFeat = withheld.r.changeSet.withheldFeatures?.[0];
+  check("Connected to (no registry evidence): the Classic block keeps a Layout row in its Classic tab — not built, why, and where to decide it",
+    () => /^\| Tab · General \|/.test(wLine) && /⚠ not built — no evidence the stand carries `crt\.Connections`/.test(wLine)
+      && wLine.includes("⚠ Confirm `[feature-component-unavailable] EntityConnectionsDetailV2`") && wLine.includes("`main#feature:Connections`")
+      && /element `EntityConnections`/.test(wLine) && /`Contact` → tooltip/.test(wLine),
+    () => withheld.r.designSpec.split("\n").filter((l) => /Connect/.test(l)));
+  check("Connected to (no registry evidence): the withheld feature keeps its tab, title, element and tips, and nothing is built or carried for it",
+    () => wFeat?.tab === "GeneralInfoTab" && wFeat.caption === "Connected to" && wFeat.element === "EntityConnections" && wFeat.connections.length === 2
+      && wFeat.withheld?.kind === "feature-component-unavailable" && !withheld.r.changeSet.standardFeatures.length
+      && !Object.keys(withheld.r.changeSet.resources).some((k) => k.startsWith("EntityConnections_"))
+      && withheld.r.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && !rowsOf(withheld).some((x) => x.deliverableId === "feature:Connections" || x.vk?.ftype === "crt.Connections")
+      && rowsOf(withheld).some((x) => x.deliverableId === CONFIRM_ID && !x.status),
+    () => ({ wFeat, features: withheld.r.changeSet.standardFeatures, rows: rowsOf(withheld).map((x) => x.deliverableId) }));
+
+  for (const key of ["main#feature:Connections", `main#${CONFIRM_ID}`]) {
+    const dropped = withRun({ [key]: { status: "wont-do", decision: "D7" } });
+    const dLine = connLine(dropped.r.designSpec);
+    const confirmRow = rowsOf(dropped).find((x) => x.deliverableId === CONFIRM_ID);
+    check(`Connected to wont-do on \`${key}\`: the Layout row closes inline with the decision, the confirm row closes with it, and the entry is valid`,
+      () => /\| not built \|/.test(dLine) && dLine.includes("**Won't do** — D7: Connected to is not carried over")
+        && confirmRow?.status?.kind === "wont-do" && confirmRow.status.decision === "D7"
+        && !(dropped.r.statusIssues || []).length && !dropped.r.changeSet.standardFeatures.length,
+      () => ({ dLine, confirmRow, issues: dropped.r.statusIssues }));
+  }
+
+  for (const key of ["main#feature:Connections", `main#${CONFIRM_ID}`]) {
+    const built = withRun({ [key]: { status: "build", decision: "D6" } });
+    const bLine = connLine(built.r.designSpec);
+    const bFeat = built.r.changeSet.standardFeatures.find((f) => f.feature === "Connections");
+    const gate = rowsOf(built).filter((x) => x.deliverableId === "feature:Connections");
+    const confirm = built.r.changeSet.needsDecision.find((d) => d.kind === "feature-component-unavailable");
+    check(`Connected to build on \`${key}\`: mapped as if the registry carried it — a normal feature row, its tips carried, a gated \`feature:Connections\` deliverable`,
+      () => bFeat?.element === "EntityConnections" && bFeat.connections.length === 2 && !(built.r.changeSet.withheldFeatures || []).length
+        && built.r.changeSet.resources.EntityConnections_Contact_tooltip === "Who the call is with"
+        && !built.r.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+        && !/not built/.test(bLine) && /UseConnectionsComponent/.test(bLine)
+        && gate.length === 1 && gate[0].vk?.ftype === "crt.Connections" && !(built.r.statusIssues || []).length
+        && resolveVk(gate[0].vk, verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "Activity",
+          viewConfig: { items: [{ type: "crt.DataGrid", name: "EntityConnectionsGrid" }] } } } }, "main"))[0] === "❌ MISSING",
+      () => ({ bLine, bFeat, gate, issues: built.r.statusIssues }));
+    check(`Connected to build on \`${key}\`: the confirm item names the decision and asks for the on-stand check instead of saying nothing is built`,
+      () => confirm && /D6/.test(confirm.reason) && /get-component-info/.test(confirm.reason) && !/Nothing is built/.test(confirm.reason),
+      () => confirm);
+  }
+
   const email = connRun({ componentRegistry: CONN_REG }, { schema: "EmailPageV2", detail: "EmailEntityConnectionsDetailV2" });
   check("Connected to: EmailEntityConnectionsDetailV2 resolves to the same Connections feature by suffix, with no `connections` entries when the page sets no tips",
     () => email.changeSet.standardFeatures.length === 1 && email.changeSet.standardFeatures[0].feature === "Connections"
@@ -15329,8 +15390,9 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
     typedPageSchemas: { CallPageV2: { ...typedManifest.typedPageSchemas.CallPageV2, platformVersion: "8.3.4" } } };
   runMigration(ownVersionManifest, { baseDir: FIX });
   const ownSpec = ownVersionManifest.typedPages[0].spec || "";
-  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — no Connections row, a feature-component-unavailable item",
-    () => !/\| Connected to \| Connections \|/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
+  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — its Layout row says not built, a feature-component-unavailable item",
+    () => ownSpec.split("\n").filter((l) => /\| Connected to \| Connections \|/.test(l)).every((l) => /⚠ not built/.test(l))
+      && /\| Connected to \| Connections \| ⚠ not built/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
     () => ownSpec.split("\n").filter((l) => /Connect/.test(l)));
 
   const partialTips = connRun({ componentRegistry: CONN_REG },
