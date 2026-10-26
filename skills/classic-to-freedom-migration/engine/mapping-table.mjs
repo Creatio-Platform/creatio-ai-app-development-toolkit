@@ -303,9 +303,10 @@ const profileCardRow = (entity, componentType, pkg, shows) => row({
   verify: { componentType }, gate: pkg ? { kind: GATE_KIND.COMPOSITE, id: pkg } : null,
   meta: { profileCard: { type: componentType, pkg, shows } },
 });
-// `requiresRegistry` marks a component newer than every platform version the vendored index carries: the mapper
-// builds it only when the run's own registry (a stand export, or a pinned version) positively carries it, and the
-// table check reports its absence from the vendored index as an advisory rather than an error. `titled` gives a
+// `requiresRegistry` marks a component that only newer platform versions carry: the mapper builds it only when the
+// run's own registry (a stand export, or a pinned version) positively carries it. The table check judges the row
+// against the union of indexed versions, so its absence from an older version is not an error, and its absence
+// from the vendored index altogether is an advisory. `titled` gives a
 // component-shaped feature the Classic detail's title, for a component that replaces the whole detail and has a
 // caption of its own.
 const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null, gate = null, requiresRegistry = false, titled = false }) =>
