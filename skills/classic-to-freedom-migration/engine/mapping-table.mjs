@@ -137,9 +137,9 @@ export const FEATURE_FEED = "Feed";
 // `upgrade` is a SECOND, version-gated target: `{ componentType, slot, propMap, gateInputs?, children? }`, emitted
 // INSTEAD of `target` only when the run's registry positively carries it (and its `children.componentType`) on the
 // version the run targets, together with every input a target lists in `gateInputs` — `resolveRowTarget` in
-// mapping-registry.mjs decides. `target` stays the fallback every indexed version renders, so a row with an upgrade
-// still validates clean against the oldest index, and a stand without the newer component keeps today's output
-// unchanged.
+// mapping-registry.mjs decides, and the mapper builds it only for an upgrade type it has an emitter for. `target`
+// stays the fallback every indexed version renders: a row with an upgrade still validates clean against the oldest
+// index, and a run whose registry cannot show the newer component builds `target`.
 function row({ match, role, tier, ownedBy, target = null, upgrade = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
   return Object.freeze({ match: Object.freeze(match), role, tier, ownedBy, target: target && Object.freeze(target),
     upgrade: upgrade && Object.freeze({ ...upgrade, children: upgrade.children && Object.freeze(upgrade.children) }),
@@ -475,8 +475,8 @@ const WIDGET_ROWS = [
 // profile-card row keyed the same way would be returned by `resolveFeatureRow` as if a Contact-bound detail were a
 // standard feature. The match kind is the discriminator.
 //
-// `meta.pkg` stays HAND-CURATED. The registry has no package field at all — `appliesToCustomEntities` exists on 8
-// of 205 components and says nothing about packages — so the ticket's "package metadata replaces the hardcoded
+// `meta.pkg` stays HAND-CURATED. The registry has no package field at all — `appliesToCustomEntities` exists on 11
+// of 220 components and says nothing about packages — so the ticket's "package metadata replaces the hardcoded
 // package knowledge" is not available. What the registry DOES give is the check that the component type is real,
 // which is now applied to all four rows.
 const PROFILE_CARD_ROWS = [

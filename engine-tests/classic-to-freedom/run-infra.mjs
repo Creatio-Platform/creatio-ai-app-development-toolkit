@@ -674,15 +674,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // builds it only when the run's own registry carries it, so its absence from the vendored index is the expected
   // state, not a typo. The doc and the code may both name it.
   const REGISTRY_GATED = new Set(MAPPING_ROWS.filter((r) => r.meta?.requiresRegistry).map((r) => r.verify?.componentType).filter(Boolean));
-  // A row's version-gated `upgrade` target (and its option child) is emitted only where the run's registry carries
-  // it, so it may legitimately be newer than the vendored index. Exempt ONLY while the index lacks them — the set is
-  // derived from the table and the index, so regenerating the index ends the exemption by itself, and a name that is
-  // neither an upgrade target nor in the index still fails.
-  const upgradePending = new Set(MAPPING_ROWS.flatMap((r) => [r.upgrade?.componentType, r.upgrade?.children?.componentType])
-    .filter((t) => t && !index.components[t]));
   const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t) && !REGISTRY_GATED.has(t));
-  const unknownDocTypes = docTypes.filter((t) => !index.components[t] && !upgradePending.has(t));
-  check(`doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index (the registry-gated rows' types and a not-yet-indexed upgrade target excepted)`,
+  const unknownDocTypes = docTypes.filter((t) => !index.components[t]);
+  check(`doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index (the registry-gated rows' types excepted)`,
     docTypes.length >= 5 && unknownDocTypes.length === 0,
     () => ({ checked: docTypes.length, unknown: unknownDocTypes, excludedAsRequests: allDocTypes.filter((t) => !isComponentName(t)) }));
   // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
@@ -723,8 +717,8 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
     .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t) && !REGISTRY_GATED.has(t));
-  const unknownEngineTypes = engineTypes.filter((t) => !index.components[t] && !upgradePending.has(t));
-  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers, the crt.Tab acceptance spelling, the registry-gated rows' types and a not-yet-indexed upgrade target)",
+  const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
+  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers, the crt.Tab acceptance spelling and the registry-gated rows' types)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
@@ -732,12 +726,6 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
     codeCounterExamples.size >= 1 && [...codeCounterExamples].every((t) => !index.components[t]),
     () => [...codeCounterExamples].filter((t) => index.components[t]));
-  // The upgrade exemption stays honest the same way: it may only ever cover types a mapping row names as an
-  // `upgrade`, and only while the index lacks them.
-  check("code lint: the not-yet-indexed upgrade exemption covers only mapping-row upgrade targets the index lacks",
-    [...upgradePending].every((t) => !index.components[t]
-      && MAPPING_ROWS.some((r) => r.upgrade?.componentType === t || r.upgrade?.children?.componentType === t)),
-    () => [...upgradePending]);
   check("code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
     !index.components["crt.Tab"],
     () => Object.keys(index.components).filter((t) => t.startsWith("crt.Tab")));

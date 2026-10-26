@@ -604,7 +604,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
   // (messages / mixins / the full define() dep list) ----
-  mapImperativeMembers(eff, cols).needsDecision.forEach(d => needsDecision.push(d));
+  mapImperativeMembers(eff, cols, F.pageAttributes).needsDecision.forEach(d => needsDecision.push(d));
 
   // ---- Fix 2: LOUD unmapped-component drop ----
   const _drop = mapUnmappedDrop(eff, accountedFor, F.configGaps);
@@ -1231,12 +1231,16 @@ function mapFields(ctx, containers) {
       .sort((a, b) => ((a.it.order ?? Infinity) - (b.it.order ?? Infinity)) || (a.n - b.n));
     for (const { it, row } of candidates) {
       // A row with a version-gated `upgrade` (RADIO_GROUP -> crt.RadioGroup) emits it only where the run's registry
-      // carries it; otherwise the row's own `target`, exactly as before the upgrade existed.
+      // carries it and an emitter for that upgrade type exists; otherwise the row's own `target` is emitted.
       const sel = resolveRowTarget(row, ctx.registry);
-      if (sel.upgraded) emitRadioGroup(it, sel.target);
+      const emitUpgrade = sel.upgraded ? UPGRADE_EMITTERS[sel.target.componentType] : null;
+      if (emitUpgrade) emitUpgrade(it, sel.target);
       else emitTableElement(it, row, sel);
     }
   };
+  // The emitter of each `upgrade` component type. An upgrade is a generic row field, but its shape is not: a type
+  // with no emitter here keeps its row's fallback `target` rather than being built as a radio group.
+  const UPGRADE_EMITTERS = { "crt.RadioGroup": (it, target) => emitRadioGroup(it, target) };
   // ONE candidate's emission. Own fn for the same Sonar CC reason as the placement helpers above: inside the loop
   // every guard here also carried the loop's nesting weight, which is what pushed `mapFields` over the budget.
   // The row's `propMap` resolved against ONE element: the emitted `values`, plus the REQUIRED sources this element
@@ -1318,7 +1322,19 @@ function mapFields(ctx, containers) {
     // could not show that the target stand has it (no stand export, no pinned version), so say what a stand that has
     // it would get and how to ask for it. Silent when the index carries the upgrade nowhere.
     if (sel?.availableIn?.length) needsDecision.push({ kind: "registry-upgrade-available", item: it.name,
-      reason: `${itemKindName(it)} '${it.name}' was built as ${row.target.componentType}, which every indexed platform version renders. ${row.upgrade.componentType} — the closer match, with named options business rules can address — is in the component registry for ${sel.availableIn.join(", ")}, but this run's registry cannot show that the target stand carries it. Supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` and re-run \`--plan --out\` to build ${row.upgrade.componentType} on a stand that has it` });
+      reason: `${itemKindName(it)} '${it.name}' was built as ${row.target.componentType}, which every indexed platform version renders. ${row.upgrade.componentType} — the closer match, with named options business rules can address — is in the component registry for ${sel.availableIn.join(", ")}, but ${upgradeRemedy(row.upgrade.componentType)}` });
+  };
+  // Why the run could not show the target stand carries the upgrade, and the one remedy that changes that. A run that
+  // already pinned a version the index does not know, or named an export that could not be read, asked for a specific
+  // stand: telling it to pin a version would repeat what it did, so only the stand's own export is named.
+  const upgradeRemedy = (upgradeType) => {
+    const rerun = `and re-run \`--plan --out\` to build ${upgradeType} on a stand that has it`;
+    const unindexed = ctx.registry?.unindexedVersion || ctx.registryUnindexedVersion;
+    if (ctx.registry?.source === "unreadable-export")
+      return `the component registry the manifest named could not be read, so the run fell back to the vendored index and cannot show that the target stand carries it. Supply a readable \`manifest.componentRegistry\` (the stand's registry export) ${rerun}`;
+    if (unindexed)
+      return `the pinned platform version '${unindexed}' is not in the engine's vendored component index, so only the target stand's own registry export can show it carries it. Supply \`manifest.componentRegistry\` (the stand's registry export) ${rerun}`;
+    return `this run's registry cannot show that the target stand carries it. Supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` ${rerun}`;
   };
 
   // ---- RADIO_GROUP -> crt.RadioGroup, the version-gated upgrade of the RADIO_GROUP row --------------------------
@@ -1326,21 +1342,35 @@ function mapFields(ctx, containers) {
   // element's own name), because that is how crt.RadioGroup stores options and what lets a business rule or a
   // package address a single option. Every piece below is its own fn for Sonar CC 15.
   const radioGroups = [];                     // every built group { name, classic, attr }, for the split-group pass
-  // The classic binding without a ContentBuilder `$` prefix (`value: { bindTo: "$UsrAttr" }`).
-  const radioAttr = (it) => (typeof it.valueBindTo === "string" ? it.valueBindTo.replace(/^\$/, "") || null : null);
-  // What the group is bound to: an entity column (keeps the PDS binding), a page attribute (a view-model attribute
-  // with no PDS path — a PDS path would point at a column that does not exist), or unknown when no entity columns
-  // were supplied (nothing to tell the two apart by, so the column binding the fallback emits is kept).
-  const radioBinding = (attr) => {
+  const radioPageAttrs = new Set();           // page attributes the groups create (no entity column behind them)
+  // The classic binding without a ContentBuilder `$` prefix (`value: { bindTo: "$UsrAttr" }`), and whether it had
+  // one: the `$` prefix is how a ContentBuilder page names a page attribute, so it is evidence of its own.
+  const radioAttr = (it) => {
+    if (typeof it.valueBindTo !== "string") return { attr: null, dollar: false };
+    return { attr: it.valueBindTo.replace(/^\$/, "") || null, dollar: it.valueBindTo.startsWith("$") };
+  };
+  // What the group is bound to, from positive evidence only:
+  // - `column`: the entity columns carry the name — the PDS attribute + column the fallback emits;
+  // - `attribute`: a `$` binding or an attribute the classic view model declares — a view-model attribute with no PDS
+  //   path (a PDS path would point at a column that does not exist);
+  // - `missing-column`: entity columns were supplied and carry neither — the PDS binding is kept and the group is
+  //   reported, because guessing "page attribute" would build a group whose value is never saved;
+  // - `unknown`: no entity columns and no other evidence — the PDS binding the fallback emits is kept.
+  const radioBinding = (attr, dollar) => {
     const classic = (ctx.eff.attributes || []).find((a) => a.name === attr) || null;
     if (ctx.cols[attr] != null) return { kind: "column", type: ctx.colMeta(attr).type, classic };
-    return { kind: Object.keys(ctx.cols).length ? "attribute" : "unknown", type: null, classic };
+    if (dollar || classic) return { kind: "attribute", type: null, classic };
+    return { kind: Object.keys(ctx.cols).length ? "missing-column" : "unknown", type: null, classic };
   };
   const LOOKUP_TYPES = new Set([DATA_VALUE_TYPE.GUID, DATA_VALUE_TYPE.LOOKUP]);
+  const GUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   // The column type as clio spells it ("Lookup", "Guid") or as a numeric code ("10", "0"), normalized like every
-  // other column type the mapper reads.
-  const isLookupBinding = (b) => ["lookup", "guid"].includes(normalizeDvt(String(b?.type ?? "").toLowerCase()))
-    || b?.classic?.isLookup === true || LOOKUP_TYPES.has(b?.classic?.dataValueType);
+  // other column type the mapper reads. A binding with no type at all (no column, no declared dataValueType) whose
+  // every option value is a record id is a lookup group too: custom values cannot hold record ids either way.
+  const isLookupBinding = (b, options) => ["lookup", "guid"].includes(normalizeDvt(String(b?.type ?? "").toLowerCase()))
+    || b?.classic?.isLookup === true || LOOKUP_TYPES.has(b?.classic?.dataValueType)
+    || (b?.type == null && b?.classic?.dataValueType == null && options.length > 0
+      && options.every((c) => typeof c.optionValue === "string" && GUID_RX.test(c.optionValue)));
   // The option children: classic child items carrying a literal `value` (the same test `optionEntriesOf` uses).
   const radioOptionsOf = (it, sink) => {
     const out = orderedChildren(it.name).filter((c) => c.optionValue !== null && c.optionValue !== undefined);
@@ -1350,8 +1380,8 @@ function mapFields(ctx, containers) {
   // Why THIS group cannot be built as crt.RadioGroup, or null. Each reason names what the reader has to port by hand;
   // the drop sweep prefixes it with `classic RADIO_GROUP '<name>'`, so the ⚠ is typed by kind.
   const radioGap = (it, attr, binding, options) => {
-    if (attr && isLookupBinding(binding))
-      return `it is bound to the lookup (Guid) ${binding.kind === "column" ? "column" : "attribute"} '${attr}' — crt.RadioGroup custom values cannot hold record ids, and the lookup values source is not mapped; rebuild the group on that lookup column by hand (Values source: Lookup)`;
+    if (attr && isLookupBinding(binding, options))
+      return `it is bound to the lookup (Guid) ${binding.kind === "attribute" ? "attribute" : "column"} '${attr}' — crt.RadioGroup custom values cannot hold record ids, and the lookup values source is not mapped; rebuild the group on that lookup column by hand (Values source: Lookup)`;
     if (options.length) return null;
     const kids = orderedChildren(it.name).length;
     if (kids) return `its Freedom target (crt.RadioGroup) needs option elements, and none of its ${kids} child item(s) carries a literal option value (the legacy card format, or options filled from code) — port the options by hand`;
@@ -1361,8 +1391,11 @@ function mapFields(ctx, containers) {
     const key = `${optName}_caption`;
     const hit = ctx.pageText(child.caption) ?? ctx.pageText(child.name + "Caption");
     if (hit) ctx.registerText(key, hit);
-    else needsDecision.push({ kind: "element-caption", item: optName,
-      reason: `radio group option '${optName}' has no caption the page strings resolve${child.caption ? ` ('${child.caption}')` : ""} — author the localized string for resource '${key}'` });
+    else {
+      const named = child.caption ? ` ('${child.caption}')` : "";
+      needsDecision.push({ kind: "element-caption", item: optName,
+        reason: `radio group option '${optName}' has no caption the page strings resolve${named} — author the localized string for resource '${key}'` });
+    }
     return `#ResourceString(${key})#`;
   };
   const radioOptionSource = (spec, child, optName) => {
@@ -1371,9 +1404,15 @@ function mapFields(ctx, containers) {
     if (spec.from === SOURCE.OPTION_DISABLED) return child.enabled === false ? true : null;
     return null;
   };
-  // One option child insert. A bound `enabled` cannot be expressed on the option itself: it becomes a business rule
-  // on the named option ("Make read-only"), raised as a decision naming the option and the attribute.
+  // An option Classic never shows (a static `visible: false`) is not built: a Freedom option is always shown, so
+  // building it would offer a value Classic never offered. It is reported, never dropped silently.
+  const reportHiddenRadioOption = (child, groupName) => needsDecision.push({ kind: "radio-option-hidden", item: child.name,
+    reason: `radio group option '${child.name}' (group '${groupName}', value ${JSON.stringify(child.optionValue)}) is hidden in Classic (visible: false), so it is not built — a record that already holds that value shows it as an extra, disabled option. Build the option and hide it with a page business rule ("Hide elements") if it must stay addressable` });
+  // One option child insert. A bound `enabled` or `visible` cannot be expressed on the option itself: each becomes a
+  // business rule on the named option ("Make read-only" / "Hide elements"), raised as a decision naming the option and
+  // the attribute.
   const emitRadioOption = (child, groupName, spec) => {
+    if (child.visible === false) { reportHiddenRadioOption(child, groupName); return; }
     const optName = uniqueName(child.name);
     const values = { type: spec.componentType };
     for (const [prop, s] of Object.entries(spec.propMap || {})) {
@@ -1383,20 +1422,34 @@ function mapFields(ctx, containers) {
     viewConfigDiff.push({ operation: "insert", name: optName, values, parentName: groupName, propertyName: spec.slot });
     if (child.handlers?.enabled) needsDecision.push({ kind: "radio-option-rule", item: optName,
       reason: `radio group option '${optName}' (group '${groupName}') is enabled by the classic attribute '${child.handlers.enabled}', which an option element cannot bind — add a page business rule that makes option '${optName}' read-only while '${child.handlers.enabled}' is false` });
+    if (child.visible === "dynamic") {
+      const by = child.handlers?.visible ? `the classic attribute '${child.handlers.visible}'` : "a bound classic condition";
+      needsDecision.push({ kind: "radio-option-rule", item: optName,
+        reason: `radio group option '${optName}' (group '${groupName}') is shown by ${by}, which an option element cannot bind — add a page business rule that hides option '${optName}' while that condition is false` });
+    }
   };
-  const bindRadioAttribute = (attr, binding) => {
+  // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
+  // imperative-members pass does not ask for it to be created again (`pageAttributes`).
+  const bindRadioAttribute = (attr, binding, groupName) => {
     if (binding.kind === "attribute") {
       const v = binding.classic?.value;
       attributes[attr] = v === null || v === undefined ? {} : { value: v };
+      radioPageAttrs.add(attr);
+      accountedFor.add(attr);
       return;
     }
     attributes[attr] = { modelConfig: { path: "PDS." + attr } };
     pdsColumns[attr] = { path: attr };
+    if (binding.kind !== "missing-column") return;
+    const near = nearestColumns(attr, ctx.cols);
+    const hint = near.length ? ` (nearest entity columns: ${near.join(", ")})` : "";
+    needsDecision.push({ kind: "radio-group-binding", item: groupName,
+      reason: `radio group '${groupName}' is bound to '${attr}', which is neither a column of the entity${hint} nor an attribute the classic page declares — it is kept bound to PDS.${attr}, so its value is saved only if that column exists. Confirm the column (a renamed column: rebind the group), or declare '${attr}' as a page attribute` });
   };
   const emitRadioGroup = (it, target) => {
     const sink = newSink();
-    const attr = radioAttr(it);
-    const binding = attr ? radioBinding(attr) : null;
+    const { attr, dollar } = radioAttr(it);
+    const binding = attr ? radioBinding(attr, dollar) : null;
     const options = radioOptionsOf(it, sink);
     const gap = radioGap(it, attr, binding, options);
     if (gap) { configGaps.set(it.name, gap); return; }
@@ -1414,7 +1467,7 @@ function mapFields(ctx, containers) {
     for (const child of options) emitRadioOption(child, elName, target.children);
     accountedFor.add(it.name);
     sink.claimed.forEach((c) => accountedFor.add(c));
-    bindRadioAttribute(attr, binding);
+    bindRadioAttribute(attr, binding, elName);
     radioGroups.push({ name: elName, classic: it.name, attr });
   };
   // A SPLIT group: one attribute shown in several classic groups, each with its own options. Each becomes its own
@@ -1443,6 +1496,8 @@ function mapFields(ctx, containers) {
     // tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
+    // the page attributes the radio groups create (no entity column): `mapImperativeMembers` does not ask for them
+    pageAttributes: radioPageAttrs,
     headerLayout: headerIsWide ? "wide" : null };
 }
 
@@ -1845,10 +1900,12 @@ function methodReason(stub) {
   return `imperative logic${where}${trigClause}${evidenceClauses(stub.evidence)} — implement as a Freedom handler, converter or virtual attribute (a declarative business rule only when it is genuinely declarative)`;
 }
 
-function mapImperativeMembers(eff, cols) {
+// `pageAttributes`: attributes the ChangeSet already creates as view-model attributes (a radio group's page
+// attribute) — not virtual attributes left for someone to create, so no `attribute-virtual` decision asks for them.
+function mapImperativeMembers(eff, cols, pageAttributes = new Set()) {
   const needsDecision = [];
   const client = (xs) => (xs || []).filter((x) => !x.fromTemplate);
-  const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n));
+  const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n)) || pageAttributes.has(n);
   const moduleDeps = client(eff.moduleDeps).map((d) => d.name);
   const mixinCovers = (m) => {
     const module = m.module || m.name;

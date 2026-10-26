@@ -11496,9 +11496,12 @@ try {
     && rgKids(typed, "IsPrimary")[1].values.value === false && rgKids(typed, "Priority")[1].values.value === 2,
     () => ({ IsPrimary: rgKids(typed, "IsPrimary"), Priority: rgKids(typed, "Priority"), Mode: rgKids(typed, "Mode") }));
 
-  // T3 / R3 — a page attribute (no entity column), also through a ContentBuilder `$` binding.
-  const pa = rgUp([rgGroupOp("Choice", "UsrChoice"), rgOptOp("ChoiceA", "Choice", "a"), rgOptOp("ChoiceB", "Choice", "b"),
-    rgGroupOp("CbChoice", "$UsrCb"), rgOptOp("CbA", "CbChoice", 1), rgOptOp("CbB", "CbChoice", 2)].join(","));
+  // T3 / R3 — a page attribute (no entity column): one the classic view model declares (with a static default), and a
+  // ContentBuilder `$` binding.
+  const rgChoiceAttr = `attributes:{UsrChoice:{dataValueType:Terrasoft.DataValueType.TEXT,value:"a"}},`;
+  const rgChoiceDiff = [rgGroupOp("Choice", "UsrChoice"), rgOptOp("ChoiceA", "Choice", "a"), rgOptOp("ChoiceB", "Choice", "b")].join(",");
+  const pa = gmRun([rgChoiceDiff, rgGroupOp("CbChoice", "$UsrCb"), rgOptOp("CbA", "CbChoice", 1), rgOptOp("CbB", "CbChoice", 2)].join(","),
+    rgChoiceAttr, { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
   const paAttrs = pa.changeSet.viewModelConfigDiff[0].values;
   const paPds = pa.changeSet.modelConfigDiff[0].values;
   check("radio group T3: a group bound to a page attribute gets an attribute with NO PDS path and no PDS column (also for a ContentBuilder `$Attr`)",
@@ -11506,6 +11509,41 @@ try {
     && paAttrs.UsrChoice && !paAttrs.UsrChoice.modelConfig && paAttrs.UsrCb && !paAttrs.UsrCb.modelConfig
     && !("UsrChoice" in paPds) && !("UsrCb" in paPds) && !("$UsrCb" in paAttrs),
     () => ({ paAttrs, paPds, ops: rgOps(pa).filter((o) => /Choice/.test(o.name)) }));
+  // The declared attribute keeps its classic default, and the ChangeSet that creates it does not also ask for it to be
+  // created (`attribute-virtual`); the same declaration without the group still asks (anti-vacuity).
+  const paNoGroup = gmRun("", rgChoiceAttr, { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  check("radio group T3: a declared page attribute is emitted as { value: <classic default> } and raises no attribute-virtual decision; without the group it does",
+    JSON.stringify(paAttrs.UsrChoice) === JSON.stringify({ value: "a" })
+    && !rgDecisions(pa, "attribute-virtual").some((d) => d.item === "UsrChoice") && pa.changeSet.accountedFor.includes("UsrChoice")
+    && rgDecisions(paNoGroup, "attribute-virtual").some((d) => d.item === "UsrChoice"),
+    () => ({ attr: paAttrs.UsrChoice, virtual: rgDecisions(pa, "attribute-virtual"), noGroup: rgDecisions(paNoGroup, "attribute-virtual") }));
+
+  // T3b / R3 + R6 — the binding is read from positive evidence only.
+  const noColsRun = (diff) => gmRun(diff, "", { entityColumns: {}, resources: rgRes, componentRegistry: rgExport });
+  const ncDollar = noColsRun([rgGroupOp("Cb", "$UsrCb"), rgOptOp("CbA", "Cb", 1), rgOptOp("CbB", "Cb", 2)].join(","));
+  check("radio group T3b: with NO entity columns a ContentBuilder `$Attr` group is still a page attribute — no PDS path, no PDS column",
+    rgOp(ncDollar, "Cb")?.values?.type === "crt.RadioGroup" && ncDollar.changeSet.viewModelConfigDiff[0].values.UsrCb
+    && !ncDollar.changeSet.viewModelConfigDiff[0].values.UsrCb.modelConfig && !("UsrCb" in ncDollar.changeSet.modelConfigDiff[0].values),
+    () => ({ attrs: ncDollar.changeSet.viewModelConfigDiff[0].values, pds: ncDollar.changeSet.modelConfigDiff[0].values }));
+  const ncGuid = noColsRun([rgGroupOp("G", "Owner"), rgOptOp("GOwnerA", "G", "6b7c1d2e-0000-0000-0000-000000000001"),
+    rgOptOp("GOwnerB", "G", "6b7c1d2e-0000-0000-0000-000000000002")].join(","));
+  const ncGuidRow = ncGuid.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "G");
+  check("radio group T3b: with NO entity columns a group whose every option value is a record id is the lookup gap — no element emitted",
+    /lookup \(Guid\) column 'Owner'/.test(ncGuidRow?.reason || "")
+    && !rgOps(ncGuid).some((o) => ["crt.RadioGroup", "crt.RadioGroupItem"].includes(o.values?.type)),
+    () => ({ row: ncGuidRow, ops: rgOps(ncGuid).filter((o) => /^G/.test(o.name)) }));
+  const ncPlain = noColsRun([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a"), rgOptOp("ModeB", "Mode", "b")].join(","));
+  check("radio group T3b: with NO entity columns and no other evidence the group keeps the PDS binding, unreported",
+    ncPlain.changeSet.viewModelConfigDiff[0].values.Mode?.modelConfig?.path === "PDS.Mode"
+    && rgDecisions(ncPlain, "radio-group-binding").length === 0,
+    () => ({ attrs: ncPlain.changeSet.viewModelConfigDiff[0].values, binding: rgDecisions(ncPlain, "radio-group-binding") }));
+  const miss = rgUp([rgGroupOp("Lost", "UsrLost"), rgOptOp("LostA", "Lost", "a"), rgOptOp("LostB", "Lost", "b")].join(","));
+  const missRow = rgDecisions(miss, "radio-group-binding");
+  check("radio group T3b: entity columns that lack the bound name (and no declared attribute) keep the PDS binding AND report it",
+    miss.changeSet.viewModelConfigDiff[0].values.UsrLost?.modelConfig?.path === "PDS.UsrLost"
+    && miss.changeSet.modelConfigDiff[0].values.UsrLost?.path === "UsrLost"
+    && missRow.length === 1 && missRow[0].item === "Lost" && /'UsrLost'/.test(missRow[0].reason) && /PDS\.UsrLost/.test(missRow[0].reason),
+    () => ({ attrs: miss.changeSet.viewModelConfigDiff[0].values, missRow }));
 
   // T4 / R4 — static `enabled: false` vs a bound `enabled`.
   const en = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",enabled:false"),
@@ -11518,6 +11556,30 @@ try {
   check("radio group T4: an option whose enabled is bound to an attribute raises ONE business-rule decision naming the option and the attribute",
     enRule.length === 1 && enRule[0].item === "ModeB" && /CanPickB/.test(enRule[0].reason) && /business rule/.test(enRule[0].reason),
     () => enRule);
+
+  // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
+  // built and raises the business-rule decision.
+  const vis = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",visible:false"),
+    rgOptOp("ModeB", "Mode", "b", `,visible:{bindTo:"ShowB"}`), rgOptOp("ModeC", "Mode", "c")].join(","));
+  const visHidden = rgDecisions(vis, "radio-option-hidden");
+  const visRule = rgDecisions(vis, "radio-option-rule");
+  check("radio group T4b: an option with visible:false is not built, is accounted for, and raises ONE radio-option-hidden decision naming it and its value",
+    rgKids(vis, "Mode").map((o) => o.name).join(",") === "ModeB,ModeC" && vis.changeSet.accountedFor.includes("ModeA")
+    && visHidden.length === 1 && visHidden[0].item === "ModeA" && /"a"/.test(visHidden[0].reason) && /visible: false/.test(visHidden[0].reason),
+    () => ({ kids: rgKids(vis, "Mode"), visHidden }));
+  check("radio group T4b: an option whose visible is bound to an attribute is built and raises ONE hide business-rule decision naming the option and the attribute",
+    visRule.length === 1 && visRule[0].item === "ModeB" && /ShowB/.test(visRule[0].reason) && /hides option 'ModeB'/.test(visRule[0].reason),
+    () => visRule);
+
+  // T1b / R6 — an option whose caption the page strings do not resolve: the caption is still the option's resource,
+  // and the missing string is reported (never invented).
+  const noCap = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a"), rgOptOp("OptMaybe", "Mode", "maybe")].join(","));
+  const noCapOpt = rgOp(noCap, "OptMaybe");
+  const noCapRow = rgDecisions(noCap, "element-caption").filter((d) => d.item === "OptMaybe");
+  check("radio group T1b: an option with no resolvable caption gets #ResourceString(<opt>_caption)#, no such resource key, and ONE element-caption decision naming the resource",
+    noCapOpt?.values?.caption === "#ResourceString(OptMaybe_caption)#" && !("OptMaybe_caption" in (noCap.changeSet.resources || {}))
+    && noCapRow.length === 1 && /'OptMaybe_caption'/.test(noCapRow[0].reason) && /OptMaybeCaption/.test(noCapRow[0].reason),
+    () => ({ opt: noCapOpt, noCapRow, resources: noCap.changeSet.resources }));
 
   // T5 / R5 — a split group: two classic groups on one attribute.
   const sp = rgUp([rgGroupOp("PrioA", "Priority"), rgOptOp("P1", "PrioA", 1), rgOptOp("P2", "PrioA", 2),
@@ -11575,6 +11637,15 @@ try {
     fbUpAvail.length === 1 && fbUpAvail[0].item === "IsPrimary" && /\blatest\b/.test(fbUpAvail[0].reason) && !/8\.3\.4/.test(fbUpAvail[0].reason)
     && [fbPinned, fbExport, fbNoCaption].every((r) => !r.changeSet.needsDecision.some((d) => d.kind === "registry-upgrade-available")),
     () => ({ union: fbUpAvail, others: [fbPinned, fbExport, fbNoCaption].map((r) => r.changeSet.needsDecision.filter((d) => d.kind === "registry-upgrade-available")) }));
+  // A run that pinned a version the vendored index does not know already asked for a specific stand: it keeps the
+  // fallback and is told to supply the stand's export, never to pin a version again.
+  const fbUnindexed = fbRun({ platformVersion: "9.9.9" });
+  const fbUnindexedAvail = fbUnindexed.changeSet.needsDecision.filter((d) => d.kind === "registry-upgrade-available");
+  check("radio group T7: a run pinned to an unindexed version keeps crt.IconRadioButton and its upgrade item names the pin and only the stand export as the remedy",
+    rgOp(fbUnindexed, "IsPrimary")?.values?.type === "crt.IconRadioButton"
+    && fbUnindexedAvail.length === 1 && /'9\.9\.9'/.test(fbUnindexedAvail[0].reason) && /manifest\.componentRegistry/.test(fbUnindexedAvail[0].reason)
+    && !/manifest\.platformVersion/.test(fbUnindexedAvail[0].reason) && /manifest\.platformVersion/.test(fbUpAvail[0].reason),
+    () => fbUnindexedAvail);
   const fbLatest = fbRun({ platformVersion: "latest" });
   check("radio group T7: a run pinned to the vendored `latest` (which carries crt.RadioGroup with the caption input) builds crt.RadioGroup",
     rgOp(fbLatest, "IsPrimary")?.values?.type === "crt.RadioGroup" && rgKids(fbLatest, "IsPrimary").length === 2,
@@ -11599,7 +11670,7 @@ try {
     /crt\.IconRadioButton/.test(miniOwn.miniPage?.spec || "") && !/crt\.RadioGroup\b/.test(miniOwn.miniPage?.spec || ""),
     () => (miniOwn.miniPage?.spec || "").split("\n").filter((l) => /Radio|IsPrimary/i.test(l)));
   // The union fallback names the upgrade ONLY when the index carries it on some version — driven at the mapper seam
-  // with a two-version index, because the vendored one does not carry crt.RadioGroup yet.
+  // with small hand-built indexes, so each case controls exactly which version carries what.
   const rgUnionIdx = { meta: { versions: ["8.3.4", "latest"] }, components: {
     "crt.IconRadioButton": { v: 3, inputs: {}, outputs: {} }, "crt.RadioGroup": { v: 2, inputs: {}, outputs: {} },
     "crt.RadioGroupItem": { v: 2, inputs: { caption: { v: 2 } }, outputs: {} } } };
