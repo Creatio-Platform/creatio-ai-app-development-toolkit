@@ -3608,7 +3608,7 @@ export function nativeTabFieldNames(ctx, planTabs) {
 // lives inside a NATIVE Freedom tab the plan did not create (`nativeTabFieldNames` — native tabs are kept, not stripped).
 // `crt.ImageInput` is NOT in this removal set: a plan image binds through `values.value` (not the `control` the Fields
 // row keys on), so its name is never in `vk.names` here — flagging it would report a correctly built plan image as EXTRA.
-// Image presence is gated by the separate image row; this row is text/lookup/date/checkbox/number controls only.
+// Image presence is gated by the separate image row; this row is text/lookup/date/checkbox/number/radio controls only.
 const EXTRA_EXEMPT_TYPE = "crt.ImageInput";
 function classicLayoutExtraRow(identified, opToName, ctx, planTabs) {
   const kept = keptConnectionFieldNames(ctx);
@@ -4820,7 +4820,9 @@ function reachabilityValue(root, key) {
   const v = root?.reachability?.[key];
   return v === undefined ? root?.[key] : v;
 }
-const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|PhoneInput|EmailInput)$/;
+// `crt.RadioGroup` and `crt.IconRadioButton` are field controls (a RADIO_GROUP column binds through either); the
+// group's `crt.RadioGroupItem` option children are NOT fields — the anchored match keeps them out.
+const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|PhoneInput|EmailInput|RadioGroup|IconRadioButton)$/;
 // ONE ctx per page (D8). It carries BOTH this page's record and the payload ROOT: `placement` and every
 // count/structural check read the PAGE (so a child's field count can never be closed by the parent's
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
@@ -4829,7 +4831,7 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // the built page's CONTAINERS, each with the fields / related lists / widgets it holds (all descendants):
 // what the `layout` vk measures a region against. `caption` is the raw binding (`#ResourceString(…TabCaption)#`),
 // matched loosely by the caption words the plan published.
-const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput|PhoneInput|EmailInput)$/;
+const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput|PhoneInput|EmailInput|RadioGroup|IconRadioButton)$/;
 const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
 function collectLayout(node, acc) {
   if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
