@@ -495,7 +495,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
   // crt.RadioGroup and crt.IconRadioButton are field types too (a RADIO_GROUP column is built as either): a side
   // profile of a crt.Input plus one of each reads 3 fields, both in the region row (LAYOUT_FIELD_RE) and in a Fields
   // row that counts by TYPE (VERIFY_FIELD_RE). The group's crt.RadioGroupItem options are not fields: 4 expected
-  // stays ⚠ 3/4. Stand-measured (PR #274): before this, a 4-field side profile read 1/4 with all four on the page.
+  // stays ⚠ 3/4.
   {
     const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
       { type: "crt.FlexContainer", name: "SideContainer", items: [
@@ -509,7 +509,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const typed4 = resolveVk({ type: "fields", n: 4 }, c);
     check("fields: crt.RadioGroup / crt.IconRadioButton are field types — a side profile of a crt.Input plus one of each verifies 3/3 ✅ in the region row and the by-TYPE Fields row; its crt.RadioGroupItem options are not counted (4 expected ⚠ 3/4)",
       () => st(side3) === "✅ Done" && /3 fields/.test(ev(side3)) && st(side4) === "⚠ verify" && /3\/4 fields/.test(ev(side4))
-        && st(typed3) === "✅ Done" && /^3 of 3 /.test(ev(typed3)) && st(typed4) === "⚠ verify" && /^3\/4 /.test(ev(typed4)),
+        && st(typed3) === "✅ Done" && ev(typed3).startsWith("3 of 3 ") && st(typed4) === "⚠ verify" && ev(typed4).startsWith("3/4 "),
       () => [side3, side4, typed3, typed4]);
   }
   // A caption word-miss falls back to a CONTENT FIT: an unclaimed tab whose fields/lists/widgets satisfy the want
