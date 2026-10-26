@@ -5,14 +5,52 @@ class WorkflowError(Exception):
     pass
 
 
+ROLES_HEADING = "## 2. Roles and Permissions"
 UX_HEADING = "## 6. UX Expectations"
 ANALYTICS_HEADING = "## 7. Analytics"
+# "Portal section" is a CONDITIONAL top-level section (present only when the app exposes sections to
+# external / portal users). When present it is § 8 and pushes Edge Cases to § 9; when absent Edge Cases
+# stays § 8. So Edge Cases is matched by whichever number the portal decision implies, not a fixed one.
+PORTAL_HEADING = "## 8. Portal section"
+PORTAL_HEADING_RE = re.compile(r"(?m)^## 8\. Portal section\s*$")
+# Portal section (§8) markers are line-anchored labels, NOT bare substrings — same discipline as
+# LIST_COLUMNS_LABEL_RE. A plain `"external access:" in text` would also match a prose mention
+# (e.g. "no external access:" in a narrative line), letting a non-conforming portal block pass the
+# only machine gate. The `[\s\-*>#\`]*` prefix allows the bullet/quote lead-ins §8 actually uses.
+PORTAL_SECTIONS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:")
+EXTERNAL_ACCESS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external access:(?P<value>.*)$")
+# `external access:` becomes the operations of the object grant to `All external users`, so its value is
+# a closed set of operation names rather than free text.
+EXTERNAL_ACCESS_OPERATIONS = ("read", "create", "edit", "delete")
+# The workplace the exposed sections are placed in for the external audience: a new Portal or
+# Self-service workplace, or a named existing one.
+EXTERNAL_WORKPLACE_LABEL_RE = re.compile(r"(?i)^[ \t\-*>#`]*external workplace:(?P<value>.*)$")
+# Which records of the section the external audience may see. An object operation grant to
+# `All external users` reaches EVERY record, so one customer seeing another's records is the default
+# unless the plan decides otherwise. There is deliberately no default value: the developer chooses.
+EXTERNAL_RECORD_SCOPE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external record scope:(?P<value>.*)$")
+EXTERNAL_RECORD_SCOPE_VALUES = ("own contact", "own account", "all")
+# A heading that LOOKS like the Portal section but is not the exact contract heading (wrong case,
+# plural, wrong number or level, trailing text). Without this the plan is silently treated as
+# portal-absent and none of the §8 checks run.
+PORTAL_HEADING_NEAR_MISS_RE = re.compile(r"(?im)^#{1,6}[ \t]*\d+\.?[ \t]*portal\b[^\n]*$")
+PORTAL_SECTIONS_COUNT_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:[ \t]*`?(?P<count>\d+)")
+# Every plan states whether it provisions roles and accounts, as a value or `none`; the build reads both.
+# These labels list several items, so their value may sit inline or in sub-bullets under the label.
+ROLES_TO_CREATE_LABEL_RE = re.compile(r"(?i)^[ \t\-*>#`]*roles to create:(?P<value>.*)$")
+USERS_TO_CREATE_LABEL_RE = re.compile(r"(?i)^[ \t\-*>#`]*users to create:(?P<value>.*)$")
+EXTERNAL_AUDIENCE_ROLE = "All external users"
+OBJECT_MODEL_HEADING = "## 3. Object Model"
 EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
+EDGE_CASES_HEADING_WITH_PORTAL = "## 9. Edge Cases and Exceptions"
 
+# The 8 REQUIRED sections. Edge Cases is required too, but its NUMBER varies (§8, or §9 when the
+# conditional Portal section is present), so it is checked number-agnostically below rather than by the
+# literal substring loop — it stays in this list so the canonical "8-section" count is one source of truth.
 REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 1. Business Outcome",
-    "## 2. Roles and Permissions",
-    "## 3. Object Model",
+    ROLES_HEADING,
+    OBJECT_MODEL_HEADING,
     "## 4. Lifecycle and Statuses",
     "## 5. Business Logic",
     UX_HEADING,
@@ -132,6 +170,123 @@ def iter_labeled_blocks(text, start_re):
         yield text[start:end]
 
 
+
+def check_ux_carriers(section_text, section3_text_lower, label):
+    """Every field Title a surface lists (list columns/filters) must exist in the §3 object model."""
+    for line in section_text.splitlines():
+        if not UX_CARRIER_RE.search(line):
+            continue
+        values = normalize_title_list(re.sub(r"^[\s-]*list [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
+        for title in values:
+            if title == "Name":
+                continue
+            if title.lower() not in section3_text_lower:
+                raise WorkflowError(f"Requirements doc failed: {label} title '{title}' must have a carrier in section 3 object model")
+
+
+def iter_surface_blocks(section_text, kind):
+    """Yield (heading line, block text) for each top-level surface of `kind` ('section' or
+    'related list'). A block is the heading's OWN indented sub-bullets: it ends at the next line
+    indented no deeper than the heading (the same scoping the §6 related-list check uses)."""
+    lines = section_text.splitlines()
+    for idx, line in enumerate(lines):
+        match = SURFACE_HEADING_RE.match(line)
+        if not match or match.group(1).lower() != kind:
+            continue
+        heading_indent = len(line) - len(line.lstrip())
+        block_lines = []
+        for nxt in lines[idx + 1:]:
+            if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= heading_indent:
+                break
+            block_lines.append(nxt)
+        yield line.strip(), "\n".join(block_lines)
+
+
+def has_labeled_value(text, label_re):
+    """A label line with a value after the colon, or with at least one item indented under it."""
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        match = label_re.match(line)
+        if not match:
+            continue
+        if match.group("value").strip():
+            return True
+        indent = len(line) - len(line.lstrip())
+        following = next((nxt for nxt in lines[idx + 1:] if nxt.strip()), "")
+        if len(following) - len(following.lstrip()) > indent and following.strip().lstrip("-*").strip():
+            return True
+    return False
+
+
+def heading_line_re(heading):
+    """A heading that stands alone on its line, the way `extract_section` matches its boundaries."""
+    return re.compile(r"(?m)^" + re.escape(heading) + r"[ \t]*$")
+
+
+def label_value(match):
+    """The value after a label, without surrounding backticks and whitespace, lower-cased."""
+    return match.group("value").strip().strip("`").strip().lower() if match else ""
+
+
+def validate_portal_section(text, portal_text):
+    """§8 Portal section: a `portal sections:` line and an `external workplace:` line, then one
+    `Section <name>` block per exposed section, EACH with its own `external access:` and
+    `external record scope:` decision."""
+    if not PORTAL_SECTIONS_LABEL_RE.search(portal_text):
+        raise WorkflowError(
+            "Requirements doc failed: section 8 Portal section must state a 'portal sections:' line (how many sections are exposed to external users, named)"
+        )
+    count_match = PORTAL_SECTIONS_COUNT_RE.search(portal_text)
+    if not count_match:
+        raise WorkflowError(
+            "Requirements doc failed: section 8 'portal sections:' must start with the number of exposed sections, e.g. 'portal sections: 2 (Requests, Knowledge Base)'"
+        )
+    if not has_labeled_value(portal_text, EXTERNAL_WORKPLACE_LABEL_RE):
+        raise WorkflowError(
+            "Requirements doc failed: section 8 Portal section must state an 'external workplace:' line (a new Portal or Self-service workplace, or a named existing one)"
+        )
+    blocks = list(iter_surface_blocks(portal_text, "section"))
+    if not blocks:
+        raise WorkflowError(
+            "Requirements doc failed: section 8 Portal section must describe each exposed section in its own 'Section <name>' block"
+        )
+    if int(count_match.group("count")) != len(blocks):
+        raise WorkflowError(
+            f"Requirements doc failed: section 8 says 'portal sections: {count_match.group('count')}' but describes {len(blocks)} 'Section <name>' block(s)"
+        )
+    for heading, block in blocks:
+        validate_portal_block(heading, block)
+    section2_text = extract_section(text, ROLES_HEADING, OBJECT_MODEL_HEADING)
+    if EXTERNAL_AUDIENCE_ROLE not in section2_text:
+        raise WorkflowError(
+            f"Requirements doc failed: section 2 Roles and Permissions must carry the external audience ('{EXTERNAL_AUDIENCE_ROLE}') when section 8 Portal section is present"
+        )
+
+
+def validate_portal_block(heading, block):
+    """One exposed section's own `external access:` and `external record scope:` decisions."""
+    access = EXTERNAL_ACCESS_LABEL_RE.search(block)
+    if not access:
+        raise WorkflowError(
+            f"Requirements doc failed: section 8 Portal section block '{heading}' must state its own 'external access:' level (default read)"
+        )
+    operations = [op.strip().strip("`").strip() for op in label_value(access).split(",")]
+    if not all(op in EXTERNAL_ACCESS_OPERATIONS for op in operations):
+        raise WorkflowError(
+            f"Requirements doc failed: section 8 Portal section block '{heading}' has 'external access: {access.group('value').strip()}'; list operations from "
+            + ", ".join(EXTERNAL_ACCESS_OPERATIONS)
+            + ", comma-separated"
+        )
+    scope = EXTERNAL_RECORD_SCOPE_LABEL_RE.search(block)
+    if label_value(scope) not in EXTERNAL_RECORD_SCOPE_VALUES:
+        found = f"'external record scope: {scope.group('value').strip()}'" if scope else "no 'external record scope:' line"
+        raise WorkflowError(
+            f"Requirements doc failed: section 8 Portal section block '{heading}' has {found}; state exactly one of "
+            + ", ".join(EXTERNAL_RECORD_SCOPE_VALUES)
+            + " (which records external users may see — decided with the developer, no default)"
+        )
+
+
 def count_widgets(block):
     """Count the widgets on a dashboard block's `widgets:` line. Widgets are
     `;`-separated (commas may appear inside a single widget's field list), and the
@@ -152,6 +307,8 @@ def validate_requirements_doc(content: str) -> None:
     if not re.search(r"^# .+ - Requirements$", text, re.MULTILINE):
         raise WorkflowError("Requirements doc failed: title must match '# <AppName> - Requirements'")
     for section in REQUIRED_REQUIREMENTS_SECTIONS:
+        if section == EDGE_CASES_HEADING:
+            continue  # required, but number-agnostic — checked below (portal presence shifts it to §9)
         if section not in text:
             raise WorkflowError(f"Requirements doc failed: missing required section: {section}")
     for marker in REQUIRED_REQUIREMENTS_MARKERS:
@@ -161,15 +318,48 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError(
             "Requirements doc failed: retired label 'default list columns:'/'default list filters:' is no longer accepted; use 'list columns:' / 'list filters:' (drop the 'default ' prefix)"
         )
-    if not LIST_COLUMNS_LABEL_RE.search(text):
-        raise WorkflowError("Requirements doc failed: missing required marker: list columns:")
+    if not LIST_COLUMNS_LABEL_RE.search(extract_section(text, UX_HEADING, ANALYTICS_HEADING)):
+        raise WorkflowError("Requirements doc failed: missing required marker: list columns: (in section 6 UX Expectations)")
+    section2_text = extract_section(text, ROLES_HEADING, OBJECT_MODEL_HEADING)
+    for label, label_re in (("roles to create:", ROLES_TO_CREATE_LABEL_RE), ("users to create:", USERS_TO_CREATE_LABEL_RE)):
+        if not has_labeled_value(section2_text, label_re):
+            raise WorkflowError(
+                f"Requirements doc failed: section 2 Roles and Permissions must state '{label}' with the planned items or 'none'"
+            )
     if not SECTION_OBJECT_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
-    section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
+    # Portal section (§8) is conditional: present only when the app exposes sections to external users.
+    # When present, Edge Cases moves to §9 and §7 Analytics ends where §8 Portal section begins.
+    portal_present = bool(PORTAL_HEADING_RE.search(text))
+    if not portal_present:
+        near_miss = PORTAL_HEADING_NEAR_MISS_RE.search(text)
+        if near_miss:
+            raise WorkflowError(
+                f"Requirements doc failed: '{near_miss.group().strip()}' looks like the Portal section but the heading must be exactly '{PORTAL_HEADING}'"
+            )
+    edge_cases_heading = EDGE_CASES_HEADING_WITH_PORTAL if portal_present else EDGE_CASES_HEADING
+    # Line-anchored: the heading also ends the §7 / §8 slices, which match whole lines only, so a
+    # heading with trailing text would let those slices run to the end of the document.
+    edge_cases_match = heading_line_re(edge_cases_heading).search(text)
+    if not edge_cases_match:
+        raise WorkflowError(f"Requirements doc failed: missing required section: {edge_cases_heading}")
+    if portal_present:
+        if heading_line_re(EDGE_CASES_HEADING).search(text):
+            raise WorkflowError(
+                f"Requirements doc failed: with '{PORTAL_HEADING}' present, Edge Cases is '{EDGE_CASES_HEADING_WITH_PORTAL}' only; remove the leftover '{EDGE_CASES_HEADING}'"
+            )
+        if PORTAL_HEADING_RE.search(text).start() > edge_cases_match.start():
+            raise WorkflowError(
+                f"Requirements doc failed: '{PORTAL_HEADING}' must come before '{EDGE_CASES_HEADING_WITH_PORTAL}'"
+            )
+        portal_text = extract_section(text, PORTAL_HEADING, edge_cases_heading)
+        validate_portal_section(text, portal_text)
+    section3_text = extract_section(text, OBJECT_MODEL_HEADING, "## 4. Lifecycle and Statuses")
     section6_text = extract_section(text, UX_HEADING, ANALYTICS_HEADING)
-    section7_analytics_text = extract_section(text, ANALYTICS_HEADING, EDGE_CASES_HEADING)
+    analytics_end_heading = PORTAL_HEADING if portal_present else edge_cases_heading
+    section7_analytics_text = extract_section(text, ANALYTICS_HEADING, analytics_end_heading)
     object_blocks = list(iter_labeled_blocks(section3_text, OBJECT_HEADING_RE))
     if not object_blocks:
         raise WorkflowError("Requirements doc failed: section 3 must contain at least one Section object or Object heading")
@@ -195,15 +385,10 @@ def validate_requirements_doc(content: str) -> None:
             f"Requirements doc failed: forbidden service marker detected: '{checklist_match.group().strip()}'"
         )
     section3_text_lower = section3_text.lower()
-    for line in section6_text.splitlines():
-        if not UX_CARRIER_RE.search(line):
-            continue
-        values = normalize_title_list(re.sub(r"^[\s-]*list [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
-        for title in values:
-            if title == "Name":
-                continue
-            if title.lower() not in section3_text_lower:
-                raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
+    check_ux_carriers(section6_text, section3_text_lower, "UX")
+    if portal_present:
+        # The external surface reuses the §6 labels, so its titles need the same §3 carrier.
+        check_ux_carriers(portal_text, section3_text_lower, "Portal")
     # Section 6 lists one block per record surface. A surface heading is a
     # top-level bullet (`- **`Section <name>`**` / `- **`Related list <name>`**`).
     # A surface's block is its OWN indented sub-bullets only: it ends at the next
@@ -214,18 +399,7 @@ def validate_requirements_doc(content: str) -> None:
     # `form groups:` bullets -- from being absorbed and raising a false conflict.
     # An inline related list edits in the grid, so its block must not also carry
     # a page/form label.
-    s6_lines = section6_text.splitlines()
-    for idx, line in enumerate(s6_lines):
-        match = SURFACE_HEADING_RE.match(line)
-        if not match or match.group(1).lower() != "related list":
-            continue
-        heading_indent = len(line) - len(line.lstrip())
-        block_lines = []
-        for nxt in s6_lines[idx + 1:]:
-            if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= heading_indent:
-                break
-            block_lines.append(nxt)
-        block = "\n".join(block_lines)
+    for _, block in iter_surface_blocks(section6_text, "related list"):
         if INLINE_INTERACTION_RE.search(block) and PAGE_FORM_LABEL_RE.search(block):
             raise WorkflowError(
                 "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"

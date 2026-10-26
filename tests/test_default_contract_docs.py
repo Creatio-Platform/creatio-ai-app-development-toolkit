@@ -731,6 +731,107 @@ class DefaultContractDocsTests(unittest.TestCase):
             doc = read_text(path).lower()
             self.assertNotIn("seven sections", doc, f"{path} has stale 'seven sections'")
 
+    def test_portal_section_contract_is_in_lockstep(self):
+        # The conditional `## 8. Portal section` contract is spread across the runbook (the spec), the
+        # orchestrator SKILL, AGENTS.md and the discovery checklist, and enforced by the validator. Bind
+        # every doc's literals to the validator constants so a rename in one place fails here.
+        import workflow_validators as wv  # runtime/scripts is on sys.path (set above)
+
+        full_contract = [
+            wv.PORTAL_HEADING,
+            wv.EDGE_CASES_HEADING_WITH_PORTAL,
+            "portal sections:",
+            "external workplace:",
+            "external access:",
+            "external record scope:",
+            wv.EXTERNAL_AUDIENCE_ROLE,
+        ]
+        for path in (ROOT / "runbooks/02-requirements-gathering.md", ROOT / "skills/creatio-app-orchestrator/SKILL.md"):
+            doc = read_text(path)
+            for literal in full_contract:
+                self.assertIn(literal, doc, f"{path} must carry the Portal section literal '{literal}'")
+        for path in (ROOT / "AGENTS.md", ROOT / "context/business-checklist.md"):
+            doc = read_text(path)
+            for literal in (wv.PORTAL_HEADING, "external workplace:", "external record scope:"):
+                self.assertIn(literal, doc, f"{path} must carry the Portal section literal '{literal}'")
+        # The validator's label regexes must accept the literals the docs prescribe.
+        self.assertRegex("- portal sections: 1 (Requests)", wv.PORTAL_SECTIONS_LABEL_RE)
+        self.assertRegex("- portal sections: 1 (Requests)", wv.PORTAL_SECTIONS_COUNT_RE)
+        self.assertRegex("- external workplace: new Portal workplace Service portal", wv.EXTERNAL_WORKPLACE_LABEL_RE)
+        self.assertRegex("  - external access: read", wv.EXTERNAL_ACCESS_LABEL_RE)
+        for operation in wv.EXTERNAL_ACCESS_OPERATIONS:
+            self.assertIn(f"`{operation}`", read_text(ROOT / "runbooks/02-requirements-gathering.md"),
+                          f"the runbook must document the external access operation '{operation}'")
+        runbook = read_text(ROOT / "runbooks/02-requirements-gathering.md")
+        scope_start = runbook.index("- `external record scope:` per exposed section")
+        scope_bullet = runbook[scope_start:runbook.index("\n\n", scope_start)]
+        for value in wv.EXTERNAL_RECORD_SCOPE_VALUES:
+            self.assertRegex(f"  - external record scope: {value}", wv.EXTERNAL_RECORD_SCOPE_LABEL_RE)
+            self.assertIn(f"`{value}`", scope_bullet,
+                          f"the record-scope bullet must document the value '{value}'")
+
+    def test_schema_naming_runs_before_the_object_model_is_drafted(self):
+        # The plan's Object Model fixes the codes and titles the implementation creates, so the naming
+        # skill has to shape them while the plan is drafted, not only when the schemas are written.
+        runbook = read_text(ROOT / "runbooks/02-requirements-gathering.md")
+        read_first = runbook[runbook.index("## Read First"):runbook.index("## Preconditions")]
+        self.assertIn("`creatio-schema-naming` skill, before drafting `## 3. Object Model`", read_first,
+                      "the BA stage must load the naming skill before the Object Model")
+        object_model = runbook.index("`## 3. Object Model` must define the core business objects.")
+        rule = runbook.index("Before drafting it, invoke the `creatio-schema-naming` skill")
+        self.assertLess(object_model, rule, "the rule belongs to the Object Model contract")
+        self.assertLess(rule, runbook.index("For each object block, include:", object_model),
+                        "the rule comes before the object block contract it governs")
+        skill = read_text(ROOT / "skills/creatio-app-orchestrator/SKILL.md")
+        self.assertIn("invoke it **before drafting `## 3. Object Model`** of the Business Plan", skill,
+                      "the orchestrator's naming rule must cover the planning stage")
+
+    def test_portal_sections_are_built_through_the_portal_sections_guide(self):
+        # The plan's Portal section only decides WHAT is exposed; the writes that open a section to every
+        # external user are sequenced and guarded by the clio guide, so the build must route there after the
+        # navigation placement and the roles it relies on.
+        impl = read_text(ROOT / "runbooks/03-app-implementation.md")
+        portal = impl.index("#### Open the portal sections to external users")
+        self.assertLess(impl.index("#### Place the app"), portal,
+                        "the portal step runs after the navigation placement")
+        self.assertLess(portal, impl.index("### 5. Build analytics dashboards"),
+                        "the portal step belongs to the navigation step")
+        portal_step = impl[portal:impl.index("### 5. Build analytics dashboards")]
+        for literal in ("get-guidance name=portal-sections", "external workplace:", "external access:",
+                        "external record scope:", "unknown-topic error", "do not report the portal section as done",
+                        "leave the section internal-only"):
+            self.assertIn(literal, portal_step, f"the portal step must state '{literal}'")
+        self.assertIn("get-guidance name=portal-sections",
+                      read_text(ROOT / "runbooks/02-requirements-gathering.md"),
+                      "the plan handoff must name the guide the build applies §8 through")
+
+    def test_role_and_user_provisioning_contract_is_in_lockstep(self):
+        # The navigation placement grants the planned roles, so a runbook that provisions them later
+        # would place the app for an audience that does not exist yet.
+        planning_docs = (
+            ROOT / "runbooks/02-requirements-gathering.md",
+            ROOT / "context/business-checklist.md",
+            ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+        )
+        for path in planning_docs:
+            doc = read_text(path)
+            for literal in ("roles to create:", "users to create:"):
+                self.assertIn(literal, doc, f"{path} must carry the provisioning literal '{literal}'")
+
+        impl = read_text(ROOT / "runbooks/03-app-implementation.md")
+        provision = impl.index("#### Provision the planned roles and users first")
+        self.assertLess(provision, impl.index("#### Place the app"),
+                        "roles must be provisioned before the navigation placement that grants them")
+        provision_step = impl[provision:impl.index("#### Place the app")]
+        for literal in ("get-guidance name=administration", "manage-role", "manage-user", "manage-license",
+                        "never passes through the agent", "only the external roles", "unknown-topic error"):
+            self.assertIn(literal, provision_step, f"the provisioning step must state '{literal}'")
+        import workflow_validators as wv  # runtime/scripts is on sys.path (set above)
+        self.assertRegex("- roles to create: none", wv.ROLES_TO_CREATE_LABEL_RE)
+        self.assertRegex("- users to create: none", wv.USERS_TO_CREATE_LABEL_RE)
+        self.assertIn("Provision the planned roles and users first",
+                      read_text(ROOT / "skills/creatio-app-orchestrator/SKILL.md"))
+
     def test_static_access_rights_literal_is_consistent(self):
         # The static dashboard access grant `access rights: All Employees` is stated
         # in several docs and pinned by the validator regex. Bind them together so a
