@@ -2857,6 +2857,7 @@ export function runMigration(manifest, opts = {}) {
   const runRegistry = runRegistryFor(manifest, baseDir, opts.inheritedRunRegistry);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
+    registry: runRegistry,                    // the run's component registry (inherited by folds) — picks a version-gated target (crt.RadioGroup)
     resources: pageStrings.resources,        // #5/#13 — localizable strings for tab/group/detail captions
     resourceStrings: pageStrings.resourceStrings, // the same strings in every Classic culture, or null
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
