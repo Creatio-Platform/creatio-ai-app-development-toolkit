@@ -463,8 +463,9 @@ the stand carries …`) and the parsed settings a build needs (tab, title, eleme
 to `feature:<feature>`. One entry on either id decides it: `wont-do` + `D<N>` closes the confirm row and prints
 **Won't do** on the Layout row; `build` is read before mapping, so the feature is mapped as if the registry carried it
 — a normal Layout row, a `feature:<feature>` row gated by `--verify`, its strings registered and its tips carried —
-and the confirm item asks for the on-stand check instead. A nested fold is mapped before its page key is assigned, so
-it reads the entry on any sub-page key.
+and the confirm item asks for the on-stand check instead. A typed, mini or child page reads the entry on its own base
+key (`typed:<Schema>`, `mini:<Schema>`, `child:<Entity>`), never a sibling's. Entries on both ids, or an entry read on a
+base key another page claimed first (the page is published as `<base>@<alt>`), are `deliverableStatus` issues.
 
 **One row per field and per related list.** Every page's coverage carries one "Field <name>" row per field and
 one "Related list <detail>" row per related list (a rebuilt detail or a list-shaped standard feature). `--verify`

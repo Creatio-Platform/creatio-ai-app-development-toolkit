@@ -143,7 +143,10 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
   // flag in `extra` participates automatically AND two truthy VALUES of the same flag (e.g. `{mode:"mini"}` vs
   // `{mode:"full"}`) get DISTINCT keys — a name-only key collided them onto one cache entry and could serve the
   // wrong-flavor spec. (The sub-run receives the full `...extra`, so the key must reflect all of it.)
-  const flagKey = Object.entries(extra).filter(([, v]) => v !== undefined && v !== false && v !== null)
+  // `statusPageKey` (the fold's base page key, which the mapper reads withheld-feature decisions on) stays out of the
+  // memo key: one physical page reached from two lists carries two base keys but is ONE page under ONE final key, and
+  // a decision read on a key the page is not finally published under is reported (`withheldStatusIssues`).
+  const flagKey = Object.entries(extra).filter(([k, v]) => k !== "statusPageKey" && v !== undefined && v !== false && v !== null)
     .sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(",");
   // The registry a fold inherits decides which components it builds, and two branches can hand the same page
   // different registries (one bundle pins its own platform version), so the registry is part of the identity.
@@ -835,8 +838,21 @@ function deliverableStatusIssues(groups, opts) {
   // an alias (a withheld feature's `feature:<Feature>` on its confirm row) never shadows a deliverable of that id
   const byKey = new Map(rows.flatMap((r) => (r.aliasIds || []).map((id) => [statusKey(r.pageKey, id), r])));
   for (const r of rows) if (r.deliverableId) byKey.set(statusKey(r.pageKey, r.deliverableId), r);
-  const own = entries.flatMap(([key, entry]) => entryProblems(key, entry, byKey, rows, opts));
+  const own = [...entries.flatMap(([key, entry]) => entryProblems(key, entry, byKey, rows, opts)), ...withheldStatusIssues(rows, opts.deliverableStatus)];
   return own.length ? own : relatedStatusIssues(rows, opts.deliverableStatus);
+}
+// A withheld feature's decision that cannot stand: entries on both of its ids (one decision, one entry), and an entry
+// the mapper read on a page key other than the one its rows are published under — a sub-page whose base key another
+// page claimed first read that page's entry, so its build or Layout row would follow a decision that is not its own.
+function withheldStatusIssues(rows, map) {
+  return rows.filter((r) => r.aliasIds?.length).flatMap((r) => {
+    const keys = [...r.aliasIds, r.deliverableId].map((id) => statusKey(r.pageKey, id)).filter((k) => Object.hasOwn(map, k));
+    const twice = keys.length > 1 ? [{ key: keys[0], kind: STATUS_ISSUE.twice, problem: "is one decision recorded under two ids of the same withheld feature", valid: keys }] : [];
+    const own = r.decidedBy && !r.decidedBy.startsWith(`${r.pageKey}#`)
+      ? [{ key: r.decidedBy, kind: STATUS_ISSUE.otherPage, problem: `was read for \`${r.pageKey}\`, whose page key is not \`${r.decidedBy.slice(0, r.decidedBy.indexOf("#"))}\` — record this page's decision on its own key`, valid: [statusKey(r.pageKey, r.aliasIds[0])] }]
+      : [];
+    return [...twice, ...own];
+  });
 }
 // Every `manifest.decisionsWithoutDeliverable` item that cannot stand, as `{ key, problem }`: a value that is not
 // a list, an item not shaped D<N>, one decisions.md does not hold, and one a `wont-do` status also cites.
@@ -1206,7 +1222,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey, foldCtx);
   const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
   if (!key) return publishUnfoldedChild(c, pageKey, foldCtx);
-  const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
+  const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true, statusPageKey: pageKey });
   if (f.status === "cycle") { c.cyclic = true; return; }   // mapped higher on this branch
   if (f.status === "error") { c.specError = f.error; return; } // malformed child manifest — keep the listed row
   const res = f.res;
@@ -1268,7 +1284,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (!tkey) { t.resolved = false; continue; }
     // `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
     // the List-page block: a typed page is NOT its own section; the ONE list page is rendered once by the base fold.
-    const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
+    const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true, statusPageKey: `typed:${t.schema}` });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
@@ -1307,7 +1323,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
   const miniPage = { schema: mpName, type: (mpDecl && typeof mpDecl === "object" && mpDecl.type) || null };
   const mkey = [miniPage.schema, miniPage.schema + "MiniPage"].find((k) => k && miniPageSchemas[k]);
   if (!mkey) { miniPage.unfolded = true; return miniPage; }
-  const f = foldSubPage(mkey, miniPageSchemas, foldCtx, { isMiniPage: true });
+  const f = foldSubPage(mkey, miniPageSchemas, foldCtx, { isMiniPage: true, statusPageKey: `mini:${miniPage.schema}` });
   if (f.status === "cycle") miniPage.cyclic = true;
   else if (f.status === "error") miniPage.specError = f.error;
   else {
@@ -2801,7 +2817,7 @@ function resolveRunEntity(manifest, eff) {
 // level so its branching does not count against runMigration's cognitive complexity (Sonar S3776 — review Rita).
 function subPageSpecOpts(specOpts, opts) {
   if (!isNestedFold(opts)) return specOpts;
-  return { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) };
+  return { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}), ...(opts.statusPageKey ? { statusPageKey: opts.statusPageKey } : {}) };
 }
 // Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
 function tallyByKind(decisions) {

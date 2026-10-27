@@ -1437,7 +1437,7 @@ function mapDetails(ctx, containers, profileRegion) {
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
-      const decided = featureStatus([`feature:${feat.feature}`, `confirm:${FEATURE_UNAVAILABLE}:${d.schemaName || d.key}`]);
+      const decided = featureStatus(withheldIds(feat.feature, d.schemaName || d.key));
       needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
       // A `build` answer builds it as if the registry carried it; anything else keeps its Classic place on record.
       if (decided?.status !== "build") { withheldFeatures.push(withheldFeature(d, dentity, tab, feat, dinfo, ctx, registrySource)); return; }
@@ -1455,7 +1455,12 @@ function mapDetails(ctx, containers, profileRegion) {
 // A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and
 // element name, and the `connections` tips. Nothing is registered or carried for it — no page string, no method
 // marked carried — so a page that never gets the component owes nothing for it.
-const FEATURE_UNAVAILABLE = "feature-component-unavailable";
+export const FEATURE_UNAVAILABLE = "feature-component-unavailable";
+// Its decision is recorded once, on either of two ids: its Layout row's `feature:<Feature>` or its confirm item.
+// `withheldIds` is THE order both are read in — by the mapper, the Layout row and the confirm row alike.
+export const withheldFeatureId = (feature) => `feature:${feature}`;
+export const withheldConfirmId = (item) => `confirm:${FEATURE_UNAVAILABLE}:${item}`;
+export const withheldIds = (feature, item) => [withheldFeatureId(feature), withheldConfirmId(item)];
 function withheldFeature(d, dentity, tab, feat, dinfo, ctx, registrySource) {
   const quiet = { ...ctx, registerText: () => {} };
   const title = (feat.uiShape || "list") !== "list" || feat.titled ? classicDetailTitle(d, dinfo, ctx.pageText) : null;
@@ -1522,14 +1527,14 @@ const REGISTRY_ANSWER = {
 function unavailableFeatureDecision(d, feat, registrySource, unindexedVersion, decided = null) {
   const item = d.schemaName || d.key;
   if (decided?.status === "build") {
-    return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature,
+    return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature, decidedBy: decided.key,
       reason: `classic '${item}' is the ${feat.feature} feature → ${feat.freedom}; no registry of the target stand shows \`${feat.componentType}\`, and the planning decision ${decided.decision || "(no D<N>)"} (\`${decided.key}\`) builds it anyway. Before building, confirm on the stand that \`${feat.componentType}\` resolves (\`get-component-info\`) and that every feature flag it needs is ON; \`--verify\` gates the built component` };
   }
   const answer = REGISTRY_ANSWER[registrySource]
     || (unindexedVersion
       ? `the pinned platform version '${unindexedVersion}' is not in the engine's vendored component index, so its presence on the target stand is unknown — only that stand's component registry export can confirm it`
       : "no registry of the target stand was supplied (`manifest.componentRegistry`), so its presence is unknown");
-  return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature,
+  return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature, ...(decided ? { decidedBy: decided.key } : {}),
     reason: `classic '${d.schemaName || d.key}' is the ${feat.feature} feature → ${feat.freedom}, and ${answer}. Nothing is built in its place: keep the page without it, or — on a stand that carries \`${feat.componentType}\` — re-run the plan with that stand's component registry export in \`manifest.componentRegistry\` (the export inline, \`{ resolvedTargetVersion, components: [{ componentType, inputs, outputs }] }\`, or \`{ "file": "<path>" }\`)` };
 }
 
