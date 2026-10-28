@@ -615,6 +615,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // Suffix classes the COMPONENT index cannot judge: requests and Angular services live in the CDN's
   // separate RequestRegistry, and a `*Handler` is platform-registered against a request, never placed on a page.
   const NON_COMPONENT_SUFFIX = /(?:Request|Service|Handler)$/;
+  // Pipe converters (`$Attr | crt.InvertBooleanValue`) are not components either: the component index does not carry
+  // them, so the ones the engine emits are listed here by name and checked the other way round below.
+  const PIPE_CONVERTERS = new Set(["crt.InvertBooleanValue"]);
 // The browser-check reference exists to stop ONE measured loop: eight minutes of re-probing a page whose main
 // thread was blocked, where no script could ever have answered. The rule and the order are what the file is for,
 // so the doc lint holds it to both, and SKILL.md must actually send a builder there.
@@ -666,7 +669,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // on `crt.SaveDataRequest`). The component index cannot judge any of the three, so they are excluded here and
   // remain UNCHECKED — stated rather than silently folded in. The exclusion is kept honest below: a suffix-excluded
   // type that DOES appear in the index would mean the suffix is hiding a real component.
-  const isComponentName = (t) => !NON_COMPONENT_SUFFIX.test(t);
+  const isComponentName = (t) => !NON_COMPONENT_SUFFIX.test(t) && !PIPE_CONVERTERS.has(t);
   // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
   // it is the warning that it does not. Those are checked the other way round below.
   const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
@@ -704,8 +707,8 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // name must exist in the index. This is what catches a new control-table entry or a new row naming a type that
   // does not exist — the run-time check would only find it once some real page emitted it.
   //
-  // Two exclusions, both stated: `crt.*Request` / `crt.*Service` are not components (see above), and `crt.Tab` is
-  // an ACCEPTANCE spelling — `TAB_TYPES` carries it so `--verify` accepts a built page that still reports it,
+  // The exclusions, all stated: `crt.*Request` / `crt.*Service` and the pipe converters are not components (see
+  // above), and `crt.Tab` is an ACCEPTANCE spelling — `TAB_TYPES` carries it so `--verify` accepts a built page that still reports it,
   // measured on a live stand as a type no platform builds. The engine never EMITS it, and the golden suite asserts
   // that separately (a rich tabbed page emits `crt.TabContainer`).
   const engineSrc = ["mapper.mjs", "designspec.mjs", "migrate.mjs", "mapping-table.mjs", "mapping-registry.mjs"]
@@ -716,9 +719,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
   const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
-    .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t) && !REGISTRY_GATED.has(t));
+    .filter((t) => isComponentName(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t) && !REGISTRY_GATED.has(t));
   const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
-  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers, the crt.Tab acceptance spelling and the registry-gated rows' types)",
+  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers, pipe converters, the crt.Tab acceptance spelling and the registry-gated rows' types)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
@@ -726,6 +729,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
     codeCounterExamples.size >= 1 && [...codeCounterExamples].every((t) => !index.components[t]),
     () => [...codeCounterExamples].filter((t) => index.components[t]));
+  check("code lint: the pipe-converter exclusion is justified — every listed converter is named by the engine and is absent from the component index",
+    [...PIPE_CONVERTERS].every((t) => engineSrc.includes(t) && !index.components[t]),
+    () => [...PIPE_CONVERTERS].map((t) => ({ t, named: engineSrc.includes(t), component: !!index.components[t] })));
   check("code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
     !index.components["crt.Tab"],
     () => Object.keys(index.components).filter((t) => t.startsWith("crt.Tab")));
