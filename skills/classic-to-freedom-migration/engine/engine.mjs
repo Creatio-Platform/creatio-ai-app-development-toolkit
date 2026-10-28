@@ -1360,6 +1360,7 @@ function normalizeDiffOp(op, i) {
     // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
     handlers: handlerBindings(v),
+    handlerConverters: handlerConverters(v),
     // item 3 — PER-KIND CONFIG CAPTURE. A RADIO_GROUP binds its selection through a NESTED
     // `value: { bindTo: "<col>" }`, not through the top-level `bindTo` a field uses, and each of its options is a
     // CHILD item carrying a literal `value` plus its own caption. Both are captured here together with the mapping
@@ -1407,6 +1408,20 @@ function handlerBindings(v) {
     // a bound METHOD name, not a bound attribute: attribute bindings are resolved elsewhere (visibility/rules),
     // and a name that matches no method simply yields no trigger — the caller cross-references the method map.
     if (name) out[k] = name;
+  }
+  return out;
+}
+
+// The classic `bindConfig.converter` of each bound handler property, as `{ <property>: <converter> }`
+// (`enabled: { bindTo: "X", bindConfig: { converter: "invertBooleanValue" } }`). Classic applied the converter to X,
+// so a consumer that binds the property straight to X must not do it without the converter. An inline function has
+// no name to carry; it is recorded as such.
+function handlerConverters(v) {
+  const out = {};
+  for (const [k, raw] of Object.entries(plainObj(v))) {
+    if (!HANDLER_PROPS.has(k)) continue;
+    const converter = plainObj(plainObj(raw).bindConfig).converter;
+    if (converter != null) out[k] = isStr(converter) ? converter : "(inline function)";
   }
   return out;
 }
@@ -1551,6 +1566,7 @@ function makeItem(op, seed, pkg, layer) {
     // then saw a handler that the first run had removed. Harmless while nothing read the map, load-bearing now
     // that an absent entry is what distinguishes a modelled handler from an unmodelled static literal.
     handlers: { ...op.handlers }, // control→method bindings; the CONTROL end of a method's trigger
+    handlerConverters: { ...op.handlerConverters }, // the `bindConfig.converter` riding on a bound handler property
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
@@ -1715,6 +1731,28 @@ function markClientTouch(cur, seed, pkg) {
   cur.declaringPackage ??= pkg;
 }
 
+// A layer that restates a handler property restates its binding whole: its converter (or the lack of one) replaces
+// the earlier layer's, while the converters of the properties it leaves alone are kept.
+function restateConverters(prev, op) {
+  const out = { ...prev };
+  for (const k of Object.keys(op.handlers)) {
+    const converter = op.handlerConverters?.[k];
+    if (converter == null) delete out[k]; else out[k] = converter;
+  }
+  return out;
+}
+
+// A layer that restates a handler property as anything but a binding (`enabled: false` over a lower layer's
+// `enabled: {bindTo:"X"}`) replaces the binding: the runtime writes the key whole (core `json-applier.js` L702-705),
+// so the lower layer's handler and its converter are gone. Keeping them let a stale binding override the literal.
+function dropRestatedHandlers(op, cur) {
+  for (const k of op.valuesKeys || []) {
+    if (!HANDLER_PROPS.has(k) || Object.hasOwn(op.handlers || {}, k) || op.aliasExcluded?.includes(k)) continue;
+    if (cur.handlers) delete cur.handlers[k];
+    if (cur.handlerConverters) delete cur.handlerConverters[k];
+  }
+}
+
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
 // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
 function replayMerge(op, cur, items, { seed, pkg, undefinedOps, layer }, warnings) {
@@ -1757,9 +1795,13 @@ function replayMerge(op, cur, items, { seed, pkg, undefinedOps, layer }, warning
     cur.valueBindTo = op.valueBindTo;
     cur.optionValue = op.optionValue;
   }
+  dropRestatedHandlers(op, cur);
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
-  if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
+  if (op.handlers && Object.keys(op.handlers).length) {
+    cur.handlers = { ...cur.handlers, ...op.handlers };
+    cur.handlerConverters = restateConverters(cur.handlerConverters, op);
+  }
   cur.provenance.push(pkg);
   markClientTouch(cur, seed, pkg); // a CLIENT schema reconfigured this (possibly base-owned) element
 }
@@ -2012,7 +2054,7 @@ function replayRemoveOneProperty(k, cur) {
     // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
     // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
     const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
-    if (wasModelled) delete cur.handlers[k];
+    if (wasModelled) { delete cur.handlers[k]; if (cur.handlerConverters) delete cur.handlerConverters[k]; }
     // handler-only key: the map entry was the whole effect it could have
     if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled;
   }
@@ -2440,7 +2482,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what the table's tier B is defined in terms of.
-      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null,
+      handlers: i.handlers || {}, handlerConverters: i.handlerConverters || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null,
       // the `values` keys the body declared on this element that the engine models on no field, SORTED
       // so two folds of the same input produce byte-identical output. Empty on almost every element; non-empty is
       // the signal that real classic configuration exists here which no mapping can represent yet, and which the
