@@ -1409,13 +1409,17 @@ function mapFields(ctx, containers) {
   // groups build). It is reported, never dropped silently, and having no built option it is copied into no group.
   const reportHiddenRadioOption = (child, groupName) => needsDecision.push({ kind: "radio-option-hidden", item: child.name,
     reason: `radio group option '${child.name}' (group '${groupName}', value ${JSON.stringify(child.optionValue)}) is hidden in Classic (visible: false), so it is not built — a record that already holds that value shows it as an extra, disabled option. Build the option and hide it with a page business rule ("Hide elements") if it must stay addressable` });
-  // What a bound `enabled` names, when the option can bind its `disabled` to it: a Boolean entity column, or a page
-  // attribute the classic view model declares. A view-model method, an unknown name, a non-Boolean column, or a
-  // binding that carries a classic converter (Classic used the CONVERTED value) yields null.
+  // What a bound `enabled` names, when the option can bind its `disabled` to it: a Boolean entity column, or a Boolean
+  // page attribute the classic view model declares. A view-model method, an unknown name, a non-Boolean column or
+  // attribute, or a binding that carries a classic converter (Classic used the CONVERTED value) yields null. A
+  // declared attribute with no `dataValueType` is not Boolean, like a column of unknown type: Classic read its value
+  // by truthiness, which an inverted Boolean binding does not reproduce for every value it may hold.
+  const isBooleanDvt = (t) => normalizeDvt(String(t ?? "").toLowerCase()) === "boolean";
   const radioEnabledKind = (name, converter) => {
     if (converter) return null;
-    if (ctx.cols[name] != null) return normalizeDvt(String(ctx.colMeta(name).type ?? "").toLowerCase()) === "boolean" ? "column" : null;
-    return (ctx.eff.attributes || []).some((a) => a.name === name) ? "attribute" : null;
+    if (ctx.cols[name] != null) return isBooleanDvt(ctx.colMeta(name).type) ? "column" : null;
+    const declared = (ctx.eff.attributes || []).find((a) => a.name === name);
+    return declared && isBooleanDvt(declared.dataValueType) ? "attribute" : null;
   };
   // A bound `enabled` becomes the option's live `disabled`, inverted. The column or page attribute it reads is defined
   // the way a group bound to it would define it, unless the page already defines it.
@@ -1429,7 +1433,7 @@ function mapFields(ctx, containers) {
   const reportOptionEnabled = (optName, groupName, name, converter) => {
     const why = converter
       ? `through the classic converter '${converter}', which a plain binding would drop`
-      : "which is neither a Boolean entity column nor a page attribute the classic page declares (a view-model method, or a name the page does not define)";
+      : "which is neither a Boolean entity column nor a Boolean page attribute the classic page declares (a view-model method, a non-Boolean or untyped column or attribute, or a name the page does not define)";
     needsDecision.push({ kind: "radio-option-rule", item: optName,
       reason: `radio group option '${optName}' (group '${groupName}') is enabled by '${name}' ${why} — port '${name}' as a converter or a page attribute and bind the option's disabled to it (inverted)` });
   };

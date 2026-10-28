@@ -1742,6 +1742,17 @@ function restateConverters(prev, op) {
   return out;
 }
 
+// A layer that restates a handler property as anything but a binding (`enabled: false` over a lower layer's
+// `enabled: {bindTo:"X"}`) replaces the binding: the runtime writes the key whole (core `json-applier.js` L702-705),
+// so the lower layer's handler and its converter are gone. Keeping them let a stale binding override the literal.
+function dropRestatedHandlers(op, cur) {
+  for (const k of op.valuesKeys || []) {
+    if (!HANDLER_PROPS.has(k) || Object.hasOwn(op.handlers || {}, k) || op.aliasExcluded?.includes(k)) continue;
+    if (cur.handlers) delete cur.handlers[k];
+    if (cur.handlerConverters) delete cur.handlerConverters[k];
+  }
+}
+
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
 // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
 function replayMerge(op, cur, items, { seed, pkg, undefinedOps, layer }, warnings) {
@@ -1784,6 +1795,7 @@ function replayMerge(op, cur, items, { seed, pkg, undefinedOps, layer }, warning
     cur.valueBindTo = op.valueBindTo;
     cur.optionValue = op.optionValue;
   }
+  dropRestatedHandlers(op, cur);
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
   if (op.handlers && Object.keys(op.handlers).length) {
