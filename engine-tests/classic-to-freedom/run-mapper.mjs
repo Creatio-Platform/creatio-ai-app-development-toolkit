@@ -11615,6 +11615,28 @@ try {
     && JSON.stringify(convRemoved) === JSON.stringify({ enabled: "invertBooleanValue" }),
     () => ({ base: convOf([convBase]), convRestated, convRemoved }));
 
+  // T4f / AC 4 — the same enabled source on two options is defined once and not overwritten, and a declared page
+  // attribute with no classic default is created as {} and still accounted for.
+  const enTwice = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPick"}`), rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"UsrCanPick"}`),
+    rgOptOp("ModeC", "Mode", "c", `,enabled:{bindTo:"UsrFlag"}`), rgOptOp("ModeD", "Mode", "d", `,enabled:{bindTo:"UsrFlag"}`)].join(","),
+    `attributes:{UsrFlag:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enTwiceAttrs = enTwice.changeSet.viewModelConfigDiff[0].values;
+  const enTwicePds = enTwice.changeSet.modelConfigDiff[0].values;
+  check("radio group T4f: two options enabled by one Boolean column both get the inverted binding, over ONE PDS attribute + column",
+    ["ModeA", "ModeB"].every((n) => rgOp(enTwice, n)?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue")
+    && JSON.stringify(enTwiceAttrs.UsrCanPick) === JSON.stringify({ modelConfig: { path: "PDS.UsrCanPick" } })
+    && JSON.stringify(enTwicePds.UsrCanPick) === JSON.stringify({ path: "UsrCanPick" }),
+    () => ({ kids: rgKids(enTwice, "Mode"), attr: enTwiceAttrs.UsrCanPick, pds: enTwicePds.UsrCanPick }));
+  check("radio group T4f: two options enabled by a declared page attribute with no default both get the inverted binding; the attribute is {}, has no PDS path, is accounted for once and raises no attribute-virtual or radio-option-rule",
+    ["ModeC", "ModeD"].every((n) => rgOp(enTwice, n)?.values?.disabled === "$UsrFlag | crt.InvertBooleanValue")
+    && JSON.stringify(enTwiceAttrs.UsrFlag) === "{}" && !("UsrFlag" in enTwicePds)
+    && enTwice.changeSet.accountedFor.filter((n) => n === "UsrFlag").length === 1
+    && !rgDecisions(enTwice, "attribute-virtual").some((d) => d.item === "UsrFlag")
+    && rgDecisions(enTwice, "radio-option-rule").length === 0,
+    () => ({ attr: enTwiceAttrs.UsrFlag, virtual: rgDecisions(enTwice, "attribute-virtual"), rules: rgDecisions(enTwice, "radio-option-rule") }));
+
   // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
   // built and raises the business-rule decision.
   const vis = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",visible:false"),
@@ -11656,6 +11678,24 @@ try {
     && spKid("PrioB", "PrioB_P2").caption === "#ResourceString(P2_caption)#"
     && ["P1", "P2"].every((n) => !("visible" in spKid("PrioA", n))) && ["P3", "P4"].every((n) => !("visible" in spKid("PrioB", n))),
     () => ({ PrioA: rgKids(sp, "PrioA"), PrioB: rgKids(sp, "PrioB") }));
+  const copyKeysMatch = (group, copy, option) => {
+    const c = spKid(group, copy); const o = rgOp(sp, option)?.values || {};
+    return JSON.stringify(Object.keys(c).sort((a, b) => a.localeCompare(b))) === JSON.stringify(["caption", "type", "value", "visible"])
+      && c.type === o.type && c.value === o.value && c.caption === o.caption && c.visible === false;
+  };
+  check("radio group T5: each hidden copy's keys are exactly the built option's value and caption plus visible (no disabled), with the built option's values",
+    copyKeysMatch("PrioA", "PrioA_P3", "P3") && copyKeysMatch("PrioA", "PrioA_P4", "P4")
+    && copyKeysMatch("PrioB", "PrioB_P1", "P1") && copyKeysMatch("PrioB", "PrioB_P2", "P2"),
+    () => ({ PrioA: rgKids(sp, "PrioA"), PrioB: rgKids(sp, "PrioB") }));
+  // The copy's hiding key is the children spec's `hidden`, checked by the table validation: an element-level key is
+  // accepted by name, any other key must be an input of the option component.
+  const rgSpecRow = MAPPING_ROWS.find((r) => r.upgrade?.children?.componentType === "crt.RadioGroupItem");
+  const withHidden = (prop) => ({ ...rgSpecRow, upgrade: { ...rgSpecRow.upgrade, children: { ...rgSpecRow.upgrade.children, hidden: { prop, value: false } } } });
+  check("radio group T5: the RADIO_GROUP children spec hides copies with the element-level `visible`, which validates clean; a hiding key that is neither element-level nor an input is an unknown-input error",
+    rgSpecRow?.upgrade?.children?.hidden?.prop === "visible"
+    && !validateRow(rgSpecRow).some((f) => f.kind === "unknown-input")
+    && validateRow(withHidden("notAnInput")).some((f) => f.kind === "unknown-input" && f.prop === "notAnInput" && f.componentType === "crt.RadioGroupItem"),
+    () => ({ hidden: rgSpecRow?.upgrade?.children?.hidden, ok: validateRow(rgSpecRow), neg: validateRow(withHidden("notAnInput")) }));
   check("radio group T5: split groups raise no radio-group-split decision, and no other run does either",
     rgDecisions(sp, "radio-group-split").length === 0 && rgDecisions(up, "radio-group-split").length === 0,
     () => rgDecisions(sp, "radio-group-split"));
@@ -11680,6 +11720,17 @@ try {
     && (sp.changeSet.tableElements || []).length === 0
     && !sp.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" || /Prio[AB]_P\d/.test(d.item || "")),
     () => ({ rows: spSpec.split("\n").filter((l) => /Prio|P\d/.test(l)), decisions: sp.changeSet.needsDecision }));
+
+  // T5c / AC 3 — a split group holding a Classic-hidden option: the hidden option is not built, so no group gets a copy
+  // of it, and it is still reported once.
+  const shv = rgUp([rgGroupOp("A", "Priority"), rgOptOp("A1", "A", 1), rgOptOp("A2", "A", 2, ",visible:false"),
+    rgGroupOp("B", "Priority"), rgOptOp("B3", "B", 3)].join(","));
+  const shvKids = (g) => rgKids(shv, g).map((o) => o.name).join(",");
+  const shvHidden = rgDecisions(shv, "radio-option-hidden");
+  check("radio group T5c: a Classic-hidden option of a split group is not built and not copied (B gets B_A1 only), A still gets its copy of B3, and the hidden option raises exactly one radio-option-hidden decision",
+    shvKids("A") === "A1,A_B3" && shvKids("B") === "B3,B_A1" && !rgOps(shv).some((o) => /A2/.test(o.name))
+    && shvHidden.length === 1 && shvHidden[0].item === "A2",
+    () => ({ A: rgKids(shv, "A"), B: rgKids(shv, "B"), hidden: shvHidden }));
 
   // T6 / R6 — the usage types that cannot be migrated are typed warnings, never half-configured elements.
   const gapCase = (diff) => {

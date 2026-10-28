@@ -140,9 +140,11 @@ page (mini page, typed or child page) uses the root run's registry unless its ow
 - **Split groups.** Several Classic groups on one attribute become separate `crt.RadioGroup` elements, each with its
   own options. After its own options, each group also carries a `visible: false` `crt.RadioGroupItem` copy of every
   other group's option whose value it does not have (named `<group>_<option>`, the other option's value and caption
-  resource; a value several groups share is copied once). A value chosen in another group is then a known, hidden
-  option, so the group shows nothing selected, as in Classic. The copies add no Layout rows. A Classic option that is
-  hidden (`visible: false`) is not built, so it is not copied either.
+  resource; a value several groups share is copied once). On a creatio-ui build that handles hidden option values, a
+  value chosen in another group is then a known, hidden option, so the group shows nothing selected, as in Classic.
+  Limit: a creatio-ui build without hidden-value handling still shows the other group's value as an extra
+  "no longer available" option. The copies add no Layout rows. A Classic option that is hidden (`visible: false`) is
+  not built, so it is not copied either.
 - **Required.** No required validator is added for a Boolean / Integer group: a new record already holds `false` /
   `0`, which preselects an option exactly as in Classic, and the required validator treats that value as filled
   anyway.
