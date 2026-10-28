@@ -250,7 +250,9 @@ const CHECKLIST_BUILDERS = ["checklistGroups", "buildPageRows", "buildLayoutGrou
 // `headerLayout` decides the header TEMPLATE RECOMMENDATION banner and gates nothing; the `layout-type` decision
 // carries the question into the worklist. `profileCards` publishes a `profile-card` decision per card, so each one
 // already has a row — through the record, not through this field.
-const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards",
+// `withheldFeatures` is the same: each one publishes its `feature-component-unavailable` decision, and a `build` answer
+// maps it into `standardFeatures`, so it never needs a row of its own.
+const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards", "withheldFeatures",
   // Triggers the quick-filter BUILD NOTE — advice on building rows that are themselves gated (`Quick filter — …`).
   "quickFilterConfigCompletedByBuilder"]);
 const fieldsOfReturn = (startsAt) => {

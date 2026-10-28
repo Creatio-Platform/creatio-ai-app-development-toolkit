@@ -23,7 +23,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // attachments component is inert without, and the two resolvers that say which plan row is covered by that item.
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
-import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
+import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -285,6 +285,23 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     const noteCell = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
     const add = [noteCell, isList ? detailTextsNote(s) : null, connectionsNote(s)].filter(Boolean).join(" · ") || DASH;
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.caption || s.feature), type, src, DASH, add] };
+  });
+}
+// A Classic block the run does not build keeps its Classic place in the Layout, with the status that says why: open
+// (decide it in ⚠ Confirm) or closed by its planning decision. A `build` decision never reaches here — the mapper
+// then emits the feature like any other.
+function rowsForWithheldFeatures(withheld, tabRegion, opts, ctx) {
+  const pageKey = withheldPageKey(opts);
+  return (withheld || []).map((s) => {
+    const ids = withheldIds(s.feature, s.item);
+    const st = withheldFeatureStatus(ctx.deliverableStatus, ids, pageKey);
+    const closed = st?.status === STATUS_WONT_DO ? statusText({ kind: STATUS_WONT_DO, decision: st.decision }, ctx) : null;
+    if (closed) for (const id of ids) ctx.printedStatus?.add(statusKey(pageKey, id));
+    const src = closed ? "not built" : `⚠ not built — no evidence the stand carries \`${esc(s.componentType)}\``;
+    const decide = `⚠ Confirm \`[${FEATURE_UNAVAILABLE}] ${esc(s.item)}\` — record the answer as \`manifest.deliverableStatus\``
+      + ` \`${esc(pageKey ?? "<this page's key>")}#${esc(ids[0])}\` (\`${STATUS_BUILD}\` or \`${STATUS_WONT_DO}\` with a D<N>)`;
+    const add = [closed || decide, connectionsNote(s)].filter(Boolean).join(" · ");
+    return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: 2, cells: [esc(s.caption || s.feature), esc(s.feature), src, DASH, add] };
   });
 }
 function widgetSource(w, formTemplate = null) {
@@ -1179,6 +1196,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
     ...rowsForFeatures(cs.standardFeatures, tabRegion, formTpl),
+    ...rowsForWithheldFeatures(cs.withheldFeatures, tabRegion, opts, statusCtx(result, opts)),
     ...rowsForWidgets(cs.widgets, cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present), formTpl),
     ...rowsForCardWidgets(cs.cardWidgets, regionOf),
     ...rowsForCardActions(cs.cardActions, result, opts),
@@ -1885,7 +1903,7 @@ function renderTemplateBanner(result, entity, typed, someBindOnly, formTpl) {
 // — the shared details/features list built once on the base. Returns the lines. Extracted for Sonar CC 15.
 function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
   if (someBindOnly) return ["### Shared form (base) — bind-only type(s) bind to this by Type", "",
-    renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), ""];
+    renderDesignSpec(result, { ...opts, embedded: true, formOnly: true, statusPageKey: "main" }), ""];
   const shFeatures = cs.standardFeatures || [], shDetails = cs.details || [];
   if (!(shFeatures.length || shDetails.length)) return [];
   const P = ["### Shared across all typed forms (inherited from the base form)", "",
@@ -2247,7 +2265,8 @@ function renderPlanWith(result, opts) {
     "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
     ...renderMiniPageMapping(result),
   );
-  if (!typed.length) P.push("", renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), ""); // NON-TYPED single form
+  // the root form is the `main` page, though `formOnly` renders it as a fold does
+  if (!typed.length) P.push("", renderDesignSpec(result, { ...opts, embedded: true, formOnly: true, statusPageKey: "main" }), ""); // NON-TYPED single form
   else P.push(...renderTypedMappings(result, opts, entity, cs, typed, someBindOnly));
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot
@@ -2766,7 +2785,7 @@ export const NATIVE_CARD_ACTIONS_ID = "card-actions:native";
 export const STATUS_WONT_DO = "wont-do";
 export const STATUS_BUILD = "build";
 // The kinds of `manifest.deliverableStatus` issue; `related` lists the deliverables that need a status of their own.
-export const STATUS_ISSUE = Object.freeze({ unknownId: "unknown-id", status: "status", engineClosed: "engine-closed", decision: "decision", related: "related" });
+export const STATUS_ISSUE = Object.freeze({ unknownId: "unknown-id", status: "status", engineClosed: "engine-closed", decision: "decision", related: "related", twice: "twice", otherPage: "other-page" });
 const isReusedChild = (c) => typeof c?.reuseFreedomPage === "string" && !!c.reuseFreedomPage;
 // The context a status is resolved in: the run's opts (the manifest entries, `isChildPage`, the host mode, the
 // decisions.md titles) plus the on-stand signals.
@@ -2813,10 +2832,12 @@ export function deliverableStatusOf(pageKey, row, ctx = {}) {
   if (row.na) return { kind: "not-applicable", reason: row.na };
   const reason = engineStatusReason(row, ctx);
   if (reason) return { kind: "not-applicable", reason };
-  const entry = row.deliverableId ? ctx.deliverableStatus?.[statusKey(pageKey, row.deliverableId)] : null;
-  if (entry?.status === STATUS_WONT_DO || entry?.status === STATUS_BUILD) return { kind: entry.status, decision: entry.decision || null };
-  return null;
+  // an alias is read first: a withheld feature's `feature:<Feature>` before its confirm id (the `withheldIds` order)
+  const entry = [...(row.aliasIds || []), row.deliverableId].filter(Boolean)
+    .map((id) => ctx.deliverableStatus?.[statusKey(pageKey, id)]).find(isStatusEntry);
+  return entry ? { kind: entry.status, decision: entry.decision || null } : null;
 }
+const isStatusEntry = (e) => e?.status === STATUS_WONT_DO || e?.status === STATUS_BUILD;
 // A closed status as plan text: `**Won't do** — D6: <title>` or `**Won't do** — <engine reason>`.
 function statusText(st, ctx) {
   if (st.kind === "not-applicable") return `**Won't do** — ${st.reason}`;
@@ -2901,7 +2922,26 @@ function confirmWorklistRows(pageKey, cs) {
   return (cs.needsDecision || [])
     .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(nn.kind))
     .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,
-      { deliverableId: `confirm:${d.kind}:${d.item}`, confirm: { kind: d.kind, item: d.item }, ...cardField(d) }));
+      { deliverableId: `confirm:${d.kind}:${d.item}`, confirm: { kind: d.kind, item: d.item }, ...cardField(d), ...featureAlias(d) }));
+}
+// The page a withheld feature's decision is read on. A nested fold is mapped before the root walk claims its page
+// key, so the fold hands it its base key (`statusPageKey`: `typed:<Schema>`, `mini:<Schema>`, `child:<Entity>`);
+// without one there is nothing to read, never another page's entry.
+export const withheldPageKey = (opts) => opts.statusPageKey || opts.pageKey || (isNestedFold(opts) ? null : "main");
+// The entry on THIS page for the first of `ids` that has one, with the key it was read on.
+export function withheldFeatureStatus(map, ids, pageKey) {
+  if (!pageKey) return null;
+  for (const id of ids) {
+    const key = statusKey(pageKey, id);
+    if (isStatusEntry(map?.[key])) return { status: map[key].status, decision: map[key].decision || null, key };
+  }
+  return null;
+}
+// The confirm row answers to the Layout row's `feature:<Feature>` too, so one entry closes both. `decidedBy` is the
+// key the mapper read that entry on, checked against the key the row is finally published under.
+function featureAlias(d) {
+  if (d.kind !== FEATURE_UNAVAILABLE || !d.feature) return {};
+  return { aliasIds: [withheldFeatureId(d.feature)], ...(d.decidedBy ? { decidedBy: d.decidedBy } : {}) };
 }
 // Quality gates — ALWAYS present, one per page. See the label for what it demands. It is an evidence row, never a vk-less `skip`
 // row: visible, tallied in nothing, closable by asserting it in prose — which is exactly how "native components →
@@ -4981,7 +5021,7 @@ export function planGaps(result) {
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.
 function statusIssueText(x) {
-  const idsLabel = x.kind === STATUS_ISSUE.related ? "needs a status" : "valid ids";
+  const idsLabel = { [STATUS_ISSUE.related]: "needs a status", [STATUS_ISSUE.twice]: "keep one of" }[x.kind] || "valid ids";
   const ids = (x.valid || []).length ? ` — ${idsLabel}: ${x.valid.join(", ")}` : "";
   return `\`${x.key}\` ${x.problem}${ids}`;
 }

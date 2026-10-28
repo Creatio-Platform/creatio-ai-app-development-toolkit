@@ -15750,6 +15750,85 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       () => ({ decisions: r.changeSet.needsDecision.map((d) => [d.kind, d.item]), features: r.changeSet.standardFeatures, details: r.changeSet.details }));
   }
 
+  // A block the run does not build keeps its Classic place in the Layout, with a status; the decision on it is one
+  // `manifest.deliverableStatus` entry, on either `feature:Connections` or its confirm item.
+  const CONN_DEC = new Map([["D6", "Connections block on, UseConnectionsComponent turned on"], ["D7", "Connected to is not carried over"]]);
+  const CONFIRM_ID = "confirm:feature-component-unavailable:EntityConnectionsDetailV2";
+  const withRun = (deliverableStatus) => {
+    const m = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      resources: { ContactTip: "Who the call is with", GeneralInfoTabCaption: "General", EntityConnectionsDetailCaptionOnPage: "Connected to" },
+      deliverableStatus, schemas: [{ pkg: "P", body: connBody({ methods: TIPS }) }] };
+    const r = runMigration(m, { baseDir: FIX, decisions: CONN_DEC });
+    return { r, opts: { ...checklistOpts(m), decisions: CONN_DEC } };
+  };
+  const connLine = (spec) => spec.split("\n").find((l) => /\| Connected to \| Connections \|/.test(l)) || "";
+  const rowsOf = ({ r, opts }) => checklistGroups(r, opts).flatMap((g) => g.rows);
+  const withheld = withRun(undefined);
+  const wLine = connLine(withheld.r.designSpec);
+  const wFeat = withheld.r.changeSet.withheldFeatures?.[0];
+  check("Connected to (no registry evidence): the Classic block keeps a Layout row in its Classic tab — not built, why, and where to decide it",
+    () => /^\| Tab · General \|/.test(wLine) && /⚠ not built — no evidence the stand carries `crt\.Connections`/.test(wLine)
+      && wLine.includes("⚠ Confirm `[feature-component-unavailable] EntityConnectionsDetailV2`") && wLine.includes("`main#feature:Connections`")
+      && /element `EntityConnections`/.test(wLine) && /`Contact` → tooltip/.test(wLine),
+    () => withheld.r.designSpec.split("\n").filter((l) => /Connect/.test(l)));
+  check("Connected to (no registry evidence): the withheld feature keeps its tab, title, element and tips, and nothing is built or carried for it",
+    () => wFeat?.tab === "GeneralInfoTab" && wFeat.caption === "Connected to" && wFeat.element === "EntityConnections" && wFeat.connections.length === 2
+      && wFeat.withheld?.kind === "feature-component-unavailable" && !withheld.r.changeSet.standardFeatures.length
+      && !Object.keys(withheld.r.changeSet.resources).some((k) => k.startsWith("EntityConnections_"))
+      && withheld.r.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && !rowsOf(withheld).some((x) => x.deliverableId === "feature:Connections" || x.vk?.ftype === "crt.Connections")
+      && rowsOf(withheld).some((x) => x.deliverableId === CONFIRM_ID && !x.status),
+    () => ({ wFeat, features: withheld.r.changeSet.standardFeatures, rows: rowsOf(withheld).map((x) => x.deliverableId) }));
+
+  for (const key of ["main#feature:Connections", `main#${CONFIRM_ID}`]) {
+    const dropped = withRun({ [key]: { status: "wont-do", decision: "D7" } });
+    const dLine = connLine(dropped.r.designSpec);
+    const confirmRow = rowsOf(dropped).find((x) => x.deliverableId === CONFIRM_ID);
+    check(`Connected to wont-do on \`${key}\`: the Layout row closes inline with the decision, the confirm row closes with it, and the entry is valid`,
+      () => /\| not built \|/.test(dLine) && dLine.includes("**Won't do** — D7: Connected to is not carried over")
+        && confirmRow?.status?.kind === "wont-do" && confirmRow.status.decision === "D7"
+        && !(dropped.r.statusIssues || []).length && !dropped.r.changeSet.standardFeatures.length,
+      () => ({ dLine, confirmRow, issues: dropped.r.statusIssues }));
+    const endList = dropped.r.plan.includes("### Won't do") ? dropped.r.plan.slice(dropped.r.plan.indexOf("### Won't do")) : "";
+    check(`Connected to wont-do on \`${key}\`: printed on its Layout row, so the end \`### Won't do\` list names neither of its ids`,
+      () => typeof dropped.r.plan === "string" && dropped.r.plan.includes("**Won't do** — D7")
+        && !endList.includes("feature:Connections") && !endList.includes(CONFIRM_ID),
+      () => endList);
+  }
+
+  for (const key of ["main#feature:Connections", `main#${CONFIRM_ID}`]) {
+    const built = withRun({ [key]: { status: "build", decision: "D6" } });
+    const bLine = connLine(built.r.designSpec);
+    const bFeat = built.r.changeSet.standardFeatures.find((f) => f.feature === "Connections");
+    const gate = rowsOf(built).filter((x) => x.deliverableId === "feature:Connections");
+    const confirm = built.r.changeSet.needsDecision.find((d) => d.kind === "feature-component-unavailable");
+    check(`Connected to build on \`${key}\`: mapped as if the registry carried it — a normal feature row, its tips carried, a gated \`feature:Connections\` deliverable`,
+      () => bFeat?.element === "EntityConnections" && bFeat.connections.length === 2 && !(built.r.changeSet.withheldFeatures || []).length
+        && built.r.changeSet.resources.EntityConnections_Contact_tooltip === "Who the call is with"
+        && !built.r.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+        && !/not built/.test(bLine) && /UseConnectionsComponent/.test(bLine)
+        && gate.length === 1 && gate[0].vk?.ftype === "crt.Connections" && !(built.r.statusIssues || []).length
+        && resolveVk(gate[0].vk, verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "Activity",
+          viewConfig: { items: [{ type: "crt.DataGrid", name: "EntityConnectionsGrid" }] } } } }, "main"))[0] === "❌ MISSING",
+      () => ({ bLine, bFeat, gate, issues: built.r.statusIssues }));
+    check(`Connected to build on \`${key}\`: the confirm item names the decision and asks for the on-stand check instead of saying nothing is built`,
+      () => confirm && /D6/.test(confirm.reason) && /get-component-info/.test(confirm.reason) && !/Nothing is built/.test(confirm.reason),
+      () => confirm);
+  }
+
+  // One decision, one entry: entries on both ids are reported, and every reader takes `feature:<Feature>` first.
+  const both = withRun({ "main#feature:Connections": { status: "wont-do", decision: "D7" }, [`main#${CONFIRM_ID}`]: { status: "build", decision: "D6" } });
+  const bothConfirm = rowsOf(both).find((x) => x.deliverableId === CONFIRM_ID);
+  const twice = (both.r.statusIssues || []).filter((x) => x.kind === "twice");
+  check("Connected to with opposite statuses on its two ids: the mapper, the Layout row and the confirm row all read `feature:Connections` first",
+    () => !both.r.changeSet.standardFeatures.length && both.r.changeSet.withheldFeatures?.length === 1
+      && connLine(both.r.designSpec).includes("**Won't do** — D7") && bothConfirm?.status?.kind === "wont-do" && bothConfirm.status.decision === "D7",
+    () => ({ line: connLine(both.r.designSpec), confirm: bothConfirm?.status }));
+  check("Connected to with entries on both ids: one `twice` status issue names both keys, and the plan is gated on it",
+    () => twice.length === 1 && twice[0].valid.length === 2 && twice[0].valid.includes("main#feature:Connections")
+      && twice[0].valid.includes(`main#${CONFIRM_ID}`) && planGaps(both.r).some((g) => /deliverableStatus INVALID[^\n]*keep one of/.test(g)),
+    () => both.r.statusIssues);
+
   const email = connRun({ componentRegistry: CONN_REG }, { schema: "EmailPageV2", detail: "EmailEntityConnectionsDetailV2" });
   check("Connected to: EmailEntityConnectionsDetailV2 resolves to the same Connections feature by suffix, with no `connections` entries when the page sets no tips",
     () => email.changeSet.standardFeatures.length === 1 && email.changeSet.standardFeatures[0].feature === "Connections"
@@ -15805,9 +15884,64 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
     typedPageSchemas: { CallPageV2: { ...typedManifest.typedPageSchemas.CallPageV2, platformVersion: "8.3.4" } } };
   runMigration(ownVersionManifest, { baseDir: FIX });
   const ownSpec = ownVersionManifest.typedPages[0].spec || "";
-  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — no Connections row, a feature-component-unavailable item",
-    () => !/\| Connected to \| Connections \|/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
+  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — its Layout row says not built, a feature-component-unavailable item",
+    () => ownSpec.split("\n").filter((l) => /\| Connected to \| Connections \|/.test(l)).every((l) => /⚠ not built/.test(l))
+      && /\| Connected to \| Connections \| ⚠ not built/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
     () => ownSpec.split("\n").filter((l) => /Connect/.test(l)));
+
+  // A sub-page reads the decision recorded on its own key, never a sibling's. Two typed pages carry "Connected to"
+  // with no registry evidence; the decision is recorded for CallPageV2 only.
+  const typedPair = (status) => {
+    const typedBundle = (schema) => ({ entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      resources: { GeneralInfoTabCaption: "General", EntityConnectionsDetailCaptionOnPage: "Connected to" }, schemas: [{ pkg: "P", body: connBody({ schema }) }] });
+    const m = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      schemas: [{ pkg: "P", body: connBody({ schema: "ActivityPageV2", detail: "SomeOtherDetail" }) }],
+      typedPages: [{ schema: "CallPageV2", type: "Call" }, { schema: "DocumentPageV2", type: "Document" }],
+      typedPageSchemas: { CallPageV2: typedBundle("CallPageV2"), DocumentPageV2: typedBundle("DocumentPageV2") },
+      deliverableStatus: { "typed:CallPageV2#feature:Connections": status } };
+    const r = runMigration(m, { baseDir: FIX, decisions: CONN_DEC });
+    const page = (schema) => {
+      const t = m.typedPages.find((x) => x.schema === schema);
+      return { t, line: connLine(t.spec || ""), rows: (t.pageRows || []).flatMap((g) => g.rows) };
+    };
+    return { r, call: page("CallPageV2"), doc: page("DocumentPageV2") };
+  };
+  const tBuild = typedPair({ status: "build", decision: "D6" });
+  check("Connected to on two typed pages, `build` recorded on `typed:CallPageV2`: that page builds it — a normal Layout row and a gated `feature:Connections` row — with no status issue",
+    () => tBuild.call.line && !/not built/.test(tBuild.call.line)
+      && tBuild.call.rows.some((x) => x.deliverableId === "feature:Connections" && x.vk?.ftype === "crt.Connections")
+      && !(tBuild.r.statusIssues || []).length,
+    () => ({ line: tBuild.call.line, rows: tBuild.call.rows.map((x) => x.deliverableId), issues: tBuild.r.statusIssues }));
+  check("Connected to on two typed pages, `build` recorded on `typed:CallPageV2`: the sibling DocumentPageV2 stays ⚠ not built, names its own key, and owes no build row",
+    () => /⚠ not built/.test(tBuild.doc.line) && tBuild.doc.line.includes("`typed:DocumentPageV2#feature:Connections`")
+      && !tBuild.doc.rows.some((x) => x.deliverableId === "feature:Connections")
+      && tBuild.doc.rows.some((x) => x.deliverableId === CONFIRM_ID && !x.status),
+    () => ({ line: tBuild.doc.line, rows: tBuild.doc.rows.map((x) => [x.deliverableId, x.status]) }));
+  const tDrop = typedPair({ status: "wont-do", decision: "D7" });
+  check("Connected to on two typed pages, `wont-do` recorded on `typed:CallPageV2`: that page's row and confirm item close with D7, the sibling's stay open",
+    () => tDrop.call.line.includes("**Won't do** — D7")
+      && tDrop.call.rows.find((x) => x.deliverableId === CONFIRM_ID)?.status?.kind === "wont-do"
+      && /⚠ not built/.test(tDrop.doc.line) && !/Won't do/.test(tDrop.doc.line)
+      && !tDrop.doc.rows.find((x) => x.deliverableId === CONFIRM_ID)?.status && !(tDrop.r.statusIssues || []).length,
+    () => ({ call: tDrop.call.line, doc: tDrop.doc.line, issues: tDrop.r.statusIssues }));
+
+  // Two different child pages over entity X: `child:X` at depth 1, and a grandchild whose base key is also `child:X`
+  // but which the root walk publishes as `child:X@XAltPage`. A decision for `child:X` is read by both folds; the
+  // grandchild's is reported, since the entry is not on the key its rows are published under.
+  const kcConnX = (nm) => `define("${nm}",[],function(){return{entitySchemaName:"X",details:{EntityConnections:{schemaName:"EntityConnectionsDetailV2",entitySchemaName:"EntityConnection",filter:{masterColumn:"Id",detailColumn:"SysModuleEntity"}}},diff:[{operation:"insert",name:"XTab",parentName:"Tabs",propertyName:"tabs",values:{items:[]}},{operation:"insert",name:"EntityConnections",parentName:"XTab",propertyName:"items",values:{itemType:2}},{operation:"insert",name:"XF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"XF"}}]};});`;
+  const kcConn = { ...KC_MANIFEST, deliverableStatus: { "child:X#feature:Connections": { status: "build", decision: "D6" } },
+    childPageSchemas: {
+      XPage: { ...KC_MANIFEST.childPageSchemas.XPage, schemas: [{ pkg: "P", body: kcConnX("XPage") }] },
+      BPage: { ...KC_MANIFEST.childPageSchemas.BPage, childPageSchemas: { XAltPage: { ...KC_MANIFEST.childPageSchemas.BPage.childPageSchemas.XAltPage, schemas: [{ pkg: "P", body: kcConnX("XAltPage") }] } } },
+    } };
+  const kcConnRun = runMigration(kcConn, { baseDir: FIX, decisions: CONN_DEC });
+  const kcConnRows = checklistGroups(kcConnRun, { ...checklistOpts(kcConn), decisions: CONN_DEC }).flatMap((g) => g.rows);
+  const otherPage = (kcConnRun.statusIssues || []).filter((x) => x.kind === "other-page");
+  check("a grandchild whose base key `child:X` another page claimed first: its fold read the `child:X` entry, so one `other-page` issue names the key it must be recorded on",
+    () => kcConnRows.some((x) => x.pageKey === "child:X" && x.deliverableId === "feature:Connections")
+      && otherPage.length === 1 && otherPage[0].key === "child:X#feature:Connections"
+      && otherPage[0].valid.join() === "child:X@XAltPage#feature:Connections" && planGaps(kcConnRun).some((g) => /deliverableStatus INVALID/.test(g)),
+    () => ({ issues: kcConnRun.statusIssues, keys: [...new Set(kcConnRows.map((x) => x.pageKey))] }));
 
   const partialTips = connRun({ componentRegistry: CONN_REG },
     { methods: `onGetPageTips: function() { return { "Contact": this.get("Resources.Strings.ContactTip"), "Account": this.get("SomeAttr") }; }` });

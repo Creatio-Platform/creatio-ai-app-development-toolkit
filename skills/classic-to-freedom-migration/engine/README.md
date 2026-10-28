@@ -450,11 +450,22 @@ its id on its page: the item's kind and name, never label text or a count. Ids: 
 `list-<filter|action|rowaction>:<name>` · `layout:<region>` · `field-override:<field>` (a base-field override) ·
 `template:form` · `field:<element name>` · `related-list:<detail>` · `images` · `tabs` · `element:<crt type>` ·
 `card-widget:<recordId>:<widgetKey>` ·
-`feature:<feature>[:<extra type>]` · `datasource:<name>` · `dcm:bar` · `dcm:next` · `business-rules` ·
+`feature:<feature>[:<extra type>]` (also the second id of a withheld feature's confirm item, below) · `datasource:<name>` · `dcm:bar` · `dcm:next` · `business-rules` ·
 `method:<name>` · `<kind>:<item>` (an imperative member, e.g. `attribute-virtual:Dept`) · `dashboards:<element|migrated|partials|delivery>` ·
 `card-action:<name>` · `card-actions:native` · `confirm:<kind>:<item>` · `child-page:<detail>` (a child with no page of its
 own) · `child-page-wiring:<detail>` (the related list that opens a rebuilt child page, on the page that holds the list) · `quality:ran` · `quality:judged`. The `<pageKey>#<deliverableId>` address is a stable manifest contract:
 any manifest key that names one deliverable uses it.
+
+**A withheld feature (`changeSet.withheldFeatures`).** A standard feature whose component needs registry evidence
+(`crt.Connections`) and has none is not built, but keeps a Layout row in its Classic tab (`⚠ not built — no evidence
+the stand carries …`) and the parsed settings a build needs (tab, title, element, `connections` tips). It publishes no
+`feature:` row; its open deliverable is the `confirm:feature-component-unavailable:<detail>` row, which also answers
+to `feature:<feature>`. One entry on either id decides it: `wont-do` + `D<N>` closes the confirm row and prints
+**Won't do** on the Layout row; `build` is read before mapping, so the feature is mapped as if the registry carried it
+— a normal Layout row, a `feature:<feature>` row gated by `--verify`, its strings registered and its tips carried —
+and the confirm item asks for the on-stand check instead. A typed, mini or child page reads the entry on its own base
+key (`typed:<Schema>`, `mini:<Schema>`, `child:<Entity>`), never a sibling's. Entries on both ids, or an entry read on a
+base key another page claimed first (the page is published as `<base>@<alt>`), are `deliverableStatus` issues.
 
 **One row per field and per related list.** Every page's coverage carries one "Field <name>" row per field and
 one "Related list <detail>" row per related list (a rebuilt detail or a list-shaped standard feature). `--verify`
