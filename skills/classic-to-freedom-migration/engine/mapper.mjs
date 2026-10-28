@@ -1340,10 +1340,10 @@ function mapFields(ctx, containers) {
   };
 
   // ---- RADIO_GROUP -> crt.RadioGroup, the version-gated upgrade of the RADIO_GROUP row --------------------------
-  // The group is built with `items: []` and ONE named crt.RadioGroupItem child per classic option (the classic option
-  // element's own name), because that is how crt.RadioGroup stores options and what lets a business rule or a
-  // package address a single option. Every piece below is its own fn for Sonar CC 15.
-  const radioGroups = [];                     // every built group { name, classic, attr }, for the split-group pass
+  // The group is built with `items: []` and ONE named crt.RadioGroupItem child per built classic option (the classic
+  // option element's own name), because that is how crt.RadioGroup stores options and what lets a business rule or a
+  // package address a single option; a split group also gets hidden copies of the other groups' options (below). Every piece below is its own fn for Sonar CC 15.
+  const radioGroups = [];                     // every built group { name, attr, options, spec }, for the split-group pass
   const radioPageAttrs = new Set();           // page attributes the groups create (no entity column behind them)
   // The classic binding without a ContentBuilder `$` prefix (`value: { bindTo: "$UsrAttr" }`), and whether it had
   // one: the `$` prefix is how a ContentBuilder page names a page attribute, so it is evidence of its own.
@@ -1406,29 +1406,66 @@ function mapFields(ctx, containers) {
     if (spec.from === SOURCE.OPTION_DISABLED) return child.enabled === false ? true : null;
     return null;
   };
-  // An option Classic never shows (a static `visible: false`) is not built: a Freedom option is always shown, so
-  // building it would offer a value Classic never offered. It is reported, never dropped silently.
+  // An option Classic never shows (a static `visible: false`) is not built: a built option is shown, so building it
+  // would offer a value Classic never offered (the only hidden options are a split group's copies of options other
+  // groups build). It is reported, never dropped silently, and having no built option it is copied into no group.
   const reportHiddenRadioOption = (child, groupName) => needsDecision.push({ kind: "radio-option-hidden", item: child.name,
     reason: `radio group option '${child.name}' (group '${groupName}', value ${JSON.stringify(child.optionValue)}) is hidden in Classic (visible: false), so it is not built — a record that already holds that value shows it as an extra, disabled option. Build the option and hide it with a page business rule ("Hide elements") if it must stay addressable` });
-  // One option child insert. A bound `enabled` or `visible` cannot be expressed on the option itself: each becomes a
-  // business rule on the named option ("Make read-only" / "Hide elements"), raised as a decision naming the option and
-  // the attribute.
+  // What a bound `enabled` names, when the option can bind its `disabled` to it: a Boolean entity column, or a Boolean
+  // page attribute the classic view model declares. A view-model method, an unknown name, a non-Boolean column or
+  // attribute, or a binding that carries a classic converter (Classic used the CONVERTED value) yields null. A
+  // declared attribute with no `dataValueType` is not Boolean, like a column of unknown type: Classic read its value
+  // by truthiness, which an inverted Boolean binding does not reproduce for every value it may hold.
+  const isBooleanDvt = (t) => normalizeDvt(String(t ?? "").toLowerCase()) === "boolean";
+  const radioEnabledKind = (name, converter) => {
+    if (converter) return null;
+    if (ctx.cols[name] != null) return isBooleanDvt(ctx.colMeta(name).type) ? "column" : null;
+    const declared = (ctx.eff.attributes || []).find((a) => a.name === name);
+    return declared && isBooleanDvt(declared.dataValueType) ? "attribute" : null;
+  };
+  // A bound `enabled` becomes the option's live `disabled`, inverted. The column or page attribute it reads is defined
+  // the way a group bound to it would define it, unless the page already defines it.
+  const bindOptionEnabled = (name, kind, groupName) => {
+    if (!Object.hasOwn(attributes, name)) {
+      const classic = (ctx.eff.attributes || []).find((a) => a.name === name) || null;
+      bindRadioAttribute(name, { kind, classic }, groupName);
+    }
+    return "$" + name + " | crt.InvertBooleanValue";
+  };
+  const reportOptionEnabled = (optName, groupName, name, converter) => {
+    const why = converter
+      ? `through the classic converter '${converter}', which a plain binding would drop`
+      : "which is neither a Boolean entity column nor a Boolean page attribute the classic page declares (a view-model method, a non-Boolean or untyped column or attribute, or a name the page does not define)";
+    needsDecision.push({ kind: "radio-option-rule", item: optName,
+      reason: `radio group option '${optName}' (group '${groupName}') is enabled by '${name}' ${why} — port '${name}' as a converter or a page attribute and bind the option's disabled to it (inverted)` });
+  };
+  const applyOptionEnabled = (child, values, optName, groupName) => {
+    const name = child.handlers?.enabled;
+    if (!name) return;
+    const converter = child.handlerConverters?.enabled ?? null;
+    const kind = radioEnabledKind(name, converter);
+    if (kind) values.disabled = bindOptionEnabled(name, kind, groupName);
+    else reportOptionEnabled(optName, groupName, name, converter);
+  };
+  // One option child insert, returned as { name, value, values } for the split-group pass (null when it is not built). A bound
+  // `visible` cannot be expressed on the option itself: it becomes a business rule on the named option ("Hide
+  // elements"), raised as a decision naming the option and the attribute.
   const emitRadioOption = (child, groupName, spec) => {
-    if (child.visible === false) { reportHiddenRadioOption(child, groupName); return; }
+    if (child.visible === false) { reportHiddenRadioOption(child, groupName); return null; }
     const optName = uniqueName(child.name);
     const values = { type: spec.componentType };
     for (const [prop, s] of Object.entries(spec.propMap || {})) {
       const v = radioOptionSource(s, child, optName);
       if (v !== null && v !== undefined) values[prop] = v;
     }
+    applyOptionEnabled(child, values, optName, groupName);
     viewConfigDiff.push({ operation: "insert", name: optName, values, parentName: groupName, propertyName: spec.slot });
-    if (child.handlers?.enabled) needsDecision.push({ kind: "radio-option-rule", item: optName,
-      reason: `radio group option '${optName}' (group '${groupName}') is enabled by the classic attribute '${child.handlers.enabled}', which an option element cannot bind — add a page business rule that makes option '${optName}' read-only while '${child.handlers.enabled}' is false` });
     if (child.visible === "dynamic") {
       const by = child.handlers?.visible ? `the classic attribute '${child.handlers.visible}'` : "a bound classic condition";
       needsDecision.push({ kind: "radio-option-rule", item: optName,
         reason: `radio group option '${optName}' (group '${groupName}') is shown by ${by}, which an option element cannot bind — add a page business rule that hides option '${optName}' while that condition is false` });
     }
+    return { name: optName, value: child.optionValue, values };
   };
   // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
   // imperative-members pass does not ask for it to be created again (`pageAttributes`).
@@ -1466,28 +1503,46 @@ function mapFields(ctx, containers) {
     const elName = uniqueName(it.name);
     needsDecision.push(...sink.decisions);
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: target.slot });
-    for (const child of options) emitRadioOption(child, elName, target.children);
+    const built = options.map((child) => emitRadioOption(child, elName, target.children)).filter(Boolean);
     accountedFor.add(it.name);
     sink.claimed.forEach((c) => accountedFor.add(c));
     bindRadioAttribute(attr, binding, elName);
-    radioGroups.push({ name: elName, classic: it.name, attr });
+    radioGroups.push({ name: elName, attr, options: built, spec: target.children });
   };
   // A SPLIT group: one attribute shown in several classic groups, each with its own options. Each becomes its own
-  // crt.RadioGroup; crt.RadioGroup shows a value that is not among ITS options as an extra disabled option for
-  // that value, where Classic left the other group empty. No group property hides it yet, so each group
-  // carries the decision that states the behaviour.
-  const reportSplitRadioGroups = () => {
+  // crt.RadioGroup, and crt.RadioGroup shows a value that is not among its options as an extra, disabled option,
+  // where Classic left the other group empty. A value it carries as a HIDDEN option shows nothing selected instead,
+  // so after its own options each group gets a `visible: false` copy of every other group's built option whose value
+  // it lacks (deduplicated by value, the first occurrence wins). The copies are option children like the others, so
+  // they add no Layout row and, having no classic element, nothing to the drop sweep. A copy carries the built
+  // option's value and caption under the children spec's own keys, plus the spec's `hidden` key, so a renamed propMap
+  // key cannot leave the copies on the old one.
+  const COPY_SOURCES = new Set([SOURCE.OPTION_VALUE, SOURCE.OPTION_CAPTION]);
+  const hiddenCopyValues = (spec, o) => {
+    const values = { type: spec.componentType };
+    for (const [prop, s] of Object.entries(spec.propMap || {})) if (COPY_SOURCES.has(s.from) && prop in o.values) values[prop] = o.values[prop];
+    values[spec.hidden.prop] = spec.hidden.value;
+    return values;
+  };
+  const emitHiddenRadioCopies = (group, others) => {
+    const seen = new Set(group.options.map((o) => o.value));
+    for (const o of others.flatMap((g) => g.options)) {
+      if (seen.has(o.value)) continue;
+      seen.add(o.value);
+      const values = hiddenCopyValues(group.spec, o);
+      viewConfigDiff.push({ operation: "insert", name: uniqueName(group.name + "_" + o.name), values, parentName: group.name, propertyName: group.spec.slot });
+    }
+  };
+  const emitSplitRadioCopies = () => {
     const byAttr = new Map();
     for (const g of radioGroups) byAttr.set(g.attr, [...(byAttr.get(g.attr) || []), g]);
-    for (const [attr, groups] of byAttr) {
+    for (const groups of byAttr.values()) {
       if (groups.length < 2) continue;
-      const others = (g) => groups.filter((x) => x !== g).map((x) => `'${x.name}'`).join(", ");
-      for (const g of groups) needsDecision.push({ kind: "radio-group-split", item: g.name,
-        reason: `radio group '${g.name}' shares the attribute '${attr}' with ${others(g)}: a value chosen in another group shows here as an extra, disabled option for that value, where Classic left this group empty — confirm the behaviour, or merge the groups` });
+      for (const g of groups) emitHiddenRadioCopies(g, groups.filter((x) => x !== g));
     }
   };
   emitFromTable();
-  reportSplitRadioGroups();
+  emitSplitRadioCopies();
 
   needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols, dupBoundCols,
     splitIslands, distinctProfileIslands, payloadFields, fieldsWithTitle }));

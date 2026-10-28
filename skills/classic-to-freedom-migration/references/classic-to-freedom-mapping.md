@@ -131,11 +131,21 @@ page (mini page, typed or child page) uses the root run's registry unless its ow
 - **Binding.** A group bound to an entity column keeps the PDS attribute and column. A group bound to a page
   attribute (including a ContentBuilder `$Attr`) gets a page attribute with no PDS path.
 - **Disabled options.** A Classic `enabled: false` option is emitted with `disabled: true`. An option whose `enabled`
-  is bound to an attribute is emitted without it and raises a `radio-option-rule` decision: add a page business rule
-  that makes that option read-only.
+  is bound to a Boolean entity column or to a Boolean page attribute the Classic page declares gets a live
+  `disabled: "$<name> | crt.InvertBooleanValue"`; the column gets its PDS attribute and column, the page attribute is
+  created with its Classic default. Any other bound `enabled` (a view-model method, a name the page does not define, a
+  non-Boolean column or page attribute, a declared page attribute with no `dataValueType`, or a binding with a Classic
+  `bindConfig` converter) is emitted without `disabled` and raises a `radio-option-rule` decision: port that name as a
+  converter or a page attribute and bind the option's `disabled` to it, inverted. When layers disagree, the highest
+  layer that states `enabled` wins: a static `enabled: false` over a lower layer's binding stays `disabled: true`.
 - **Split groups.** Several Classic groups on one attribute become separate `crt.RadioGroup` elements, each with its
-  own options. Each raises a `radio-group-split` decision: a value chosen in another group shows as an extra, disabled
-  "no longer available" option, where Classic left the group empty. No group property hides it yet.
+  own options. After its own options, each group also carries a `visible: false` `crt.RadioGroupItem` copy of every
+  other group's option whose value it does not have (named `<group>_<option>`, the other option's value and caption
+  resource; a value several groups share is copied once). On a creatio-ui build that handles hidden option values, a
+  value chosen in another group is then a known, hidden option, so the group shows nothing selected, as in Classic.
+  Limit: a creatio-ui build without hidden-value handling still shows the other group's value as an extra
+  "no longer available" option. The copies add no Layout rows. A Classic option that is hidden (`visible: false`) is
+  not built, so it is not copied either.
 - **Required.** No required validator is added for a Boolean / Integer group: a new record already holds `false` /
   `0`, which preselects an option exactly as in Classic, and the required validator treats that value as filled
   anyway.

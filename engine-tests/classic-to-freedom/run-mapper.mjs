@@ -11448,7 +11448,7 @@ try {
   const rgGroupOp = (name, attr, extra = "") => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"${attr}"},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
   const rgOptOp = (name, parent, value, extra = "") => `{operation:"insert",name:"${name}",parentName:"${parent}",propertyName:"items",values:{value:${JSON.stringify(value)},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
   const rgCols = { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" }, Priority: { type: "Integer" },
-    Mode: { type: "ShortText" }, Owner: { type: "Lookup" } };
+    Mode: { type: "ShortText" }, Owner: { type: "Lookup" }, UsrCanPick: { type: "Boolean" } };
   const rgRes = { IsPrimaryCaption: "Is primary", OptYesCaption: "Yes", OptNoCaption: "No" };
   const rgDiff = [rgGroupOp("IsPrimary", "IsPrimary"), rgOptOp("OptYes", "IsPrimary", true), rgOptOp("OptNo", "IsPrimary", false)].join(",");
   const rgUp = (diff, extra = {}) => gmRun(diff, "", { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport, ...extra });
@@ -11553,9 +11553,119 @@ try {
   check("radio group T4: an option with enabled:false emits disabled:true; the others carry no disabled flag",
     enKid("ModeA").disabled === true && !("disabled" in enKid("ModeB")) && !("disabled" in enKid("ModeC")),
     () => ({ ModeA: enKid("ModeA"), ModeB: enKid("ModeB"), ModeC: enKid("ModeC") }));
-  check("radio group T4: an option whose enabled is bound to an attribute raises ONE business-rule decision naming the option and the attribute",
-    enRule.length === 1 && enRule[0].item === "ModeB" && /CanPickB/.test(enRule[0].reason) && /business rule/.test(enRule[0].reason),
+  check("radio group T4: an option whose enabled is bound to a name that is neither a column nor a declared attribute raises ONE decision naming the option and the name, asking to port it",
+    enRule.length === 1 && enRule[0].item === "ModeB" && /'CanPickB'/.test(enRule[0].reason)
+    && /port 'CanPickB' as a converter or a page attribute and bind the option's disabled to it \(inverted\)/.test(enRule[0].reason)
+    && !/cannot bind/.test(enRule[0].reason),
     () => enRule);
+
+  // T4c / AC 4 — an option enabled by a Boolean entity column binds `disabled` to it, inverted, live.
+  const enCol = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPick"}`),
+    rgOptOp("ModeB", "Mode", "b")].join(","));
+  const enColAttrs = enCol.changeSet.viewModelConfigDiff[0].values;
+  const enColPds = enCol.changeSet.modelConfigDiff[0].values;
+  check("radio group T4c: an option enabled by a Boolean entity column gets disabled \"$<col> | crt.InvertBooleanValue\", the column's PDS attribute + column, and no radio-option-rule",
+    rgOp(enCol, "ModeA")?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue" && !("disabled" in (rgOp(enCol, "ModeB")?.values || {}))
+    && enColAttrs.UsrCanPick?.modelConfig?.path === "PDS.UsrCanPick" && enColPds.UsrCanPick?.path === "UsrCanPick"
+    && rgDecisions(enCol, "radio-option-rule").length === 0,
+    () => ({ ModeA: rgOp(enCol, "ModeA"), attr: enColAttrs.UsrCanPick, pds: enColPds.UsrCanPick, rules: rgDecisions(enCol, "radio-option-rule") }));
+
+  // T4d / AC 4 — an option enabled by a declared classic page attribute: the same binding, and the attribute is created
+  // with its classic default and accounted for (no attribute-virtual ask for it).
+  const enAttr = gmRun([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickA"}`),
+    rgOptOp("ModeB", "Mode", "b")].join(","),
+    `attributes:{UsrCanPickA:{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enAttrAttrs = enAttr.changeSet.viewModelConfigDiff[0].values;
+  check("radio group T4d: an option enabled by a declared page attribute gets the same inverted disabled binding; the attribute is { value: <classic default> }, has no PDS path, is accounted for and raises no attribute-virtual or radio-option-rule",
+    rgOp(enAttr, "ModeA")?.values?.disabled === "$UsrCanPickA | crt.InvertBooleanValue"
+    && JSON.stringify(enAttrAttrs.UsrCanPickA) === JSON.stringify({ value: true })
+    && !("UsrCanPickA" in enAttr.changeSet.modelConfigDiff[0].values) && enAttr.changeSet.accountedFor.includes("UsrCanPickA")
+    && !rgDecisions(enAttr, "attribute-virtual").some((d) => d.item === "UsrCanPickA")
+    && rgDecisions(enAttr, "radio-option-rule").length === 0,
+    () => ({ ModeA: rgOp(enAttr, "ModeA"), attr: enAttrAttrs.UsrCanPickA, virtual: rgDecisions(enAttr, "attribute-virtual"), rules: rgDecisions(enAttr, "radio-option-rule") }));
+
+  // T4e / AC 4 — what cannot be bound as-is keeps the decision: a view-model method, a non-Boolean column, and a
+  // binding that carries a classic converter (even on a Boolean column — binding it would drop the converter).
+  const enKeep = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"canPickA"}`),
+    rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"Name"}`),
+    rgOptOp("ModeC", "Mode", "c", `,enabled:{bindTo:"UsrCanPick",bindConfig:{converter:"invertBooleanValue"}}`),
+    rgOptOp("ModeD", "Mode", "d")].join(","),
+    `methods:{canPickA:function(){return true;}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enKeepRule = rgDecisions(enKeep, "radio-option-rule");
+  const enKeepFor = (opt, x) => enKeepRule.filter((d) => d.item === opt && d.reason.includes(`'${x}'`)
+    && d.reason.includes(`port '${x}' as a converter or a page attribute and bind the option's disabled to it (inverted)`));
+  check("radio group T4e: an option enabled by a method, a non-Boolean column or a converter binding gets no disabled key and ONE port decision each, naming the option and the name",
+    ["ModeA", "ModeB", "ModeC", "ModeD"].every((n) => !("disabled" in (rgOp(enKeep, n)?.values || {})))
+    && enKeepRule.length === 3 && enKeepFor("ModeA", "canPickA").length === 1 && enKeepFor("ModeB", "Name").length === 1
+    && enKeepFor("ModeC", "UsrCanPick").length === 1 && /converter 'invertBooleanValue'/.test(enKeepFor("ModeC", "UsrCanPick")[0]?.reason || ""),
+    () => ({ rules: enKeepRule, kids: rgKids(enKeep, "Mode") }));
+  // A declared page attribute binds only when it is Boolean: a TEXT attribute, and one that states no dataValueType
+  // (its Classic truthiness cannot be assumed), keep the decision like a non-Boolean column.
+  const enAttrKeep = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrModeText"}`),
+    rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"UsrUntyped"}`), rgOptOp("ModeC", "Mode", "c")].join(","),
+    `attributes:{UsrModeText:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"},UsrUntyped:{value:true}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enAttrKeepRule = rgDecisions(enAttrKeep, "radio-option-rule");
+  const enAttrKeepFor = (opt, x) => enAttrKeepRule.filter((d) => d.item === opt && d.reason.includes(`'${x}'`)
+    && d.reason.includes(`port '${x}' as a converter or a page attribute and bind the option's disabled to it (inverted)`));
+  check("radio group T4e: an option enabled by a declared TEXT page attribute, or by a declared attribute with no dataValueType, gets no disabled key and ONE port decision each, naming the option and the attribute",
+    ["ModeA", "ModeB", "ModeC"].every((n) => !("disabled" in (rgOp(enAttrKeep, n)?.values || {})))
+    && enAttrKeepRule.length === 2 && enAttrKeepFor("ModeA", "UsrModeText").length === 1 && enAttrKeepFor("ModeB", "UsrUntyped").length === 1,
+    () => ({ rules: enAttrKeepRule, kids: rgKids(enAttrKeep, "Mode") }));
+
+  // The converter rides on the binding through the fold: a layer that restates the binding without one clears it, the
+  // converters of the properties it leaves alone are kept, and removing the property removes its converter.
+  const convLayer = (name, op) => parseSchema(`define("${name}",[],function(){return{entitySchemaName:"X",diff:[${op}]};});`, name);
+  const convBase = convLayer("B", `{operation:"insert",name:"Opt",parentName:"Header",propertyName:"items",values:{value:1,enabled:{bindTo:"UsrCanPick",bindConfig:{converter:"invertBooleanValue"}},visible:{bindTo:"ShowOpt",bindConfig:{converter:function(v){return !v;}}}}}`);
+  const convOf = (layers) => mergeHierarchy(layers).items.find((i) => i.name === "Opt")?.handlerConverters;
+  const convRestated = convOf([convBase, convLayer("C", `{operation:"merge",name:"Opt",values:{enabled:{bindTo:"UsrCanPick"}}}`)]);
+  const convRemoved = convOf([convBase, convLayer("C", `{operation:"remove",name:"Opt",properties:["visible"]}`)]);
+  check("radio group T4e: the fold carries a bound property's converter (an inline function by kind), a restating layer replaces it, and removing the property removes it",
+    JSON.stringify(convOf([convBase])) === JSON.stringify({ enabled: "invertBooleanValue", visible: "(inline function)" })
+    && JSON.stringify(convRestated) === JSON.stringify({ visible: "(inline function)" })
+    && JSON.stringify(convRemoved) === JSON.stringify({ enabled: "invertBooleanValue" }),
+    () => ({ base: convOf([convBase]), convRestated, convRemoved }));
+
+  // T4g / AC 1 + AC 4 — precedence across layers: the higher layer's statement of `enabled` wins whole. A static
+  // `enabled: false` over a lower layer's binding stays disabled:true (the stale binding does not override it), and a
+  // binding over a lower layer's `enabled: false` is the live binding.
+  const layerRun = (base, top) => runMigration({ entity: "X", noParentTemplate: true, entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport,
+    schemas: [{ pkg: "P", body: gmBody("", [nameOp, rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", base), rgOptOp("ModeB", "Mode", "b")].join(",")) },
+      { pkg: "Q", body: `define("Q",[],function(){return{entitySchemaName:"X",diff:[{operation:"merge",name:"ModeA",values:{${top}}}]};});` }] }, { baseDir: FIX });
+  const staticOverBound = layerRun(`,enabled:{bindTo:"UsrCanPick",bindConfig:{converter:"invertBooleanValue"}}`, "enabled:false");
+  const boundOverStatic = layerRun(",enabled:false", `enabled:{bindTo:"UsrCanPick"}`);
+  check("radio group T4g: a higher layer's static enabled:false over a lower layer's binding emits disabled:true and raises no radio-option-rule; a higher layer's binding over a static enabled:false emits the live inverted binding",
+    rgOp(staticOverBound, "ModeA")?.values?.disabled === true && rgDecisions(staticOverBound, "radio-option-rule").length === 0
+    && rgOp(boundOverStatic, "ModeA")?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue"
+    && rgDecisions(boundOverStatic, "radio-option-rule").length === 0,
+    () => ({ staticOverBound: rgOp(staticOverBound, "ModeA"), boundOverStatic: rgOp(boundOverStatic, "ModeA"),
+      rules: [rgDecisions(staticOverBound, "radio-option-rule"), rgDecisions(boundOverStatic, "radio-option-rule")] }));
+
+  // T4f / AC 4 — the same enabled source on two options is defined once and not overwritten, and a declared page
+  // attribute with no classic default is created as {} and still accounted for.
+  const enTwice = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPick"}`), rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"UsrCanPick"}`),
+    rgOptOp("ModeC", "Mode", "c", `,enabled:{bindTo:"UsrFlag"}`), rgOptOp("ModeD", "Mode", "d", `,enabled:{bindTo:"UsrFlag"}`)].join(","),
+    `attributes:{UsrFlag:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enTwiceAttrs = enTwice.changeSet.viewModelConfigDiff[0].values;
+  const enTwicePds = enTwice.changeSet.modelConfigDiff[0].values;
+  check("radio group T4f: two options enabled by one Boolean column both get the inverted binding, over ONE PDS attribute + column",
+    ["ModeA", "ModeB"].every((n) => rgOp(enTwice, n)?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue")
+    && JSON.stringify(enTwiceAttrs.UsrCanPick) === JSON.stringify({ modelConfig: { path: "PDS.UsrCanPick" } })
+    && JSON.stringify(enTwicePds.UsrCanPick) === JSON.stringify({ path: "UsrCanPick" }),
+    () => ({ kids: rgKids(enTwice, "Mode"), attr: enTwiceAttrs.UsrCanPick, pds: enTwicePds.UsrCanPick }));
+  check("radio group T4f: two options enabled by a declared page attribute with no default both get the inverted binding; the attribute is {}, has no PDS path, is accounted for once and raises no attribute-virtual or radio-option-rule",
+    ["ModeC", "ModeD"].every((n) => rgOp(enTwice, n)?.values?.disabled === "$UsrFlag | crt.InvertBooleanValue")
+    && JSON.stringify(enTwiceAttrs.UsrFlag) === "{}" && !("UsrFlag" in enTwicePds)
+    && enTwice.changeSet.accountedFor.filter((n) => n === "UsrFlag").length === 1
+    && !rgDecisions(enTwice, "attribute-virtual").some((d) => d.item === "UsrFlag")
+    && rgDecisions(enTwice, "radio-option-rule").length === 0,
+    () => ({ attr: enTwiceAttrs.UsrFlag, virtual: rgDecisions(enTwice, "attribute-virtual"), rules: rgDecisions(enTwice, "radio-option-rule") }));
 
   // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
   // built and raises the business-rule decision.
@@ -11582,18 +11692,79 @@ try {
     () => ({ opt: noCapOpt, noCapRow, resources: noCap.changeSet.resources }));
 
   // T5 / R5 — a split group: two classic groups on one attribute.
-  const sp = rgUp([rgGroupOp("PrioA", "Priority"), rgOptOp("P1", "PrioA", 1), rgOptOp("P2", "PrioA", 2),
-    rgGroupOp("PrioB", "Priority"), rgOptOp("P3", "PrioB", 3), rgOptOp("P4", "PrioB", 4)].join(","));
-  const spSplit = rgDecisions(sp, "radio-group-split");
-  check("radio group T5: two groups bound to one attribute become two crt.RadioGroup elements, each with ITS OWN options",
+  // Group A's first option is statically disabled and group B's first is enabled by a Boolean column, so the copies'
+  // "no disabled" rule is exercised.
+  const sp = rgUp([rgGroupOp("PrioA", "Priority"), rgOptOp("P1", "PrioA", 1, ",enabled:false"), rgOptOp("P2", "PrioA", 2),
+    rgGroupOp("PrioB", "Priority"), rgOptOp("P3", "PrioB", 3, `,enabled:{bindTo:"UsrCanPick"}`), rgOptOp("P4", "PrioB", 4)].join(","));
+  const spKid = (group, name) => rgKids(sp, group).find((o) => o.name === name)?.values || {};
+  check("radio group T5: two groups bound to one attribute become two crt.RadioGroup elements, each with its own options first, then a hidden copy of every option of the other group",
     rgOp(sp, "PrioA")?.values?.type === "crt.RadioGroup" && rgOp(sp, "PrioB")?.values?.type === "crt.RadioGroup"
-    && rgKids(sp, "PrioA").map((o) => o.name).join(",") === "P1,P2" && rgKids(sp, "PrioB").map((o) => o.name).join(",") === "P3,P4",
+    && rgKids(sp, "PrioA").map((o) => o.name).join(",") === "P1,P2,PrioA_P3,PrioA_P4"
+    && rgKids(sp, "PrioB").map((o) => o.name).join(",") === "P3,P4,PrioB_P1,PrioB_P2",
     () => rgOps(sp).filter((o) => /^P/.test(o.name)));
-  check("radio group T5: each split group carries ONE split-group decision that names the shared attribute and the extra-disabled-option behaviour",
-    spSplit.map((d) => d.item).sort((a, b) => a.localeCompare(b)).join(",") === "PrioA,PrioB"
-    && spSplit.every((d) => /'Priority'/.test(d.reason) && /extra, disabled option/.test(d.reason))
-    && rgDecisions(up, "radio-group-split").length === 0,
-    () => spSplit);
+  check("radio group T5: a hidden copy is visible:false with the other option's typed value and caption resource; the group's own options carry no visible flag",
+    spKid("PrioA", "PrioA_P3").visible === false && spKid("PrioA", "PrioA_P3").value === 3
+    && spKid("PrioA", "PrioA_P3").caption === "#ResourceString(P3_caption)#"
+    && spKid("PrioA", "PrioA_P4").value === 4 && spKid("PrioA", "PrioA_P4").caption === "#ResourceString(P4_caption)#"
+    && spKid("PrioB", "PrioB_P1").visible === false && spKid("PrioB", "PrioB_P1").value === 1
+    && spKid("PrioB", "PrioB_P2").caption === "#ResourceString(P2_caption)#"
+    && ["P1", "P2"].every((n) => !("visible" in spKid("PrioA", n))) && ["P3", "P4"].every((n) => !("visible" in spKid("PrioB", n))),
+    () => ({ PrioA: rgKids(sp, "PrioA"), PrioB: rgKids(sp, "PrioB") }));
+  const copyKeysMatch = (group, copy, option) => {
+    const c = spKid(group, copy); const o = rgOp(sp, option)?.values || {};
+    return JSON.stringify(Object.keys(c).sort((a, b) => a.localeCompare(b))) === JSON.stringify(["caption", "type", "value", "visible"])
+      && c.type === o.type && c.value === o.value && c.caption === o.caption && c.visible === false;
+  };
+  check("radio group T5: each hidden copy's keys are exactly the built option's value and caption plus visible (no disabled), with the built option's values — also for a statically disabled and a column-enabled option",
+    rgOp(sp, "P1")?.values?.disabled === true && rgOp(sp, "P3")?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue"
+    && copyKeysMatch("PrioA", "PrioA_P3", "P3") && copyKeysMatch("PrioA", "PrioA_P4", "P4")
+    && copyKeysMatch("PrioB", "PrioB_P1", "P1") && copyKeysMatch("PrioB", "PrioB_P2", "P2"),
+    () => ({ PrioA: rgKids(sp, "PrioA"), PrioB: rgKids(sp, "PrioB") }));
+  // The copy's hiding key is the children spec's `hidden`, checked by the table validation: an element-level key is
+  // accepted by name, any other key must be an input of the option component.
+  const rgSpecRow = MAPPING_ROWS.find((r) => r.upgrade?.children?.componentType === "crt.RadioGroupItem");
+  const withHidden = (prop) => ({ ...rgSpecRow, upgrade: { ...rgSpecRow.upgrade, children: { ...rgSpecRow.upgrade.children, hidden: { prop, value: false } } } });
+  check("radio group T5: the RADIO_GROUP children spec hides copies with the element-level `visible`, which validates clean; a shared base input (`classes`) is accepted like in a propMap; a hiding key that is neither element-level nor an input is an unknown-input error",
+    rgSpecRow?.upgrade?.children?.hidden?.prop === "visible"
+    && !validateRow(rgSpecRow).some((f) => f.kind === "unknown-input")
+    && !validateRow(withHidden("classes")).some((f) => f.kind === "unknown-input")
+    && validateRow(withHidden("notAnInput")).some((f) => f.kind === "unknown-input" && f.prop === "notAnInput" && f.componentType === "crt.RadioGroupItem"),
+    () => ({ hidden: rgSpecRow?.upgrade?.children?.hidden, ok: validateRow(rgSpecRow), base: validateRow(withHidden("classes")), neg: validateRow(withHidden("notAnInput")) }));
+  check("radio group T5: split groups raise no radio-group-split decision, and no other run does either",
+    rgDecisions(sp, "radio-group-split").length === 0 && rgDecisions(up, "radio-group-split").length === 0,
+    () => rgDecisions(sp, "radio-group-split"));
+
+  // T5b / AC 3 — copies are deduplicated by value (the first occurrence wins), a single group gets none, and the
+  // copies add no Layout or coverage rows and nothing to the drop list.
+  const ov = rgUp([rgGroupOp("A", "Priority"), rgOptOp("A1", "A", 1), rgOptOp("A2", "A", 2),
+    rgGroupOp("B", "Priority"), rgOptOp("B2", "B", 2), rgOptOp("B3", "B", 3),
+    rgGroupOp("C", "Priority"), rgOptOp("C3", "C", 3), rgOptOp("C1", "C", 1)].join(","));
+  const ovKids = (g) => rgKids(ov, g).map((o) => o.name).join(",");
+  check("radio group T5b: a value a group already has is not copied into it, and a value several other groups share is copied once, from its first occurrence",
+    ovKids("A") === "A1,A2,A_B3" && ovKids("B") === "B2,B3,B_A1" && ovKids("C") === "C3,C1,C_A2"
+    && rgOp(ov, "C_A2")?.values?.caption === "#ResourceString(A2_caption)#" && rgOp(ov, "A_B3")?.values?.value === 3,
+    () => ({ A: rgKids(ov, "A"), B: rgKids(ov, "B"), C: rgKids(ov, "C") }));
+  check("radio group T5b: a single group gets no hidden copies",
+    rgKids(up, "IsPrimary").length === 2 && rgKids(up, "IsPrimary").every((o) => !("visible" in o.values)),
+    () => rgKids(up, "IsPrimary"));
+  const spSpec = renderDesignSpec(sp, {});
+  const spRows = (re) => spSpec.split("\n").filter((l) => /\|/.test(l) && re.test(l));
+  check("radio group T5b: the hidden copies add no Layout or coverage rows and reach neither the table elements nor the drop list",
+    spRows(/\| Priority \| crt\.RadioGroup \|/).length === 2 && spRows(/crt\.RadioGroupItem|Prio[AB]_P\d/).length === 0
+    && (sp.changeSet.tableElements || []).length === 0
+    && !sp.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" || /Prio[AB]_P\d/.test(d.item || "")),
+    () => ({ rows: spSpec.split("\n").filter((l) => /Prio|P\d/.test(l)), decisions: sp.changeSet.needsDecision }));
+
+  // T5c / AC 3 — a split group holding a Classic-hidden option: the hidden option is not built, so no group gets a copy
+  // of it, and it is still reported once.
+  const shv = rgUp([rgGroupOp("A", "Priority"), rgOptOp("A1", "A", 1), rgOptOp("A2", "A", 2, ",visible:false"),
+    rgGroupOp("B", "Priority"), rgOptOp("B3", "B", 3)].join(","));
+  const shvKids = (g) => rgKids(shv, g).map((o) => o.name).join(",");
+  const shvHidden = rgDecisions(shv, "radio-option-hidden");
+  check("radio group T5c: a Classic-hidden option of a split group is not built and not copied (B gets B_A1 only), A still gets its copy of B3, and the hidden option raises exactly one radio-option-hidden decision",
+    shvKids("A") === "A1,A_B3" && shvKids("B") === "B3,B_A1" && !rgOps(shv).some((o) => /A2/.test(o.name))
+    && shvHidden.length === 1 && shvHidden[0].item === "A2",
+    () => ({ A: rgKids(shv, "A"), B: rgKids(shv, "B"), hidden: shvHidden }));
 
   // T6 / R6 — the usage types that cannot be migrated are typed warnings, never half-configured elements.
   const gapCase = (diff) => {
