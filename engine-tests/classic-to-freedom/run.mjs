@@ -1160,6 +1160,19 @@ check("a merge onto a TOMBSTONE does not throw — every item record in the fold
   check("a child layer's merge of enabled:false, readonly:true and controlConfig.protect onto a base insert reaches the field projection",
     pin?.enabled === false && pin?.readonly === true && pin?.protect === true,
     () => pin);
+  // Literal then bound: a child layer that states enabled / readonly as a binding replaces the base layer's literal,
+  // so the field is not statically disabled or read-only; a key the child does not state keeps the literal.
+  const boundEff = mergeHierarchy([
+    upMk("A", `[{"operation":"insert","name":"UsrPin","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrPin","enabled":false,"readonly":true,"controlConfig":{"protect":true}}},`
+      + `{"operation":"insert","name":"UsrKeep","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrKeep","enabled":false,"readonly":true}}]`),
+    upMk("B", `[{"operation":"merge","name":"UsrPin","values":{"enabled":{"bindTo":"IsEditable"},"readonly":{"bindTo":"IsLocked"}}},`
+      + `{"operation":"merge","name":"UsrKeep","values":{"enabled":{"bindTo":"IsEditable"}}}]`)]);
+  const boundPin = boundEff.fields.find((f) => f.name === "UsrPin");
+  const boundKeep = boundEff.fields.find((f) => f.name === "UsrKeep");
+  check("a child layer's merge that states enabled / readonly as a binding clears the base layer's literal; a key it does not state keeps the literal",
+    boundPin?.enabled === null && boundPin?.readonly === null && boundPin?.protect === true
+    && boundKeep?.enabled === null && boundKeep?.readonly === true,
+    () => ({ boundPin, boundKeep }));
 }
 
 console.log(`\n=================\nGOLDEN:${pass} passed, ${fail} failed`);

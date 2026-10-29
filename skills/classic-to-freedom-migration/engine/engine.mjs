@@ -291,14 +291,15 @@ const TAG_TRANSITIONS = {
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
   terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
     controls: "terrasoft.controls", core: "terrasoft.core",
-    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
+    MessageMode: "t:sym", MessageDirectionType: "t:sym", ViewModelColumnType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
   "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
-    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
+    MessageMode: "t:sym", MessageDirectionType: "t:sym", ViewModelColumnType: "t:sym" },
 };
 // "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
-// the `messages` block's `mode`/`direction` (`Terrasoft.MessageMode.PTP`, `…MessageDirectionType.PUBLISH`).
+// the `messages` block's `mode`/`direction` (`Terrasoft.MessageMode.PTP`, `…MessageDirectionType.PUBLISH`) and an
+// attribute's `type` (`Terrasoft.ViewModelColumnType.ENTITY_COLUMN`).
 // Deliberately not a numeric enum table: the migration needs to know a message is PUBLISH vs SUBSCRIBE, and the
 // plan reads better naming it, so there is no reason to pin numeric constants the engine would have to assert.
 // An unknown key under this state still yields its name (any member of these two namespaces is a symbol we want).
@@ -1230,6 +1231,10 @@ function attributeFact(name, def) {
     // `isVirtual`-style marker used by some schemas; the mapper also infers virtuality from the entity columns
     isLookup: d.isLookup === true || !!llc.entitySchemaName,
     referenceSchema: strOrNull(llc.entitySchemaName),
+    // what the attribute stands for: `columnPath` maps a column of a related source, and `type` is its
+    // ViewModelColumnType (the symbolic name, `ENTITY_COLUMN` / `VIRTUAL_COLUMN` / ..., or a numeric literal)
+    columnPath: strOrNull(d.columnPath),
+    columnType: isStr(d.type) || isNum(d.type) ? d.type : null,
   };
 }
 
@@ -1729,6 +1734,12 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
 // own fns so `replayMerge` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
 function applyMergeOrderVisible(op, cur) {
   for (const k of ["order", "visible", "enabled", "readonly", "protect"]) { if (op[k] != null) cur[k] = op[k]; }
+  // A layer that states `enabled` / `readonly` as a binding (`enabled: { bindTo: "IsEditable" }`) replaces a lower
+  // layer's literal: the runtime writes the key whole, so the field is not statically disabled or read-only.
+  // `valuesKeys` records that the key was stated; a null literal means it was stated as something other than a boolean.
+  for (const k of ["enabled", "readonly"]) {
+    if (op[k] == null && op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = null;
+  }
 }
 // Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
 function applyMergeContentFields(op, cur) {

@@ -124,22 +124,34 @@ model first:
   the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
   bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
 - **A page attribute field Classic disables statically** (`enabled: false` or `readonly: true` on the field) gets
-  the same page attribute and control, but **read-only**. Only these static signals make it read-only.
+  the same page attribute and control, but **read-only**. Only these static signals make it read-only, and only from
+  the layer that states them last: a later layer that states `enabled` or `readonly` as a binding clears the literal.
 - **A page attribute the page's own methods write** (`this.set("UsrX", …)`), with no attribute `dependencies` entry
   listing it in its `columns`, stays **editable**, as Classic rendered it: an init method that sets a starting value
   the user then toggles looks the same as a computed value. Every such field is named, with the method(s) that write
   it, in one `field-attribute-computed` decision: if the value is one the page computes and only shows, make the field
   read-only by hand. A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring,
   so such an attribute is not named.
-- **A masked field** (`controlConfig: { protect: true }`, a password-style input) is a `crt.PasswordInput`, a
-  password-style masked input that stays editable as in Classic, whether it is bound to a page attribute or to an
-  entity column of any type, and is named in a `secret-column` decision of its own (`(<n> masked fields)`). The
-  masking is on screen only: the stored value is the real secret, not a hash or ciphertext. `crt.PasswordInput` is
-  `compositeOnly` (no Designer toolbar entry), so verify on a stand that the built field masks its value. A
-  hashed or encrypted column keeps its read-only `crt.Input` even when masked.
+- **A masked text field** (`controlConfig: { protect: true }`, a password-style input, on an entity column or a
+  declared page attribute whose type gives a plain single-line `crt.Input`) is a `crt.PasswordInput`, a
+  password-style masked input that stays editable as in Classic, and is named in a `secret-column` decision of its own
+  (`(<n> masked fields)`). The masking is on screen only: the stored value is the real secret, not a hash or
+  ciphertext. `crt.PasswordInput` is `compositeOnly` (no Designer toolbar entry), so verify on a stand that the built
+  field masks its value. It is emitted only where the run's component registry shows the target stand carries it
+  (a stand export or a pinned platform version, as for radio groups); otherwise the field is a **read-only**
+  `crt.Input`, which shows the value unmasked, named in a `secret-column` row (`(<n> masked fields, not masked)`) that
+  says so and how to re-run with the stand's registry.
+- **A masked field of another type** keeps the control its type gives: a masked Boolean, number, date, long text or
+  lookup column, or a masked non-text page attribute, is emitted exactly as if it were not masked, and is named in no
+  `secret-column` row. A hashed or encrypted column keeps its read-only `crt.Input` even when masked. A masked name
+  that is neither an entity column nor a declared attribute keeps the read-only linked value below unchanged.
+- **A hashed or encrypted page attribute** (`HASH_TEXT` / `SECURE_TEXT`) is a read-only `crt.Input` over the page
+  attribute, named in the hashed / encrypted `secret-column` row like such a column.
 - **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
   type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
-  naming the attribute: its values source has to be built by hand.
+  naming the attribute, also when the field is masked: its values source has to be built by hand.
+- **A page attribute that maps a related column** (`columnPath`, or `type: Terrasoft.ViewModelColumnType.ENTITY_COLUMN`)
+  is that column's value, not page state: its field keeps the read-only linked value below, as an undeclared name.
 - **A name the page does not declare** is a value shown from a related data source: a read-only field
   (`linkedValue`) over `PDS.<name>`, with the nearest entity columns as a hint for a renamed column.
 

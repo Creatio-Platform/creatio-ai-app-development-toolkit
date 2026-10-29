@@ -5,7 +5,7 @@ import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey, HEADER_TOP_
 import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
   widgetsByMatch, profileCardsByEntity, knownCardActions, FEATURE_CONNECTIONS,
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
-import { resolveRowTarget } from "./mapping-registry.mjs";
+import { resolveRowTarget, runCarries } from "./mapping-registry.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -820,20 +820,26 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   return vis;
 }
 
-// A field Classic renders MASKED (`controlConfig: { protect: true }`, a password-style text edit) is emitted as the
-// Freedom password-style input `crt.PasswordInput`: editable as it was in Classic, its value masked on screen. It is
-// reported under the same decision kind as the hashed / encrypted columns, in its own row because the reason differs:
-// the stored value is the real secret in plain storage, and the protection is the field's own configuration, not the
-// column's storage.
+// A TEXT field Classic renders MASKED (`controlConfig: { protect: true }`, a password-style text edit) is emitted as
+// the Freedom password-style input `crt.PasswordInput`: editable as it was in Classic, its value masked on screen. Only
+// a text field: a masked Boolean, number, date or lookup keeps its typed control, since a text input over such a value
+// would hold it as free text. It is reported under the same decision kind as the hashed / encrypted columns, in its own
+// row because the reason differs: the stored value is the real secret in plain storage, and the protection is the
+// field's own configuration, not the column's storage. `crt.PasswordInput` is emitted only where the run's component
+// registry shows the target stand carries it; elsewhere the field is a read-only `crt.Input` and the row says why.
 const MASKED_CONTROL = Object.freeze({ type: "crt.PasswordInput" });
-// The control for a secret field: a masked one is the password-style input, a hashed or encrypted column a read-only
-// `crt.Input` (no Freedom field renders those values safely).
-function secretControl(secretType) {
-  return secretType === "protect" ? MASKED_CONTROL : { type: "crt.Input", readOnly: true };
-}
+// the read-only `crt.Input` a hashed or encrypted column gets (no Freedom field renders those values safely), and a
+// masked field where the run cannot show the stand carries `crt.PasswordInput`
+const READ_ONLY_INPUT = Object.freeze({ type: "crt.Input", readOnly: true });
+// a plain single-line text control: what Classic's masked text edit stands for
+const isPlainTextControl = (c) => !!c && c.type === "crt.Input" && !c.multiline && !c.readOnly && !c.linkedDisplay;
 function maskedFieldsDecision(cols) {
   return { kind: "secret-column", item: `(${cols.length} masked fields)`,
     reason: `${cols.length} field(s) are MASKED on the classic page (\`controlConfig: { protect: true }\`, a password-style input). They are emitted as \`crt.PasswordInput\`, a password-style masked input that stays editable as it was in Classic. The masking is on screen only: the stored value is the real secret, not a hash or ciphertext, so anyone who can read the data source still reads it. \`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index (no Designer toolbar entry): verify on a stand that the built field masks its value. DECIDE per field: keep it, or drop it, and port the save logic the classic page ran for it. Fields: ${cols.join(", ")}` };
+}
+function maskedFallbackDecision(cols) {
+  return { kind: "secret-column", item: `(${cols.length} masked fields, not masked)`,
+    reason: `${cols.length} field(s) are MASKED on the classic page (\`controlConfig: { protect: true }\`, a password-style input), and this run's component registry cannot show that the target stand carries \`crt.PasswordInput\`, the Freedom masked input. They are emitted as a READ-ONLY \`crt.Input\` instead: not editable, and the value shows UNMASKED on screen. The stored value is the real secret, not a hash or ciphertext. Supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` and re-run \`--plan --out\` to build \`crt.PasswordInput\` on a stand that has it. DECIDE per field: keep it read-only, drop it, or build the masked input by hand. Fields: ${cols.join(", ")}` };
 }
 // The declared page attributes whose fields stay editable although the page's own methods write them (`this.set`):
 // such a field may be a value the page computes and only shows. Reported once, naming each field and its writers.
@@ -875,9 +881,11 @@ function foldFieldSummaries(acc) {
   // the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
   // here on purpose: the whole point is that the operator can see every column whose value the classic page put
   // on screen and that this migration is NOT carrying over.
-  const maskedCols = secretCols.filter((sc) => sc.type === "protect").map((sc) => sc.col);
+  const maskedCols = secretCols.filter((sc) => sc.type === "protect" && sc.shown).map((sc) => sc.col);
+  const unmaskedCols = secretCols.filter((sc) => sc.type === "protect" && !sc.shown).map((sc) => sc.col);
   const storedSecretCols = secretCols.filter((sc) => sc.type !== "protect");
   if (maskedCols.length) out.push(maskedFieldsDecision(maskedCols));
+  if (unmaskedCols.length) out.push(maskedFallbackDecision(unmaskedCols));
   if (storedSecretCols.length) {
     const named = storedSecretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
     out.push({ kind: "secret-column", item: `(${storedSecretCols.length} fields)`,
@@ -1084,27 +1092,38 @@ function mapFields(ctx, containers) {
     const writers = staticReadOnly(f) ? [] : attributeWriters(col);
     if (writers.length) computedAttrFields.push(`${col} (${writers.join(", ")})`);
   };
+  // A masked text field: `crt.PasswordInput` where the run's registry shows the target stand carries it, otherwise the
+  // read-only `crt.Input`. Either way it is named in a secret-column row, the one that matches what was emitted.
+  const passwordInputShown = runCarries(ctx.registry, MASKED_CONTROL.type);
+  const maskedField = (col) => {
+    secretCols.push({ col, type: "protect", shown: passwordInputShown });
+    return passwordInputShown ? MASKED_CONTROL : READ_ONLY_INPUT;
+  };
+  // An attribute that maps a column of a related source (`columnPath`, or ViewModelColumnType ENTITY_COLUMN, numeric
+  // 0) is that column's value, not page state: its field keeps the linked-value output.
+  const mapsRelatedColumn = (a) => !!a.columnPath || a.columnType === "ENTITY_COLUMN" || a.columnType === 0;
   // The control for a field on a page attribute the classic view model declares, chosen from its dataValueType through
   // the same selection a column's type goes through. A declared attribute is evidence the name is view-model state, not
   // a column of a related data source, so it becomes an editable page attribute — unless its type cannot be one
-  // (reported, and the linked-value output kept: null). An attribute with no type, or a code the engine does not know,
-  // is an editable crt.Input named in the field-control decision, like a column whose type is not recognized.
+  // (reported, and the linked-value output kept: null). A lookup or other non-scalar attribute takes that path even
+  // when masked. A hashed or encrypted one is a read-only crt.Input named with the stored secrets. An attribute with no
+  // type, or a code the engine does not know, is an editable crt.Input named in the field-control decision, like a
+  // column whose type is not recognized. A masked text attribute is a masked field.
   const declaredAttributeField = (col, f) => {
     const a = (ctx.eff.attributes || []).find((x) => x.name === col);
-    if (!a) return null;
+    if (!a || mapsRelatedColumn(a)) return null;
     const dvt = a.dataValueType;
     const meta = { type: dvt == null ? null : String(dvt) };
-    // masked in classic: a password-style input, reported with the secret columns, whatever the attribute's type
-    if (f.protect === true) {
-      secretCols.push({ col, type: "protect" });
-      return { a, meta, c: staticReadOnly(f) ? { ...MASKED_CONTROL, readOnly: true } : MASKED_CONTROL };
-    }
+    const stored = secretTypeOf(meta.type);
+    if (stored) { secretCols.push({ col, type: stored }); return { a, meta, c: READ_ONLY_INPUT }; }
     const known = dvt != null && DATAVALUETYPE_CODE[meta.type] !== undefined;
     const c = known ? scalarControl(meta.type) : { type: "crt.Input" };
     if (a.isLookup || a.isCollection || NON_SCALAR_ATTR_TYPES.has(dvt) || !c) { reportLookupAttributeField(a); return null; }
     if (!known) fieldControlCols.push(col);
-    noteComputedAttributeField(col, f);
-    return { a, meta, c: staticReadOnly(f) ? { ...c, readOnly: true } : c };
+    const masked = known && f.protect === true && isPlainTextControl(c);
+    if (!masked) noteComputedAttributeField(col, f);
+    const shown = masked ? maskedField(col) : c;
+    return { a, meta, c: staticReadOnly(f) ? { ...shown, readOnly: true } : shown };
   };
   // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
   // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
@@ -1143,12 +1162,15 @@ function mapFields(ctx, containers) {
     // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
     // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
     // than folded into the "type was not recognized" bucket, which was untrue for these two.
-    // A field classic MASKS (`controlConfig.protect`) on any other column is a password-style `crt.PasswordInput`,
-    // whatever its column type; a hashed or encrypted column keeps the read-only path above even when masked.
-    const secretType = storedSecretType(ctl, missingColumn, meta) || (f.protect === true ? "protect" : null);
+    // A field classic MASKS (`controlConfig.protect`) on an entity column of a text type is a masked field; a masked
+    // column of any other type keeps its typed control, a hashed or encrypted column the read-only path above, and a
+    // masked name that is no entity column the linked-value output.
+    const secretType = storedSecretType(ctl, missingColumn, meta);
     if (!ctl && !missingColumn && !secretType) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     if (secretType) secretCols.push({ col, type: secretType });
-    const c = secretType ? secretControl(secretType) : (ctl || { type: "crt.Input" });
+    const masked = !missingColumn && f.protect === true && isPlainTextControl(ctl);
+    const unmasked = secretType ? READ_ONLY_INPUT : (ctl || { type: "crt.Input" });
+    const c = masked ? maskedField(col) : unmasked;
     return { col, meta, missingColumn, nearMissing, c, elName: fieldElementName(col), pageAttr: null };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
