@@ -898,6 +898,7 @@ function mapFields(ctx, containers) {
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
   const dupBoundCols = [];                // cols the classic page binds MORE THAN ONCE (col, col_2, …)
   const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
+  const pageAttributes = new Set();       // page attributes the ChangeSet creates (no entity column behind them)
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first: the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -1011,6 +1012,55 @@ function mapFields(ctx, containers) {
     needsDecision.push({ kind: "container", item: f.name || f.bindTo, reason: `${why} — placed in ${FLAT_FALLBACK} for now` });
     return FLAT_FALLBACK; // parent chain unresolvable
   };
+  // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
+  // imperative-members pass does not ask for it to be created again (`pageAttributes`). Shared by the field pass and
+  // the radio groups, so a field and a group (or an option's `enabled`) on one attribute define it the same way.
+  const definePageAttribute = (attr, classic) => {
+    const v = classic?.value;
+    attributes[attr] = v === null || v === undefined ? {} : { value: v };
+    pageAttributes.add(attr);
+    accountedFor.add(attr);
+  };
+  // The attribute a field binds: a declared page attribute is the page's own state (no PDS path, no PDS column —
+  // neither exists on the entity); anything else is read through the primary data source.
+  const bindFieldAttribute = (col, pageAttr) => {
+    if (pageAttr) { definePageAttribute(col, pageAttr); return; }
+    attributes[col] = { modelConfig: { path: "PDS." + col } };
+    pdsColumns[col] = { path: col };
+  };
+  // A declared attribute whose value a field cannot hold as a plain page attribute: a lookup or a record id needs a
+  // values source the field pass does not build, an enum a value list, an image lookup a SysImage reference.
+  const NON_SCALAR_ATTR_TYPES = new Set([DATA_VALUE_TYPE.GUID, DATA_VALUE_TYPE.LOOKUP, DATA_VALUE_TYPE.ENUM, DATA_VALUE_TYPE.IMAGELOOKUP]);
+  const reportLookupAttributeField = (a) => needsDecision.push({ kind: "field-attribute-lookup", item: a.name,
+    reason: `a field is bound to '${a.name}', a lookup (or other non-scalar) attribute the classic page declares with no entity column behind it — the field is kept as a read-only linked value over PDS.${a.name}, a column that does not exist. Build it by hand: a page attribute with its values source (for a lookup, its reference schema), or bind the field to the entity column the attribute stands for` });
+  // The control for a field on a page attribute the classic view model declares, chosen from its dataValueType through
+  // the same selection a column's type goes through. A declared attribute is evidence the name is view-model state, not
+  // a column of a related data source, so it becomes an editable page attribute — unless its type cannot be one
+  // (reported, and the linked-value output kept: null). An attribute with no type, or a code the engine does not know,
+  // is an editable crt.Input named in the field-control decision, like a column whose type is not recognized.
+  const declaredAttributeField = (col) => {
+    const a = (ctx.eff.attributes || []).find((x) => x.name === col);
+    if (!a) return null;
+    const dvt = a.dataValueType;
+    const meta = { type: dvt == null ? null : String(dvt) };
+    const known = dvt != null && DATAVALUETYPE_CODE[meta.type] !== undefined;
+    const c = known ? scalarControl(meta.type) : { type: "crt.Input" };
+    if (a.isLookup || a.isCollection || NON_SCALAR_ATTR_TYPES.has(dvt) || !c) { reportLookupAttributeField(a); return null; }
+    if (!known) fieldControlCols.push(col);
+    return { a, meta, c };
+  };
+  // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
+  // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
+  // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
+  // built page shows one value in two places and the plan's Layout table lists the column twice in two
+  // different regions, where nothing connects them. A per-field line here is folded away and
+  // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
+  // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
+  const fieldElementName = (col) => {
+    nameCount[col] = (nameCount[col] || 0) + 1;
+    if (nameCount[col] === 2) dupBoundCols.push(col);
+    return nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+  };
   // Resolve a field's column, control type and unique element name (own function for Sonar CC 15). Splits the two
   // unresolved-control causes: a MISSING bound column → virtual-field decision naming nearest columns; a resolved
   // column whose TYPE didn't map → folded field-control summary. Mutates needsDecision/fieldControlCols/nameCount.
@@ -1019,6 +1069,10 @@ function mapFields(ctx, containers) {
     const meta = colMeta(col);
     const haveCols = Object.keys(cols).length > 0;
     const missingColumn = !!f.bindTo && haveCols && !(col in cols);
+    // Only when the entity columns were supplied and lack the name: without them a declared attribute may as well be
+    // a column override (an `Owner` attribute carrying a lookupListConfig), which must keep its column binding.
+    const declared = missingColumn ? declaredAttributeField(col) : null;
+    if (declared) return { col, meta: declared.meta, missingColumn: false, nearMissing: [], c: declared.c, elName: fieldElementName(col), pageAttr: declared.a };
     // A bound column NOT on the entity is (almost always) a companion value shown FROM A RELATED DATA SOURCE
     // (e.g. Contact.Phone/Email/BirthDate on an Employee page via the Contact lookup). Freedom shows this
     // natively — add the related data source's column through the lookup and bind the input to it READ-ONLY.
@@ -1036,17 +1090,7 @@ function mapFields(ctx, containers) {
     if (!ctl && !missingColumn && !secretType) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     if (secretType) secretCols.push({ col, type: secretType });
     const c = ctl || (secretType ? { type: "crt.Input", readOnly: true } : { type: "crt.Input" });
-    // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
-    // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
-    nameCount[col] = (nameCount[col] || 0) + 1;
-    const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
-    // built page shows one value in two places and the plan's Layout table lists the column twice in two
-    // different regions, where nothing connects them. A per-field line here is folded away and
-    // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
-    // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
-    if (nameCount[col] === 2) dupBoundCols.push(col);
-    return { col, meta, missingColumn, nearMissing, c, elName };
+    return { col, meta, missingColumn, nearMissing, c, elName: fieldElementName(col), pageAttr: null };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
   // 24-col), assign a collision-free (span-aware) cell, and return the layoutConfig. Own function for Sonar CC 15;
@@ -1117,7 +1161,7 @@ function mapFields(ctx, containers) {
   };
   for (const { f, own } of resolved) {
     const parent = routeField(f, own);
-    const { col, meta, c, elName, missingColumn, nearMissing } = resolveFieldControl(f);
+    const { col, meta, c, elName, missingColumn, nearMissing, pageAttr } = resolveFieldControl(f);
     const layoutConfig = computeLayout(f, own, parent, col);
     const vis = fieldVisibility(f, own, col, { isMiniPage: ctx.isMiniPage, needsDecision });
     const values = buildFieldValues(f, col, c, meta, vis, layoutConfig);
@@ -1126,8 +1170,7 @@ function mapFields(ctx, containers) {
     // nearest existing columns for the secondary renamed-column case.
     if (missingColumn) { values.readOnly = true; values.linkedValue = true; if (nearMissing.length) values.linkedNearest = nearMissing; }
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
-    attributes[col] = { modelConfig: { path: "PDS." + col } };
-    pdsColumns[col] = { path: col };
+    bindFieldAttribute(col, pageAttr);
   }
   // ---- the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
   // Placement deliberately goes through the SAME `routeField` / `computeLayout` closures the fields above use:
@@ -1344,7 +1387,6 @@ function mapFields(ctx, containers) {
   // option element's own name), because that is how crt.RadioGroup stores options and what lets a business rule or a
   // package address a single option; a split group also gets hidden copies of the other groups' options (below). Every piece below is its own fn for Sonar CC 15.
   const radioGroups = [];                     // every built group { name, attr, options, spec }, for the split-group pass
-  const radioPageAttrs = new Set();           // page attributes the groups create (no entity column behind them)
   // The classic binding without a ContentBuilder `$` prefix (`value: { bindTo: "$UsrAttr" }`), and whether it had
   // one: the `$` prefix is how a ContentBuilder page names a page attribute, so it is evidence of its own.
   const radioAttr = (it) => {
@@ -1467,16 +1509,8 @@ function mapFields(ctx, containers) {
     }
     return { name: optName, value: child.optionValue, values };
   };
-  // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
-  // imperative-members pass does not ask for it to be created again (`pageAttributes`).
   const bindRadioAttribute = (attr, binding, groupName) => {
-    if (binding.kind === "attribute") {
-      const v = binding.classic?.value;
-      attributes[attr] = v === null || v === undefined ? {} : { value: v };
-      radioPageAttrs.add(attr);
-      accountedFor.add(attr);
-      return;
-    }
+    if (binding.kind === "attribute") { definePageAttribute(attr, binding.classic); return; }
     attributes[attr] = { modelConfig: { path: "PDS." + attr } };
     pdsColumns[attr] = { path: attr };
     if (binding.kind !== "missing-column") return;
@@ -1553,8 +1587,8 @@ function mapFields(ctx, containers) {
     // tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
-    // the page attributes the radio groups create (no entity column): `mapImperativeMembers` does not ask for them
-    pageAttributes: radioPageAttrs,
+    // the page attributes the fields and radio groups create (no entity column): `mapImperativeMembers` does not ask for them
+    pageAttributes,
     headerLayout: headerIsWide ? "wide" : null };
 }
 

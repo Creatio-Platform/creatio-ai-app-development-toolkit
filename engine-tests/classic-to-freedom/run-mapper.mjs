@@ -11667,6 +11667,69 @@ try {
     && rgDecisions(enTwice, "radio-option-rule").length === 0,
     () => ({ attr: enTwiceAttrs.UsrFlag, virtual: rgDecisions(enTwice, "attribute-virtual"), rules: rgDecisions(enTwice, "radio-option-rule") }));
 
+  // T8 / AC 4 — a field bound to a page attribute the classic view model declares (no entity column behind it) is an
+  // editable control over that page attribute, with its classic default: no PDS path, no PDS column, no linked value.
+  // A radio option enabled by the same attribute then binds to a value the page really holds.
+  const fieldOp = (name) => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{bindTo:"${name}"}}`;
+  const faRun = (diff, attrs) => gmRun(diff, `attributes:{${attrs}},`, { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const faAttrs = (run) => run.changeSet.viewModelConfigDiff[0].values;
+  const faPds = (run) => run.changeSet.modelConfigDiff[0].values;
+  const faEditable = (run, name) => {
+    const v = rgOp(run, name)?.values || {};
+    return v.control === "$" + name && !("readOnly" in v) && !("linkedValue" in v) && !("linkedNearest" in v);
+  };
+  const faPageAttr = (run, name, expected) => JSON.stringify(faAttrs(run)[name]) === JSON.stringify(expected)
+    && !(name in faPds(run)) && run.changeSet.accountedFor.includes(name)
+    && !rgDecisions(run, "attribute-virtual").some((d) => d.item === name);
+  const faBool = faRun([fieldOp("UsrCanPickReplica"), rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickReplica"}`), rgOptOp("ModeB", "Mode", "b")].join(","),
+  "UsrCanPickReplica:{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}");
+  check("field T8: a field on a declared Boolean page attribute is an editable crt.Checkbox over a page attribute { value: <classic default> } with no PDS path, no PDS column and no attribute-virtual decision",
+    rgOp(faBool, "UsrCanPickReplica")?.values?.type === "crt.Checkbox" && faEditable(faBool, "UsrCanPickReplica")
+    && faPageAttr(faBool, "UsrCanPickReplica", { value: true }),
+    () => ({ field: rgOp(faBool, "UsrCanPickReplica"), attr: faAttrs(faBool).UsrCanPickReplica, pds: faPds(faBool).UsrCanPickReplica,
+      virtual: rgDecisions(faBool, "attribute-virtual") }));
+  check("field T8: a radio option enabled by that attribute gets disabled \"$<attr> | crt.InvertBooleanValue\" over the same page attribute, and no radio-option-rule or field-attribute-lookup decision",
+    rgOp(faBool, "ModeA")?.values?.disabled === "$UsrCanPickReplica | crt.InvertBooleanValue"
+    && rgDecisions(faBool, "radio-option-rule").length === 0 && rgDecisions(faBool, "field-attribute-lookup").length === 0,
+    () => ({ ModeA: rgOp(faBool, "ModeA"), rules: rgDecisions(faBool, "radio-option-rule"), lookup: rgDecisions(faBool, "field-attribute-lookup") }));
+
+  // T8b — the control comes from the attribute's dataValueType, like a column's: text → crt.Input, a number →
+  // crt.NumberInput, a date → a date picker. A declared attribute with no dataValueType is an editable crt.Input and is
+  // named in the existing field-control decision (its type is not known).
+  const faScalar = faRun(["UsrNote", "UsrCount", "UsrDue", "UsrLoose"].map(fieldOp).join(","),
+    `UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"},UsrCount:{dataValueType:Terrasoft.DataValueType.INTEGER},UsrDue:{dataValueType:Terrasoft.DataValueType.DATE},UsrLoose:{value:"y"}`);
+  const faFieldControl = rgDecisions(faScalar, "field-control");
+  check("field T8b: a field on a declared TEXT page attribute is an editable crt.Input over a page attribute { value: <classic default> } with no PDS path",
+    rgOp(faScalar, "UsrNote")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrNote") && faPageAttr(faScalar, "UsrNote", { value: "x" }),
+    () => ({ field: rgOp(faScalar, "UsrNote"), attr: faAttrs(faScalar).UsrNote, pds: faPds(faScalar).UsrNote }));
+  check("field T8b: Integer and Date page attributes get an editable crt.NumberInput and a date picker over a page attribute {}; an untyped one an editable crt.Input named in the field-control decision",
+    rgOp(faScalar, "UsrCount")?.values?.type === "crt.NumberInput" && faEditable(faScalar, "UsrCount") && faPageAttr(faScalar, "UsrCount", {})
+    && rgOp(faScalar, "UsrDue")?.values?.type === "crt.DateTimePicker" && rgOp(faScalar, "UsrDue")?.values?.pickerType === "date"
+    && faEditable(faScalar, "UsrDue") && faPageAttr(faScalar, "UsrDue", {})
+    && rgOp(faScalar, "UsrLoose")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrLoose") && faPageAttr(faScalar, "UsrLoose", { value: "y" })
+    && faFieldControl.length === 1 && /UsrLoose/.test(faFieldControl[0].reason) && !/UsrNote|UsrCount|UsrDue/.test(faFieldControl[0].reason),
+    () => ({ ops: ["UsrCount", "UsrDue", "UsrLoose"].map((n) => rgOp(faScalar, n)), attrs: faAttrs(faScalar), fieldControl: faFieldControl }));
+
+  // T8c — a Lookup page attribute keeps the linked-value output (a lookup field needs a values source the field pass
+  // does not build) and ONE decision names it.
+  const faLookup = faRun(fieldOp("UsrRef"), "UsrRef:{dataValueType:Terrasoft.DataValueType.LOOKUP,isLookup:true}");
+  const faLookupRows = rgDecisions(faLookup, "field-attribute-lookup");
+  check("field T8c: a field on a declared Lookup page attribute keeps the read-only linked value over PDS.<attr> and raises ONE field-attribute-lookup decision naming the attribute",
+    rgOp(faLookup, "UsrRef")?.values?.readOnly === true && rgOp(faLookup, "UsrRef")?.values?.linkedValue === true
+    && faAttrs(faLookup).UsrRef?.modelConfig?.path === "PDS.UsrRef" && faPds(faLookup).UsrRef?.path === "UsrRef"
+    && faLookupRows.length === 1 && faLookupRows[0].item === "UsrRef" && /'UsrRef'/.test(faLookupRows[0].reason),
+    () => ({ field: rgOp(faLookup, "UsrRef"), attr: faAttrs(faLookup).UsrRef, rows: faLookupRows }));
+
+  // T8d — a field on a name that is neither an entity column nor a declared attribute is unchanged: a read-only
+  // linked value from a related data source over PDS.<name>.
+  const faUndeclared = faRun(fieldOp("UsrOther"), "UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT}");
+  check("field T8d: a field on an undeclared non-column name stays a read-only linked value over PDS.<name> with a PDS column, and raises no field-attribute-lookup decision",
+    rgOp(faUndeclared, "UsrOther")?.values?.readOnly === true && rgOp(faUndeclared, "UsrOther")?.values?.linkedValue === true
+    && faAttrs(faUndeclared).UsrOther?.modelConfig?.path === "PDS.UsrOther" && faPds(faUndeclared).UsrOther?.path === "UsrOther"
+    && !faUndeclared.changeSet.accountedFor.includes("UsrOther") && rgDecisions(faUndeclared, "field-attribute-lookup").length === 0,
+    () => ({ field: rgOp(faUndeclared, "UsrOther"), attr: faAttrs(faUndeclared).UsrOther }));
+
   // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
   // built and raises the business-rule decision.
   const vis = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",visible:false"),

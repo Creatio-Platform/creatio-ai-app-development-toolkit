@@ -110,6 +110,25 @@ For each Classic page/detail, record:
 | Mini page | Freedom mini page, modal, side panel, or explicit UX decision if the Classic interaction has no direct analog. |
 | Radio group (`ViewItemType.RADIO_GROUP`) | `crt.RadioGroup` with named `crt.RadioGroupItem` options where the target stand carries it, else `crt.IconRadioButton` — see *Radio groups* below. |
 
+### Fields that are not entity columns
+
+When the entity columns are supplied and a field's `bindTo` is not one of them, the engine reads the Classic view
+model first:
+
+- **A page attribute the Classic page declares** (`attributes: { UsrX: { dataValueType, value } }`) is the page's own
+  state, so the field is an **editable** control over a page attribute: the attribute keeps its Classic default
+  (`{ value }`, or `{}` with none), with no PDS path and no PDS column, and it raises no `attribute-virtual` decision
+  (the ChangeSet creates it). The control comes from the attribute's `dataValueType` through the same selection as a
+  column's type: Boolean → `crt.Checkbox`, text → `crt.Input`, numbers → `crt.NumberInput`, dates → a date picker. An
+  attribute with no `dataValueType`, or a code the engine does not know, gets an editable `crt.Input` and is named in
+  the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
+  bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
+- **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
+  type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
+  naming the attribute: its values source has to be built by hand.
+- **A name the page does not declare** is a value shown from a related data source: a read-only field
+  (`linkedValue`) over `PDS.<name>`, with the nearest entity columns as a hint for a renamed column.
+
 ### Radio groups
 
 The engine builds a Classic `RADIO_GROUP` as `crt.RadioGroup` only when the run's component registry shows the target
