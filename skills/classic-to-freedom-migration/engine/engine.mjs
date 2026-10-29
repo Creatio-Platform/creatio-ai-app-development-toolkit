@@ -1307,7 +1307,7 @@ function enablement(v) {
 
 // The two other static field-state literals a field reads: `readonly: true` (the same story as `enabled: false` —
 // a literal `handlerBindings` skips) and `controlConfig: { protect: true }`, the masked (password-style) text edit.
-// A masked value must not become a cleartext editable input, so the flag has to reach the field projection.
+// A masked field becomes a masked (password-style) input, so the flag has to reach the field projection.
 // `null` means this op did not state it.
 function readOnlyLiteral(v) {
   return typeof v.readonly === "boolean" ? v.readonly : null;
@@ -2505,7 +2505,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       unmodelledProps: [...(i.unmodelledProps || [])].sort(byLocale) })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null,
       // the static field-state literals: `enabled: false` / `readonly: true` keep a page-attribute field read-only,
-      // `controlConfig.protect` keeps a masked field off an editable cleartext input
+      // `controlConfig.protect` makes a masked field a password-style input
       enabled: i.enabled ?? null, readonly: i.readonly ?? null, protect: i.protect ?? null,
       provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),

@@ -123,15 +123,20 @@ model first:
   attribute with no `dataValueType`, or a code the engine does not know, gets an editable `crt.Input` and is named in
   the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
   bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
-- **A page attribute the Classic page shows as a value, not an input**, gets the same page attribute and control, but
-  **read-only**: the Classic field is statically disabled (`enabled: false` or `readonly: true`), or the page's own
-  methods set the attribute (`this.set("UsrX", …)`) and no attribute `dependencies` entry lists it in its `columns`.
-  A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring, so such an attribute
-  stays editable even though code also sets it.
-- **A masked field** (`controlConfig: { protect: true }`, a password-style input) is a **read-only** `crt.Input`,
-  whether it is bound to a page attribute or to an entity column, and is named in a `secret-column` decision of its
-  own (`(<n> masked fields)`): Freedom has no plain field that masks its value, so it is never emitted as editable
-  cleartext.
+- **A page attribute field Classic disables statically** (`enabled: false` or `readonly: true` on the field) gets
+  the same page attribute and control, but **read-only**. Only these static signals make it read-only.
+- **A page attribute the page's own methods write** (`this.set("UsrX", …)`), with no attribute `dependencies` entry
+  listing it in its `columns`, stays **editable**, as Classic rendered it: an init method that sets a starting value
+  the user then toggles looks the same as a computed value. Every such field is named, with the method(s) that write
+  it, in one `field-attribute-computed` decision: if the value is one the page computes and only shows, make the field
+  read-only by hand. A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring,
+  so such an attribute is not named.
+- **A masked field** (`controlConfig: { protect: true }`, a password-style input) is a `crt.PasswordInput`, a
+  password-style masked input that stays editable as in Classic, whether it is bound to a page attribute or to an
+  entity column of any type, and is named in a `secret-column` decision of its own (`(<n> masked fields)`). The
+  masking is on screen only: the stored value is the real secret, not a hash or ciphertext. `crt.PasswordInput` is
+  `compositeOnly` (no Designer toolbar entry), so verify on a stand that the built field masks its value. A
+  hashed or encrypted column keeps its read-only `crt.Input` even when masked.
 - **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
   type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
   naming the attribute: its values source has to be built by hand.

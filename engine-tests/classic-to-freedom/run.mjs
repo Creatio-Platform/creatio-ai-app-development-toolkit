@@ -1150,6 +1150,17 @@ check("a merge onto a TOMBSTONE does not throw — every item record in the fold
       upMk("B", `[{"operation":"merge","name":"Ghost","values":{"controlColumnName":"Q"}}]`)]);
     return Array.isArray(eff.items); },
   () => "threw");
+// The static field-state literals ride the fold: a child layer's `merge` that disables, locks and masks a field the
+// base layer inserted reaches the field projection the mapper reads.
+{
+  const stateEff = mergeHierarchy([
+    upMk("A", `[{"operation":"insert","name":"UsrPin","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrPin"}}]`),
+    upMk("B", `[{"operation":"merge","name":"UsrPin","values":{"enabled":false,"readonly":true,"controlConfig":{"protect":true}}}]`)]);
+  const pin = stateEff.fields.find((f) => f.name === "UsrPin");
+  check("a child layer's merge of enabled:false, readonly:true and controlConfig.protect onto a base insert reaches the field projection",
+    pin?.enabled === false && pin?.readonly === true && pin?.protect === true,
+    () => pin);
+}
 
-console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
+console.log(`\n=================\nGOLDEN:${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
