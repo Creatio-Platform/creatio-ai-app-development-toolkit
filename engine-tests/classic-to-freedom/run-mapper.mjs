@@ -11730,6 +11730,44 @@ try {
     && !faUndeclared.changeSet.accountedFor.includes("UsrOther") && rgDecisions(faUndeclared, "field-attribute-lookup").length === 0,
     () => ({ field: rgOp(faUndeclared, "UsrOther"), attr: faAttrs(faUndeclared).UsrOther }));
 
+  // T8e — a field on a declared attribute the classic page shows as a value, not an input, stays read-only: masked
+  // (`controlConfig.protect`, also reported with the secret columns), statically disabled, or computed by the page's
+  // own code with no user-change dependency. It is still a plain page attribute (no PDS path, no linked value).
+  const roOp = (name, extra) => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{bindTo:"${name}"${extra}}}`;
+  const roRun = (diff, body) => gmRun(diff, body, { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const roReadOnly = (run, name) => {
+    const v = rgOp(run, name)?.values || {};
+    return v.control === "$" + name && v.readOnly === true && !("linkedValue" in v);
+  };
+  const roMasked = roRun(roOp("UsrSecret", `,controlConfig:{protect:true}`),
+    `attributes:{UsrSecret:{dataValueType:Terrasoft.DataValueType.TEXT}},`);
+  const roMaskedRows = rgDecisions(roMasked, "secret-column");
+  check("field T8e: a field Classic masks (controlConfig.protect) on a declared TEXT attribute is a READ-ONLY crt.Input over a page attribute, named in a secret-column decision",
+    rgOp(roMasked, "UsrSecret")?.values?.type === "crt.Input" && roReadOnly(roMasked, "UsrSecret")
+    && faPageAttr(roMasked, "UsrSecret", {})
+    && roMaskedRows.length === 1 && /UsrSecret/.test(roMaskedRows[0].reason) && /protect/.test(roMaskedRows[0].reason),
+    () => ({ field: rgOp(roMasked, "UsrSecret"), attr: faAttrs(roMasked).UsrSecret, rows: roMaskedRows }));
+  const roMaskedCol = roRun(roOp("Name", `,controlConfig:{protect:true}`).replace('name:"Name"', 'name:"NameMasked"'), "");
+  check("field T8e: a masked field on a real entity column is read-only and named in the secret-column decision too",
+    rgOp(roMaskedCol, "Name_2")?.values?.readOnly === true
+    && rgDecisions(roMaskedCol, "secret-column").some((d) => /\bName\b/.test(d.reason) && /protect/.test(d.reason)),
+    () => ({ field: rgOp(roMaskedCol, "Name_2"), rows: rgDecisions(roMaskedCol, "secret-column") }));
+  const roDisabled = roRun([roOp("UsrShown", ",enabled:false"), roOp("UsrLocked", ",readonly:true")].join(","),
+    `attributes:{UsrShown:{dataValueType:Terrasoft.DataValueType.TEXT,value:"v"},UsrLocked:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},`);
+  check("field T8e: a field on a declared attribute that Classic disables statically (enabled: false / readonly: true) is read-only over a page attribute with its default, and raises no secret-column decision",
+    roReadOnly(roDisabled, "UsrShown") && faPageAttr(roDisabled, "UsrShown", { value: "v" })
+    && rgOp(roDisabled, "UsrLocked")?.values?.type === "crt.Checkbox" && roReadOnly(roDisabled, "UsrLocked")
+    && rgDecisions(roDisabled, "secret-column").length === 0,
+    () => ({ shown: rgOp(roDisabled, "UsrShown"), locked: rgOp(roDisabled, "UsrLocked"), attrs: faAttrs(roDisabled) }));
+  const roComputed = roRun([roOp("UsrFull", ""), roOp("UsrToggle", "")].join(","),
+    `attributes:{UsrFull:{dataValueType:Terrasoft.DataValueType.TEXT},UsrToggle:{dataValueType:Terrasoft.DataValueType.BOOLEAN,dependencies:[{columns:["UsrToggle"],methodName:"onToggle"}]}},`
+    + `methods:{initFull:function(){this.set("UsrFull",this.get("Name"));},onToggle:function(){this.set('UsrToggle',false);}},`);
+  check("field T8e: a declared attribute the page's code computes (this.set) with no dependency on it is read-only; one whose dependency reacts to a user change stays an editable control though code also sets it",
+    roReadOnly(roComputed, "UsrFull") && faPageAttr(roComputed, "UsrFull", {})
+    && rgOp(roComputed, "UsrToggle")?.values?.type === "crt.Checkbox" && faEditable(roComputed, "UsrToggle")
+    && faPageAttr(roComputed, "UsrToggle", {}),
+    () => ({ full: rgOp(roComputed, "UsrFull"), toggle: rgOp(roComputed, "UsrToggle"), attrs: faAttrs(roComputed) }));
+
   // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
   // built and raises the business-rule decision.
   const vis = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",visible:false"),

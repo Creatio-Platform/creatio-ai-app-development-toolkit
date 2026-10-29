@@ -123,6 +123,15 @@ model first:
   attribute with no `dataValueType`, or a code the engine does not know, gets an editable `crt.Input` and is named in
   the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
   bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
+- **A page attribute the Classic page shows as a value, not an input**, gets the same page attribute and control, but
+  **read-only**: the Classic field is statically disabled (`enabled: false` or `readonly: true`), or the page's own
+  methods set the attribute (`this.set("UsrX", …)`) and no attribute `dependencies` entry lists it in its `columns`.
+  A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring, so such an attribute
+  stays editable even though code also sets it.
+- **A masked field** (`controlConfig: { protect: true }`, a password-style input) is a **read-only** `crt.Input`,
+  whether it is bound to a page attribute or to an entity column, and is named in a `secret-column` decision of its
+  own (`(<n> masked fields)`): Freedom has no plain field that masks its value, so it is never emitted as editable
+  cleartext.
 - **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
   type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
   naming the attribute: its values source has to be built by hand.

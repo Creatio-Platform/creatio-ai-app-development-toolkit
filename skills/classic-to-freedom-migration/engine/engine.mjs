@@ -1305,6 +1305,18 @@ function enablement(v) {
   return typeof v.enabled === "boolean" ? v.enabled : null;
 }
 
+// The two other static field-state literals a field reads: `readonly: true` (the same story as `enabled: false` —
+// a literal `handlerBindings` skips) and `controlConfig: { protect: true }`, the masked (password-style) text edit.
+// A masked value must not become a cleartext editable input, so the flag has to reach the field projection.
+// `null` means this op did not state it.
+function readOnlyLiteral(v) {
+  return typeof v.readonly === "boolean" ? v.readonly : null;
+}
+function protection(v) {
+  const p = plainObj(v.controlConfig).protect;
+  return typeof p === "boolean" ? p : null;
+}
+
 // A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) must not fall
 // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
 // null-safe filter in normalizeDiff drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried
@@ -1356,6 +1368,8 @@ function normalizeDiffOp(op, i) {
     generator: strOrNull(v.generator),
     visible: visibility(v),
     enabled: enablement(v),
+    readonly: readOnlyLiteral(v),
+    protect: protection(v),
     // Handler bindings on the item (`click: {bindTo:"onSaveClick"}`, `change: "onXChange"`, `changeMethod`, …).
     // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
@@ -1560,6 +1574,7 @@ function makeItem(op, seed, pkg, layer) {
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, enabled: op.enabled, caption: op.caption,
+    readonly: op.readonly, protect: op.protect,
     labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
     // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
     // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
@@ -1713,7 +1728,7 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
 
 // own fns so `replayMerge` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
 function applyMergeOrderVisible(op, cur) {
-  for (const k of ["order", "visible", "enabled"]) { if (op[k] != null) cur[k] = op[k]; }
+  for (const k of ["order", "visible", "enabled", "readonly", "protect"]) { if (op[k] != null) cur[k] = op[k]; }
 }
 // Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
 function applyMergeContentFields(op, cur) {
@@ -2488,7 +2503,11 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // the signal that real classic configuration exists here which no mapping can represent yet, and which the
       // consumer must NAME rather than drop (a section's `merge DataGrid` controlColumnName is the founding case).
       unmodelledProps: [...(i.unmodelledProps || [])].sort(byLocale) })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null,
+      // the static field-state literals: `enabled: false` / `readonly: true` keep a page-attribute field read-only,
+      // `controlConfig.protect` keeps a masked field off an editable cleartext input
+      enabled: i.enabled ?? null, readonly: i.readonly ?? null, protect: i.protect ?? null,
+      provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).
