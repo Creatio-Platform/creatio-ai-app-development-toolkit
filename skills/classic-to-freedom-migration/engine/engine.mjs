@@ -291,14 +291,15 @@ const TAG_TRANSITIONS = {
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
   terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
     controls: "terrasoft.controls", core: "terrasoft.core",
-    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
+    MessageMode: "t:sym", MessageDirectionType: "t:sym", ViewModelColumnType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
   "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
-    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
+    MessageMode: "t:sym", MessageDirectionType: "t:sym", ViewModelColumnType: "t:sym" },
 };
 // "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
-// the `messages` block's `mode`/`direction` (`Terrasoft.MessageMode.PTP`, `…MessageDirectionType.PUBLISH`).
+// the `messages` block's `mode`/`direction` (`Terrasoft.MessageMode.PTP`, `…MessageDirectionType.PUBLISH`) and an
+// attribute's `type` (`Terrasoft.ViewModelColumnType.ENTITY_COLUMN`).
 // Deliberately not a numeric enum table: the migration needs to know a message is PUBLISH vs SUBSCRIBE, and the
 // plan reads better naming it, so there is no reason to pin numeric constants the engine would have to assert.
 // An unknown key under this state still yields its name (any member of these two namespaces is a symbol we want).
@@ -1230,6 +1231,10 @@ function attributeFact(name, def) {
     // `isVirtual`-style marker used by some schemas; the mapper also infers virtuality from the entity columns
     isLookup: d.isLookup === true || !!llc.entitySchemaName,
     referenceSchema: strOrNull(llc.entitySchemaName),
+    // what the attribute stands for: `columnPath` maps a column of a related source, and `type` is its
+    // ViewModelColumnType (the symbolic name, `ENTITY_COLUMN` / `VIRTUAL_COLUMN` / ..., or a numeric literal)
+    columnPath: strOrNull(d.columnPath),
+    columnType: isStr(d.type) || isNum(d.type) ? d.type : null,
   };
 }
 
@@ -1305,6 +1310,18 @@ function enablement(v) {
   return typeof v.enabled === "boolean" ? v.enabled : null;
 }
 
+// The two other static field-state literals a field reads: `readonly: true` (the same story as `enabled: false` —
+// a literal `handlerBindings` skips) and `controlConfig: { protect: true }`, the masked (password-style) text edit.
+// A masked field becomes a masked (password-style) input, so the flag has to reach the field projection.
+// `null` means this op did not state it.
+function readOnlyLiteral(v) {
+  return typeof v.readonly === "boolean" ? v.readonly : null;
+}
+function protection(v) {
+  const p = plainObj(v.controlConfig).protect;
+  return typeof p === "boolean" ? p : null;
+}
+
 // A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) must not fall
 // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
 // null-safe filter in normalizeDiff drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried
@@ -1356,6 +1373,8 @@ function normalizeDiffOp(op, i) {
     generator: strOrNull(v.generator),
     visible: visibility(v),
     enabled: enablement(v),
+    readonly: readOnlyLiteral(v),
+    protect: protection(v),
     // Handler bindings on the item (`click: {bindTo:"onSaveClick"}`, `change: "onXChange"`, `changeMethod`, …).
     // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
@@ -1560,6 +1579,7 @@ function makeItem(op, seed, pkg, layer) {
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, enabled: op.enabled, caption: op.caption,
+    readonly: op.readonly, protect: op.protect,
     labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
     // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
     // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
@@ -1713,7 +1733,13 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
 
 // own fns so `replayMerge` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
 function applyMergeOrderVisible(op, cur) {
-  for (const k of ["order", "visible", "enabled"]) { if (op[k] != null) cur[k] = op[k]; }
+  for (const k of ["order", "visible", "enabled", "readonly", "protect"]) { if (op[k] != null) cur[k] = op[k]; }
+  // A layer that states `enabled` / `readonly` as a binding (`enabled: { bindTo: "IsEditable" }`) replaces a lower
+  // layer's literal: the runtime writes the key whole, so the field is not statically disabled or read-only.
+  // `valuesKeys` records that the key was stated; a null literal means it was stated as something other than a boolean.
+  for (const k of ["enabled", "readonly"]) {
+    if (op[k] == null && op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = null;
+  }
 }
 // Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
 function applyMergeContentFields(op, cur) {
@@ -2022,10 +2048,22 @@ function settleUndefinedOps(undefinedOps, refs, seedState) {
 const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
   "layout", "tip", "hint", "generator", "visible", "caption"]);
 const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
+// The static field-state literals the fold copies onto the item (`applyMergeOrderVisible`) under a diff key that has
+// no field of its own in TOP_LEVEL_ITEM_PROPS: `enabled` / `readonly` are handler-vocabulary keys, and `protect` is
+// read out of `controlConfig`. A layer that removes the key removes the literal too, or the field stays statically
+// disabled, read-only or masked although the runtime renders it plain.
+const STATE_LITERAL_FIELDS = new Map([["enabled", "enabled"], ["readonly", "readonly"], ["controlConfig", "protect"]]);
+function clearStateLiteral(k, cur) {
+  const field = STATE_LITERAL_FIELDS.get(k);
+  if (!field || cur[field] == null) return false;
+  cur[field] = null;
+  return true;
+}
 // ONE removed property key, applied to the item. Returns `true` when the removal is NOT represented in the model —
 // the caller collects those keys into a single fidelity warning. Own fn so `replayRemoveProperties` stays under
 // Sonar's cognitive-complexity budget; the decision order below is unchanged.
 function replayRemoveOneProperty(k, cur) {
+  const literalCleared = clearStateLiteral(k, cur);
   if (!REMOVABLE_ITEM_PROPS.has(k)) {
     // …and the key is not DECLARED on the element either. Without this, the list mapper would raise an open
     // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
@@ -2048,15 +2086,15 @@ function replayRemoveOneProperty(k, cur) {
   // silenced the trigger but left the static value would be half-applied.
   if (HANDLER_PROPS.has(k)) {
     // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
-    // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
-    // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
-    // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
-    // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
-    // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+    // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal that
+    // `handlerBindings` skips. `enabled` and `readonly` keep that literal on the item (`clearStateLiteral` cleared it
+    // above); `required` has no slot for it, so removing its static form changes nothing here, and saying nothing
+    // about it is the silent drop this function exists to prevent. So the map entry or the cleared literal decides:
+    // either ⇒ the effect is represented, neither ⇒ the removal is an unrepresented effect, exactly like an unknown key.
     const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
     if (wasModelled) { delete cur.handlers[k]; if (cur.handlerConverters) delete cur.handlerConverters[k]; }
-    // handler-only key: the map entry was the whole effect it could have
-    if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled;
+    // handler-only key: the map entry and the static literal cleared above were the whole effect it could have
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled && !literalCleared;
   }
   if (!TOP_LEVEL_ITEM_PROPS.has(k)) return false;   // not a handler and not a field: nothing modelled to clear
   // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
@@ -2488,7 +2526,11 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // the signal that real classic configuration exists here which no mapping can represent yet, and which the
       // consumer must NAME rather than drop (a section's `merge DataGrid` controlColumnName is the founding case).
       unmodelledProps: [...(i.unmodelledProps || [])].sort(byLocale) })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null,
+      // the static field-state literals: `enabled: false` / `readonly: true` keep a page-attribute field read-only,
+      // `controlConfig.protect` makes a masked field a password-style input
+      enabled: i.enabled ?? null, readonly: i.readonly ?? null, protect: i.protect ?? null,
+      provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).

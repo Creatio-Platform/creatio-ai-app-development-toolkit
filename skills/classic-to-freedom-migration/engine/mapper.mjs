@@ -5,7 +5,7 @@ import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey, HEADER_TOP_
 import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
   widgetsByMatch, profileCardsByEntity, knownCardActions, FEATURE_CONNECTIONS,
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
-import { resolveRowTarget } from "./mapping-registry.mjs";
+import { resolveRowTarget, runCarries } from "./mapping-registry.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -160,6 +160,8 @@ const secretTypeOf = (type) => {
   const t = normalizeDvt(String(type ?? "").toLowerCase());
   return SECRET_DVT.has(t) ? t : null;
 };
+// the stored-secret type of a resolved field column: only when no control was resolved and the column exists
+const storedSecretType = (ctl, missingColumn, meta) => ((!ctl && !missingColumn) ? secretTypeOf(meta.type) : null);
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
@@ -205,9 +207,8 @@ function scalarControl(t) {
   // via `generateStageIndicator`, so it is not a peer here; see the COVERAGE note above.) The security argument is
   // now the SECONDARY reason to withhold a control — the primary one is that Classic's `generateEditControl` has no
   // case for HASH_TEXT/SECURE_TEXT either and throws `UnsupportedTypeException`, so no classic field existed to
-  // port in the first place. Whether Freedom offers a
-  // masked component (a `crt.PasswordInput` is reported to exist, but only on a community answer — not Academy
-  // docs) is the mapping task's call, so no target is asserted here.
+  // port in the first place. The masked `crt.PasswordInput` (in the vendored component index) is what a field
+  // Classic MASKS becomes; a hashed or encrypted column is not given it here, since Classic never rendered one.
   // Phone / Email / Web link are TEXT-storage columns carrying a FORMAT on the column (verified on-stand: Contact.
   // Phone/MobilePhone = 42, Account.Web = 44, Contact.Email = "Email"). The Freedom field is a plain crt.Input bound
   // to the column — the phone/email/web-link rendering is inherited from the column's format, there is NO field-level
@@ -279,6 +280,7 @@ function labelFromColumnName(col) {
 // The label the resolved CONTROL implies, for the shapes the type alone does not name.
 function labelFromControl(ctl, t, meta) {
   if (ctl.type === "crt.Checkbox") return "Boolean";
+  if (ctl.type === "crt.PasswordInput") return "Masked text";
   if (ctl.picker === "datetime") return "Date/time";
   if (ctl.picker === "date") return "Date";
   if (ctl.multiline) return t === "richtext" ? "Rich text" : "Long text";
@@ -818,6 +820,33 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   return vis;
 }
 
+// A TEXT field on a declared page attribute that Classic renders MASKED (`controlConfig: { protect: true }`, a
+// password-style text edit) is emitted as the Freedom password-style input `crt.PasswordInput`: editable as it was in Classic, its value masked on screen. Only
+// a text field: a masked Boolean, number, date or lookup keeps its typed control, since a text input over such a value
+// would hold it as free text. A field on an entity column keeps its own control whatever its masking. It is reported under the same decision kind as the hashed / encrypted columns, in its own
+// row because the reason differs: the stored value is the real secret in plain storage, and the protection is the
+// field's own configuration, not the column's storage. `crt.PasswordInput` is emitted only where the run's component
+// registry shows the target stand carries it; elsewhere the field is a read-only `crt.Input` and the row says why.
+const MASKED_CONTROL = Object.freeze({ type: "crt.PasswordInput" });
+// the read-only `crt.Input` a hashed or encrypted column gets (no Freedom field renders those values safely), and a
+// masked page-attribute field where the run cannot show the stand carries `crt.PasswordInput`
+const READ_ONLY_INPUT = Object.freeze({ type: "crt.Input", readOnly: true });
+// a plain single-line text control: what Classic's masked text edit stands for
+const isPlainTextControl = (c) => !!c && c.type === "crt.Input" && !c.multiline && !c.readOnly && !c.linkedDisplay;
+function maskedFieldsDecision(cols) {
+  return { kind: "secret-column", item: `(${cols.length} masked fields)`,
+    reason: `${cols.length} field(s) are MASKED on the classic page (\`controlConfig: { protect: true }\`, a password-style input). They are emitted as \`crt.PasswordInput\`, a password-style masked input that stays editable as it was in Classic. The masking is on screen only: the stored value is the real secret, not a hash or ciphertext, so anyone who can read the data source still reads it. \`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index (no Designer toolbar entry): verify on a stand that the built field masks its value. DECIDE per field: keep it, or drop it, and port the save logic the classic page ran for it. Fields: ${cols.join(", ")}` };
+}
+function maskedFallbackDecision(cols) {
+  return { kind: "secret-column", item: `(${cols.length} masked fields, not masked)`,
+    reason: `${cols.length} field(s) are MASKED on the classic page (\`controlConfig: { protect: true }\`, a password-style input), and this run's component registry cannot show that the target stand carries \`crt.PasswordInput\`, the Freedom masked input. They are emitted as a READ-ONLY \`crt.Input\` instead: not editable, and the value shows UNMASKED on screen. The stored value is the real secret, not a hash or ciphertext. Supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` and re-run \`--plan --out\` to build \`crt.PasswordInput\` on a stand that has it. DECIDE per field: keep it read-only, drop it, or build the masked input by hand. Fields: ${cols.join(", ")}` };
+}
+// The declared page attributes whose fields stay editable although the page's own methods write them (`this.set`):
+// such a field may be a value the page computes and only shows. Reported once, naming each field and its writers.
+function computedAttributeFieldsDecision(rows) {
+  return { kind: "field-attribute-computed", item: `(${rows.length} field(s))`,
+    reason: `${rows.length} field(s) bind a declared page attribute that the page's own methods write with \`this.set\`, and no attribute dependency reacts to a user change of it. Each is emitted EDITABLE, as Classic rendered it, because nothing static marks it read-only. The value may be one the page computes and only shows: if so, make the field read-only by hand. Fields (writing methods): ${rows.join(", ")}` };
+}
 // The per-field noise, FOLDED into one summary decision per kind — extracted from `mapFields` so its five
 // branches (collision density, unresolved controls, secret columns, split islands, missing labels) score against
 // this function rather than against the loop that fills the accumulators (Sonar S3776, CC 15). Pure: it reads the
@@ -852,10 +881,15 @@ function foldFieldSummaries(acc) {
   // the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
   // here on purpose: the whole point is that the operator can see every column whose value the classic page put
   // on screen and that this migration is NOT carrying over.
-  if (secretCols.length) {
-    const named = secretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
-    out.push({ kind: "secret-column", item: `(${secretCols.length} fields)`,
-      reason: `${secretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
+  const maskedCols = secretCols.filter((sc) => sc.type === "protect" && sc.shown).map((sc) => sc.col);
+  const unmaskedCols = secretCols.filter((sc) => sc.type === "protect" && !sc.shown).map((sc) => sc.col);
+  const storedSecretCols = secretCols.filter((sc) => sc.type !== "protect");
+  if (maskedCols.length) out.push(maskedFieldsDecision(maskedCols));
+  if (unmaskedCols.length) out.push(maskedFallbackDecision(unmaskedCols));
+  if (storedSecretCols.length) {
+    const named = storedSecretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
+    out.push({ kind: "secret-column", item: `(${storedSecretCols.length} fields)`,
+      reason: `${storedSecretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
   }
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
   // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
@@ -898,6 +932,7 @@ function mapFields(ctx, containers) {
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
   const dupBoundCols = [];                // cols the classic page binds MORE THAN ONCE (col, col_2, …)
   const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
+  const pageAttributes = new Set();       // page attributes the ChangeSet creates (no entity column behind them)
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first: the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -1011,6 +1046,108 @@ function mapFields(ctx, containers) {
     needsDecision.push({ kind: "container", item: f.name || f.bindTo, reason: `${why} — placed in ${FLAT_FALLBACK} for now` });
     return FLAT_FALLBACK; // parent chain unresolvable
   };
+  // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
+  // imperative-members pass does not ask for it to be created again (`pageAttributes`). Shared by the field pass and
+  // the radio groups, so a field and a group (or an option's `enabled`) on one attribute define it the same way.
+  const definePageAttribute = (attr, classic) => {
+    const v = classic?.value;
+    attributes[attr] = v === null || v === undefined ? {} : { value: v };
+    pageAttributes.add(attr);
+    accountedFor.add(attr);
+  };
+  // The attribute a field binds: a declared page attribute is the page's own state (no PDS path, no PDS column —
+  // neither exists on the entity); anything else is read through the primary data source.
+  const bindFieldAttribute = (col, pageAttr) => {
+    if (pageAttr) { definePageAttribute(col, pageAttr); return; }
+    attributes[col] = { modelConfig: { path: "PDS." + col } };
+    pdsColumns[col] = { path: col };
+  };
+  // A declared attribute whose value a field cannot hold as a plain page attribute: a lookup or a record id needs a
+  // values source the field pass does not build, an enum a value list, an image lookup a SysImage reference.
+  const NON_SCALAR_ATTR_TYPES = new Set([DATA_VALUE_TYPE.GUID, DATA_VALUE_TYPE.LOOKUP, DATA_VALUE_TYPE.ENUM, DATA_VALUE_TYPE.IMAGELOOKUP]);
+  // One decision per attribute, however many fields (col, col_2, …) bind it.
+  const reportedLookupAttrs = new Set();
+  const reportLookupAttributeField = (a) => {
+    if (reportedLookupAttrs.has(a.name)) return;
+    reportedLookupAttrs.add(a.name);
+    needsDecision.push({ kind: "field-attribute-lookup", item: a.name,
+    reason: `a field is bound to '${a.name}', a lookup (or other non-scalar) attribute the classic page declares with no entity column behind it — the field is kept as a read-only linked value over PDS.${a.name}, a column that does not exist. Build it by hand: a page attribute with its values source (for a lookup, its reference schema), or bind the field to the entity column the attribute stands for` });
+  };
+  // A field on a declared page attribute is read-only only on Classic's STATIC signals: the field is disabled
+  // (`enabled: false`) or read-only (`readonly: true`) in the diff. A value the page's own code writes
+  // (`this.set("X", …)`) is not evidence enough: an init method that sets a starting value the user then toggles
+  // looks the same. Such a field stays editable and is named, with its writing methods, in one folded
+  // `field-attribute-computed` decision, unless an attribute `dependencies` entry lists X in its columns (the classic
+  // "the user edits X and the page reacts" wiring, which settles it as an input). The writer map is built once.
+  const staticReadOnly = (f) => f.enabled === false || f.readonly === true;
+  const computedAttrFields = [];
+  let attrWriters = null;
+  const attributeWriters = (col) => {
+    if (!attrWriters) {
+      const watched = new Set((ctx.eff.attributes || []).flatMap((x) => (x.dependencies || []).flatMap((d) => d.columns || [])));
+      attrWriters = new Map();
+      for (const m of ctx.eff.methods || []) {
+        for (const w of m.facts?.writesAttrs || []) {
+          if (!watched.has(w)) attrWriters.set(w, [...(attrWriters.get(w) || []), m.name]);
+        }
+      }
+    }
+    return attrWriters.get(col) || [];
+  };
+  // Each attribute is listed once, however many fields bind it.
+  const notedComputedAttrs = new Set();
+  const noteComputedAttributeField = (col, f) => {
+    const writers = (staticReadOnly(f) || notedComputedAttrs.has(col)) ? [] : attributeWriters(col);
+    if (!writers.length) return;
+    notedComputedAttrs.add(col);
+    computedAttrFields.push(`${col} (${writers.join(", ")})`);
+  };
+  // A masked text field on a declared page attribute: `crt.PasswordInput` where the run's registry shows the target stand carries it, otherwise the
+  // read-only `crt.Input`. Either way it is named in a secret-column row, the one that matches what was emitted.
+  const passwordInputShown = runCarries(ctx.registry, MASKED_CONTROL.type);
+  const maskedField = (col) => {
+    secretCols.push({ col, type: "protect", shown: passwordInputShown });
+    return passwordInputShown ? MASKED_CONTROL : READ_ONLY_INPUT;
+  };
+  // An attribute that maps a column of a related source (`columnPath`, or ViewModelColumnType ENTITY_COLUMN, numeric
+  // 0) is that column's value, not page state: its field keeps the linked-value output.
+  const mapsRelatedColumn = (a) => !!a.columnPath || a.columnType === "ENTITY_COLUMN" || a.columnType === 0;
+  // The control for a field on a page attribute the classic view model declares, chosen from its dataValueType through
+  // the same selection a column's type goes through. A declared attribute is evidence the name is view-model state, not
+  // a column of a related data source, so it becomes an editable page attribute — unless its type cannot be one
+  // (reported, and the linked-value output kept: null). A lookup or other non-scalar attribute takes that path even
+  // when masked. A hashed or encrypted one keeps the linked-value output too (null), so its value is never put on
+  // screen, and is named with the stored secrets. An attribute with no
+  // type, or a code the engine does not know, is an editable crt.Input named in the field-control decision, like a
+  // column whose type is not recognized. A masked text attribute is a masked field.
+  const declaredAttributeField = (col, f) => {
+    const a = (ctx.eff.attributes || []).find((x) => x.name === col);
+    if (!a || mapsRelatedColumn(a)) return null;
+    const dvt = a.dataValueType;
+    const meta = { type: dvt == null ? null : String(dvt) };
+    const stored = secretTypeOf(meta.type);
+    if (stored) { secretCols.push({ col, type: stored }); return null; }
+    const known = dvt != null && DATAVALUETYPE_CODE[meta.type] !== undefined;
+    const c = known ? scalarControl(meta.type) : { type: "crt.Input" };
+    if (a.isLookup || a.isCollection || NON_SCALAR_ATTR_TYPES.has(dvt) || !c) { reportLookupAttributeField(a); return null; }
+    if (!known) fieldControlCols.push(col);
+    const masked = known && f.protect === true && isPlainTextControl(c);
+    if (!masked) noteComputedAttributeField(col, f);
+    const shown = masked ? maskedField(col) : c;
+    return { a, meta, c: staticReadOnly(f) ? { ...shown, readOnly: true } : shown };
+  };
+  // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
+  // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
+  // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
+  // built page shows one value in two places and the plan's Layout table lists the column twice in two
+  // different regions, where nothing connects them. A per-field line here is folded away and
+  // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
+  // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
+  const fieldElementName = (col) => {
+    nameCount[col] = (nameCount[col] || 0) + 1;
+    if (nameCount[col] === 2) dupBoundCols.push(col);
+    return nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+  };
   // Resolve a field's column, control type and unique element name (own function for Sonar CC 15). Splits the two
   // unresolved-control causes: a MISSING bound column → virtual-field decision naming nearest columns; a resolved
   // column whose TYPE didn't map → folded field-control summary. Mutates needsDecision/fieldControlCols/nameCount.
@@ -1019,6 +1156,10 @@ function mapFields(ctx, containers) {
     const meta = colMeta(col);
     const haveCols = Object.keys(cols).length > 0;
     const missingColumn = !!f.bindTo && haveCols && !(col in cols);
+    // Only when the entity columns were supplied and lack the name: without them a declared attribute may as well be
+    // a column override (an `Owner` attribute carrying a lookupListConfig), which must keep its column binding.
+    const declared = missingColumn ? declaredAttributeField(col, f) : null;
+    if (declared) return { col, meta: declared.meta, missingColumn: false, nearMissing: [], c: declared.c, elName: fieldElementName(col), pageAttr: declared.a };
     // A bound column NOT on the entity is (almost always) a companion value shown FROM A RELATED DATA SOURCE
     // (e.g. Contact.Phone/Email/BirthDate on an Employee page via the Contact lookup). Freedom shows this
     // natively — add the related data source's column through the lookup and bind the input to it READ-ONLY.
@@ -1032,21 +1173,13 @@ function mapFields(ctx, containers) {
     // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
     // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
     // than folded into the "type was not recognized" bucket, which was untrue for these two.
-    const secretType = (!ctl && !missingColumn) ? secretTypeOf(meta.type) : null;
+    // `controlConfig.protect` is read only for a field on a declared page attribute (`declaredAttributeField`); an
+    // entity column keeps its own control whatever the field's masking.
+    const secretType = storedSecretType(ctl, missingColumn, meta);
     if (!ctl && !missingColumn && !secretType) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     if (secretType) secretCols.push({ col, type: secretType });
-    const c = ctl || (secretType ? { type: "crt.Input", readOnly: true } : { type: "crt.Input" });
-    // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
-    // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
-    nameCount[col] = (nameCount[col] || 0) + 1;
-    const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
-    // built page shows one value in two places and the plan's Layout table lists the column twice in two
-    // different regions, where nothing connects them. A per-field line here is folded away and
-    // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
-    // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
-    if (nameCount[col] === 2) dupBoundCols.push(col);
-    return { col, meta, missingColumn, nearMissing, c, elName };
+    const c = ctl || (secretType ? READ_ONLY_INPUT : { type: "crt.Input" });
+    return { col, meta, missingColumn, nearMissing, c, elName: fieldElementName(col), pageAttr: null };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
   // 24-col), assign a collision-free (span-aware) cell, and return the layoutConfig. Own function for Sonar CC 15;
@@ -1117,7 +1250,7 @@ function mapFields(ctx, containers) {
   };
   for (const { f, own } of resolved) {
     const parent = routeField(f, own);
-    const { col, meta, c, elName, missingColumn, nearMissing } = resolveFieldControl(f);
+    const { col, meta, c, elName, missingColumn, nearMissing, pageAttr } = resolveFieldControl(f);
     const layoutConfig = computeLayout(f, own, parent, col);
     const vis = fieldVisibility(f, own, col, { isMiniPage: ctx.isMiniPage, needsDecision });
     const values = buildFieldValues(f, col, c, meta, vis, layoutConfig);
@@ -1126,8 +1259,7 @@ function mapFields(ctx, containers) {
     // nearest existing columns for the secondary renamed-column case.
     if (missingColumn) { values.readOnly = true; values.linkedValue = true; if (nearMissing.length) values.linkedNearest = nearMissing; }
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
-    attributes[col] = { modelConfig: { path: "PDS." + col } };
-    pdsColumns[col] = { path: col };
+    bindFieldAttribute(col, pageAttr);
   }
   // ---- the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
   // Placement deliberately goes through the SAME `routeField` / `computeLayout` closures the fields above use:
@@ -1344,7 +1476,6 @@ function mapFields(ctx, containers) {
   // option element's own name), because that is how crt.RadioGroup stores options and what lets a business rule or a
   // package address a single option; a split group also gets hidden copies of the other groups' options (below). Every piece below is its own fn for Sonar CC 15.
   const radioGroups = [];                     // every built group { name, attr, options, spec }, for the split-group pass
-  const radioPageAttrs = new Set();           // page attributes the groups create (no entity column behind them)
   // The classic binding without a ContentBuilder `$` prefix (`value: { bindTo: "$UsrAttr" }`), and whether it had
   // one: the `$` prefix is how a ContentBuilder page names a page attribute, so it is evidence of its own.
   const radioAttr = (it) => {
@@ -1467,16 +1598,8 @@ function mapFields(ctx, containers) {
     }
     return { name: optName, value: child.optionValue, values };
   };
-  // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
-  // imperative-members pass does not ask for it to be created again (`pageAttributes`).
   const bindRadioAttribute = (attr, binding, groupName) => {
-    if (binding.kind === "attribute") {
-      const v = binding.classic?.value;
-      attributes[attr] = v === null || v === undefined ? {} : { value: v };
-      radioPageAttrs.add(attr);
-      accountedFor.add(attr);
-      return;
-    }
+    if (binding.kind === "attribute") { definePageAttribute(attr, binding.classic); return; }
     attributes[attr] = { modelConfig: { path: "PDS." + attr } };
     pdsColumns[attr] = { path: attr };
     if (binding.kind !== "missing-column") return;
@@ -1546,6 +1669,7 @@ function mapFields(ctx, containers) {
 
   needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols, dupBoundCols,
     splitIslands, distinctProfileIslands, payloadFields, fieldsWithTitle }));
+  if (computedAttrFields.length) needsDecision.push(computedAttributeFieldsDecision(computedAttrFields));
   // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
   // header elements land in TopAreaProfileContainer rather than being crammed into the narrow left profile.
@@ -1553,8 +1677,8 @@ function mapFields(ctx, containers) {
     // tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
-    // the page attributes the radio groups create (no entity column): `mapImperativeMembers` does not ask for them
-    pageAttributes: radioPageAttrs,
+    // the page attributes the fields and radio groups create (no entity column): `mapImperativeMembers` does not ask for them
+    pageAttributes,
     headerLayout: headerIsWide ? "wide" : null };
 }
 

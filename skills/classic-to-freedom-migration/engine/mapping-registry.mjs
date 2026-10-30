@@ -310,6 +310,18 @@ export function carriedOn(index, ctype, version, inputs = []) {
   return bit !== null && (c.v & bit) !== 0 && inputs.every((k) => onVersion(c.inputs?.[k]));
 }
 
+// The version a run's registry answers for: a stand export or a pinned platform version. The unpinned union (and an
+// unreadable export that fell back to it) answers for no single version.
+function runVersion(registry) {
+  return registry?.source === "vendored-union" ? null : registry?.version || null;
+}
+// Whether the run's registry positively carries a component on the version the run targets: the same test the
+// version-gated row upgrade applies, for a component the mapper emits outside the mapping table.
+export function runCarries(registry, ctype, inputs = []) {
+  const index = registry?.index || null;
+  return !!index && carriedOn(index, ctype, runVersion(registry), inputs);
+}
+
 // Which target a row emits on THIS run. A row with an `upgrade` emits it only when the run's registry positively
 // carries the upgrade component AND its option-child component on the version the run targets, each with the inputs
 // its `gateInputs` names (crt.RadioGroupItem's `caption`) — a stand export, or a pinned platform version.
@@ -320,7 +332,7 @@ export function resolveRowTarget(row, registry) {
   const targets = upgradeTargets(row);
   if (!targets.length) return { target: row?.target || null, upgraded: false, availableIn: [] };
   const index = registry?.index || null;
-  const version = registry?.source === "vendored-union" ? null : registry?.version || null;
+  const version = runVersion(registry);
   const carriedAll = (v) => targets.every((t) => carriedOn(index, t.componentType, v, t.gateInputs || []));
   if (index && carriedAll(version)) return { target: row.upgrade, upgraded: true, availableIn: [] };
   // Only an unversioned run can be told "a newer stand would get it": a pinned version or a stand export that lacks

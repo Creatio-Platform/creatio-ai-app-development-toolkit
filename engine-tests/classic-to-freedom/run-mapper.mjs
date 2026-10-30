@@ -11667,6 +11667,290 @@ try {
     && rgDecisions(enTwice, "radio-option-rule").length === 0,
     () => ({ attr: enTwiceAttrs.UsrFlag, virtual: rgDecisions(enTwice, "attribute-virtual"), rules: rgDecisions(enTwice, "radio-option-rule") }));
 
+  // T8 / AC 4 — a field bound to a page attribute the classic view model declares (no entity column behind it) is an
+  // editable control over that page attribute, with its classic default: no PDS path, no PDS column, no linked value.
+  // A radio option enabled by the same attribute then binds to a value the page really holds.
+  const fieldOp = (name) => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{bindTo:"${name}"}}`;
+  const faRun = (diff, attrs) => gmRun(diff, `attributes:{${attrs}},`, { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const faAttrs = (run) => run.changeSet.viewModelConfigDiff[0].values;
+  const faPds = (run) => run.changeSet.modelConfigDiff[0].values;
+  const faEditable = (run, name) => {
+    const v = rgOp(run, name)?.values || {};
+    return v.control === "$" + name && !("readOnly" in v) && !("linkedValue" in v) && !("linkedNearest" in v);
+  };
+  const faPageAttr = (run, name, expected) => JSON.stringify(faAttrs(run)[name]) === JSON.stringify(expected)
+    && !(name in faPds(run)) && run.changeSet.accountedFor.includes(name)
+    && !rgDecisions(run, "attribute-virtual").some((d) => d.item === name);
+  const faBool = faRun([fieldOp("UsrCanPickReplica"), rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickReplica"}`), rgOptOp("ModeB", "Mode", "b")].join(","),
+  "UsrCanPickReplica:{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}");
+  check("field T8: a field on a declared Boolean page attribute is an editable crt.Checkbox over a page attribute { value: <classic default> } with no PDS path, no PDS column and no attribute-virtual decision",
+    rgOp(faBool, "UsrCanPickReplica")?.values?.type === "crt.Checkbox" && faEditable(faBool, "UsrCanPickReplica")
+    && faPageAttr(faBool, "UsrCanPickReplica", { value: true }),
+    () => ({ field: rgOp(faBool, "UsrCanPickReplica"), attr: faAttrs(faBool).UsrCanPickReplica, pds: faPds(faBool).UsrCanPickReplica,
+      virtual: rgDecisions(faBool, "attribute-virtual") }));
+  check("field T8: a radio option enabled by that attribute gets disabled \"$<attr> | crt.InvertBooleanValue\" over the same page attribute, and no radio-option-rule or field-attribute-lookup decision",
+    rgOp(faBool, "ModeA")?.values?.disabled === "$UsrCanPickReplica | crt.InvertBooleanValue"
+    && rgDecisions(faBool, "radio-option-rule").length === 0 && rgDecisions(faBool, "field-attribute-lookup").length === 0,
+    () => ({ ModeA: rgOp(faBool, "ModeA"), rules: rgDecisions(faBool, "radio-option-rule"), lookup: rgDecisions(faBool, "field-attribute-lookup") }));
+
+  // T8b — the control comes from the attribute's dataValueType, like a column's: text → crt.Input, a number →
+  // crt.NumberInput, a date → a date picker. A declared attribute with no dataValueType is an editable crt.Input and is
+  // named in the existing field-control decision (its type is not known).
+  const faScalar = faRun(["UsrNote", "UsrCount", "UsrDue", "UsrLoose", "UsrOdd"].map(fieldOp).join(","),
+    `UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"},UsrCount:{dataValueType:Terrasoft.DataValueType.INTEGER},UsrDue:{dataValueType:Terrasoft.DataValueType.DATE},UsrLoose:{value:"y"},UsrOdd:{dataValueType:99,value:"z"}`);
+  const faFieldControl = rgDecisions(faScalar, "field-control");
+  check("field T8b: a field on a declared TEXT page attribute is an editable crt.Input over a page attribute { value: <classic default> } with no PDS path",
+    rgOp(faScalar, "UsrNote")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrNote") && faPageAttr(faScalar, "UsrNote", { value: "x" }),
+    () => ({ field: rgOp(faScalar, "UsrNote"), attr: faAttrs(faScalar).UsrNote, pds: faPds(faScalar).UsrNote }));
+  check("field T8b: Integer and Date page attributes get an editable crt.NumberInput and a date picker over a page attribute {}; an untyped one an editable crt.Input named in the field-control decision",
+    rgOp(faScalar, "UsrCount")?.values?.type === "crt.NumberInput" && faEditable(faScalar, "UsrCount") && faPageAttr(faScalar, "UsrCount", {})
+    && rgOp(faScalar, "UsrDue")?.values?.type === "crt.DateTimePicker" && rgOp(faScalar, "UsrDue")?.values?.pickerType === "date"
+    && faEditable(faScalar, "UsrDue") && faPageAttr(faScalar, "UsrDue", {})
+    && rgOp(faScalar, "UsrLoose")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrLoose") && faPageAttr(faScalar, "UsrLoose", { value: "y" })
+    && faFieldControl.length === 1 && /UsrLoose/.test(faFieldControl[0].reason) && !/UsrNote|UsrCount|UsrDue/.test(faFieldControl[0].reason),
+    () => ({ ops: ["UsrCount", "UsrDue", "UsrLoose"].map((n) => rgOp(faScalar, n)), attrs: faAttrs(faScalar), fieldControl: faFieldControl }));
+  check("field T8b: an attribute with a numeric dataValueType code the engine does not know (99) is an editable crt.Input over a page attribute { value: <classic default> }, named in the field-control decision",
+    rgOp(faScalar, "UsrOdd")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrOdd") && faPageAttr(faScalar, "UsrOdd", { value: "z" })
+    && faFieldControl.length === 1 && /UsrOdd/.test(faFieldControl[0].reason),
+    () => ({ field: rgOp(faScalar, "UsrOdd"), attr: faAttrs(faScalar).UsrOdd, fieldControl: faFieldControl }));
+
+  // T8c — a Lookup page attribute keeps the linked-value output (a lookup field needs a values source the field pass
+  // does not build) and ONE decision names it.
+  const faLookup = faRun(fieldOp("UsrRef"), "UsrRef:{dataValueType:Terrasoft.DataValueType.LOOKUP,isLookup:true}");
+  const faLookupRows = rgDecisions(faLookup, "field-attribute-lookup");
+  check("field T8c: a field on a declared Lookup page attribute keeps the read-only linked value over PDS.<attr> and raises ONE field-attribute-lookup decision naming the attribute",
+    rgOp(faLookup, "UsrRef")?.values?.readOnly === true && rgOp(faLookup, "UsrRef")?.values?.linkedValue === true
+    && faAttrs(faLookup).UsrRef?.modelConfig?.path === "PDS.UsrRef" && faPds(faLookup).UsrRef?.path === "UsrRef"
+    && faLookupRows.length === 1 && faLookupRows[0].item === "UsrRef" && /'UsrRef'/.test(faLookupRows[0].reason),
+    () => ({ field: rgOp(faLookup, "UsrRef"), attr: faAttrs(faLookup).UsrRef, rows: faLookupRows }));
+  // A lookup attribute bound by two fields (UsrRef, UsrRef_2) is one decision, not one per field.
+  const faLookupTwice = faRun([fieldOp("UsrRef"), `{operation:"insert",name:"UsrRefAgain",parentName:"Header",propertyName:"items",values:{bindTo:"UsrRef"}}`].join(","),
+    "UsrRef:{dataValueType:Terrasoft.DataValueType.LOOKUP,isLookup:true}");
+  const faLookupTwiceRows = rgDecisions(faLookupTwice, "field-attribute-lookup");
+  check("field T8c: a declared Lookup attribute bound by two fields keeps both linked-value fields and raises exactly ONE field-attribute-lookup decision",
+    rgOps(faLookupTwice).filter((o) => o.values?.control === "$UsrRef" && o.values?.linkedValue === true).length === 2
+    && faLookupTwiceRows.length === 1 && faLookupTwiceRows[0].item === "UsrRef",
+    () => ({ fields: rgOps(faLookupTwice).filter((o) => o.values?.control === "$UsrRef"), rows: faLookupTwiceRows }));
+  // The non-scalar type set decides on its own: attributes declared only by dataValueType (no isLookup), one of each
+  // type the set lists, plus a TEXT collection. Each keeps the read-only linked value, one row each, none editable.
+  const faNonScalarNames = ["UsrLk", "UsrEn", "UsrId", "UsrImg", "UsrColl"];
+  const faNonScalar = faRun(faNonScalarNames.map(fieldOp).join(","),
+    "UsrLk:{dataValueType:Terrasoft.DataValueType.LOOKUP},UsrEn:{dataValueType:Terrasoft.DataValueType.ENUM},"
+    + "UsrId:{dataValueType:Terrasoft.DataValueType.GUID},UsrImg:{dataValueType:Terrasoft.DataValueType.IMAGELOOKUP},"
+    + "UsrColl:{dataValueType:Terrasoft.DataValueType.TEXT,isCollection:true}");
+  const faNonScalarRows = rgDecisions(faNonScalar, "field-attribute-lookup");
+  check("field T8c: Lookup, Enum, Guid and ImageLookup attributes declared only by dataValueType (no isLookup), and a collection, each keep the read-only linked value over PDS.<attr>, with exactly one field-attribute-lookup row each",
+    faNonScalarNames.every((n) => rgOp(faNonScalar, n)?.values?.readOnly === true && rgOp(faNonScalar, n)?.values?.linkedValue === true
+      && faAttrs(faNonScalar)[n]?.modelConfig?.path === "PDS." + n)
+    && faNonScalarRows.length === faNonScalarNames.length
+    && faNonScalarNames.every((n) => faNonScalarRows.filter((d) => d.item === n).length === 1),
+    () => ({ fields: faNonScalarNames.map((n) => rgOp(faNonScalar, n)), rows: faNonScalarRows }));
+
+  // T8d — a field on a name that is neither an entity column nor a declared attribute is unchanged: a read-only
+  // linked value from a related data source over PDS.<name>.
+  const faUndeclared = faRun(fieldOp("UsrOther"), "UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT}");
+  check("field T8d: a field on an undeclared non-column name stays a read-only linked value over PDS.<name> with a PDS column, and raises no field-attribute-lookup decision",
+    rgOp(faUndeclared, "UsrOther")?.values?.readOnly === true && rgOp(faUndeclared, "UsrOther")?.values?.linkedValue === true
+    && faAttrs(faUndeclared).UsrOther?.modelConfig?.path === "PDS.UsrOther" && faPds(faUndeclared).UsrOther?.path === "UsrOther"
+    && !faUndeclared.changeSet.accountedFor.includes("UsrOther") && rgDecisions(faUndeclared, "field-attribute-lookup").length === 0,
+    () => ({ field: rgOp(faUndeclared, "UsrOther"), attr: faAttrs(faUndeclared).UsrOther }));
+  // The same name masked (`controlConfig.protect`) keeps exactly the same output: masking is no evidence the name is a
+  // column or page state, so it is no masked field and is named in no secret-column row.
+  const faUndeclaredMasked = faRun(`{operation:"insert",name:"UsrOther",parentName:"Header",propertyName:"items",values:{bindTo:"UsrOther",controlConfig:{protect:true}}}`,
+    "UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT}");
+  check("field T8d: a MASKED field on an undeclared non-column name keeps exactly the unmasked linked-value output and raises no secret-column decision",
+    JSON.stringify(rgOp(faUndeclaredMasked, "UsrOther")) === JSON.stringify(rgOp(faUndeclared, "UsrOther"))
+    && JSON.stringify(faAttrs(faUndeclaredMasked).UsrOther) === JSON.stringify(faAttrs(faUndeclared).UsrOther)
+    && rgDecisions(faUndeclaredMasked, "secret-column").length === 0,
+    () => ({ masked: rgOp(faUndeclaredMasked, "UsrOther"), plain: rgOp(faUndeclared, "UsrOther"), rows: rgDecisions(faUndeclaredMasked, "secret-column") }));
+  // RISK1 — an attribute that maps a column of a related source (`columnPath`, or ViewModelColumnType ENTITY_COLUMN) is
+  // that column's value, not page state: its field keeps the undeclared name's linked-value output.
+  // `type: 0` is the numeric ViewModelColumnType.ENTITY_COLUMN.
+  const faRelatedNames = ["UsrPath", "UsrEntCol", "UsrEntNum"];
+  const faRelated = faRun(faRelatedNames.map(fieldOp).join(","),
+    `UsrPath:{dataValueType:Terrasoft.DataValueType.TEXT,columnPath:"Contact.Phone"},UsrEntCol:{dataValueType:Terrasoft.DataValueType.TEXT,type:Terrasoft.ViewModelColumnType.ENTITY_COLUMN},`
+    + `UsrEntNum:{dataValueType:Terrasoft.DataValueType.TEXT,type:0}`);
+  check("field T8d: a declared attribute with a columnPath, one of type ViewModelColumnType.ENTITY_COLUMN and one of numeric type 0 keep the read-only linked value over PDS.<attr>: no page attribute, no field-attribute-lookup decision",
+    faRelatedNames.every((n) => rgOp(faRelated, n)?.values?.readOnly === true && rgOp(faRelated, n)?.values?.linkedValue === true
+      && rgOp(faRelated, n)?.values?.type === "crt.Input"
+      && faAttrs(faRelated)[n]?.modelConfig?.path === "PDS." + n && faPds(faRelated)[n]?.path === n)
+    && rgDecisions(faRelated, "field-attribute-lookup").length === 0,
+    () => ({ fields: faRelatedNames.map((n) => rgOp(faRelated, n)), attrs: faAttrs(faRelated), lookup: rgDecisions(faRelated, "field-attribute-lookup") }));
+  // A declared scalar attribute whose name IS a supplied entity column is that column: the field keeps its PDS binding.
+  const faColAttr = faRun(`{operation:"insert",name:"NameField",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
+    `Name:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"}`);
+  const faColAttrFields = rgOps(faColAttr).filter((o) => o.values?.control === "$Name");
+  check("field T8d: a declared scalar attribute whose name is a supplied entity column keeps the editable column control over PDS.<col>, a PDS column and no page attribute",
+    faColAttrFields.length >= 1 && faColAttrFields.every((o) => o.values.type === "crt.Input" && !("readOnly" in o.values) && !("linkedValue" in o.values))
+    && JSON.stringify(faAttrs(faColAttr).Name) === JSON.stringify({ modelConfig: { path: "PDS.Name" } })
+    && JSON.stringify(faPds(faColAttr).Name) === JSON.stringify({ path: "Name" }),
+    () => ({ fields: faColAttrFields, attr: faAttrs(faColAttr).Name, pds: faPds(faColAttr).Name }));
+
+  // T8e — a field on a declared attribute: a masked one (`controlConfig.protect`) is an editable crt.PasswordInput named
+  // in a secret-column decision (an entity column keeps its own control whatever its masking); a statically disabled one (enabled: false / readonly: true) is read-only; one the
+  // page's own code writes stays editable and is named, with its writer, in one field-attribute-computed decision.
+  // Each is still a plain page attribute (no PDS path, no linked value).
+  const roOp = (name, extra, elName = name) => `{operation:"insert",name:"${elName}",parentName:"Header",propertyName:"items",values:{bindTo:"${name}"${extra}}}`;
+  // the emitted elements bound to a column, of one component type: the template's own `Name` field binds Name too, so a
+  // masked Name field is found by its binding and type, never by a generated element name
+  const roBound = (run, col, type) => rgOps(run).filter((o) => o.values?.control === "$" + col && o.values?.type === type);
+  const roRun = (diff, body, cols = rgCols) => gmRun(diff, body, { entityColumns: cols, resources: rgRes, componentRegistry: rgExport });
+  const roReadOnly = (run, name) => {
+    const v = rgOp(run, name)?.values || {};
+    return v.control === "$" + name && v.readOnly === true && !("linkedValue" in v);
+  };
+  const roMaskedText = (d) => /protect/.test(d.reason) && /crt\.PasswordInput/.test(d.reason) && /real secret/.test(d.reason)
+    && !/never emitted as editable cleartext|has no plain field that masks/.test(d.reason);
+  const roMasked = roRun(roOp("UsrSecret", `,controlConfig:{protect:true}`),
+    `attributes:{UsrSecret:{dataValueType:Terrasoft.DataValueType.TEXT}},`);
+  const roMaskedRows = rgDecisions(roMasked, "secret-column");
+  check("field T8e: a field Classic masks (controlConfig.protect) on a declared TEXT attribute is an EDITABLE crt.PasswordInput over a page attribute, named in ONE secret-column decision that calls it a masked input over the real secret",
+    rgOp(roMasked, "UsrSecret")?.values?.type === "crt.PasswordInput" && faEditable(roMasked, "UsrSecret")
+    && faPageAttr(roMasked, "UsrSecret", {})
+    && roMaskedRows.length === 1 && /UsrSecret/.test(roMaskedRows[0].reason) && roMaskedText(roMaskedRows[0]),
+    () => ({ field: rgOp(roMasked, "UsrSecret"), attr: faAttrs(roMasked).UsrSecret, rows: roMaskedRows }));
+  // A masked field on an entity column keeps the output it has without the masking, on every registry path: an
+  // editable crt.Input for a text column, crt.NumberInput for an Integer one, and no secret-column decision.
+  const roColDiff = (extra) => [roOp("Name", extra, "NameMasked"), roOp("Priority", extra)].join(",");
+  const roColRegs = { export: { componentRegistry: rgExport }, pinned: { platformVersion: "8.3.4" }, union: {} };
+  const roColPairs = Object.entries(roColRegs).map(([reg, m]) => {
+    const run = (extra) => gmRun(roColDiff(extra), "", { entityColumns: rgCols, resources: rgRes, ...m });
+    return { reg, masked: run(`,controlConfig:{protect:true}`), plain: run("") };
+  });
+  const roColOps = (run) => rgOps(run).filter((o) => ["$Name", "$Priority"].includes(o.values?.control));
+  check("field T8e: a masked TEXT and a masked Integer entity column emit exactly the unmasked output (editable crt.Input / crt.NumberInput bound to the column) on a stand export, a pinned platformVersion and the vendored union, with no secret-column decision",
+    roColPairs.every(({ masked, plain }) => JSON.stringify(roColOps(masked)) === JSON.stringify(roColOps(plain))
+      && JSON.stringify(faAttrs(masked)) === JSON.stringify(faAttrs(plain))
+      && roBound(masked, "Name", "crt.Input").length === 2 && roBound(masked, "Name", "crt.Input").every((o) => !("readOnly" in o.values))
+      && rgOp(masked, "Priority")?.values?.type === "crt.NumberInput" && !("readOnly" in rgOp(masked, "Priority").values)
+      && rgDecisions(masked, "secret-column").length === 0),
+    () => roColPairs.map(({ reg, masked, plain }) => ({ reg, masked: roColOps(masked), plain: roColOps(plain), rows: rgDecisions(masked, "secret-column") })));
+  // A masked column of another non-text type keeps its typed control too: Boolean, Date, Lookup.
+  const roMaskedTyped = roRun(["IsPrimary", "Owner", "UsrDue"].map((n) => roOp(n, `,controlConfig:{protect:true}`)).join(","), "",
+    { ...rgCols, UsrDue: { type: "Date" } });
+  check("field T8e: masked Boolean, Lookup and Date columns keep their crt.Checkbox, crt.ComboBox and date picker, with no secret-column decision",
+    rgOp(roMaskedTyped, "IsPrimary")?.values?.type === "crt.Checkbox" && rgOp(roMaskedTyped, "Owner")?.values?.type === "crt.ComboBox"
+    && rgOp(roMaskedTyped, "UsrDue")?.values?.type === "crt.DateTimePicker" && rgDecisions(roMaskedTyped, "secret-column").length === 0,
+    () => ({ fields: ["IsPrimary", "Owner", "UsrDue"].map((n) => rgOp(roMaskedTyped, n)), rows: rgDecisions(roMaskedTyped, "secret-column") }));
+  // AC 4 holds for a masked attribute: a masked Lookup attribute (by dataValueType, and by isLookup) keeps the
+  // read-only linked value and its field-attribute-lookup row; a masked Integer attribute keeps its typed control.
+  const roMaskedNonText = roRun(["UsrLkMasked", "UsrRefMasked", "UsrQtyMasked"].map((n) => roOp(n, `,controlConfig:{protect:true}`)).join(","),
+    `attributes:{UsrLkMasked:{dataValueType:Terrasoft.DataValueType.LOOKUP},UsrRefMasked:{dataValueType:Terrasoft.DataValueType.TEXT,isLookup:true},UsrQtyMasked:{dataValueType:Terrasoft.DataValueType.INTEGER}},`);
+  const roMaskedNonTextLookup = rgDecisions(roMaskedNonText, "field-attribute-lookup");
+  check("field T8e: a MASKED Lookup attribute and a MASKED isLookup attribute keep the read-only linked value over PDS.<attr> with one field-attribute-lookup row each; a masked Integer attribute is an editable crt.NumberInput page attribute; no secret-column decision",
+    ["UsrLkMasked", "UsrRefMasked"].every((n) => rgOp(roMaskedNonText, n)?.values?.readOnly === true && rgOp(roMaskedNonText, n)?.values?.linkedValue === true
+      && rgOp(roMaskedNonText, n)?.values?.type !== "crt.PasswordInput"
+      && faAttrs(roMaskedNonText)[n]?.modelConfig?.path === "PDS." + n
+      && roMaskedNonTextLookup.filter((d) => d.item === n).length === 1)
+    && roMaskedNonTextLookup.length === 2
+    && rgOp(roMaskedNonText, "UsrQtyMasked")?.values?.type === "crt.NumberInput" && faEditable(roMaskedNonText, "UsrQtyMasked")
+    && faPageAttr(roMaskedNonText, "UsrQtyMasked", {})
+    && rgDecisions(roMaskedNonText, "secret-column").length === 0,
+    () => ({ fields: ["UsrLkMasked", "UsrRefMasked", "UsrQtyMasked"].map((n) => rgOp(roMaskedNonText, n)), lookup: roMaskedNonTextLookup,
+      secret: rgDecisions(roMaskedNonText, "secret-column") }));
+  // A declared HASH_TEXT / SECURE_TEXT attribute is never made a page attribute (its value would reach the screen): the
+  // field keeps the read-only linked-value output of an undeclared name, and the stored-secret row names it with its
+  // hashed / encrypted reason. Never the lookup decision, and the classic default value is in none of the page diffs.
+  const roStoredAttr = roRun([roOp("UsrHashAttr", ""), roOp("UsrSecureAttr", "")].join(","),
+    `attributes:{UsrHashAttr:{dataValueType:Terrasoft.DataValueType.HASH_TEXT,value:"hash-default"},UsrSecureAttr:{dataValueType:Terrasoft.DataValueType.SECURE_TEXT,value:"secure-default"}},`);
+  const roStoredAttrRows = rgDecisions(roStoredAttr, "secret-column");
+  check("field T8e: declared HASH_TEXT and SECURE_TEXT attributes keep the read-only linked value over PDS.<attr> (no page attribute, the classic default value in no page diff), named in ONE stored-secret secret-column row (hashed / encrypted), with no field-attribute-lookup decision",
+    ["UsrHashAttr", "UsrSecureAttr"].every((n) => rgOp(roStoredAttr, n)?.values?.type === "crt.Input" && rgOp(roStoredAttr, n)?.values?.readOnly === true
+      && rgOp(roStoredAttr, n)?.values?.linkedValue === true && faAttrs(roStoredAttr)[n]?.modelConfig?.path === "PDS." + n
+      && !roStoredAttr.changeSet.accountedFor.includes(n))
+    && !/hash-default|secure-default/.test(JSON.stringify([roStoredAttr.changeSet.viewConfigDiff, roStoredAttr.changeSet.viewModelConfigDiff, roStoredAttr.changeSet.modelConfigDiff]))
+    && roStoredAttrRows.length === 1 && /UsrHashAttr \(hashed\)/.test(roStoredAttrRows[0].reason) && /UsrSecureAttr \(encrypted\)/.test(roStoredAttrRows[0].reason)
+    && rgDecisions(roStoredAttr, "field-attribute-lookup").length === 0,
+    () => ({ fields: ["UsrHashAttr", "UsrSecureAttr"].map((n) => rgOp(roStoredAttr, n)), rows: roStoredAttrRows, lookup: rgDecisions(roStoredAttr, "field-attribute-lookup") }));
+  // crt.PasswordInput is gated on the run's component registry: with no registry (the vendored union), an export that
+  // lacks it, or a pinned platformVersion the vendored index does not hold (the union again), a masked text attribute
+  // is a read-only crt.Input and its secret-column row says the masked input could not be shown to exist.
+  const roNoPwExport = { ...rgExport, components: rgExport.components.filter((c) => c.componentType !== "crt.PasswordInput") };
+  const roPinRun = (m) => gmRun(roOp("UsrPinAttr", `,controlConfig:{protect:true}`), `attributes:{UsrPinAttr:{dataValueType:Terrasoft.DataValueType.TEXT}},`,
+    { entityColumns: rgCols, resources: rgRes, ...m });
+  const roUngated = [{}, { componentRegistry: roNoPwExport }, { platformVersion: "99.9.9" }].map(roPinRun);
+  check("field T8e: where the run's registry cannot show crt.PasswordInput (vendored union with no registry; an export without it; an unindexed pinned platformVersion), a masked text attribute is a read-only crt.Input, named in ONE secret-column row that states the fallback, and no crt.PasswordInput is emitted",
+    roUngated.every((run) => {
+      const rows = rgDecisions(run, "secret-column");
+      return roBound(run, "UsrPinAttr", "crt.PasswordInput").length === 0
+        && rgOp(run, "UsrPinAttr")?.values?.type === "crt.Input" && roReadOnly(run, "UsrPinAttr") && faPageAttr(run, "UsrPinAttr", {})
+        && rows.length === 1 && rows[0].item === "(1 masked fields, not masked)" && /cannot show/.test(rows[0].reason)
+        && /manifest\.componentRegistry/.test(rows[0].reason) && /manifest\.platformVersion/.test(rows[0].reason) && /UsrPinAttr/.test(rows[0].reason);
+    }),
+    () => roUngated.map((run) => ({ field: rgOp(run, "UsrPinAttr"), rows: rgDecisions(run, "secret-column") })));
+  // A platformVersion pinned to a version the vendored index carries crt.PasswordInput on builds it, with no stand export.
+  const roPinned = roPinRun({ platformVersion: "8.3.4" });
+  const roPinnedRows = rgDecisions(roPinned, "secret-column");
+  check("field T8e: with manifest.platformVersion pinned to an indexed version that carries crt.PasswordInput (8.3.4, no stand export), a masked text attribute is an EDITABLE crt.PasswordInput page attribute named in ONE masked secret-column row",
+    rgOp(roPinned, "UsrPinAttr")?.values?.type === "crt.PasswordInput" && faEditable(roPinned, "UsrPinAttr") && faPageAttr(roPinned, "UsrPinAttr", {})
+    && roPinnedRows.length === 1 && roPinnedRows[0].item === "(1 masked fields)" && roMaskedText(roPinnedRows[0]),
+    () => ({ field: rgOp(roPinned, "UsrPinAttr"), rows: roPinnedRows }));
+  // A mixed page: a masked text column, a masked ENCRYPTED column, a plain ENCRYPTED column, and a masked attribute
+  // that is also statically disabled. The encrypted columns keep the read-only stored-secret path (masked or not);
+  // the page carries exactly two secret-column rows, one per reason, each naming exactly its own fields.
+  const roMixed = roRun([roOp("Name", `,controlConfig:{protect:true}`, "NameMasked"), roOp("UsrVault", `,controlConfig:{protect:true}`),
+    roOp("UsrToken", ""), roOp("UsrPin", `,controlConfig:{protect:true},enabled:false`)].join(","),
+  `attributes:{UsrPin:{dataValueType:Terrasoft.DataValueType.TEXT}},`,
+  { ...rgCols, UsrVault: { type: "24" }, UsrToken: { type: "24" } });
+  const roMixedRows = rgDecisions(roMixed, "secret-column");
+  const roMixedMasked = roMixedRows.filter((d) => /masked fields/.test(d.item));
+  const roMixedStored = roMixedRows.filter((d) => !/masked fields/.test(d.item));
+  check("field T8e: a mixed page has exactly TWO secret-column rows — the masked row names only the masked attribute (1 field), the stored-secret row names both encrypted columns (2 fields); the masked text column keeps its editable crt.Input, encrypted columns stay read-only crt.Input even when masked, and a masked attribute also disabled is a read-only crt.PasswordInput",
+    roMixedRows.length === 2 && roMixedMasked.length === 1 && roMixedStored.length === 1
+    && roMixedMasked[0].item === "(1 masked fields)" && !/\bName\b/.test(roMixedMasked[0].reason) && /UsrPin/.test(roMixedMasked[0].reason)
+    && !/UsrVault|UsrToken/.test(roMixedMasked[0].reason)
+    && roMixedStored[0].item === "(2 fields)" && /UsrVault \(encrypted\)/.test(roMixedStored[0].reason) && /UsrToken \(encrypted\)/.test(roMixedStored[0].reason)
+    && ["UsrVault", "UsrToken"].every((n) => rgOp(roMixed, n)?.values?.type === "crt.Input" && rgOp(roMixed, n)?.values?.readOnly === true)
+    && rgOp(roMixed, "UsrPin")?.values?.type === "crt.PasswordInput" && roReadOnly(roMixed, "UsrPin")
+    && roBound(roMixed, "Name", "crt.PasswordInput").length === 0
+    && roBound(roMixed, "Name", "crt.Input").length === 2 && roBound(roMixed, "Name", "crt.Input").every((o) => !("readOnly" in o.values)),
+    () => ({ rows: roMixedRows, fields: [...roBound(roMixed, "Name", "crt.Input"), ...["UsrVault", "UsrToken", "UsrPin"].map((n) => rgOp(roMixed, n))] }));
+  const roDisabled = roRun([roOp("UsrShown", ",enabled:false"), roOp("UsrLocked", ",readonly:true")].join(","),
+    `attributes:{UsrShown:{dataValueType:Terrasoft.DataValueType.TEXT,value:"v"},UsrLocked:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},`);
+  check("field T8e: a field on a declared attribute that Classic disables statically (enabled: false / readonly: true) is read-only over a page attribute with its default, and raises no secret-column decision",
+    roReadOnly(roDisabled, "UsrShown") && faPageAttr(roDisabled, "UsrShown", { value: "v" })
+    && rgOp(roDisabled, "UsrLocked")?.values?.type === "crt.Checkbox" && roReadOnly(roDisabled, "UsrLocked")
+    && rgDecisions(roDisabled, "secret-column").length === 0 && rgDecisions(roDisabled, "field-attribute-computed").length === 0,
+    () => ({ shown: rgOp(roDisabled, "UsrShown"), locked: rgOp(roDisabled, "UsrLocked"), attrs: faAttrs(roDisabled) }));
+  // Code-written attributes: FullAddress (computed by a method, like AccountMiniPage) stays editable; UsrToggle (its
+  // own dependency reacts to a user change) stays editable and is not reported; a statically disabled one is not
+  // reported either. ONE field-attribute-computed row names FullAddress and its writer.
+  const roComputed = roRun([roOp("FullAddress", ""), roOp("UsrToggle", ""), roOp("UsrStamp", ",enabled:false"), roOp("UsrCalc", "")].join(","),
+    `attributes:{FullAddress:{dataValueType:Terrasoft.DataValueType.TEXT},UsrToggle:{dataValueType:Terrasoft.DataValueType.BOOLEAN,dependencies:[{columns:["UsrToggle"],methodName:"onToggle"}]},UsrStamp:{dataValueType:Terrasoft.DataValueType.TEXT},`
+    + `UsrCalc:{dataValueType:Terrasoft.DataValueType.TEXT,dependencies:[{columns:["Name"],methodName:"calc"}]}},`
+    + `methods:{setFullAddress:function(){this.set("FullAddress",this.get("Name"));},onToggle:function(){this.set('UsrToggle',false);},stamp:function(){this.set("UsrStamp","x");},calc:function(){this.set("UsrCalc",this.get("Name"));}},`);
+  const roComputedRows = rgDecisions(roComputed, "field-attribute-computed");
+  check("field T8e: a declared attribute the page's code writes (this.set) with no dependency on it stays EDITABLE and is named with its writing method in ONE field-attribute-computed decision, also when its own dependency watches another column; a dependency-watched or statically disabled one is not named",
+    rgOp(roComputed, "FullAddress")?.values?.type === "crt.Input" && faEditable(roComputed, "FullAddress") && faPageAttr(roComputed, "FullAddress", {})
+    && rgOp(roComputed, "UsrToggle")?.values?.type === "crt.Checkbox" && faEditable(roComputed, "UsrToggle") && faPageAttr(roComputed, "UsrToggle", {})
+    && roReadOnly(roComputed, "UsrStamp")
+    && roComputedRows.length === 1 && roComputedRows[0].reason.includes("FullAddress (setFullAddress)")
+    && /read-only by hand/.test(roComputedRows[0].reason) && !/UsrToggle|UsrStamp/.test(roComputedRows[0].reason)
+    // UsrCalc's own dependency watches ANOTHER column (Name), so the user does not edit UsrCalc: still reported
+    && faEditable(roComputed, "UsrCalc") && roComputedRows[0].reason.includes("UsrCalc (calc)") && roComputedRows[0].item === "(2 field(s))",
+    () => ({ full: rgOp(roComputed, "FullAddress"), toggle: rgOp(roComputed, "UsrToggle"), stamp: rgOp(roComputed, "UsrStamp"), rows: roComputedRows }));
+  // A code-written attribute bound by two fields is listed once.
+  const roComputedTwice = roRun([roOp("FullAddress", ""), roOp("FullAddress", "", "FullAddressAgain")].join(","),
+    `attributes:{FullAddress:{dataValueType:Terrasoft.DataValueType.TEXT}},methods:{setFullAddress:function(){this.set("FullAddress",this.get("Name"));}},`);
+  const roComputedTwiceRows = rgDecisions(roComputedTwice, "field-attribute-computed");
+  check("field T8e: a code-written attribute bound by two fields is listed ONCE in the field-attribute-computed decision",
+    roComputedTwiceRows.length === 1 && roComputedTwiceRows[0].item === "(1 field(s))"
+    && roComputedTwiceRows[0].reason.split("FullAddress (setFullAddress)").length === 2,
+    () => roComputedTwiceRows);
+  // The init-then-toggle pattern: a method sets the starting value, the user toggles the field, an option's enabled
+  // reads it. The field stays an editable checkbox, the option keeps its live inverted binding, one decision names it.
+  const roInit = roRun([roOp("UsrCanPickReplica", ""), rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickReplica"}`), rgOptOp("ModeB", "Mode", "b")].join(","),
+  `attributes:{UsrCanPickReplica:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},methods:{init:function(){this.callParent(arguments);this.set("UsrCanPickReplica",false);}},`);
+  const roInitRows = rgDecisions(roInit, "field-attribute-computed");
+  check("field T8e: init-then-toggle — an attribute set in a method with no dependency is an EDITABLE crt.Checkbox, the option keeps disabled \"$<attr> | crt.InvertBooleanValue\", and ONE field-attribute-computed decision names the field and the method",
+    rgOp(roInit, "UsrCanPickReplica")?.values?.type === "crt.Checkbox" && faEditable(roInit, "UsrCanPickReplica")
+    && faPageAttr(roInit, "UsrCanPickReplica", {})
+    && rgOp(roInit, "ModeA")?.values?.disabled === "$UsrCanPickReplica | crt.InvertBooleanValue"
+    && roInitRows.length === 1 && roInitRows[0].reason.includes("UsrCanPickReplica (init)"),
+    () => ({ field: rgOp(roInit, "UsrCanPickReplica"), opt: rgOp(roInit, "ModeA"), rows: roInitRows }));
+
   // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
   // built and raises the business-rule decision.
   const vis = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", ",visible:false"),

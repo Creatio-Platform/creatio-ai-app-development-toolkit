@@ -1069,16 +1069,25 @@ check("key audit: `visible` is in BOTH vocabularies — removing it clears the f
 
 // The four AMBIGUOUS keys (`enabled`, `visible`, `readonly`, `required`) appear in a classic body both as a handler
 // (`{bindTo:"m"}`, modelled in `handlers`) and as a static literal (`enabled: false`, which `handlerBindings` skips
-// and no field holds). Removing the modelled form is fully represented; removing the static form changes nothing,
-// and a silent no-op there is the drop this whole function exists to prevent. So each of the three that has NO
-// second slot must warn on the literal and stay quiet on the handler — `visible` is asserted above, it has one.
+// and the handler map does not hold). Removing the modelled form is fully represented. `enabled` and `readonly` keep
+// their static literal on the item (the field-state literals the field projection reads), so removing the static
+// form clears that literal and is represented too. `required` has NO second slot: removing its literal changes
+// nothing, and a silent no-op there is the drop this whole function exists to prevent, so it must warn on the
+// literal and stay quiet on the handler — `visible` is asserted above, it has a field.
 for (const key of ["enabled", "readonly", "required"]) {
   const litBase = ps("LitB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: false } }]);
   const litTop = ps("LitT", [{ operation: "remove", name: "F", properties: [key] }]);
   const lit = mergeHierarchy([litBase, litTop]);
-  check(`key audit: a STATIC \`${key}: false\` removal is an unmodelled effect — it warns (fidelity) instead of silently doing nothing`,
-    lit.warnings.length === 1 && lit.warnings[0].severity === "fidelity" && new RegExp(key).test(lit.warnings[0].hint),
-    () => lit.warnings);
+  if (key === "required") {
+    check(`key audit: a STATIC \`${key}: false\` removal is an unmodelled effect — it warns (fidelity) instead of silently doing nothing`,
+      lit.warnings.length === 1 && lit.warnings[0].severity === "fidelity" && new RegExp(key).test(lit.warnings[0].hint),
+      () => lit.warnings);
+  } else {
+    const litItem = lit.fields.find((f) => f.name === "F");
+    check(`key audit: a STATIC \`${key}: false\` removal clears the field's literal and raises nothing`,
+      lit.warnings.length === 0 && !!litItem && litItem[key] === null,
+      () => ({ warnings: lit.warnings, value: litItem?.[key] }));
+  }
   const dynBase = ps("DynB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: { bindTo: "m" } } }]);
   const dyn = mergeHierarchy([dynBase, litTop]);
   const dynItem = dyn.items.find((i) => i.name === "F");
@@ -1150,6 +1159,43 @@ check("a merge onto a TOMBSTONE does not throw — every item record in the fold
       upMk("B", `[{"operation":"merge","name":"Ghost","values":{"controlColumnName":"Q"}}]`)]);
     return Array.isArray(eff.items); },
   () => "threw");
+// The static field-state literals ride the fold: a child layer's `merge` that disables, locks and masks a field the
+// base layer inserted reaches the field projection the mapper reads.
+{
+  const stateEff = mergeHierarchy([
+    upMk("A", `[{"operation":"insert","name":"UsrPin","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrPin"}}]`),
+    upMk("B", `[{"operation":"merge","name":"UsrPin","values":{"enabled":false,"readonly":true,"controlConfig":{"protect":true}}}]`)]);
+  const pin = stateEff.fields.find((f) => f.name === "UsrPin");
+  check("a child layer's merge of enabled:false, readonly:true and controlConfig.protect onto a base insert reaches the field projection",
+    pin?.enabled === false && pin?.readonly === true && pin?.protect === true,
+    () => pin);
+  // Literal then bound: a child layer that states enabled / readonly as a binding replaces the base layer's literal,
+  // so the field is not statically disabled or read-only; a key the child does not state keeps the literal.
+  const boundEff = mergeHierarchy([
+    upMk("A", `[{"operation":"insert","name":"UsrPin","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrPin","enabled":false,"readonly":true,"controlConfig":{"protect":true}}},`
+      + `{"operation":"insert","name":"UsrKeep","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrKeep","enabled":false,"readonly":true}}]`),
+    upMk("B", `[{"operation":"merge","name":"UsrPin","values":{"enabled":{"bindTo":"IsEditable"},"readonly":{"bindTo":"IsLocked"}}},`
+      + `{"operation":"merge","name":"UsrKeep","values":{"enabled":{"bindTo":"IsEditable"}}}]`)]);
+  const boundPin = boundEff.fields.find((f) => f.name === "UsrPin");
+  const boundKeep = boundEff.fields.find((f) => f.name === "UsrKeep");
+  check("a child layer's merge that states enabled / readonly as a binding clears the base layer's literal; a key it does not state keeps the literal",
+    boundPin?.enabled === null && boundPin?.readonly === null && boundPin?.protect === true
+    && boundKeep?.enabled === null && boundKeep?.readonly === true,
+    () => ({ boundPin, boundKeep }));
+  // Literal then removed: a child layer's `remove … properties` of enabled / readonly / controlConfig clears the base
+  // layer's literal, so the field is neither statically read-only nor masked; a key it does not remove keeps it.
+  const removedEff = mergeHierarchy([
+    upMk("A", `[{"operation":"insert","name":"UsrPin","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrPin","enabled":false,"readonly":true,"controlConfig":{"protect":true}}},`
+      + `{"operation":"insert","name":"UsrKeep","parentName":"Header","propertyName":"items","values":{"bindTo":"UsrKeep","enabled":false,"readonly":true,"controlConfig":{"protect":true}}}]`),
+    upMk("B", `[{"operation":"remove","name":"UsrPin","properties":["enabled","readonly","controlConfig"]},`
+      + `{"operation":"remove","name":"UsrKeep","properties":["enabled"]}]`)]);
+  const removedPin = removedEff.fields.find((f) => f.name === "UsrPin");
+  const removedKeep = removedEff.fields.find((f) => f.name === "UsrKeep");
+  check("a child layer's remove of enabled / readonly / controlConfig clears the base layer's literal; a key it does not remove keeps the literal",
+    removedPin?.enabled === null && removedPin?.readonly === null && removedPin?.protect === null
+    && removedKeep?.enabled === null && removedKeep?.readonly === true && removedKeep?.protect === true,
+    () => ({ removedPin, removedKeep }));
+}
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

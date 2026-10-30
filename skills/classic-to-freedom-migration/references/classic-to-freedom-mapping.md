@@ -110,6 +110,56 @@ For each Classic page/detail, record:
 | Mini page | Freedom mini page, modal, side panel, or explicit UX decision if the Classic interaction has no direct analog. |
 | Radio group (`ViewItemType.RADIO_GROUP`) | `crt.RadioGroup` with named `crt.RadioGroupItem` options where the target stand carries it, else `crt.IconRadioButton` — see *Radio groups* below. |
 
+### Fields that are not entity columns
+
+When the entity columns are supplied and a field's `bindTo` is not one of them, the engine reads the Classic view
+model first:
+
+- **A page attribute the Classic page declares** (`attributes: { UsrX: { dataValueType, value } }`) is the page's own
+  state, so the field is an **editable** control over a page attribute: the attribute keeps its Classic default
+  (`{ value }`, or `{}` with none), with no PDS path and no PDS column, and it raises no `attribute-virtual` decision
+  (the ChangeSet creates it). The control comes from the attribute's `dataValueType` through the same selection as a
+  column's type: Boolean → `crt.Checkbox`, text → `crt.Input`, numbers → `crt.NumberInput`, dates → a date picker. An
+  attribute with no `dataValueType`, or a code the engine does not know, gets an editable `crt.Input` and is named in
+  the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
+  bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
+- **A page attribute field Classic disables statically** (`enabled: false` or `readonly: true` on the field) gets
+  the same page attribute and control, but **read-only**. Only these static signals make it read-only, and only from
+  the layer that states them last: a later layer that states `enabled` or `readonly` as a binding, or removes the key
+  (`remove … properties`), clears the literal; removing `controlConfig` clears the masking the same way.
+- **A page attribute the page's own methods write** (`this.set("UsrX", …)`), with no attribute `dependencies` entry
+  listing it in its `columns`, stays **editable**, as Classic rendered it: an init method that sets a starting value
+  the user then toggles looks the same as a computed value. Every such field is named, with the method(s) that write
+  it, in one `field-attribute-computed` decision (each attribute once, however many fields bind it): if the value is
+  one the page computes and only shows, make the field read-only by hand. A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring,
+  so such an attribute is not named.
+- **A masked text field on a declared page attribute** (`controlConfig: { protect: true }`, a password-style input,
+  on an attribute whose type gives a plain single-line `crt.Input`) is a `crt.PasswordInput`, a
+  password-style masked input that stays editable as in Classic, and is named in a `secret-column` decision of its own
+  (`(<n> masked fields)`). The masking is on screen only: the stored value is the real secret, not a hash or
+  ciphertext. `crt.PasswordInput` is `compositeOnly` (no Designer toolbar entry), so verify on a stand that the built
+  field masks its value. It is emitted only where the run's component registry shows the target stand carries it
+  (a stand export, or a pinned `manifest.platformVersion` the vendored index carries it on, as for radio groups);
+  otherwise (no registry or an unindexed pinned version, both the vendored union, or an export without it) the field
+  is a **read-only** `crt.Input`, which shows the value unmasked, named in a `secret-column` row
+  (`(<n> masked fields, not masked)`) that says so and how to re-run with the stand's registry or a pinned version.
+- **A masked field on an entity column** is emitted exactly as if it were not masked, whatever its type, and is named
+  in no `secret-column` row: the masking of entity columns is not migrated. A masked non-text page attribute keeps the
+  control its type gives, also with no row. A hashed or encrypted column keeps its read-only `crt.Input`. A masked name
+  that is neither an entity column nor a declared attribute keeps the read-only linked value below unchanged.
+- **A hashed or encrypted page attribute** (`HASH_TEXT` / `SECURE_TEXT`) is never made a page attribute, so its value
+  is not put on screen: the field keeps the read-only linked value below, and the attribute is named in the hashed /
+  encrypted `secret-column` row like such a column.
+- **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
+  type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
+  naming the attribute (one per attribute, however many fields bind it), also when the field is masked: its values
+  source has to be built by hand.
+- **A page attribute that maps a related column** (`columnPath`, or `type: Terrasoft.ViewModelColumnType.ENTITY_COLUMN`,
+  numeric `0`)
+  is that column's value, not page state: its field keeps the read-only linked value below, as an undeclared name.
+- **A name the page does not declare** is a value shown from a related data source: a read-only field
+  (`linkedValue`) over `PDS.<name>`, with the nearest entity columns as a hint for a renamed column.
+
 ### Radio groups
 
 The engine builds a Classic `RADIO_GROUP` as `crt.RadioGroup` only when the run's component registry shows the target
