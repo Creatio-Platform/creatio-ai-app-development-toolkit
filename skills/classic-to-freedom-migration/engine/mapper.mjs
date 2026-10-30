@@ -820,16 +820,16 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   return vis;
 }
 
-// A TEXT field Classic renders MASKED (`controlConfig: { protect: true }`, a password-style text edit) is emitted as
-// the Freedom password-style input `crt.PasswordInput`: editable as it was in Classic, its value masked on screen. Only
+// A TEXT field on a declared page attribute that Classic renders MASKED (`controlConfig: { protect: true }`, a
+// password-style text edit) is emitted as the Freedom password-style input `crt.PasswordInput`: editable as it was in Classic, its value masked on screen. Only
 // a text field: a masked Boolean, number, date or lookup keeps its typed control, since a text input over such a value
-// would hold it as free text. It is reported under the same decision kind as the hashed / encrypted columns, in its own
+// would hold it as free text. A field on an entity column keeps its own control whatever its masking. It is reported under the same decision kind as the hashed / encrypted columns, in its own
 // row because the reason differs: the stored value is the real secret in plain storage, and the protection is the
 // field's own configuration, not the column's storage. `crt.PasswordInput` is emitted only where the run's component
 // registry shows the target stand carries it; elsewhere the field is a read-only `crt.Input` and the row says why.
 const MASKED_CONTROL = Object.freeze({ type: "crt.PasswordInput" });
 // the read-only `crt.Input` a hashed or encrypted column gets (no Freedom field renders those values safely), and a
-// masked field where the run cannot show the stand carries `crt.PasswordInput`
+// masked page-attribute field where the run cannot show the stand carries `crt.PasswordInput`
 const READ_ONLY_INPUT = Object.freeze({ type: "crt.Input", readOnly: true });
 // a plain single-line text control: what Classic's masked text edit stands for
 const isPlainTextControl = (c) => !!c && c.type === "crt.Input" && !c.multiline && !c.readOnly && !c.linkedDisplay;
@@ -1065,8 +1065,14 @@ function mapFields(ctx, containers) {
   // A declared attribute whose value a field cannot hold as a plain page attribute: a lookup or a record id needs a
   // values source the field pass does not build, an enum a value list, an image lookup a SysImage reference.
   const NON_SCALAR_ATTR_TYPES = new Set([DATA_VALUE_TYPE.GUID, DATA_VALUE_TYPE.LOOKUP, DATA_VALUE_TYPE.ENUM, DATA_VALUE_TYPE.IMAGELOOKUP]);
-  const reportLookupAttributeField = (a) => needsDecision.push({ kind: "field-attribute-lookup", item: a.name,
+  // One decision per attribute, however many fields (col, col_2, …) bind it.
+  const reportedLookupAttrs = new Set();
+  const reportLookupAttributeField = (a) => {
+    if (reportedLookupAttrs.has(a.name)) return;
+    reportedLookupAttrs.add(a.name);
+    needsDecision.push({ kind: "field-attribute-lookup", item: a.name,
     reason: `a field is bound to '${a.name}', a lookup (or other non-scalar) attribute the classic page declares with no entity column behind it — the field is kept as a read-only linked value over PDS.${a.name}, a column that does not exist. Build it by hand: a page attribute with its values source (for a lookup, its reference schema), or bind the field to the entity column the attribute stands for` });
+  };
   // A field on a declared page attribute is read-only only on Classic's STATIC signals: the field is disabled
   // (`enabled: false`) or read-only (`readonly: true`) in the diff. A value the page's own code writes
   // (`this.set("X", …)`) is not evidence enough: an init method that sets a starting value the user then toggles
@@ -1088,11 +1094,15 @@ function mapFields(ctx, containers) {
     }
     return attrWriters.get(col) || [];
   };
+  // Each attribute is listed once, however many fields bind it.
+  const notedComputedAttrs = new Set();
   const noteComputedAttributeField = (col, f) => {
-    const writers = staticReadOnly(f) ? [] : attributeWriters(col);
-    if (writers.length) computedAttrFields.push(`${col} (${writers.join(", ")})`);
+    const writers = (staticReadOnly(f) || notedComputedAttrs.has(col)) ? [] : attributeWriters(col);
+    if (!writers.length) return;
+    notedComputedAttrs.add(col);
+    computedAttrFields.push(`${col} (${writers.join(", ")})`);
   };
-  // A masked text field: `crt.PasswordInput` where the run's registry shows the target stand carries it, otherwise the
+  // A masked text field on a declared page attribute: `crt.PasswordInput` where the run's registry shows the target stand carries it, otherwise the
   // read-only `crt.Input`. Either way it is named in a secret-column row, the one that matches what was emitted.
   const passwordInputShown = runCarries(ctx.registry, MASKED_CONTROL.type);
   const maskedField = (col) => {
@@ -1106,7 +1116,8 @@ function mapFields(ctx, containers) {
   // the same selection a column's type goes through. A declared attribute is evidence the name is view-model state, not
   // a column of a related data source, so it becomes an editable page attribute — unless its type cannot be one
   // (reported, and the linked-value output kept: null). A lookup or other non-scalar attribute takes that path even
-  // when masked. A hashed or encrypted one is a read-only crt.Input named with the stored secrets. An attribute with no
+  // when masked. A hashed or encrypted one keeps the linked-value output too (null), so its value is never put on
+  // screen, and is named with the stored secrets. An attribute with no
   // type, or a code the engine does not know, is an editable crt.Input named in the field-control decision, like a
   // column whose type is not recognized. A masked text attribute is a masked field.
   const declaredAttributeField = (col, f) => {
@@ -1115,7 +1126,7 @@ function mapFields(ctx, containers) {
     const dvt = a.dataValueType;
     const meta = { type: dvt == null ? null : String(dvt) };
     const stored = secretTypeOf(meta.type);
-    if (stored) { secretCols.push({ col, type: stored }); return { a, meta, c: READ_ONLY_INPUT }; }
+    if (stored) { secretCols.push({ col, type: stored }); return null; }
     const known = dvt != null && DATAVALUETYPE_CODE[meta.type] !== undefined;
     const c = known ? scalarControl(meta.type) : { type: "crt.Input" };
     if (a.isLookup || a.isCollection || NON_SCALAR_ATTR_TYPES.has(dvt) || !c) { reportLookupAttributeField(a); return null; }
@@ -1162,15 +1173,12 @@ function mapFields(ctx, containers) {
     // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
     // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
     // than folded into the "type was not recognized" bucket, which was untrue for these two.
-    // A field classic MASKS (`controlConfig.protect`) on an entity column of a text type is a masked field; a masked
-    // column of any other type keeps its typed control, a hashed or encrypted column the read-only path above, and a
-    // masked name that is no entity column the linked-value output.
+    // `controlConfig.protect` is read only for a field on a declared page attribute (`declaredAttributeField`); an
+    // entity column keeps its own control whatever the field's masking.
     const secretType = storedSecretType(ctl, missingColumn, meta);
     if (!ctl && !missingColumn && !secretType) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     if (secretType) secretCols.push({ col, type: secretType });
-    const masked = !missingColumn && f.protect === true && isPlainTextControl(ctl);
-    const unmasked = secretType ? READ_ONLY_INPUT : (ctl || { type: "crt.Input" });
-    const c = masked ? maskedField(col) : unmasked;
+    const c = ctl || (secretType ? READ_ONLY_INPUT : { type: "crt.Input" });
     return { col, meta, missingColumn, nearMissing, c, elName: fieldElementName(col), pageAttr: null };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header

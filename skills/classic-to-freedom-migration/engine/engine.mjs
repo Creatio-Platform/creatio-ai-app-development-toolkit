@@ -2048,10 +2048,22 @@ function settleUndefinedOps(undefinedOps, refs, seedState) {
 const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
   "layout", "tip", "hint", "generator", "visible", "caption"]);
 const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
+// The static field-state literals the fold copies onto the item (`applyMergeOrderVisible`) under a diff key that has
+// no field of its own in TOP_LEVEL_ITEM_PROPS: `enabled` / `readonly` are handler-vocabulary keys, and `protect` is
+// read out of `controlConfig`. A layer that removes the key removes the literal too, or the field stays statically
+// disabled, read-only or masked although the runtime renders it plain.
+const STATE_LITERAL_FIELDS = new Map([["enabled", "enabled"], ["readonly", "readonly"], ["controlConfig", "protect"]]);
+function clearStateLiteral(k, cur) {
+  const field = STATE_LITERAL_FIELDS.get(k);
+  if (!field || cur[field] == null) return false;
+  cur[field] = null;
+  return true;
+}
 // ONE removed property key, applied to the item. Returns `true` when the removal is NOT represented in the model —
 // the caller collects those keys into a single fidelity warning. Own fn so `replayRemoveProperties` stays under
 // Sonar's cognitive-complexity budget; the decision order below is unchanged.
 function replayRemoveOneProperty(k, cur) {
+  const literalCleared = clearStateLiteral(k, cur);
   if (!REMOVABLE_ITEM_PROPS.has(k)) {
     // …and the key is not DECLARED on the element either. Without this, the list mapper would raise an open
     // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
@@ -2074,15 +2086,15 @@ function replayRemoveOneProperty(k, cur) {
   // silenced the trigger but left the static value would be half-applied.
   if (HANDLER_PROPS.has(k)) {
     // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
-    // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
-    // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
-    // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
-    // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
-    // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+    // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal that
+    // `handlerBindings` skips. `enabled` and `readonly` keep that literal on the item (`clearStateLiteral` cleared it
+    // above); `required` has no slot for it, so removing its static form changes nothing here, and saying nothing
+    // about it is the silent drop this function exists to prevent. So the map entry or the cleared literal decides:
+    // either ⇒ the effect is represented, neither ⇒ the removal is an unrepresented effect, exactly like an unknown key.
     const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
     if (wasModelled) { delete cur.handlers[k]; if (cur.handlerConverters) delete cur.handlerConverters[k]; }
-    // handler-only key: the map entry was the whole effect it could have
-    if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled;
+    // handler-only key: the map entry and the static literal cleared above were the whole effect it could have
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled && !literalCleared;
   }
   if (!TOP_LEVEL_ITEM_PROPS.has(k)) return false;   // not a handler and not a field: nothing modelled to clear
   // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
