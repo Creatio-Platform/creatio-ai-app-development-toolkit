@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "mcp__rca-creatio-http__creatio_create_record",
+      "mcp__rca-creatio-http__creatio_update_record",
+      "mcp__rca-creatio-http__creatio_delete_record",
+      "mcp__rca-creatio-http__creatio_post_feed_message"
+    ]
+  }
+}
