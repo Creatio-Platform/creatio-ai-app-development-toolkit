@@ -55,7 +55,8 @@ An administrator creates it once: **System Designer → OAuth 2.0 integrated app
 
 - **Allowed grant types:** *On behalf of a user (authorization code)*; **Public client** ticked.
 - **Authorized redirect URIs:** `https://<region>-mcp.creatio.com/oauth/callback` — the region of your site (`eu1`,
-  `eu3`, `uk1`, `us1`, `ca1`, `mx1`, `au1`, `jp1`, `ae1`).
+  `eu3`, `uk1`, `us1`, `ca1`, `mx1`, `au1`, `jp1`, `ae1`). It must be on the same host as the MCP server you connect
+  to (`CREATIO_HTTP_MCP_URL`); otherwise the sign-in fails.
 - **Permitted users:** everyone who will use the agent. An empty list lets no one in.
 
 Note the app's **Client ID**.
@@ -264,6 +265,7 @@ the agent's menu does not clear it.
    not see variables set later.
 2. Ask your AI agent to remove the saved sign-in, for example: *"Delete your stored sign-in data for the MCP server
    `rca-creatio-http`, and nothing else, so I can sign in again."* The agent knows where its host keeps it.
+   Alternatively, remove the `rca-creatio-http` server and set it up again as above: its saved sign-in goes with it.
 3. Close the agent, start it again, and sign in to `rca-creatio-http` (in Claude Code: `/mcp` → **Authenticate**).
 
 **"Integration access is not allowed"**, and the page address ends in `consent?errorId=3`. The Creatio user you signed
