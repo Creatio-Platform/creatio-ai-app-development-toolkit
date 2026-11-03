@@ -237,10 +237,13 @@ const ITEM_TYPE_ROWS = [
         items: { from: SOURCE.OPTION_ELEMENTS, required: true } },
       children: { componentType: "crt.RadioGroupItem", slot: "items", gateInputs: ["caption"],
         propMap: { value: { from: SOURCE.OPTION_VALUE }, caption: { from: SOURCE.OPTION_CAPTION },
-          disabled: { from: SOURCE.OPTION_DISABLED } } } },
+          disabled: { from: SOURCE.OPTION_DISABLED } },
+        // How a split group's hidden copy of another group's option is hidden: the element-level `visible` every
+        // Freedom view element accepts (what a page business rule toggles), not a component input.
+        hidden: { prop: "visible", value: false } } },
     verify: { componentType: "crt.IconRadioButton" },
     notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become the options and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning. "
-      + "Where the run's registry carries crt.RadioGroup and a crt.RadioGroupItem with the `caption` input (a stand export, or a pinned platform version that has both), the group is built as crt.RadioGroup with `valuesSource: custom`, `items: []` and one named crt.RadioGroupItem child per classic option (caption `#ResourceString(<option name>_caption)#`, the classic `enabled: false` as `disabled: true`); elsewhere — including an unpinned run over the vendored union index — it stays crt.IconRadioButton. "
+      + "Where the run's registry carries crt.RadioGroup and a crt.RadioGroupItem with the `caption` input (a stand export, or a pinned platform version that has both), the group is built as crt.RadioGroup with `valuesSource: custom`, `items: []` and one named crt.RadioGroupItem child per built classic option, followed in a split group by a hidden (`visible: false`) copy of each other group's option it lacks (caption `#ResourceString(<option name>_caption)#`, the classic `enabled: false` as `disabled: true`); elsewhere — including an unpinned run over the vendored union index — it stays crt.IconRadioButton. "
       + "Option values keep their classic TYPE (true/false, numbers, text), because the group writes the option value back unchanged. "
       + "The Page Designer cannot edit a group with custom values: its options are changed in the page schema. "
       + "Required: no required validator is added for a Boolean/Integer group — a new record already holds false / 0, which preselects an option exactly as in Classic and which the required validator treats as filled anyway.",

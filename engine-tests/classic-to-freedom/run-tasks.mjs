@@ -10488,6 +10488,42 @@ const locateRow = (dir, label) => {
   }
 }
 
+console.log("\n===== a withheld feature: its decision lives in `manifest.deliverableStatus` =====");
+// "Connected to" with no registry evidence: the cut builds nothing for it until a status answers it, and a `build`
+// answer is a build row like any feature's.
+{
+  const connBody = `define("MPage",[],function(){return{entitySchemaName:"M",details:{EntityConnections:{schemaName:"EntityConnectionsDetailV2",entitySchemaName:"EntityConnection",filter:{masterColumn:"Id",detailColumn:"SysModuleEntity"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"EntityConnections",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}]};});`;
+  const DEC = new Map([["D6", "Connections block on"], ["D7", "Connected to is not carried over"]]);
+  const CONFIRM = "confirm:feature-component-unavailable:EntityConnectionsDetailV2";
+  const LABEL = { [CONFIRM]: "[feature-component-unavailable] EntityConnectionsDetailV2", "feature:Connections": "Connections (`crt.Connections`)" };
+  const cutConn = (label, deliverableStatus) => {
+    const m = { ...manifestOf(), schemas: [{ pkg: "P", body: connBody }], detailSchemas: {}, childPageSchemas: {}, deliverableStatus };
+    const run = runMigration(m, { decisions: DEC });
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, run, { ...optsOf(m), decisions: DEC });
+    const rows = readTaskDir(dir).flatMap((t) => t.rows.map((r) => ({ ...r, task: t })));
+    fs.rmSync(base, { recursive: true, force: true });
+    return { run, set, byId: (id) => rows.find((r) => r.task.pageKey === "main" && r.label.startsWith(LABEL[id])) };
+  };
+  const open = cutConn("withheld-open", undefined);
+  check("withheld feature: with no status the cut holds no `feature:Connections` build row, and its confirm row stays open",
+    () => !open.set.refused && !open.byId("feature:Connections") && open.byId(CONFIRM) && !open.byId(CONFIRM).outcomeKind,
+    () => ({ refused: open.set.problems, confirm: open.byId(CONFIRM) }));
+  for (const [n, id] of ["feature:Connections", CONFIRM].entries()) {
+    const built = cutConn(`withheld-build-${n}`, { [`main#${id}`]: { status: "build", decision: "D6" } });
+    check(`withheld feature: \`build\` with a D<N> on \`${id}\` cuts an open build row gated on \`crt.Connections\``,
+      () => built.run.statusIssues.length === 0 && !built.set.refused && built.byId("feature:Connections")
+        && !built.byId("feature:Connections").outcomeKind && /crt\.Connections/.test(built.byId("feature:Connections").label),
+      () => ({ issues: built.run.statusIssues, refused: built.set.problems, row: built.byId("feature:Connections") }));
+    const dropped = cutConn(`withheld-wontdo-${n}`, { [`main#${id}`]: { status: "wont-do", decision: "D7" } });
+    check(`withheld feature: \`wont-do\` on \`${id}\` closes its confirm row at the cut with the decision — no build row`,
+      () => dropped.run.statusIssues.length === 0 && !dropped.set.refused && !dropped.byId("feature:Connections")
+        && dropped.byId(CONFIRM)?.outcomeKind === "wont-do" && dropped.byId(CONFIRM).outcome === "wont-do — Connected to is not carried over (D7)",
+      () => ({ issues: dropped.run.statusIssues, refused: dropped.set.problems, confirm: dropped.byId(CONFIRM) }));
+  }
+}
+
 console.log("\n===== a folder cut with one aggregate Fields / Related lists row =====");
 {
   const FIX = path.join(DIR, "fixtures", "tasks-aggregate-rows");

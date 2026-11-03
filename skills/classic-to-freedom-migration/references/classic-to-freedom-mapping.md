@@ -110,6 +110,56 @@ For each Classic page/detail, record:
 | Mini page | Freedom mini page, modal, side panel, or explicit UX decision if the Classic interaction has no direct analog. |
 | Radio group (`ViewItemType.RADIO_GROUP`) | `crt.RadioGroup` with named `crt.RadioGroupItem` options where the target stand carries it, else `crt.IconRadioButton` — see *Radio groups* below. |
 
+### Fields that are not entity columns
+
+When the entity columns are supplied and a field's `bindTo` is not one of them, the engine reads the Classic view
+model first:
+
+- **A page attribute the Classic page declares** (`attributes: { UsrX: { dataValueType, value } }`) is the page's own
+  state, so the field is an **editable** control over a page attribute: the attribute keeps its Classic default
+  (`{ value }`, or `{}` with none), with no PDS path and no PDS column, and it raises no `attribute-virtual` decision
+  (the ChangeSet creates it). The control comes from the attribute's `dataValueType` through the same selection as a
+  column's type: Boolean → `crt.Checkbox`, text → `crt.Input`, numbers → `crt.NumberInput`, dates → a date picker. An
+  attribute with no `dataValueType`, or a code the engine does not know, gets an editable `crt.Input` and is named in
+  the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
+  bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
+- **A page attribute field Classic disables statically** (`enabled: false` or `readonly: true` on the field) gets
+  the same page attribute and control, but **read-only**. Only these static signals make it read-only, and only from
+  the layer that states them last: a later layer that states `enabled` or `readonly` as a binding, or removes the key
+  (`remove … properties`), clears the literal; removing `controlConfig` clears the masking the same way.
+- **A page attribute the page's own methods write** (`this.set("UsrX", …)`), with no attribute `dependencies` entry
+  listing it in its `columns`, stays **editable**, as Classic rendered it: an init method that sets a starting value
+  the user then toggles looks the same as a computed value. Every such field is named, with the method(s) that write
+  it, in one `field-attribute-computed` decision (each attribute once, however many fields bind it): if the value is
+  one the page computes and only shows, make the field read-only by hand. A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring,
+  so such an attribute is not named.
+- **A masked text field on a declared page attribute** (`controlConfig: { protect: true }`, a password-style input,
+  on an attribute whose type gives a plain single-line `crt.Input`) is a `crt.PasswordInput`, a
+  password-style masked input that stays editable as in Classic, and is named in a `secret-column` decision of its own
+  (`(<n> masked fields)`). The masking is on screen only: the stored value is the real secret, not a hash or
+  ciphertext. `crt.PasswordInput` is `compositeOnly` (no Designer toolbar entry), so verify on a stand that the built
+  field masks its value. It is emitted only where the run's component registry shows the target stand carries it
+  (a stand export, or a pinned `manifest.platformVersion` the vendored index carries it on, as for radio groups);
+  otherwise (no registry or an unindexed pinned version, both the vendored union, or an export without it) the field
+  is a **read-only** `crt.Input`, which shows the value unmasked, named in a `secret-column` row
+  (`(<n> masked fields, not masked)`) that says so and how to re-run with the stand's registry or a pinned version.
+- **A masked field on an entity column** is emitted exactly as if it were not masked, whatever its type, and is named
+  in no `secret-column` row: the masking of entity columns is not migrated. A masked non-text page attribute keeps the
+  control its type gives, also with no row. A hashed or encrypted column keeps its read-only `crt.Input`. A masked name
+  that is neither an entity column nor a declared attribute keeps the read-only linked value below unchanged.
+- **A hashed or encrypted page attribute** (`HASH_TEXT` / `SECURE_TEXT`) is never made a page attribute, so its value
+  is not put on screen: the field keeps the read-only linked value below, and the attribute is named in the hashed /
+  encrypted `secret-column` row like such a column.
+- **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
+  type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
+  naming the attribute (one per attribute, however many fields bind it), also when the field is masked: its values
+  source has to be built by hand.
+- **A page attribute that maps a related column** (`columnPath`, or `type: Terrasoft.ViewModelColumnType.ENTITY_COLUMN`,
+  numeric `0`)
+  is that column's value, not page state: its field keeps the read-only linked value below, as an undeclared name.
+- **A name the page does not declare** is a value shown from a related data source: a read-only field
+  (`linkedValue`) over `PDS.<name>`, with the nearest entity columns as a hint for a renamed column.
+
 ### Radio groups
 
 The engine builds a Classic `RADIO_GROUP` as `crt.RadioGroup` only when the run's component registry shows the target
@@ -131,11 +181,21 @@ page (mini page, typed or child page) uses the root run's registry unless its ow
 - **Binding.** A group bound to an entity column keeps the PDS attribute and column. A group bound to a page
   attribute (including a ContentBuilder `$Attr`) gets a page attribute with no PDS path.
 - **Disabled options.** A Classic `enabled: false` option is emitted with `disabled: true`. An option whose `enabled`
-  is bound to an attribute is emitted without it and raises a `radio-option-rule` decision: add a page business rule
-  that makes that option read-only.
+  is bound to a Boolean entity column or to a Boolean page attribute the Classic page declares gets a live
+  `disabled: "$<name> | crt.InvertBooleanValue"`; the column gets its PDS attribute and column, the page attribute is
+  created with its Classic default. Any other bound `enabled` (a view-model method, a name the page does not define, a
+  non-Boolean column or page attribute, a declared page attribute with no `dataValueType`, or a binding with a Classic
+  `bindConfig` converter) is emitted without `disabled` and raises a `radio-option-rule` decision: port that name as a
+  converter or a page attribute and bind the option's `disabled` to it, inverted. When layers disagree, the highest
+  layer that states `enabled` wins: a static `enabled: false` over a lower layer's binding stays `disabled: true`.
 - **Split groups.** Several Classic groups on one attribute become separate `crt.RadioGroup` elements, each with its
-  own options. Each raises a `radio-group-split` decision: a value chosen in another group shows as an extra, disabled
-  "no longer available" option, where Classic left the group empty. No group property hides it yet.
+  own options. After its own options, each group also carries a `visible: false` `crt.RadioGroupItem` copy of every
+  other group's option whose value it does not have (named `<group>_<option>`, the other option's value and caption
+  resource; a value several groups share is copied once). On a creatio-ui build that handles hidden option values, a
+  value chosen in another group is then a known, hidden option, so the group shows nothing selected, as in Classic.
+  Limit: a creatio-ui build without hidden-value handling still shows the other group's value as an extra
+  "no longer available" option. The copies add no Layout rows. A Classic option that is hidden (`visible: false`) is
+  not built, so it is not copied either.
 - **Required.** No required validator is added for a Boolean / Integer group: a new record already holds `false` /
   `0`, which preselects an option exactly as in Classic, and the required validator treats that value as filled
   anyway.
@@ -175,7 +235,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 | **Embedded profile card** — a compact card of a LINKED record dropped into the page by `modules` config (a "requester" block on a request page; `AccountProfile` on `ContactPageV2`) | `profileCards[]` + a `profile-card` ⚠ item | the native Freedom **compact profile** in the **side profile**, keyed by the PROFILED entity: Contact → `crt.ContactCompactProfile`, Account → `crt.AccountCompactProfile`, user → `crt.UserCompactProfile` (the first two need the `CrtCustomer360App` package). Wire it with `referenceColumn: "$<masterColumnName>"` + `readonly: true`. No native component for that entity ⇒ rebuild the card as its own read-only-fields island. Full recipe below. | treat it as an "unknown embedded module" and drop the card (that is exactly the gap this rule closes); mistake the **actions/DCM dashboard** module for a profile card (it carries `masterColumnName` too, but nested under `dashboardConfig`); assume the native card shows everything the classic one did — it does **not** render Phone/Email/JobTitle-style columns, which must be added beside it. |
 | **Card widget** — a record-scoped indicator/chart embedded by `modules` config, its data stored per record in **`SysWidgetDashboard`** (e.g. the KPI charts on a Campaign page). The module carries `widgetKey` (which widget) + `recordId` (its `SysWidgetDashboard` record). | `cardWidgets[]` + a `card-widget` ⚠ item (carries `widgetKey`, `recordId`, `region`) | **converted by the migrator, never hand-built.** Group the widgets by `recordId`; per group make ONE `ConvertCardWidgetsProcess` call (batch the group's `widgetKeys`) and place the returned `freedomElementConfig` in the widget's `region`. Full recipe below. | hand-build a chart/list as a substitute; make one process call per widget instead of one per `recordId`; confuse it with a **section dashboard** (`SysDashboard`, the analytics section) — that is a different store and out of scope here. |
 | Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
-| Connected to (object connections, `EntityConnectionsDetailV2` / `EmailEntityConnectionsDetailV2` / «Связи объекта») | `standardFeatures` (feature `Connections`) when the run's registry carries `crt.Connections`; otherwise a `feature-component-unavailable` decision | ONE `crt.Connections` element, named after the Classic detail (`EntityConnections`), in the Classic detail's tab, its `caption` the Classic detail title. The platform builds a field per connection of the object at run time: the page stores NO child element and NO `crt.ComboBox` per connection. Tips the Classic page sets in `onGetPageTips` become `connections` entries `{ code, tooltip: "#ResourceString(<Element>_<Code>_tooltip)#" }`; the component shows listed connections first. It renders only with the `UseConnectionsComponent` feature ON (OFF by default) | **Built only on positive evidence** — `manifest.componentRegistry` (the stand's export) or a pinned `platformVersion` that carries `crt.Connections`; a union of versions is not evidence. Without it nothing is built in the detail's place — NOT a related list over `EntityConnection`, which holds the object's connection settings, not the record's connections. **On a RECONCILE where the Freedom page already shows "Connected to" (a `crt.Connections` or a group of connection lookups), KEEP it and close the row with `--decide <rowKey> --wont-do`** (reason: `standard Freedom component kept — counterpart not migrated`). See `existing-freedom-reconcile.md`. |
+| Connected to (object connections, `EntityConnectionsDetailV2` / `EmailEntityConnectionsDetailV2` / «Связи объекта») | `standardFeatures` (feature `Connections`) when the run's registry carries `crt.Connections`; otherwise `withheldFeatures` + a `feature-component-unavailable` item | ONE `crt.Connections` element, named after the Classic detail (`EntityConnections`), in the Classic detail's tab, its `caption` the Classic detail title. The platform builds a field per connection of the object at run time: the page stores NO child element and NO `crt.ComboBox` per connection. Tips the Classic page sets in `onGetPageTips` become `connections` entries `{ code, tooltip: "#ResourceString(<Element>_<Code>_tooltip)#" }`; the component shows listed connections first. It renders only with the `UseConnectionsComponent` feature ON (OFF by default) | **Built only on positive evidence** — `manifest.componentRegistry` (the stand's export) or a pinned `platformVersion` that carries `crt.Connections`; a union of versions is not evidence. Without it nothing is built in the detail's place — NOT a related list over `EntityConnection`, which holds the object's connection settings, not the record's connections — it keeps a `⚠ not built` Layout row in its Classic tab. Record the answer as ONE `manifest.deliverableStatus` entry on `<pageKey>#feature:Connections` (or its confirm item): `wont-do` + `D<N>` closes the row; `build` + `D<N>` builds it as if the registry carried it, gated by `--verify`. Never in `decisionsWithoutDeliverable`. **On a RECONCILE where the Freedom page already shows "Connected to" (a `crt.Connections` or a group of connection lookups), KEEP it and close the row with `--decide <rowKey> --wont-do`** (reason: `standard Freedom component kept — counterpart not migrated`). See `existing-freedom-reconcile.md`. |
 | Run process (record page) | `needsDecision` `process-launch` / `cardActions` | a Freedom "Run process" card action — **only if a process is connected to the section**. Check `ProcessInModules` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) — that is what fills the menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the name. None connected ⇒ **drop the button**; if some are, name each in the plan. | fabricate a process name, or migrate the button when nothing is connected. The base `ProcessButton` names none; only a literal `executeProcess`/`RunProcessRequest` name in a method is captured directly. `SysProcessEntity`/`VwSysProcessEntity` ("Object in process") are runtime process↔record instances — NOT the section config. |
 | Print (record page) | `cardActions` (Print) | a Freedom print action — **only if printables/reports exist** for the section. Check `SysModuleReport` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) / `ShowInCard eq true` (record card); read each `Caption`/`Type`/`SysReportSchemaUId`\|`FileName`. None ⇒ **drop the button** — unless a step-5.1 behaviour card says a client layer binds the print button's menu to a collection its own code fills (`controlConfig.menu.items`): `SysModuleReport` does not describe that menu, so the card decides the button. | migrate the Print button when the section has no printables (it would be a dead button); drop a print menu a client layer builds itself because `SysModuleReport` returned nothing. |
 | Standard page chrome — View options, Tag, Reload, Save/Close/Discard | `cardActions` / base buttons | native Freedom capabilities: **ViewOptions is not migrated**; **Tag is provided by the default template**; Save/Close/Discard/Reload are standard page chrome. The checklist folds only these into one `Card actions — native` row; a custom `getActions` action gets its own `Card action — <name>` row, closed by a built element whose name, caption or `clicked.request` spells the action name as whole words, ignoring case and separators (`CalculateSaasMetricsMenuItem`, caption "Calculate SaaS metrics" and `usr.CalculateSaaSMetricsRequest` all close `calculateSaaSMetrics`; `RecalculateSaaSMetricsMenuItem` does not). A word boundary is a separator, a lower→upper case step or the end of an acronym; a digit right after a letter is not one. When the card declares a longer hint that contains this one (`approve` / `approveAll` / `massApprove`), `ApproveAllMenuItem` closes only `approveAll` and `MassApproveMenuItem` only `massApprove`. Only a crt.Button, a crt.MenuItem or an element with a `clicked` request counts — a field, tab or label named after the action (`PostDate` for `post`) does not. A `remove` op is not evidence, and only ASCII letters and digits are compared, so a localized caption cannot close the row — name the menu item (or its `clicked.request`) after the action. | present them as bespoke actions to build. |

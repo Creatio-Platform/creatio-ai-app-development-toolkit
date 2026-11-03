@@ -328,7 +328,11 @@ may change it at any time by saying so — update the line first.
    cites a `D<N>` decisions.md does not hold, or drops a deliverable whose behaviour card, confirm
    item or fold chain other deliverables share without a status of their own: give each its own
    (`wont-do`, or `"status": "build"`); nothing is closed on their behalf. A decision taken DURING
-   the build still goes through `--decide`.
+   the build still goes through `--decide`. An answer to a `feature-component-unavailable` item
+   (a Classic block the engine does not build without registry evidence, e.g. "Connected to") decides
+   a deliverable too: record it on `<pageKey>#feature:<Feature>` (or the confirm item's id) — `wont-do`
+   + `D<N>` closes it on its Layout row, `build` + `D<N>` builds it as if the registry carried it —
+   never in `decisionsWithoutDeliverable`.
 
    **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
    deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints

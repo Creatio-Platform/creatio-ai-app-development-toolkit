@@ -11448,7 +11448,7 @@ try {
   const rgGroupOp = (name, attr, extra = "") => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"${attr}"},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
   const rgOptOp = (name, parent, value, extra = "") => `{operation:"insert",name:"${name}",parentName:"${parent}",propertyName:"items",values:{value:${JSON.stringify(value)},caption:{bindTo:"Resources.Strings.${name}Caption"}${extra}}}`;
   const rgCols = { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" }, Priority: { type: "Integer" },
-    Mode: { type: "ShortText" }, Owner: { type: "Lookup" } };
+    Mode: { type: "ShortText" }, Owner: { type: "Lookup" }, UsrCanPick: { type: "Boolean" } };
   const rgRes = { IsPrimaryCaption: "Is primary", OptYesCaption: "Yes", OptNoCaption: "No" };
   const rgDiff = [rgGroupOp("IsPrimary", "IsPrimary"), rgOptOp("OptYes", "IsPrimary", true), rgOptOp("OptNo", "IsPrimary", false)].join(",");
   const rgUp = (diff, extra = {}) => gmRun(diff, "", { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport, ...extra });
@@ -11553,9 +11553,403 @@ try {
   check("radio group T4: an option with enabled:false emits disabled:true; the others carry no disabled flag",
     enKid("ModeA").disabled === true && !("disabled" in enKid("ModeB")) && !("disabled" in enKid("ModeC")),
     () => ({ ModeA: enKid("ModeA"), ModeB: enKid("ModeB"), ModeC: enKid("ModeC") }));
-  check("radio group T4: an option whose enabled is bound to an attribute raises ONE business-rule decision naming the option and the attribute",
-    enRule.length === 1 && enRule[0].item === "ModeB" && /CanPickB/.test(enRule[0].reason) && /business rule/.test(enRule[0].reason),
+  check("radio group T4: an option whose enabled is bound to a name that is neither a column nor a declared attribute raises ONE decision naming the option and the name, asking to port it",
+    enRule.length === 1 && enRule[0].item === "ModeB" && /'CanPickB'/.test(enRule[0].reason)
+    && /port 'CanPickB' as a converter or a page attribute and bind the option's disabled to it \(inverted\)/.test(enRule[0].reason)
+    && !/cannot bind/.test(enRule[0].reason),
     () => enRule);
+
+  // T4c / AC 4 — an option enabled by a Boolean entity column binds `disabled` to it, inverted, live.
+  const enCol = rgUp([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPick"}`),
+    rgOptOp("ModeB", "Mode", "b")].join(","));
+  const enColAttrs = enCol.changeSet.viewModelConfigDiff[0].values;
+  const enColPds = enCol.changeSet.modelConfigDiff[0].values;
+  check("radio group T4c: an option enabled by a Boolean entity column gets disabled \"$<col> | crt.InvertBooleanValue\", the column's PDS attribute + column, and no radio-option-rule",
+    rgOp(enCol, "ModeA")?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue" && !("disabled" in (rgOp(enCol, "ModeB")?.values || {}))
+    && enColAttrs.UsrCanPick?.modelConfig?.path === "PDS.UsrCanPick" && enColPds.UsrCanPick?.path === "UsrCanPick"
+    && rgDecisions(enCol, "radio-option-rule").length === 0,
+    () => ({ ModeA: rgOp(enCol, "ModeA"), attr: enColAttrs.UsrCanPick, pds: enColPds.UsrCanPick, rules: rgDecisions(enCol, "radio-option-rule") }));
+
+  // T4d / AC 4 — an option enabled by a declared classic page attribute: the same binding, and the attribute is created
+  // with its classic default and accounted for (no attribute-virtual ask for it).
+  const enAttr = gmRun([rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickA"}`),
+    rgOptOp("ModeB", "Mode", "b")].join(","),
+    `attributes:{UsrCanPickA:{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enAttrAttrs = enAttr.changeSet.viewModelConfigDiff[0].values;
+  check("radio group T4d: an option enabled by a declared page attribute gets the same inverted disabled binding; the attribute is { value: <classic default> }, has no PDS path, is accounted for and raises no attribute-virtual or radio-option-rule",
+    rgOp(enAttr, "ModeA")?.values?.disabled === "$UsrCanPickA | crt.InvertBooleanValue"
+    && JSON.stringify(enAttrAttrs.UsrCanPickA) === JSON.stringify({ value: true })
+    && !("UsrCanPickA" in enAttr.changeSet.modelConfigDiff[0].values) && enAttr.changeSet.accountedFor.includes("UsrCanPickA")
+    && !rgDecisions(enAttr, "attribute-virtual").some((d) => d.item === "UsrCanPickA")
+    && rgDecisions(enAttr, "radio-option-rule").length === 0,
+    () => ({ ModeA: rgOp(enAttr, "ModeA"), attr: enAttrAttrs.UsrCanPickA, virtual: rgDecisions(enAttr, "attribute-virtual"), rules: rgDecisions(enAttr, "radio-option-rule") }));
+
+  // T4e / AC 4 — what cannot be bound as-is keeps the decision: a view-model method, a non-Boolean column, and a
+  // binding that carries a classic converter (even on a Boolean column — binding it would drop the converter).
+  const enKeep = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"canPickA"}`),
+    rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"Name"}`),
+    rgOptOp("ModeC", "Mode", "c", `,enabled:{bindTo:"UsrCanPick",bindConfig:{converter:"invertBooleanValue"}}`),
+    rgOptOp("ModeD", "Mode", "d")].join(","),
+    `methods:{canPickA:function(){return true;}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enKeepRule = rgDecisions(enKeep, "radio-option-rule");
+  const enKeepFor = (opt, x) => enKeepRule.filter((d) => d.item === opt && d.reason.includes(`'${x}'`)
+    && d.reason.includes(`port '${x}' as a converter or a page attribute and bind the option's disabled to it (inverted)`));
+  check("radio group T4e: an option enabled by a method, a non-Boolean column or a converter binding gets no disabled key and ONE port decision each, naming the option and the name",
+    ["ModeA", "ModeB", "ModeC", "ModeD"].every((n) => !("disabled" in (rgOp(enKeep, n)?.values || {})))
+    && enKeepRule.length === 3 && enKeepFor("ModeA", "canPickA").length === 1 && enKeepFor("ModeB", "Name").length === 1
+    && enKeepFor("ModeC", "UsrCanPick").length === 1 && /converter 'invertBooleanValue'/.test(enKeepFor("ModeC", "UsrCanPick")[0]?.reason || ""),
+    () => ({ rules: enKeepRule, kids: rgKids(enKeep, "Mode") }));
+  // A declared page attribute binds only when it is Boolean: a TEXT attribute, and one that states no dataValueType
+  // (its Classic truthiness cannot be assumed), keep the decision like a non-Boolean column.
+  const enAttrKeep = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrModeText"}`),
+    rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"UsrUntyped"}`), rgOptOp("ModeC", "Mode", "c")].join(","),
+    `attributes:{UsrModeText:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"},UsrUntyped:{value:true}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enAttrKeepRule = rgDecisions(enAttrKeep, "radio-option-rule");
+  const enAttrKeepFor = (opt, x) => enAttrKeepRule.filter((d) => d.item === opt && d.reason.includes(`'${x}'`)
+    && d.reason.includes(`port '${x}' as a converter or a page attribute and bind the option's disabled to it (inverted)`));
+  check("radio group T4e: an option enabled by a declared TEXT page attribute, or by a declared attribute with no dataValueType, gets no disabled key and ONE port decision each, naming the option and the attribute",
+    ["ModeA", "ModeB", "ModeC"].every((n) => !("disabled" in (rgOp(enAttrKeep, n)?.values || {})))
+    && enAttrKeepRule.length === 2 && enAttrKeepFor("ModeA", "UsrModeText").length === 1 && enAttrKeepFor("ModeB", "UsrUntyped").length === 1,
+    () => ({ rules: enAttrKeepRule, kids: rgKids(enAttrKeep, "Mode") }));
+
+  // The converter rides on the binding through the fold: a layer that restates the binding without one clears it, the
+  // converters of the properties it leaves alone are kept, and removing the property removes its converter.
+  const convLayer = (name, op) => parseSchema(`define("${name}",[],function(){return{entitySchemaName:"X",diff:[${op}]};});`, name);
+  const convBase = convLayer("B", `{operation:"insert",name:"Opt",parentName:"Header",propertyName:"items",values:{value:1,enabled:{bindTo:"UsrCanPick",bindConfig:{converter:"invertBooleanValue"}},visible:{bindTo:"ShowOpt",bindConfig:{converter:function(v){return !v;}}}}}`);
+  const convOf = (layers) => mergeHierarchy(layers).items.find((i) => i.name === "Opt")?.handlerConverters;
+  const convRestated = convOf([convBase, convLayer("C", `{operation:"merge",name:"Opt",values:{enabled:{bindTo:"UsrCanPick"}}}`)]);
+  const convRemoved = convOf([convBase, convLayer("C", `{operation:"remove",name:"Opt",properties:["visible"]}`)]);
+  check("radio group T4e: the fold carries a bound property's converter (an inline function by kind), a restating layer replaces it, and removing the property removes it",
+    JSON.stringify(convOf([convBase])) === JSON.stringify({ enabled: "invertBooleanValue", visible: "(inline function)" })
+    && JSON.stringify(convRestated) === JSON.stringify({ visible: "(inline function)" })
+    && JSON.stringify(convRemoved) === JSON.stringify({ enabled: "invertBooleanValue" }),
+    () => ({ base: convOf([convBase]), convRestated, convRemoved }));
+
+  // T4g / AC 1 + AC 4 — precedence across layers: the higher layer's statement of `enabled` wins whole. A static
+  // `enabled: false` over a lower layer's binding stays disabled:true (the stale binding does not override it), and a
+  // binding over a lower layer's `enabled: false` is the live binding.
+  const layerRun = (base, top) => runMigration({ entity: "X", noParentTemplate: true, entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport,
+    schemas: [{ pkg: "P", body: gmBody("", [nameOp, rgGroupOp("Mode", "Mode"), rgOptOp("ModeA", "Mode", "a", base), rgOptOp("ModeB", "Mode", "b")].join(",")) },
+      { pkg: "Q", body: `define("Q",[],function(){return{entitySchemaName:"X",diff:[{operation:"merge",name:"ModeA",values:{${top}}}]};});` }] }, { baseDir: FIX });
+  const staticOverBound = layerRun(`,enabled:{bindTo:"UsrCanPick",bindConfig:{converter:"invertBooleanValue"}}`, "enabled:false");
+  const boundOverStatic = layerRun(",enabled:false", `enabled:{bindTo:"UsrCanPick"}`);
+  check("radio group T4g: a higher layer's static enabled:false over a lower layer's binding emits disabled:true and raises no radio-option-rule; a higher layer's binding over a static enabled:false emits the live inverted binding",
+    rgOp(staticOverBound, "ModeA")?.values?.disabled === true && rgDecisions(staticOverBound, "radio-option-rule").length === 0
+    && rgOp(boundOverStatic, "ModeA")?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue"
+    && rgDecisions(boundOverStatic, "radio-option-rule").length === 0,
+    () => ({ staticOverBound: rgOp(staticOverBound, "ModeA"), boundOverStatic: rgOp(boundOverStatic, "ModeA"),
+      rules: [rgDecisions(staticOverBound, "radio-option-rule"), rgDecisions(boundOverStatic, "radio-option-rule")] }));
+
+  // T4f / AC 4 — the same enabled source on two options is defined once and not overwritten, and a declared page
+  // attribute with no classic default is created as {} and still accounted for.
+  const enTwice = gmRun([rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPick"}`), rgOptOp("ModeB", "Mode", "b", `,enabled:{bindTo:"UsrCanPick"}`),
+    rgOptOp("ModeC", "Mode", "c", `,enabled:{bindTo:"UsrFlag"}`), rgOptOp("ModeD", "Mode", "d", `,enabled:{bindTo:"UsrFlag"}`)].join(","),
+    `attributes:{UsrFlag:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},`,
+    { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const enTwiceAttrs = enTwice.changeSet.viewModelConfigDiff[0].values;
+  const enTwicePds = enTwice.changeSet.modelConfigDiff[0].values;
+  check("radio group T4f: two options enabled by one Boolean column both get the inverted binding, over ONE PDS attribute + column",
+    ["ModeA", "ModeB"].every((n) => rgOp(enTwice, n)?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue")
+    && JSON.stringify(enTwiceAttrs.UsrCanPick) === JSON.stringify({ modelConfig: { path: "PDS.UsrCanPick" } })
+    && JSON.stringify(enTwicePds.UsrCanPick) === JSON.stringify({ path: "UsrCanPick" }),
+    () => ({ kids: rgKids(enTwice, "Mode"), attr: enTwiceAttrs.UsrCanPick, pds: enTwicePds.UsrCanPick }));
+  check("radio group T4f: two options enabled by a declared page attribute with no default both get the inverted binding; the attribute is {}, has no PDS path, is accounted for once and raises no attribute-virtual or radio-option-rule",
+    ["ModeC", "ModeD"].every((n) => rgOp(enTwice, n)?.values?.disabled === "$UsrFlag | crt.InvertBooleanValue")
+    && JSON.stringify(enTwiceAttrs.UsrFlag) === "{}" && !("UsrFlag" in enTwicePds)
+    && enTwice.changeSet.accountedFor.filter((n) => n === "UsrFlag").length === 1
+    && !rgDecisions(enTwice, "attribute-virtual").some((d) => d.item === "UsrFlag")
+    && rgDecisions(enTwice, "radio-option-rule").length === 0,
+    () => ({ attr: enTwiceAttrs.UsrFlag, virtual: rgDecisions(enTwice, "attribute-virtual"), rules: rgDecisions(enTwice, "radio-option-rule") }));
+
+  // T8 / AC 4 — a field bound to a page attribute the classic view model declares (no entity column behind it) is an
+  // editable control over that page attribute, with its classic default: no PDS path, no PDS column, no linked value.
+  // A radio option enabled by the same attribute then binds to a value the page really holds.
+  const fieldOp = (name) => `{operation:"insert",name:"${name}",parentName:"Header",propertyName:"items",values:{bindTo:"${name}"}}`;
+  const faRun = (diff, attrs) => gmRun(diff, `attributes:{${attrs}},`, { entityColumns: rgCols, resources: rgRes, componentRegistry: rgExport });
+  const faAttrs = (run) => run.changeSet.viewModelConfigDiff[0].values;
+  const faPds = (run) => run.changeSet.modelConfigDiff[0].values;
+  const faEditable = (run, name) => {
+    const v = rgOp(run, name)?.values || {};
+    return v.control === "$" + name && !("readOnly" in v) && !("linkedValue" in v) && !("linkedNearest" in v);
+  };
+  const faPageAttr = (run, name, expected) => JSON.stringify(faAttrs(run)[name]) === JSON.stringify(expected)
+    && !(name in faPds(run)) && run.changeSet.accountedFor.includes(name)
+    && !rgDecisions(run, "attribute-virtual").some((d) => d.item === name);
+  const faBool = faRun([fieldOp("UsrCanPickReplica"), rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickReplica"}`), rgOptOp("ModeB", "Mode", "b")].join(","),
+  "UsrCanPickReplica:{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}");
+  check("field T8: a field on a declared Boolean page attribute is an editable crt.Checkbox over a page attribute { value: <classic default> } with no PDS path, no PDS column and no attribute-virtual decision",
+    rgOp(faBool, "UsrCanPickReplica")?.values?.type === "crt.Checkbox" && faEditable(faBool, "UsrCanPickReplica")
+    && faPageAttr(faBool, "UsrCanPickReplica", { value: true }),
+    () => ({ field: rgOp(faBool, "UsrCanPickReplica"), attr: faAttrs(faBool).UsrCanPickReplica, pds: faPds(faBool).UsrCanPickReplica,
+      virtual: rgDecisions(faBool, "attribute-virtual") }));
+  check("field T8: a radio option enabled by that attribute gets disabled \"$<attr> | crt.InvertBooleanValue\" over the same page attribute, and no radio-option-rule or field-attribute-lookup decision",
+    rgOp(faBool, "ModeA")?.values?.disabled === "$UsrCanPickReplica | crt.InvertBooleanValue"
+    && rgDecisions(faBool, "radio-option-rule").length === 0 && rgDecisions(faBool, "field-attribute-lookup").length === 0,
+    () => ({ ModeA: rgOp(faBool, "ModeA"), rules: rgDecisions(faBool, "radio-option-rule"), lookup: rgDecisions(faBool, "field-attribute-lookup") }));
+
+  // T8b — the control comes from the attribute's dataValueType, like a column's: text → crt.Input, a number →
+  // crt.NumberInput, a date → a date picker. A declared attribute with no dataValueType is an editable crt.Input and is
+  // named in the existing field-control decision (its type is not known).
+  const faScalar = faRun(["UsrNote", "UsrCount", "UsrDue", "UsrLoose", "UsrOdd"].map(fieldOp).join(","),
+    `UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"},UsrCount:{dataValueType:Terrasoft.DataValueType.INTEGER},UsrDue:{dataValueType:Terrasoft.DataValueType.DATE},UsrLoose:{value:"y"},UsrOdd:{dataValueType:99,value:"z"}`);
+  const faFieldControl = rgDecisions(faScalar, "field-control");
+  check("field T8b: a field on a declared TEXT page attribute is an editable crt.Input over a page attribute { value: <classic default> } with no PDS path",
+    rgOp(faScalar, "UsrNote")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrNote") && faPageAttr(faScalar, "UsrNote", { value: "x" }),
+    () => ({ field: rgOp(faScalar, "UsrNote"), attr: faAttrs(faScalar).UsrNote, pds: faPds(faScalar).UsrNote }));
+  check("field T8b: Integer and Date page attributes get an editable crt.NumberInput and a date picker over a page attribute {}; an untyped one an editable crt.Input named in the field-control decision",
+    rgOp(faScalar, "UsrCount")?.values?.type === "crt.NumberInput" && faEditable(faScalar, "UsrCount") && faPageAttr(faScalar, "UsrCount", {})
+    && rgOp(faScalar, "UsrDue")?.values?.type === "crt.DateTimePicker" && rgOp(faScalar, "UsrDue")?.values?.pickerType === "date"
+    && faEditable(faScalar, "UsrDue") && faPageAttr(faScalar, "UsrDue", {})
+    && rgOp(faScalar, "UsrLoose")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrLoose") && faPageAttr(faScalar, "UsrLoose", { value: "y" })
+    && faFieldControl.length === 1 && /UsrLoose/.test(faFieldControl[0].reason) && !/UsrNote|UsrCount|UsrDue/.test(faFieldControl[0].reason),
+    () => ({ ops: ["UsrCount", "UsrDue", "UsrLoose"].map((n) => rgOp(faScalar, n)), attrs: faAttrs(faScalar), fieldControl: faFieldControl }));
+  check("field T8b: an attribute with a numeric dataValueType code the engine does not know (99) is an editable crt.Input over a page attribute { value: <classic default> }, named in the field-control decision",
+    rgOp(faScalar, "UsrOdd")?.values?.type === "crt.Input" && faEditable(faScalar, "UsrOdd") && faPageAttr(faScalar, "UsrOdd", { value: "z" })
+    && faFieldControl.length === 1 && /UsrOdd/.test(faFieldControl[0].reason),
+    () => ({ field: rgOp(faScalar, "UsrOdd"), attr: faAttrs(faScalar).UsrOdd, fieldControl: faFieldControl }));
+
+  // T8c — a Lookup page attribute keeps the linked-value output (a lookup field needs a values source the field pass
+  // does not build) and ONE decision names it.
+  const faLookup = faRun(fieldOp("UsrRef"), "UsrRef:{dataValueType:Terrasoft.DataValueType.LOOKUP,isLookup:true}");
+  const faLookupRows = rgDecisions(faLookup, "field-attribute-lookup");
+  check("field T8c: a field on a declared Lookup page attribute keeps the read-only linked value over PDS.<attr> and raises ONE field-attribute-lookup decision naming the attribute",
+    rgOp(faLookup, "UsrRef")?.values?.readOnly === true && rgOp(faLookup, "UsrRef")?.values?.linkedValue === true
+    && faAttrs(faLookup).UsrRef?.modelConfig?.path === "PDS.UsrRef" && faPds(faLookup).UsrRef?.path === "UsrRef"
+    && faLookupRows.length === 1 && faLookupRows[0].item === "UsrRef" && /'UsrRef'/.test(faLookupRows[0].reason),
+    () => ({ field: rgOp(faLookup, "UsrRef"), attr: faAttrs(faLookup).UsrRef, rows: faLookupRows }));
+  // A lookup attribute bound by two fields (UsrRef, UsrRef_2) is one decision, not one per field.
+  const faLookupTwice = faRun([fieldOp("UsrRef"), `{operation:"insert",name:"UsrRefAgain",parentName:"Header",propertyName:"items",values:{bindTo:"UsrRef"}}`].join(","),
+    "UsrRef:{dataValueType:Terrasoft.DataValueType.LOOKUP,isLookup:true}");
+  const faLookupTwiceRows = rgDecisions(faLookupTwice, "field-attribute-lookup");
+  check("field T8c: a declared Lookup attribute bound by two fields keeps both linked-value fields and raises exactly ONE field-attribute-lookup decision",
+    rgOps(faLookupTwice).filter((o) => o.values?.control === "$UsrRef" && o.values?.linkedValue === true).length === 2
+    && faLookupTwiceRows.length === 1 && faLookupTwiceRows[0].item === "UsrRef",
+    () => ({ fields: rgOps(faLookupTwice).filter((o) => o.values?.control === "$UsrRef"), rows: faLookupTwiceRows }));
+  // The non-scalar type set decides on its own: attributes declared only by dataValueType (no isLookup), one of each
+  // type the set lists, plus a TEXT collection. Each keeps the read-only linked value, one row each, none editable.
+  const faNonScalarNames = ["UsrLk", "UsrEn", "UsrId", "UsrImg", "UsrColl"];
+  const faNonScalar = faRun(faNonScalarNames.map(fieldOp).join(","),
+    "UsrLk:{dataValueType:Terrasoft.DataValueType.LOOKUP},UsrEn:{dataValueType:Terrasoft.DataValueType.ENUM},"
+    + "UsrId:{dataValueType:Terrasoft.DataValueType.GUID},UsrImg:{dataValueType:Terrasoft.DataValueType.IMAGELOOKUP},"
+    + "UsrColl:{dataValueType:Terrasoft.DataValueType.TEXT,isCollection:true}");
+  const faNonScalarRows = rgDecisions(faNonScalar, "field-attribute-lookup");
+  check("field T8c: Lookup, Enum, Guid and ImageLookup attributes declared only by dataValueType (no isLookup), and a collection, each keep the read-only linked value over PDS.<attr>, with exactly one field-attribute-lookup row each",
+    faNonScalarNames.every((n) => rgOp(faNonScalar, n)?.values?.readOnly === true && rgOp(faNonScalar, n)?.values?.linkedValue === true
+      && faAttrs(faNonScalar)[n]?.modelConfig?.path === "PDS." + n)
+    && faNonScalarRows.length === faNonScalarNames.length
+    && faNonScalarNames.every((n) => faNonScalarRows.filter((d) => d.item === n).length === 1),
+    () => ({ fields: faNonScalarNames.map((n) => rgOp(faNonScalar, n)), rows: faNonScalarRows }));
+
+  // T8d — a field on a name that is neither an entity column nor a declared attribute is unchanged: a read-only
+  // linked value from a related data source over PDS.<name>.
+  const faUndeclared = faRun(fieldOp("UsrOther"), "UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT}");
+  check("field T8d: a field on an undeclared non-column name stays a read-only linked value over PDS.<name> with a PDS column, and raises no field-attribute-lookup decision",
+    rgOp(faUndeclared, "UsrOther")?.values?.readOnly === true && rgOp(faUndeclared, "UsrOther")?.values?.linkedValue === true
+    && faAttrs(faUndeclared).UsrOther?.modelConfig?.path === "PDS.UsrOther" && faPds(faUndeclared).UsrOther?.path === "UsrOther"
+    && !faUndeclared.changeSet.accountedFor.includes("UsrOther") && rgDecisions(faUndeclared, "field-attribute-lookup").length === 0,
+    () => ({ field: rgOp(faUndeclared, "UsrOther"), attr: faAttrs(faUndeclared).UsrOther }));
+  // The same name masked (`controlConfig.protect`) keeps exactly the same output: masking is no evidence the name is a
+  // column or page state, so it is no masked field and is named in no secret-column row.
+  const faUndeclaredMasked = faRun(`{operation:"insert",name:"UsrOther",parentName:"Header",propertyName:"items",values:{bindTo:"UsrOther",controlConfig:{protect:true}}}`,
+    "UsrNote:{dataValueType:Terrasoft.DataValueType.TEXT}");
+  check("field T8d: a MASKED field on an undeclared non-column name keeps exactly the unmasked linked-value output and raises no secret-column decision",
+    JSON.stringify(rgOp(faUndeclaredMasked, "UsrOther")) === JSON.stringify(rgOp(faUndeclared, "UsrOther"))
+    && JSON.stringify(faAttrs(faUndeclaredMasked).UsrOther) === JSON.stringify(faAttrs(faUndeclared).UsrOther)
+    && rgDecisions(faUndeclaredMasked, "secret-column").length === 0,
+    () => ({ masked: rgOp(faUndeclaredMasked, "UsrOther"), plain: rgOp(faUndeclared, "UsrOther"), rows: rgDecisions(faUndeclaredMasked, "secret-column") }));
+  // RISK1 — an attribute that maps a column of a related source (`columnPath`, or ViewModelColumnType ENTITY_COLUMN) is
+  // that column's value, not page state: its field keeps the undeclared name's linked-value output.
+  // `type: 0` is the numeric ViewModelColumnType.ENTITY_COLUMN.
+  const faRelatedNames = ["UsrPath", "UsrEntCol", "UsrEntNum"];
+  const faRelated = faRun(faRelatedNames.map(fieldOp).join(","),
+    `UsrPath:{dataValueType:Terrasoft.DataValueType.TEXT,columnPath:"Contact.Phone"},UsrEntCol:{dataValueType:Terrasoft.DataValueType.TEXT,type:Terrasoft.ViewModelColumnType.ENTITY_COLUMN},`
+    + `UsrEntNum:{dataValueType:Terrasoft.DataValueType.TEXT,type:0}`);
+  check("field T8d: a declared attribute with a columnPath, one of type ViewModelColumnType.ENTITY_COLUMN and one of numeric type 0 keep the read-only linked value over PDS.<attr>: no page attribute, no field-attribute-lookup decision",
+    faRelatedNames.every((n) => rgOp(faRelated, n)?.values?.readOnly === true && rgOp(faRelated, n)?.values?.linkedValue === true
+      && rgOp(faRelated, n)?.values?.type === "crt.Input"
+      && faAttrs(faRelated)[n]?.modelConfig?.path === "PDS." + n && faPds(faRelated)[n]?.path === n)
+    && rgDecisions(faRelated, "field-attribute-lookup").length === 0,
+    () => ({ fields: faRelatedNames.map((n) => rgOp(faRelated, n)), attrs: faAttrs(faRelated), lookup: rgDecisions(faRelated, "field-attribute-lookup") }));
+  // A declared scalar attribute whose name IS a supplied entity column is that column: the field keeps its PDS binding.
+  const faColAttr = faRun(`{operation:"insert",name:"NameField",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
+    `Name:{dataValueType:Terrasoft.DataValueType.TEXT,value:"x"}`);
+  const faColAttrFields = rgOps(faColAttr).filter((o) => o.values?.control === "$Name");
+  check("field T8d: a declared scalar attribute whose name is a supplied entity column keeps the editable column control over PDS.<col>, a PDS column and no page attribute",
+    faColAttrFields.length >= 1 && faColAttrFields.every((o) => o.values.type === "crt.Input" && !("readOnly" in o.values) && !("linkedValue" in o.values))
+    && JSON.stringify(faAttrs(faColAttr).Name) === JSON.stringify({ modelConfig: { path: "PDS.Name" } })
+    && JSON.stringify(faPds(faColAttr).Name) === JSON.stringify({ path: "Name" }),
+    () => ({ fields: faColAttrFields, attr: faAttrs(faColAttr).Name, pds: faPds(faColAttr).Name }));
+
+  // T8e — a field on a declared attribute: a masked one (`controlConfig.protect`) is an editable crt.PasswordInput named
+  // in a secret-column decision (an entity column keeps its own control whatever its masking); a statically disabled one (enabled: false / readonly: true) is read-only; one the
+  // page's own code writes stays editable and is named, with its writer, in one field-attribute-computed decision.
+  // Each is still a plain page attribute (no PDS path, no linked value).
+  const roOp = (name, extra, elName = name) => `{operation:"insert",name:"${elName}",parentName:"Header",propertyName:"items",values:{bindTo:"${name}"${extra}}}`;
+  // the emitted elements bound to a column, of one component type: the template's own `Name` field binds Name too, so a
+  // masked Name field is found by its binding and type, never by a generated element name
+  const roBound = (run, col, type) => rgOps(run).filter((o) => o.values?.control === "$" + col && o.values?.type === type);
+  const roRun = (diff, body, cols = rgCols) => gmRun(diff, body, { entityColumns: cols, resources: rgRes, componentRegistry: rgExport });
+  const roReadOnly = (run, name) => {
+    const v = rgOp(run, name)?.values || {};
+    return v.control === "$" + name && v.readOnly === true && !("linkedValue" in v);
+  };
+  const roMaskedText = (d) => /protect/.test(d.reason) && /crt\.PasswordInput/.test(d.reason) && /real secret/.test(d.reason)
+    && !/never emitted as editable cleartext|has no plain field that masks/.test(d.reason);
+  const roMasked = roRun(roOp("UsrSecret", `,controlConfig:{protect:true}`),
+    `attributes:{UsrSecret:{dataValueType:Terrasoft.DataValueType.TEXT}},`);
+  const roMaskedRows = rgDecisions(roMasked, "secret-column");
+  check("field T8e: a field Classic masks (controlConfig.protect) on a declared TEXT attribute is an EDITABLE crt.PasswordInput over a page attribute, named in ONE secret-column decision that calls it a masked input over the real secret",
+    rgOp(roMasked, "UsrSecret")?.values?.type === "crt.PasswordInput" && faEditable(roMasked, "UsrSecret")
+    && faPageAttr(roMasked, "UsrSecret", {})
+    && roMaskedRows.length === 1 && /UsrSecret/.test(roMaskedRows[0].reason) && roMaskedText(roMaskedRows[0]),
+    () => ({ field: rgOp(roMasked, "UsrSecret"), attr: faAttrs(roMasked).UsrSecret, rows: roMaskedRows }));
+  // A masked field on an entity column keeps the output it has without the masking, on every registry path: an
+  // editable crt.Input for a text column, crt.NumberInput for an Integer one, and no secret-column decision.
+  const roColDiff = (extra) => [roOp("Name", extra, "NameMasked"), roOp("Priority", extra)].join(",");
+  const roColRegs = { export: { componentRegistry: rgExport }, pinned: { platformVersion: "8.3.4" }, union: {} };
+  const roColPairs = Object.entries(roColRegs).map(([reg, m]) => {
+    const run = (extra) => gmRun(roColDiff(extra), "", { entityColumns: rgCols, resources: rgRes, ...m });
+    return { reg, masked: run(`,controlConfig:{protect:true}`), plain: run("") };
+  });
+  const roColOps = (run) => rgOps(run).filter((o) => ["$Name", "$Priority"].includes(o.values?.control));
+  check("field T8e: a masked TEXT and a masked Integer entity column emit exactly the unmasked output (editable crt.Input / crt.NumberInput bound to the column) on a stand export, a pinned platformVersion and the vendored union, with no secret-column decision",
+    roColPairs.every(({ masked, plain }) => JSON.stringify(roColOps(masked)) === JSON.stringify(roColOps(plain))
+      && JSON.stringify(faAttrs(masked)) === JSON.stringify(faAttrs(plain))
+      && roBound(masked, "Name", "crt.Input").length === 2 && roBound(masked, "Name", "crt.Input").every((o) => !("readOnly" in o.values))
+      && rgOp(masked, "Priority")?.values?.type === "crt.NumberInput" && !("readOnly" in rgOp(masked, "Priority").values)
+      && rgDecisions(masked, "secret-column").length === 0),
+    () => roColPairs.map(({ reg, masked, plain }) => ({ reg, masked: roColOps(masked), plain: roColOps(plain), rows: rgDecisions(masked, "secret-column") })));
+  // A masked column of another non-text type keeps its typed control too: Boolean, Date, Lookup.
+  const roMaskedTyped = roRun(["IsPrimary", "Owner", "UsrDue"].map((n) => roOp(n, `,controlConfig:{protect:true}`)).join(","), "",
+    { ...rgCols, UsrDue: { type: "Date" } });
+  check("field T8e: masked Boolean, Lookup and Date columns keep their crt.Checkbox, crt.ComboBox and date picker, with no secret-column decision",
+    rgOp(roMaskedTyped, "IsPrimary")?.values?.type === "crt.Checkbox" && rgOp(roMaskedTyped, "Owner")?.values?.type === "crt.ComboBox"
+    && rgOp(roMaskedTyped, "UsrDue")?.values?.type === "crt.DateTimePicker" && rgDecisions(roMaskedTyped, "secret-column").length === 0,
+    () => ({ fields: ["IsPrimary", "Owner", "UsrDue"].map((n) => rgOp(roMaskedTyped, n)), rows: rgDecisions(roMaskedTyped, "secret-column") }));
+  // AC 4 holds for a masked attribute: a masked Lookup attribute (by dataValueType, and by isLookup) keeps the
+  // read-only linked value and its field-attribute-lookup row; a masked Integer attribute keeps its typed control.
+  const roMaskedNonText = roRun(["UsrLkMasked", "UsrRefMasked", "UsrQtyMasked"].map((n) => roOp(n, `,controlConfig:{protect:true}`)).join(","),
+    `attributes:{UsrLkMasked:{dataValueType:Terrasoft.DataValueType.LOOKUP},UsrRefMasked:{dataValueType:Terrasoft.DataValueType.TEXT,isLookup:true},UsrQtyMasked:{dataValueType:Terrasoft.DataValueType.INTEGER}},`);
+  const roMaskedNonTextLookup = rgDecisions(roMaskedNonText, "field-attribute-lookup");
+  check("field T8e: a MASKED Lookup attribute and a MASKED isLookup attribute keep the read-only linked value over PDS.<attr> with one field-attribute-lookup row each; a masked Integer attribute is an editable crt.NumberInput page attribute; no secret-column decision",
+    ["UsrLkMasked", "UsrRefMasked"].every((n) => rgOp(roMaskedNonText, n)?.values?.readOnly === true && rgOp(roMaskedNonText, n)?.values?.linkedValue === true
+      && rgOp(roMaskedNonText, n)?.values?.type !== "crt.PasswordInput"
+      && faAttrs(roMaskedNonText)[n]?.modelConfig?.path === "PDS." + n
+      && roMaskedNonTextLookup.filter((d) => d.item === n).length === 1)
+    && roMaskedNonTextLookup.length === 2
+    && rgOp(roMaskedNonText, "UsrQtyMasked")?.values?.type === "crt.NumberInput" && faEditable(roMaskedNonText, "UsrQtyMasked")
+    && faPageAttr(roMaskedNonText, "UsrQtyMasked", {})
+    && rgDecisions(roMaskedNonText, "secret-column").length === 0,
+    () => ({ fields: ["UsrLkMasked", "UsrRefMasked", "UsrQtyMasked"].map((n) => rgOp(roMaskedNonText, n)), lookup: roMaskedNonTextLookup,
+      secret: rgDecisions(roMaskedNonText, "secret-column") }));
+  // A declared HASH_TEXT / SECURE_TEXT attribute is never made a page attribute (its value would reach the screen): the
+  // field keeps the read-only linked-value output of an undeclared name, and the stored-secret row names it with its
+  // hashed / encrypted reason. Never the lookup decision, and the classic default value is in none of the page diffs.
+  const roStoredAttr = roRun([roOp("UsrHashAttr", ""), roOp("UsrSecureAttr", "")].join(","),
+    `attributes:{UsrHashAttr:{dataValueType:Terrasoft.DataValueType.HASH_TEXT,value:"hash-default"},UsrSecureAttr:{dataValueType:Terrasoft.DataValueType.SECURE_TEXT,value:"secure-default"}},`);
+  const roStoredAttrRows = rgDecisions(roStoredAttr, "secret-column");
+  check("field T8e: declared HASH_TEXT and SECURE_TEXT attributes keep the read-only linked value over PDS.<attr> (no page attribute, the classic default value in no page diff), named in ONE stored-secret secret-column row (hashed / encrypted), with no field-attribute-lookup decision",
+    ["UsrHashAttr", "UsrSecureAttr"].every((n) => rgOp(roStoredAttr, n)?.values?.type === "crt.Input" && rgOp(roStoredAttr, n)?.values?.readOnly === true
+      && rgOp(roStoredAttr, n)?.values?.linkedValue === true && faAttrs(roStoredAttr)[n]?.modelConfig?.path === "PDS." + n
+      && !roStoredAttr.changeSet.accountedFor.includes(n))
+    && !/hash-default|secure-default/.test(JSON.stringify([roStoredAttr.changeSet.viewConfigDiff, roStoredAttr.changeSet.viewModelConfigDiff, roStoredAttr.changeSet.modelConfigDiff]))
+    && roStoredAttrRows.length === 1 && /UsrHashAttr \(hashed\)/.test(roStoredAttrRows[0].reason) && /UsrSecureAttr \(encrypted\)/.test(roStoredAttrRows[0].reason)
+    && rgDecisions(roStoredAttr, "field-attribute-lookup").length === 0,
+    () => ({ fields: ["UsrHashAttr", "UsrSecureAttr"].map((n) => rgOp(roStoredAttr, n)), rows: roStoredAttrRows, lookup: rgDecisions(roStoredAttr, "field-attribute-lookup") }));
+  // crt.PasswordInput is gated on the run's component registry: with no registry (the vendored union), an export that
+  // lacks it, or a pinned platformVersion the vendored index does not hold (the union again), a masked text attribute
+  // is a read-only crt.Input and its secret-column row says the masked input could not be shown to exist.
+  const roNoPwExport = { ...rgExport, components: rgExport.components.filter((c) => c.componentType !== "crt.PasswordInput") };
+  const roPinRun = (m) => gmRun(roOp("UsrPinAttr", `,controlConfig:{protect:true}`), `attributes:{UsrPinAttr:{dataValueType:Terrasoft.DataValueType.TEXT}},`,
+    { entityColumns: rgCols, resources: rgRes, ...m });
+  const roUngated = [{}, { componentRegistry: roNoPwExport }, { platformVersion: "99.9.9" }].map(roPinRun);
+  check("field T8e: where the run's registry cannot show crt.PasswordInput (vendored union with no registry; an export without it; an unindexed pinned platformVersion), a masked text attribute is a read-only crt.Input, named in ONE secret-column row that states the fallback, and no crt.PasswordInput is emitted",
+    roUngated.every((run) => {
+      const rows = rgDecisions(run, "secret-column");
+      return roBound(run, "UsrPinAttr", "crt.PasswordInput").length === 0
+        && rgOp(run, "UsrPinAttr")?.values?.type === "crt.Input" && roReadOnly(run, "UsrPinAttr") && faPageAttr(run, "UsrPinAttr", {})
+        && rows.length === 1 && rows[0].item === "(1 masked fields, not masked)" && /cannot show/.test(rows[0].reason)
+        && /manifest\.componentRegistry/.test(rows[0].reason) && /manifest\.platformVersion/.test(rows[0].reason) && /UsrPinAttr/.test(rows[0].reason);
+    }),
+    () => roUngated.map((run) => ({ field: rgOp(run, "UsrPinAttr"), rows: rgDecisions(run, "secret-column") })));
+  // A platformVersion pinned to a version the vendored index carries crt.PasswordInput on builds it, with no stand export.
+  const roPinned = roPinRun({ platformVersion: "8.3.4" });
+  const roPinnedRows = rgDecisions(roPinned, "secret-column");
+  check("field T8e: with manifest.platformVersion pinned to an indexed version that carries crt.PasswordInput (8.3.4, no stand export), a masked text attribute is an EDITABLE crt.PasswordInput page attribute named in ONE masked secret-column row",
+    rgOp(roPinned, "UsrPinAttr")?.values?.type === "crt.PasswordInput" && faEditable(roPinned, "UsrPinAttr") && faPageAttr(roPinned, "UsrPinAttr", {})
+    && roPinnedRows.length === 1 && roPinnedRows[0].item === "(1 masked fields)" && roMaskedText(roPinnedRows[0]),
+    () => ({ field: rgOp(roPinned, "UsrPinAttr"), rows: roPinnedRows }));
+  // A mixed page: a masked text column, a masked ENCRYPTED column, a plain ENCRYPTED column, and a masked attribute
+  // that is also statically disabled. The encrypted columns keep the read-only stored-secret path (masked or not);
+  // the page carries exactly two secret-column rows, one per reason, each naming exactly its own fields.
+  const roMixed = roRun([roOp("Name", `,controlConfig:{protect:true}`, "NameMasked"), roOp("UsrVault", `,controlConfig:{protect:true}`),
+    roOp("UsrToken", ""), roOp("UsrPin", `,controlConfig:{protect:true},enabled:false`)].join(","),
+  `attributes:{UsrPin:{dataValueType:Terrasoft.DataValueType.TEXT}},`,
+  { ...rgCols, UsrVault: { type: "24" }, UsrToken: { type: "24" } });
+  const roMixedRows = rgDecisions(roMixed, "secret-column");
+  const roMixedMasked = roMixedRows.filter((d) => /masked fields/.test(d.item));
+  const roMixedStored = roMixedRows.filter((d) => !/masked fields/.test(d.item));
+  check("field T8e: a mixed page has exactly TWO secret-column rows — the masked row names only the masked attribute (1 field), the stored-secret row names both encrypted columns (2 fields); the masked text column keeps its editable crt.Input, encrypted columns stay read-only crt.Input even when masked, and a masked attribute also disabled is a read-only crt.PasswordInput",
+    roMixedRows.length === 2 && roMixedMasked.length === 1 && roMixedStored.length === 1
+    && roMixedMasked[0].item === "(1 masked fields)" && !/\bName\b/.test(roMixedMasked[0].reason) && /UsrPin/.test(roMixedMasked[0].reason)
+    && !/UsrVault|UsrToken/.test(roMixedMasked[0].reason)
+    && roMixedStored[0].item === "(2 fields)" && /UsrVault \(encrypted\)/.test(roMixedStored[0].reason) && /UsrToken \(encrypted\)/.test(roMixedStored[0].reason)
+    && ["UsrVault", "UsrToken"].every((n) => rgOp(roMixed, n)?.values?.type === "crt.Input" && rgOp(roMixed, n)?.values?.readOnly === true)
+    && rgOp(roMixed, "UsrPin")?.values?.type === "crt.PasswordInput" && roReadOnly(roMixed, "UsrPin")
+    && roBound(roMixed, "Name", "crt.PasswordInput").length === 0
+    && roBound(roMixed, "Name", "crt.Input").length === 2 && roBound(roMixed, "Name", "crt.Input").every((o) => !("readOnly" in o.values)),
+    () => ({ rows: roMixedRows, fields: [...roBound(roMixed, "Name", "crt.Input"), ...["UsrVault", "UsrToken", "UsrPin"].map((n) => rgOp(roMixed, n))] }));
+  const roDisabled = roRun([roOp("UsrShown", ",enabled:false"), roOp("UsrLocked", ",readonly:true")].join(","),
+    `attributes:{UsrShown:{dataValueType:Terrasoft.DataValueType.TEXT,value:"v"},UsrLocked:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},`);
+  check("field T8e: a field on a declared attribute that Classic disables statically (enabled: false / readonly: true) is read-only over a page attribute with its default, and raises no secret-column decision",
+    roReadOnly(roDisabled, "UsrShown") && faPageAttr(roDisabled, "UsrShown", { value: "v" })
+    && rgOp(roDisabled, "UsrLocked")?.values?.type === "crt.Checkbox" && roReadOnly(roDisabled, "UsrLocked")
+    && rgDecisions(roDisabled, "secret-column").length === 0 && rgDecisions(roDisabled, "field-attribute-computed").length === 0,
+    () => ({ shown: rgOp(roDisabled, "UsrShown"), locked: rgOp(roDisabled, "UsrLocked"), attrs: faAttrs(roDisabled) }));
+  // Code-written attributes: FullAddress (computed by a method, like AccountMiniPage) stays editable; UsrToggle (its
+  // own dependency reacts to a user change) stays editable and is not reported; a statically disabled one is not
+  // reported either. ONE field-attribute-computed row names FullAddress and its writer.
+  const roComputed = roRun([roOp("FullAddress", ""), roOp("UsrToggle", ""), roOp("UsrStamp", ",enabled:false"), roOp("UsrCalc", "")].join(","),
+    `attributes:{FullAddress:{dataValueType:Terrasoft.DataValueType.TEXT},UsrToggle:{dataValueType:Terrasoft.DataValueType.BOOLEAN,dependencies:[{columns:["UsrToggle"],methodName:"onToggle"}]},UsrStamp:{dataValueType:Terrasoft.DataValueType.TEXT},`
+    + `UsrCalc:{dataValueType:Terrasoft.DataValueType.TEXT,dependencies:[{columns:["Name"],methodName:"calc"}]}},`
+    + `methods:{setFullAddress:function(){this.set("FullAddress",this.get("Name"));},onToggle:function(){this.set('UsrToggle',false);},stamp:function(){this.set("UsrStamp","x");},calc:function(){this.set("UsrCalc",this.get("Name"));}},`);
+  const roComputedRows = rgDecisions(roComputed, "field-attribute-computed");
+  check("field T8e: a declared attribute the page's code writes (this.set) with no dependency on it stays EDITABLE and is named with its writing method in ONE field-attribute-computed decision, also when its own dependency watches another column; a dependency-watched or statically disabled one is not named",
+    rgOp(roComputed, "FullAddress")?.values?.type === "crt.Input" && faEditable(roComputed, "FullAddress") && faPageAttr(roComputed, "FullAddress", {})
+    && rgOp(roComputed, "UsrToggle")?.values?.type === "crt.Checkbox" && faEditable(roComputed, "UsrToggle") && faPageAttr(roComputed, "UsrToggle", {})
+    && roReadOnly(roComputed, "UsrStamp")
+    && roComputedRows.length === 1 && roComputedRows[0].reason.includes("FullAddress (setFullAddress)")
+    && /read-only by hand/.test(roComputedRows[0].reason) && !/UsrToggle|UsrStamp/.test(roComputedRows[0].reason)
+    // UsrCalc's own dependency watches ANOTHER column (Name), so the user does not edit UsrCalc: still reported
+    && faEditable(roComputed, "UsrCalc") && roComputedRows[0].reason.includes("UsrCalc (calc)") && roComputedRows[0].item === "(2 field(s))",
+    () => ({ full: rgOp(roComputed, "FullAddress"), toggle: rgOp(roComputed, "UsrToggle"), stamp: rgOp(roComputed, "UsrStamp"), rows: roComputedRows }));
+  // A code-written attribute bound by two fields is listed once.
+  const roComputedTwice = roRun([roOp("FullAddress", ""), roOp("FullAddress", "", "FullAddressAgain")].join(","),
+    `attributes:{FullAddress:{dataValueType:Terrasoft.DataValueType.TEXT}},methods:{setFullAddress:function(){this.set("FullAddress",this.get("Name"));}},`);
+  const roComputedTwiceRows = rgDecisions(roComputedTwice, "field-attribute-computed");
+  check("field T8e: a code-written attribute bound by two fields is listed ONCE in the field-attribute-computed decision",
+    roComputedTwiceRows.length === 1 && roComputedTwiceRows[0].item === "(1 field(s))"
+    && roComputedTwiceRows[0].reason.split("FullAddress (setFullAddress)").length === 2,
+    () => roComputedTwiceRows);
+  // The init-then-toggle pattern: a method sets the starting value, the user toggles the field, an option's enabled
+  // reads it. The field stays an editable checkbox, the option keeps its live inverted binding, one decision names it.
+  const roInit = roRun([roOp("UsrCanPickReplica", ""), rgGroupOp("Mode", "Mode"),
+    rgOptOp("ModeA", "Mode", "a", `,enabled:{bindTo:"UsrCanPickReplica"}`), rgOptOp("ModeB", "Mode", "b")].join(","),
+  `attributes:{UsrCanPickReplica:{dataValueType:Terrasoft.DataValueType.BOOLEAN}},methods:{init:function(){this.callParent(arguments);this.set("UsrCanPickReplica",false);}},`);
+  const roInitRows = rgDecisions(roInit, "field-attribute-computed");
+  check("field T8e: init-then-toggle — an attribute set in a method with no dependency is an EDITABLE crt.Checkbox, the option keeps disabled \"$<attr> | crt.InvertBooleanValue\", and ONE field-attribute-computed decision names the field and the method",
+    rgOp(roInit, "UsrCanPickReplica")?.values?.type === "crt.Checkbox" && faEditable(roInit, "UsrCanPickReplica")
+    && faPageAttr(roInit, "UsrCanPickReplica", {})
+    && rgOp(roInit, "ModeA")?.values?.disabled === "$UsrCanPickReplica | crt.InvertBooleanValue"
+    && roInitRows.length === 1 && roInitRows[0].reason.includes("UsrCanPickReplica (init)"),
+    () => ({ field: rgOp(roInit, "UsrCanPickReplica"), opt: rgOp(roInit, "ModeA"), rows: roInitRows }));
 
   // T4b / R4 + R6 — option visibility: a static `visible: false` option is not built and is reported; a bound one is
   // built and raises the business-rule decision.
@@ -11582,18 +11976,79 @@ try {
     () => ({ opt: noCapOpt, noCapRow, resources: noCap.changeSet.resources }));
 
   // T5 / R5 — a split group: two classic groups on one attribute.
-  const sp = rgUp([rgGroupOp("PrioA", "Priority"), rgOptOp("P1", "PrioA", 1), rgOptOp("P2", "PrioA", 2),
-    rgGroupOp("PrioB", "Priority"), rgOptOp("P3", "PrioB", 3), rgOptOp("P4", "PrioB", 4)].join(","));
-  const spSplit = rgDecisions(sp, "radio-group-split");
-  check("radio group T5: two groups bound to one attribute become two crt.RadioGroup elements, each with ITS OWN options",
+  // Group A's first option is statically disabled and group B's first is enabled by a Boolean column, so the copies'
+  // "no disabled" rule is exercised.
+  const sp = rgUp([rgGroupOp("PrioA", "Priority"), rgOptOp("P1", "PrioA", 1, ",enabled:false"), rgOptOp("P2", "PrioA", 2),
+    rgGroupOp("PrioB", "Priority"), rgOptOp("P3", "PrioB", 3, `,enabled:{bindTo:"UsrCanPick"}`), rgOptOp("P4", "PrioB", 4)].join(","));
+  const spKid = (group, name) => rgKids(sp, group).find((o) => o.name === name)?.values || {};
+  check("radio group T5: two groups bound to one attribute become two crt.RadioGroup elements, each with its own options first, then a hidden copy of every option of the other group",
     rgOp(sp, "PrioA")?.values?.type === "crt.RadioGroup" && rgOp(sp, "PrioB")?.values?.type === "crt.RadioGroup"
-    && rgKids(sp, "PrioA").map((o) => o.name).join(",") === "P1,P2" && rgKids(sp, "PrioB").map((o) => o.name).join(",") === "P3,P4",
+    && rgKids(sp, "PrioA").map((o) => o.name).join(",") === "P1,P2,PrioA_P3,PrioA_P4"
+    && rgKids(sp, "PrioB").map((o) => o.name).join(",") === "P3,P4,PrioB_P1,PrioB_P2",
     () => rgOps(sp).filter((o) => /^P/.test(o.name)));
-  check("radio group T5: each split group carries ONE split-group decision that names the shared attribute and the extra-disabled-option behaviour",
-    spSplit.map((d) => d.item).sort((a, b) => a.localeCompare(b)).join(",") === "PrioA,PrioB"
-    && spSplit.every((d) => /'Priority'/.test(d.reason) && /extra, disabled option/.test(d.reason))
-    && rgDecisions(up, "radio-group-split").length === 0,
-    () => spSplit);
+  check("radio group T5: a hidden copy is visible:false with the other option's typed value and caption resource; the group's own options carry no visible flag",
+    spKid("PrioA", "PrioA_P3").visible === false && spKid("PrioA", "PrioA_P3").value === 3
+    && spKid("PrioA", "PrioA_P3").caption === "#ResourceString(P3_caption)#"
+    && spKid("PrioA", "PrioA_P4").value === 4 && spKid("PrioA", "PrioA_P4").caption === "#ResourceString(P4_caption)#"
+    && spKid("PrioB", "PrioB_P1").visible === false && spKid("PrioB", "PrioB_P1").value === 1
+    && spKid("PrioB", "PrioB_P2").caption === "#ResourceString(P2_caption)#"
+    && ["P1", "P2"].every((n) => !("visible" in spKid("PrioA", n))) && ["P3", "P4"].every((n) => !("visible" in spKid("PrioB", n))),
+    () => ({ PrioA: rgKids(sp, "PrioA"), PrioB: rgKids(sp, "PrioB") }));
+  const copyKeysMatch = (group, copy, option) => {
+    const c = spKid(group, copy); const o = rgOp(sp, option)?.values || {};
+    return JSON.stringify(Object.keys(c).sort((a, b) => a.localeCompare(b))) === JSON.stringify(["caption", "type", "value", "visible"])
+      && c.type === o.type && c.value === o.value && c.caption === o.caption && c.visible === false;
+  };
+  check("radio group T5: each hidden copy's keys are exactly the built option's value and caption plus visible (no disabled), with the built option's values — also for a statically disabled and a column-enabled option",
+    rgOp(sp, "P1")?.values?.disabled === true && rgOp(sp, "P3")?.values?.disabled === "$UsrCanPick | crt.InvertBooleanValue"
+    && copyKeysMatch("PrioA", "PrioA_P3", "P3") && copyKeysMatch("PrioA", "PrioA_P4", "P4")
+    && copyKeysMatch("PrioB", "PrioB_P1", "P1") && copyKeysMatch("PrioB", "PrioB_P2", "P2"),
+    () => ({ PrioA: rgKids(sp, "PrioA"), PrioB: rgKids(sp, "PrioB") }));
+  // The copy's hiding key is the children spec's `hidden`, checked by the table validation: an element-level key is
+  // accepted by name, any other key must be an input of the option component.
+  const rgSpecRow = MAPPING_ROWS.find((r) => r.upgrade?.children?.componentType === "crt.RadioGroupItem");
+  const withHidden = (prop) => ({ ...rgSpecRow, upgrade: { ...rgSpecRow.upgrade, children: { ...rgSpecRow.upgrade.children, hidden: { prop, value: false } } } });
+  check("radio group T5: the RADIO_GROUP children spec hides copies with the element-level `visible`, which validates clean; a shared base input (`classes`) is accepted like in a propMap; a hiding key that is neither element-level nor an input is an unknown-input error",
+    rgSpecRow?.upgrade?.children?.hidden?.prop === "visible"
+    && !validateRow(rgSpecRow).some((f) => f.kind === "unknown-input")
+    && !validateRow(withHidden("classes")).some((f) => f.kind === "unknown-input")
+    && validateRow(withHidden("notAnInput")).some((f) => f.kind === "unknown-input" && f.prop === "notAnInput" && f.componentType === "crt.RadioGroupItem"),
+    () => ({ hidden: rgSpecRow?.upgrade?.children?.hidden, ok: validateRow(rgSpecRow), base: validateRow(withHidden("classes")), neg: validateRow(withHidden("notAnInput")) }));
+  check("radio group T5: split groups raise no radio-group-split decision, and no other run does either",
+    rgDecisions(sp, "radio-group-split").length === 0 && rgDecisions(up, "radio-group-split").length === 0,
+    () => rgDecisions(sp, "radio-group-split"));
+
+  // T5b / AC 3 — copies are deduplicated by value (the first occurrence wins), a single group gets none, and the
+  // copies add no Layout or coverage rows and nothing to the drop list.
+  const ov = rgUp([rgGroupOp("A", "Priority"), rgOptOp("A1", "A", 1), rgOptOp("A2", "A", 2),
+    rgGroupOp("B", "Priority"), rgOptOp("B2", "B", 2), rgOptOp("B3", "B", 3),
+    rgGroupOp("C", "Priority"), rgOptOp("C3", "C", 3), rgOptOp("C1", "C", 1)].join(","));
+  const ovKids = (g) => rgKids(ov, g).map((o) => o.name).join(",");
+  check("radio group T5b: a value a group already has is not copied into it, and a value several other groups share is copied once, from its first occurrence",
+    ovKids("A") === "A1,A2,A_B3" && ovKids("B") === "B2,B3,B_A1" && ovKids("C") === "C3,C1,C_A2"
+    && rgOp(ov, "C_A2")?.values?.caption === "#ResourceString(A2_caption)#" && rgOp(ov, "A_B3")?.values?.value === 3,
+    () => ({ A: rgKids(ov, "A"), B: rgKids(ov, "B"), C: rgKids(ov, "C") }));
+  check("radio group T5b: a single group gets no hidden copies",
+    rgKids(up, "IsPrimary").length === 2 && rgKids(up, "IsPrimary").every((o) => !("visible" in o.values)),
+    () => rgKids(up, "IsPrimary"));
+  const spSpec = renderDesignSpec(sp, {});
+  const spRows = (re) => spSpec.split("\n").filter((l) => /\|/.test(l) && re.test(l));
+  check("radio group T5b: the hidden copies add no Layout or coverage rows and reach neither the table elements nor the drop list",
+    spRows(/\| Priority \| crt\.RadioGroup \|/).length === 2 && spRows(/crt\.RadioGroupItem|Prio[AB]_P\d/).length === 0
+    && (sp.changeSet.tableElements || []).length === 0
+    && !sp.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" || /Prio[AB]_P\d/.test(d.item || "")),
+    () => ({ rows: spSpec.split("\n").filter((l) => /Prio|P\d/.test(l)), decisions: sp.changeSet.needsDecision }));
+
+  // T5c / AC 3 — a split group holding a Classic-hidden option: the hidden option is not built, so no group gets a copy
+  // of it, and it is still reported once.
+  const shv = rgUp([rgGroupOp("A", "Priority"), rgOptOp("A1", "A", 1), rgOptOp("A2", "A", 2, ",visible:false"),
+    rgGroupOp("B", "Priority"), rgOptOp("B3", "B", 3)].join(","));
+  const shvKids = (g) => rgKids(shv, g).map((o) => o.name).join(",");
+  const shvHidden = rgDecisions(shv, "radio-option-hidden");
+  check("radio group T5c: a Classic-hidden option of a split group is not built and not copied (B gets B_A1 only), A still gets its copy of B3, and the hidden option raises exactly one radio-option-hidden decision",
+    shvKids("A") === "A1,A_B3" && shvKids("B") === "B3,B_A1" && !rgOps(shv).some((o) => /A2/.test(o.name))
+    && shvHidden.length === 1 && shvHidden[0].item === "A2",
+    () => ({ A: rgKids(shv, "A"), B: rgKids(shv, "B"), hidden: shvHidden }));
 
   // T6 / R6 — the usage types that cannot be migrated are typed warnings, never half-configured elements.
   const gapCase = (diff) => {
@@ -15579,6 +16034,85 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       () => ({ decisions: r.changeSet.needsDecision.map((d) => [d.kind, d.item]), features: r.changeSet.standardFeatures, details: r.changeSet.details }));
   }
 
+  // A block the run does not build keeps its Classic place in the Layout, with a status; the decision on it is one
+  // `manifest.deliverableStatus` entry, on either `feature:Connections` or its confirm item.
+  const CONN_DEC = new Map([["D6", "Connections block on, UseConnectionsComponent turned on"], ["D7", "Connected to is not carried over"]]);
+  const CONFIRM_ID = "confirm:feature-component-unavailable:EntityConnectionsDetailV2";
+  const withRun = (deliverableStatus) => {
+    const m = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      resources: { ContactTip: "Who the call is with", GeneralInfoTabCaption: "General", EntityConnectionsDetailCaptionOnPage: "Connected to" },
+      deliverableStatus, schemas: [{ pkg: "P", body: connBody({ methods: TIPS }) }] };
+    const r = runMigration(m, { baseDir: FIX, decisions: CONN_DEC });
+    return { r, opts: { ...checklistOpts(m), decisions: CONN_DEC } };
+  };
+  const connLine = (spec) => spec.split("\n").find((l) => /\| Connected to \| Connections \|/.test(l)) || "";
+  const rowsOf = ({ r, opts }) => checklistGroups(r, opts).flatMap((g) => g.rows);
+  const withheld = withRun(undefined);
+  const wLine = connLine(withheld.r.designSpec);
+  const wFeat = withheld.r.changeSet.withheldFeatures?.[0];
+  check("Connected to (no registry evidence): the Classic block keeps a Layout row in its Classic tab — not built, why, and where to decide it",
+    () => /^\| Tab · General \|/.test(wLine) && /⚠ not built — no evidence the stand carries `crt\.Connections`/.test(wLine)
+      && wLine.includes("⚠ Confirm `[feature-component-unavailable] EntityConnectionsDetailV2`") && wLine.includes("`main#feature:Connections`")
+      && /element `EntityConnections`/.test(wLine) && /`Contact` → tooltip/.test(wLine),
+    () => withheld.r.designSpec.split("\n").filter((l) => /Connect/.test(l)));
+  check("Connected to (no registry evidence): the withheld feature keeps its tab, title, element and tips, and nothing is built or carried for it",
+    () => wFeat?.tab === "GeneralInfoTab" && wFeat.caption === "Connected to" && wFeat.element === "EntityConnections" && wFeat.connections.length === 2
+      && wFeat.withheld?.kind === "feature-component-unavailable" && !withheld.r.changeSet.standardFeatures.length
+      && !Object.keys(withheld.r.changeSet.resources).some((k) => k.startsWith("EntityConnections_"))
+      && withheld.r.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+      && !rowsOf(withheld).some((x) => x.deliverableId === "feature:Connections" || x.vk?.ftype === "crt.Connections")
+      && rowsOf(withheld).some((x) => x.deliverableId === CONFIRM_ID && !x.status),
+    () => ({ wFeat, features: withheld.r.changeSet.standardFeatures, rows: rowsOf(withheld).map((x) => x.deliverableId) }));
+
+  for (const key of ["main#feature:Connections", `main#${CONFIRM_ID}`]) {
+    const dropped = withRun({ [key]: { status: "wont-do", decision: "D7" } });
+    const dLine = connLine(dropped.r.designSpec);
+    const confirmRow = rowsOf(dropped).find((x) => x.deliverableId === CONFIRM_ID);
+    check(`Connected to wont-do on \`${key}\`: the Layout row closes inline with the decision, the confirm row closes with it, and the entry is valid`,
+      () => /\| not built \|/.test(dLine) && dLine.includes("**Won't do** — D7: Connected to is not carried over")
+        && confirmRow?.status?.kind === "wont-do" && confirmRow.status.decision === "D7"
+        && !(dropped.r.statusIssues || []).length && !dropped.r.changeSet.standardFeatures.length,
+      () => ({ dLine, confirmRow, issues: dropped.r.statusIssues }));
+    const endList = dropped.r.plan.includes("### Won't do") ? dropped.r.plan.slice(dropped.r.plan.indexOf("### Won't do")) : "";
+    check(`Connected to wont-do on \`${key}\`: printed on its Layout row, so the end \`### Won't do\` list names neither of its ids`,
+      () => typeof dropped.r.plan === "string" && dropped.r.plan.includes("**Won't do** — D7")
+        && !endList.includes("feature:Connections") && !endList.includes(CONFIRM_ID),
+      () => endList);
+  }
+
+  for (const key of ["main#feature:Connections", `main#${CONFIRM_ID}`]) {
+    const built = withRun({ [key]: { status: "build", decision: "D6" } });
+    const bLine = connLine(built.r.designSpec);
+    const bFeat = built.r.changeSet.standardFeatures.find((f) => f.feature === "Connections");
+    const gate = rowsOf(built).filter((x) => x.deliverableId === "feature:Connections");
+    const confirm = built.r.changeSet.needsDecision.find((d) => d.kind === "feature-component-unavailable");
+    check(`Connected to build on \`${key}\`: mapped as if the registry carried it — a normal feature row, its tips carried, a gated \`feature:Connections\` deliverable`,
+      () => bFeat?.element === "EntityConnections" && bFeat.connections.length === 2 && !(built.r.changeSet.withheldFeatures || []).length
+        && built.r.changeSet.resources.EntityConnections_Contact_tooltip === "Who the call is with"
+        && !built.r.changeSet.handlerStubs.some((h) => h.sourceMethod === "onGetPageTips")
+        && !/not built/.test(bLine) && /UseConnectionsComponent/.test(bLine)
+        && gate.length === 1 && gate[0].vk?.ftype === "crt.Connections" && !(built.r.statusIssues || []).length
+        && resolveVk(gate[0].vk, verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "Activity",
+          viewConfig: { items: [{ type: "crt.DataGrid", name: "EntityConnectionsGrid" }] } } } }, "main"))[0] === "❌ MISSING",
+      () => ({ bLine, bFeat, gate, issues: built.r.statusIssues }));
+    check(`Connected to build on \`${key}\`: the confirm item names the decision and asks for the on-stand check instead of saying nothing is built`,
+      () => confirm && /D6/.test(confirm.reason) && /get-component-info/.test(confirm.reason) && !/Nothing is built/.test(confirm.reason),
+      () => confirm);
+  }
+
+  // One decision, one entry: entries on both ids are reported, and every reader takes `feature:<Feature>` first.
+  const both = withRun({ "main#feature:Connections": { status: "wont-do", decision: "D7" }, [`main#${CONFIRM_ID}`]: { status: "build", decision: "D6" } });
+  const bothConfirm = rowsOf(both).find((x) => x.deliverableId === CONFIRM_ID);
+  const twice = (both.r.statusIssues || []).filter((x) => x.kind === "twice");
+  check("Connected to with opposite statuses on its two ids: the mapper, the Layout row and the confirm row all read `feature:Connections` first",
+    () => !both.r.changeSet.standardFeatures.length && both.r.changeSet.withheldFeatures?.length === 1
+      && connLine(both.r.designSpec).includes("**Won't do** — D7") && bothConfirm?.status?.kind === "wont-do" && bothConfirm.status.decision === "D7",
+    () => ({ line: connLine(both.r.designSpec), confirm: bothConfirm?.status }));
+  check("Connected to with entries on both ids: one `twice` status issue names both keys, and the plan is gated on it",
+    () => twice.length === 1 && twice[0].valid.length === 2 && twice[0].valid.includes("main#feature:Connections")
+      && twice[0].valid.includes(`main#${CONFIRM_ID}`) && planGaps(both.r).some((g) => /deliverableStatus INVALID[^\n]*keep one of/.test(g)),
+    () => both.r.statusIssues);
+
   const email = connRun({ componentRegistry: CONN_REG }, { schema: "EmailPageV2", detail: "EmailEntityConnectionsDetailV2" });
   check("Connected to: EmailEntityConnectionsDetailV2 resolves to the same Connections feature by suffix, with no `connections` entries when the page sets no tips",
     () => email.changeSet.standardFeatures.length === 1 && email.changeSet.standardFeatures[0].feature === "Connections"
@@ -15634,9 +16168,64 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
     typedPageSchemas: { CallPageV2: { ...typedManifest.typedPageSchemas.CallPageV2, platformVersion: "8.3.4" } } };
   runMigration(ownVersionManifest, { baseDir: FIX });
   const ownSpec = ownVersionManifest.typedPages[0].spec || "";
-  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — no Connections row, a feature-component-unavailable item",
-    () => !/\| Connected to \| Connections \|/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
+  check("Connected to: a typed bundle pinned to its own platform version does not inherit the root's stand registry — its Layout row says not built, a feature-component-unavailable item",
+    () => ownSpec.split("\n").filter((l) => /\| Connected to \| Connections \|/.test(l)).every((l) => /⚠ not built/.test(l))
+      && /\| Connected to \| Connections \| ⚠ not built/.test(ownSpec) && /feature-component-unavailable/.test(ownSpec),
     () => ownSpec.split("\n").filter((l) => /Connect/.test(l)));
+
+  // A sub-page reads the decision recorded on its own key, never a sibling's. Two typed pages carry "Connected to"
+  // with no registry evidence; the decision is recorded for CallPageV2 only.
+  const typedPair = (status) => {
+    const typedBundle = (schema) => ({ entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      resources: { GeneralInfoTabCaption: "General", EntityConnectionsDetailCaptionOnPage: "Connected to" }, schemas: [{ pkg: "P", body: connBody({ schema }) }] });
+    const m = { entity: "Activity", noParentTemplate: true, entityColumns: { Title: { type: "ShortText" } },
+      schemas: [{ pkg: "P", body: connBody({ schema: "ActivityPageV2", detail: "SomeOtherDetail" }) }],
+      typedPages: [{ schema: "CallPageV2", type: "Call" }, { schema: "DocumentPageV2", type: "Document" }],
+      typedPageSchemas: { CallPageV2: typedBundle("CallPageV2"), DocumentPageV2: typedBundle("DocumentPageV2") },
+      deliverableStatus: { "typed:CallPageV2#feature:Connections": status } };
+    const r = runMigration(m, { baseDir: FIX, decisions: CONN_DEC });
+    const page = (schema) => {
+      const t = m.typedPages.find((x) => x.schema === schema);
+      return { t, line: connLine(t.spec || ""), rows: (t.pageRows || []).flatMap((g) => g.rows) };
+    };
+    return { r, call: page("CallPageV2"), doc: page("DocumentPageV2") };
+  };
+  const tBuild = typedPair({ status: "build", decision: "D6" });
+  check("Connected to on two typed pages, `build` recorded on `typed:CallPageV2`: that page builds it — a normal Layout row and a gated `feature:Connections` row — with no status issue",
+    () => tBuild.call.line && !/not built/.test(tBuild.call.line)
+      && tBuild.call.rows.some((x) => x.deliverableId === "feature:Connections" && x.vk?.ftype === "crt.Connections")
+      && !(tBuild.r.statusIssues || []).length,
+    () => ({ line: tBuild.call.line, rows: tBuild.call.rows.map((x) => x.deliverableId), issues: tBuild.r.statusIssues }));
+  check("Connected to on two typed pages, `build` recorded on `typed:CallPageV2`: the sibling DocumentPageV2 stays ⚠ not built, names its own key, and owes no build row",
+    () => /⚠ not built/.test(tBuild.doc.line) && tBuild.doc.line.includes("`typed:DocumentPageV2#feature:Connections`")
+      && !tBuild.doc.rows.some((x) => x.deliverableId === "feature:Connections")
+      && tBuild.doc.rows.some((x) => x.deliverableId === CONFIRM_ID && !x.status),
+    () => ({ line: tBuild.doc.line, rows: tBuild.doc.rows.map((x) => [x.deliverableId, x.status]) }));
+  const tDrop = typedPair({ status: "wont-do", decision: "D7" });
+  check("Connected to on two typed pages, `wont-do` recorded on `typed:CallPageV2`: that page's row and confirm item close with D7, the sibling's stay open",
+    () => tDrop.call.line.includes("**Won't do** — D7")
+      && tDrop.call.rows.find((x) => x.deliverableId === CONFIRM_ID)?.status?.kind === "wont-do"
+      && /⚠ not built/.test(tDrop.doc.line) && !/Won't do/.test(tDrop.doc.line)
+      && !tDrop.doc.rows.find((x) => x.deliverableId === CONFIRM_ID)?.status && !(tDrop.r.statusIssues || []).length,
+    () => ({ call: tDrop.call.line, doc: tDrop.doc.line, issues: tDrop.r.statusIssues }));
+
+  // Two different child pages over entity X: `child:X` at depth 1, and a grandchild whose base key is also `child:X`
+  // but which the root walk publishes as `child:X@XAltPage`. A decision for `child:X` is read by both folds; the
+  // grandchild's is reported, since the entry is not on the key its rows are published under.
+  const kcConnX = (nm) => `define("${nm}",[],function(){return{entitySchemaName:"X",details:{EntityConnections:{schemaName:"EntityConnectionsDetailV2",entitySchemaName:"EntityConnection",filter:{masterColumn:"Id",detailColumn:"SysModuleEntity"}}},diff:[{operation:"insert",name:"XTab",parentName:"Tabs",propertyName:"tabs",values:{items:[]}},{operation:"insert",name:"EntityConnections",parentName:"XTab",propertyName:"items",values:{itemType:2}},{operation:"insert",name:"XF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"XF"}}]};});`;
+  const kcConn = { ...KC_MANIFEST, deliverableStatus: { "child:X#feature:Connections": { status: "build", decision: "D6" } },
+    childPageSchemas: {
+      XPage: { ...KC_MANIFEST.childPageSchemas.XPage, schemas: [{ pkg: "P", body: kcConnX("XPage") }] },
+      BPage: { ...KC_MANIFEST.childPageSchemas.BPage, childPageSchemas: { XAltPage: { ...KC_MANIFEST.childPageSchemas.BPage.childPageSchemas.XAltPage, schemas: [{ pkg: "P", body: kcConnX("XAltPage") }] } } },
+    } };
+  const kcConnRun = runMigration(kcConn, { baseDir: FIX, decisions: CONN_DEC });
+  const kcConnRows = checklistGroups(kcConnRun, { ...checklistOpts(kcConn), decisions: CONN_DEC }).flatMap((g) => g.rows);
+  const otherPage = (kcConnRun.statusIssues || []).filter((x) => x.kind === "other-page");
+  check("a grandchild whose base key `child:X` another page claimed first: its fold read the `child:X` entry, so one `other-page` issue names the key it must be recorded on",
+    () => kcConnRows.some((x) => x.pageKey === "child:X" && x.deliverableId === "feature:Connections")
+      && otherPage.length === 1 && otherPage[0].key === "child:X#feature:Connections"
+      && otherPage[0].valid.join() === "child:X@XAltPage#feature:Connections" && planGaps(kcConnRun).some((g) => /deliverableStatus INVALID/.test(g)),
+    () => ({ issues: kcConnRun.statusIssues, keys: [...new Set(kcConnRows.map((x) => x.pageKey))] }));
 
   const partialTips = connRun({ componentRegistry: CONN_REG },
     { methods: `onGetPageTips: function() { return { "Contact": this.get("Resources.Strings.ContactTip"), "Account": this.get("SomeAttr") }; }` });
