@@ -596,7 +596,7 @@ Also out of scope:
   the quoted sentence varies by caller and product version. Match the type plus what it names.
 - Signatures whose text belongs to PostgreSQL, MSSQL or the .NET runtime (ID4, ID7's engine half, ID9)
   could not be verified against the product's own resources; they are matched as engine/runtime text.
-  **ID5 is no longer one of them** — its real signature is a product string.
+  ID5 is not among them: its signature is a product string.
 - **ID2, ID3, ID8 and ID9 have no failing stage** — a refusal before the delivery starts, or a runtime
   consequence after one that succeeded. This is not a gap in routing: the spine's §5 routes them by
   **pasted signature**, which is how the catalogs are organised anyway. It *is* a limit on what the

@@ -8,10 +8,11 @@
   - [Configure the OAuth app for the agent](#configure-the-oauth-app-for-the-agent)
   - [Publish RcaAgentMcp on the site (for attached files)](#publish-rcaagentmcp-on-the-site-for-attached-files)
 - [Set the environment variables](#set-the-environment-variables)
-- [Add the MCP servers to your AI agent](#add-the-mcp-servers-to-your-ai-agent)
-  - [Claude Code](#claude-code)
-  - [Codex](#codex)
-  - [GitHub Copilot CLI](#github-copilot-cli)
+- [The MCP servers](#the-mcp-servers)
+  - [What is left to set, per agent](#what-is-left-to-set-per-agent)
+    - [Claude Code](#claude-code)
+    - [Codex](#codex)
+    - [GitHub Copilot CLI](#github-copilot-cli)
 - [Usage](#usage)
 - [Troubleshooting the sign-in](#troubleshooting-the-sign-in)
 
@@ -84,152 +85,81 @@ path from the field.
 
 ## Set the environment variables
 
-The MCP servers read these at run time (in Claude Code the setup writes the site and Client ID into its
-configuration); the login and password are never written into a file. Set them as **user** environment variables,
-then restart the agent so it picks them up (a `.env` file is not read):
+The MCP servers read these from the environment at run time; no MCP configuration file holds them. Set them in the
+environment the agent starts in, then start the agent from there (a `.env` file is not read). Wherever you keep
+them, programs you run can read the password, so use a read-only user.
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `CREATIO_BASE_URL` | yes | the Creatio site, e.g. `https://your-site.creatio.com` |
+| `CREATIO_BASE_URL` | yes | the Creatio site, e.g. `https://your-creatio-site.creatio.com` |
 | `CREATIO_CLIENT_ID` | yes | the Client ID of the OAuth app (above) |
-| `CREATIO_HTTP_MCP_URL` | no | Creatio's MCP server of your region, e.g. `https://eu1-mcp.creatio.com/mcp` — read only by `mcp.rca.json` (end of this page) |
+| `CREATIO_HTTP_MCP_URL` | Claude Code | Creatio's MCP server of your region, e.g. `https://your-creatio-mcp.creatio.com/mcp`; Codex and Copilot take it as a value instead (below) |
 | `CREATIO_LOGIN` | for attached files | the read-only user |
 | `CREATIO_PASSWORD` | for attached files | its password |
 | `CREATIO_RCA_AGENT_MCP_PATH` | no | only when RcaAgentMcp is published under a non-default route (above) |
 
 ```
-# Windows (PowerShell)
-[Environment]::SetEnvironmentVariable('CREATIO_BASE_URL',     'https://your-site.creatio.com',   'User')
-[Environment]::SetEnvironmentVariable('CREATIO_CLIENT_ID',    'your_client_id',                  'User')
-[Environment]::SetEnvironmentVariable('CREATIO_HTTP_MCP_URL', 'https://eu1-mcp.creatio.com/mcp', 'User')
-[Environment]::SetEnvironmentVariable('CREATIO_LOGIN',        'your_readonly_user',              'User')
-[Environment]::SetEnvironmentVariable('CREATIO_PASSWORD',     'your_password',                   'User')
+# Windows (PowerShell), for this terminal
+$env:CREATIO_BASE_URL     = 'https://your-creatio-site.creatio.com'
+$env:CREATIO_CLIENT_ID    = 'your_client_id'
+$env:CREATIO_HTTP_MCP_URL = 'https://your-creatio-mcp.creatio.com/mcp'
+$env:CREATIO_LOGIN        = 'your_readonly_user'
+$env:CREATIO_PASSWORD     = 'your_password'
 
-# macOS or Linux: add to ~/.zshrc (or ~/.bashrc), then open a new terminal
-export CREATIO_BASE_URL='https://your-site.creatio.com'
+# macOS or Linux, for this terminal
+export CREATIO_BASE_URL='https://your-creatio-site.creatio.com'
 export CREATIO_CLIENT_ID='your_client_id'
-export CREATIO_HTTP_MCP_URL='https://eu1-mcp.creatio.com/mcp'
+export CREATIO_HTTP_MCP_URL='https://your-creatio-mcp.creatio.com/mcp'
 export CREATIO_LOGIN='your_readonly_user'
 export CREATIO_PASSWORD='your_password'
 ```
 
-## Add the MCP servers to your AI agent
+Variables set this way last until the terminal closes, and only an agent started from that terminal sees them. An
+agent started some other way (a desktop app, an IDE) needs them set for your user, the way your system keeps user
+environment variables (on Windows: `[Environment]::SetEnvironmentVariable('CREATIO_LOGIN', 'your_readonly_user', 'User')`
+for each), or by a secret manager you use.
+
+## The MCP servers
 
 The agent needs two MCP servers: **`rca-creatio-http`** (Creatio's hosted MCP server) and **`rca-files`** (a local
-server for the files attached to the log). Paste the prompt for your agent into it, with the values at its top
-filled in.
+server for the files attached to the log). **The toolkit plugin brings both**; what is left to you depends on the
+agent (next section). 
 
-**Codex and Copilot cannot take an MCP server's URL from an environment variable, and neither can Claude Code in the
-user's configuration**, so the URL is a value you give; Claude Code takes its two headers as values too. Everything
-else comes from the environment variables (above), and the agent finds the script itself. 
+The plugin declares the servers for each agent in its own format (`modules/rca/mcp/`). Only what an agent cannot read
+from an environment variable is left: Claude Code needs nothing more than the variables; Codex and Copilot need the
+URL of your region's MCP server written into the plugin. Paste the prompt for your agent into it, with the URL filled
+in. **A toolkit update brings the plugin's files anew: paste the prompt again after one.**
 
-- `<MCP_CREATIO_URL>` — Creatio's MCP server of your region, e.g. `https://eu1-mcp.creatio.com/mcp`.
-- `<CREATIO_BASE_URL>`, `<CREATIO_CLIENT_ID>` (Claude Code only) — your site and the OAuth app's Client ID, the same
-  values as the environment variables of those names.
-- `<MCP_FILES_PATH>` — found by the agent: the full path of `modules/rca/scripts/rca-files-mcp.mjs` in the installed
-  toolkit plugin, e.g. `C:/Users/you/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/1.16.0/modules/rca/scripts/rca-files-mcp.mjs`.
-  The folder changes with every toolkit version: paste the prompt again after an update.
+#### Claude Code
 
-**Replace each `[...]` at the top of the prompt**; the placeholders are in angle brackets so they do not look like environment variables:
+The servers read all their values from the environment variables. Sign in: `/mcp` →
+`rca-creatio-http` → **Authenticate**.
 
-### Claude Code
+#### Codex
 
 ````text
-<MCP_CREATIO_URL> = [...replace with your region's MCP server URL, e.g. https://eu1-mcp.creatio.com/mcp...]
-<CREATIO_BASE_URL> = [...replace with your Creatio site, e.g. https://your-site.creatio.com...]
-<CREATIO_CLIENT_ID> = [...replace with the Client ID of the OAuth app...]
+<MCP_CREATIO_URL> = [...replace with your region's MCP server URL]
 
-<MCP_FILES_PATH> = the full path of modules/rca/scripts/rca-files-mcp.mjs in the installed
-creatio-ai-app-development-toolkit plugin (under ~/.claude/plugins/cache/, the newest version)
+In the installed creatio-ai-app-development-toolkit plugin (under ~/.codex/plugins/cache/, the newest version), in
+modules/rca/mcp/codex.json, set "url" of the server "rca-creatio-http" to <MCP_CREATIO_URL>. Change nothing else.
 
-Add this MCP configuration to "mcpServers" in ~/.claude.json (my user scope), replacing entries of the same name
-and keeping the rest of the file:
-
-"rca-creatio-http": {
-  "type": "http",
-  "url": "<MCP_CREATIO_URL>",
-  "headers": { "X-Creatio-Base-Url": "<CREATIO_BASE_URL>", "X-Creatio-Client-Id": "<CREATIO_CLIENT_ID>" }
-},
-"rca-files": {
-  "type": "stdio",
-  "command": "node",
-  "args": ["<MCP_FILES_PATH>"]
-}
-
-and add these to "permissions" -> "deny" in ~/.claude/settings.json, keeping the rest of the file:
-
-"mcp__rca-creatio-http__creatio_create_record",
-"mcp__rca-creatio-http__creatio_update_record",
-"mcp__rca-creatio-http__creatio_delete_record",
-"mcp__rca-creatio-http__creatio_post_feed_message"
-
-If a value above is still the [...] text, ask me for it first.
+If the value above is still the [...] text, ask me for it first.
 ````
 
-Sign in: `/mcp` → `rca-creatio-http` → **Authenticate**.
+Then restart Codex and sign in: `codex mcp login rca-creatio-http`.
 
-### Codex
+#### GitHub Copilot CLI
 
 ````text
-<MCP_CREATIO_URL> = [...replace with your region's MCP server URL, e.g. https://eu1-mcp.creatio.com/mcp...]
+<MCP_CREATIO_URL> = [...replace with your region's MCP server URL]
 
-<MCP_FILES_PATH> = the full path of modules/rca/scripts/rca-files-mcp.mjs in the installed
-creatio-ai-app-development-toolkit plugin (under ~/.codex/plugins/cache/)
+In the installed creatio-ai-app-development-toolkit plugin (`copilot plugin list` shows it), in the .mcp.json at the
+plugin's root, set "url" of the server "rca-creatio-http" to <MCP_CREATIO_URL>. Change nothing else.
 
-Add this MCP configuration to ~/.codex/config.toml, replacing tables of the same name and keeping the rest of the
-file:
-
-[mcp_servers.rca-creatio-http]
-url = "<MCP_CREATIO_URL>"
-env_http_headers = { "X-Creatio-Base-Url" = "CREATIO_BASE_URL", "X-Creatio-Client-Id" = "CREATIO_CLIENT_ID" }
-enabled_tools = ["creatio_describe_object", "creatio_search_objects", "creatio_list_records", "creatio_get_record", "creatio_get_current_user", "creatio_build_record_url", "creatio_search_records"]
-
-[mcp_servers.rca-files]
-command = "node"
-args = ["<MCP_FILES_PATH>"]
-env_vars = ["CREATIO_BASE_URL", "CREATIO_LOGIN", "CREATIO_PASSWORD", "CREATIO_RCA_AGENT_MCP_PATH"]
-enabled_tools = ["get_text_file_content"]
-
-If a value above is still the [...] text, ask me for it first.
+If the value above is still the [...] text, ask me for it first.
 ````
 
-Sign in: `codex mcp login rca-creatio-http`.
-
-### GitHub Copilot CLI
-
-````text
-<MCP_CREATIO_URL> = [...replace with your region's MCP server URL, e.g. https://eu1-mcp.creatio.com/mcp...]
-
-<MCP_FILES_PATH> = the full path of modules/rca/scripts/rca-files-mcp.mjs in the installed
-creatio-ai-app-development-toolkit plugin (under ~/.copilot/installed-plugins/)
-
-Add this MCP configuration to "mcpServers" in ~/.copilot/mcp-config.json, replacing entries of the same name and
-keeping the rest of the file. Keep the ${...} references as they are:
-
-"rca-creatio-http": {
-  "type": "http",
-  "url": "<MCP_CREATIO_URL>",
-  "headers": { "X-Creatio-Base-Url": "${CREATIO_BASE_URL}", "X-Creatio-Client-Id": "${CREATIO_CLIENT_ID}" },
-  "tools": ["creatio_describe_object", "creatio_search_objects", "creatio_list_records", "creatio_get_record",
-            "creatio_get_current_user", "creatio_build_record_url", "creatio_search_records"]
-},
-"rca-files": {
-  "type": "local",
-  "command": "node",
-  "args": ["<MCP_FILES_PATH>"],
-  "env": {
-    "CREATIO_BASE_URL": "${CREATIO_BASE_URL}",
-    "CREATIO_LOGIN": "${CREATIO_LOGIN}",
-    "CREATIO_PASSWORD": "${CREATIO_PASSWORD}",
-    "CREATIO_RCA_AGENT_MCP_PATH": "${CREATIO_RCA_AGENT_MCP_PATH}"
-  },
-  "tools": ["get_text_file_content"]
-}
-
-If a value above is still the [...] text, ask me for it first.
-````
-
-Copilot opens the browser to sign in to `rca-creatio-http` the first time it uses it.
+Then restart Copilot; it opens the browser to sign in to `rca-creatio-http` the first time it uses it.
 
 ## Usage
 
@@ -255,17 +185,17 @@ Describe the incident the way it was reported to you, for example:
 ## Troubleshooting the sign-in
 
 **"Tenant registration expired; reconnect to retry"** on the sign-in page. Creatio's MCP server did not get your
-site and Client ID — a wrong or missing `X-Creatio-Base-Url` / `X-Creatio-Client-Id` header, or (Codex) an agent
-started before the environment variables were set — and your agent has saved that failed sign-in. Signing out from
+site and Client ID — `CREATIO_BASE_URL` or `CREATIO_CLIENT_ID` wrong or not set, or an agent started before the
+environment variables were set — and your agent has saved that failed sign-in. Signing out from
 the agent's menu does not clear it.
 
-1. Check the two header values in your configuration (Claude Code, Copilot). For Codex, check that the variables are
-   visible in the terminal you start it from (`echo $env:CREATIO_CLIENT_ID` in PowerShell, `echo $CREATIO_CLIENT_ID`
-   elsewhere); if not, close the whole terminal app (or IDE) and open it again: a window that was already open does
+1. Check that the two variables are set and visible in the terminal you start the agent from
+   (`echo $env:CREATIO_CLIENT_ID` in PowerShell, `echo $CREATIO_CLIENT_ID` elsewhere); if not, close the whole terminal app (or IDE) and open it again: a window that was already open does
    not see variables set later.
-2. Ask your AI agent to remove the saved sign-in, for example: *"Delete your stored sign-in data for the MCP server
-   `rca-creatio-http`, and nothing else, so I can sign in again."* The agent knows where its host keeps it.
-   Alternatively, remove the `rca-creatio-http` server and set it up again as above: its saved sign-in goes with it.
+2. Remove the saved sign-in:
+   - **Codex:** `codex mcp logout rca-creatio-http`.
+   - **Claude Code and GitHub Copilot CLI:** ask your AI agent, for example: *"Delete your stored sign-in data for the
+     MCP server `rca-creatio-http`, and nothing else, so I can sign in again."* The agent knows where its host keeps it.
 3. Close the agent, start it again, and sign in to `rca-creatio-http` (in Claude Code: `/mcp` → **Authenticate**).
 
 **"Integration access is not allowed"**, and the page address ends in `consent?errorId=3`. The Creatio user you signed
@@ -276,7 +206,7 @@ page does not help.
 
 ---
 
-`mcp.rca.json` and `settings.rca.json` in this folder are for the toolkit's developers: they start both servers from a
-clone of the toolkit, with the hosted server's write tools denied,
-with `claude --strict-mcp-config --mcp-config modules/rca/mcp.rca.json --settings modules/rca/settings.rca.json --setting-sources project --plugin-dir .` in
-the clone's root.
+**Maintaining these files.** The RCA agent's files (`skills/rca-*`, `modules/rca/`, `hooks/hooks.json`,
+`tests/test_rca_*.py`) are maintained by the RCA team and updated here as a whole. A change made only here is
+replaced by the next update; propose changes to the RCA team instead.
+

@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "clio": {
-      "command": "clio",
-      "args": ["mcp-server"]
-    },
     "rca-creatio-http": {
       "type": "http",
       "url": "${CREATIO_HTTP_MCP_URL}",
@@ -14,7 +10,7 @@
     },
     "rca-files": {
       "command": "node",
-      "args": ["./modules/rca/scripts/rca-files-mcp.mjs"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/modules/rca/scripts/rca-files-mcp.mjs"]
     }
   }
 }

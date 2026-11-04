@@ -27,6 +27,9 @@ guardrail governs every `mcp-creatio` call.
 
 ## Forbidden during an investigation
 
+Every tool not in "Allowed" is forbidden. That list is the one the hosts enforce (below); the tool names here are
+examples, and they differ between mcp-creatio servers and versions.
+
 - Any write: `creatio_create_record`, `creatio_update_record`, `delete`.
 - Any execution: `execute-process`.
 - Any configuration change: `set-sys-settings-value`, `create-sys-setting`,
@@ -116,7 +119,7 @@ Read-only is enforced beyond this skill, in layers. Only the host's tool list di
 
   | Host | How | Where |
   |---|---|---|
-  | Claude Code | deny-list of every mutating and configuration `mcp-creatio` tool (`permissions.allow` would only skip the approval prompt, so a hard block has to be a deny) | `permissions.deny` in Claude Code's settings — a plugin cannot carry permissions, so an installed plugin brings no deny-list of its own |
+  | Claude Code | allow-list: a `PreToolUse` hook denies every call to an RCA server's tool that is not in "Allowed", a tool the server adds later included (Claude Code cannot hide an MCP server's tools, and a deny rule cannot say "all but these") | a hook the plugin brings, which reads the list Codex uses; nothing for the user to set |
   | Codex | allow-list: only the tools in "Allowed" reach the model | `enabled_tools` in the server's MCP configuration |
   | GitHub Copilot CLI | allow-list: only the tools in "Allowed" reach the model | `tools` in the server's MCP configuration |
 

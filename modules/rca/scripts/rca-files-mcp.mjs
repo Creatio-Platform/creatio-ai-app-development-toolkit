@@ -1,7 +1,6 @@
-// claude --strict-mcp-config --mcp-config modules/rca/mcp.rca.json
-
-// The RCA agent's attachment reader, in one file with no imports. A prototype: how the agent reads attachment content
-// is not settled yet.
+// The RCA agent's attachment reader, in one file with no imports. Creatio's hosted MCP server reads records but not the
+// content of the files attached to them (installer logs, metadata.json), so this script reads it from RcaAgentMcp, an
+// MCP server published on the site itself, and passes on that one tool.
 // RcaAgentMcp as a stdio MCP server: RcaAgentMcp needs a Creatio session (AuthService login, cookies, BPMCSRF), which
 // a host's static-header HTTP client cannot obtain, so this logs in, keeps the session and the Mcp-Session-Id, logs in
 // again once on a 401, and passes on only the tools in TOOLS — anything else RcaAgentMcp offers is neither listed nor
@@ -28,7 +27,7 @@ const value = (v) => (isUnset(v) ? '' : String(v).trim());
 function urlPath(v) {
   const s = value(v);
   const m = /^[A-Za-z]:[\\/].*?([\\/](?:0[\\/])?rest[\\/].*)$/.exec(s);
-  return m ? m[1].replace(/\\/g, '/') : s;
+  return m ? m[1].replaceAll('\\', '/') : s;
 }
 
 // ---------- RcaAgentMcp client ----------
@@ -48,22 +47,27 @@ function sseMessage(text, id) {
     if (sawData) throw new Error('no JSON event in the stream');
     return null;
   }
-  return (id === undefined ? null : messages.find((m) => m?.id === id)) ?? messages[messages.length - 1];
+  return (id === undefined ? null : messages.find((m) => m?.id === id)) ?? messages.at(-1);
 }
 
 class RcaAgentMcpClient {
   constructor({ baseUrl, login, password, mcpPath, log = () => {}, fetchImpl = globalThis.fetch, timeoutMs = 45000, clientName = 'rca-gateway' }) {
-    Object.assign(this, { baseUrl: baseUrl.replace(/\/+$/, ''), login, password, mcpPath, log, fetchImpl, timeoutMs, clientName });
+    let base = baseUrl;
+    while (base.endsWith('/')) base = base.slice(0, -1);
+    Object.assign(this, { baseUrl: base, login, password, mcpPath, log, fetchImpl, timeoutMs, clientName });
     this.cookieJar = '';
     this.bpmcsrf = '';
     this.sessionId = '';
     this.loginPromise = null;
+    this.loginRefused = null; // the site refused the login and password: kept, so they are not sent again
     this.nextId = 1;
     this.initialized = null;
   }
 
   ensureLoggedIn() {
     if (this.cookieJar) return Promise.resolve();
+    // A refused login is not tried again: every attempt with a wrong password brings the account closer to a lockout.
+    if (this.loginRefused) return Promise.reject(this.loginRefused);
     if (!this.loginPromise) this.loginPromise = this.doLogin().finally(() => { this.loginPromise = null; });
     return this.loginPromise;
   }
@@ -77,7 +81,16 @@ class RcaAgentMcpClient {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const body = await res.json().catch(() => ({}));
-    if (body.Code !== 0) throw new Error(`login failed (HTTP ${res.status}${body.Message ? `: ${body.Message}` : ''})`);
+    if (body.Code !== 0) {
+      const reason = body.Message ? ': ' + body.Message : '';
+      const err = new Error(`login failed (HTTP ${res.status}${reason})`);
+      // The site answered and said no (a number in Code): the credentials are wrong. Anything else may pass.
+      if (res.ok && typeof body.Code === 'number') {
+        err.message += ' — check CREATIO_LOGIN and CREATIO_PASSWORD, then restart the agent';
+        this.loginRefused = err;
+      }
+      throw err;
+    }
     const cookies = {};
     const setCookies = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
     for (const sc of setCookies) {
@@ -110,42 +123,53 @@ class RcaAgentMcpClient {
   async send(jsonRpc, retry = true) {
     await this.ensureLoggedIn();
     const res = await this.post(jsonRpc);
-    if (res.status === 404) {
-      // An MCP server also answers 404 for a session it has dropped (MCP spec, streamable HTTP): start a new
-      // session once before reading the 404 as a route that is not published.
-      if (this.sessionId && retry) {
-        this.log('RcaAgentMcp: 404 for the MCP session — starting a new one');
-        this.sessionId = '';
-        this.initialized = null;
-        if (jsonRpc.method !== 'initialize') await this.initialize();
-        return this.send(jsonRpc, false);
-      }
-      throw new Error(`not found at ${this.mcpPath} on this stand — publish it, or set CREATIO_RCA_AGENT_MCP_PATH to the route it is published at`);
-    }
-    if (res.status === 401 && retry) {
-      this.log('RcaAgentMcp: 401 — logging in again');
-      this.cookieJar = '';
-      this.sessionId = '';
-      this.initialized = null;
-      await this.ensureLoggedIn();
-      if (jsonRpc.method !== 'initialize') await this.initialize();
-      return this.send(jsonRpc, false);
-    }
+    if (res.status === 404) return this.recoverNotFound(jsonRpc, retry);
+    if (res.status === 401 && retry) return this.recoverUnauthorized(jsonRpc);
     const sid = res.headers.get('mcp-session-id');
     if (sid && !this.sessionId) this.sessionId = sid;
     if (res.status === 202) return null;
+    return this.readMessage(res, jsonRpc.id);
+  }
+
+  // An MCP server also answers 404 for a session it has dropped (MCP spec, streamable HTTP): start a new session once
+  // before reading the 404 as a route that is not published.
+  async recoverNotFound(jsonRpc, retry) {
+    if (!this.sessionId || !retry) {
+      throw new Error(`not found at ${this.mcpPath} on this stand — publish it, or set CREATIO_RCA_AGENT_MCP_PATH to the route it is published at`);
+    }
+    this.log('RcaAgentMcp: 404 for the MCP session — starting a new one');
+    this.sessionId = '';
+    this.initialized = null;
+    if (jsonRpc.method !== 'initialize') await this.initialize();
+    return this.send(jsonRpc, false);
+  }
+
+  async recoverUnauthorized(jsonRpc) {
+    this.log('RcaAgentMcp: 401 — logging in again');
+    this.cookieJar = '';
+    this.sessionId = '';
+    this.initialized = null;
+    await this.ensureLoggedIn();
+    if (jsonRpc.method !== 'initialize') await this.initialize();
+    return this.send(jsonRpc, false);
+  }
+
+  // The JSON-RPC message of a response: from a text/event-stream or a JSON body; null for an empty body; undefined when
+  // the body cannot be read as either.
+  async readMessage(res, id) {
     const text = await res.text();
     let message;
     try {
-      message = (res.headers.get('content-type') || '').includes('text/event-stream')
-        ? sseMessage(text, jsonRpc.id)
-        : (text ? JSON.parse(text) : null);
+      if ((res.headers.get('content-type') || '').includes('text/event-stream')) message = sseMessage(text, id);
+      else if (text) message = JSON.parse(text);
+      else message = null;
     } catch { message = undefined; }
     if (!res.ok) {
       // A JSON-RPC error the server sent with an HTTP error status is still its answer; anything else is a failure.
       if (message?.jsonrpc && message.error) return message;
       const excerpt = text.replace(/\s+/g, ' ').trim().slice(0, 200);
-      throw new Error(`HTTP ${res.status}${excerpt ? `: ${excerpt}` : ''}`);
+      const detail = excerpt ? ': ' + excerpt : '';
+      throw new Error(`HTTP ${res.status}${detail}`);
     }
     if (message === undefined) throw new Error(`HTTP ${res.status}: non-JSON response`);
     return message;
@@ -187,40 +211,55 @@ function serve({ listTools, callTool }) {
   const reply = (id, result) => write({ jsonrpc: '2.0', id, result });
   const fail = (id, code, message, data) => write({ jsonrpc: '2.0', id, error: { code, message, ...(data === undefined ? {} : { data }) } });
 
+  const isObject = (m) => m !== null && typeof m === 'object' && !Array.isArray(m);
+
+  // One handler per method; each answers through reply/fail.
+  const handlers = {
+    initialize: (id, params) => reply(id, {
+      protocolVersion: PROTOCOL_VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
+      capabilities: { tools: {} },
+      serverInfo: { name: 'rca-files', version: '0' },
+    }),
+    ping: (id, params, isRequest) => {
+      if (isRequest) reply(id, {});
+    },
+    'tools/list': async (id) => reply(id, { tools: await listTools() }),
+    'tools/call': async (id, params) => {
+      if (!params || typeof params.name !== 'string') {
+        fail(id, -32602, 'tools/call needs params.name');
+        return;
+      }
+      reply(id, await callTool(params.name, params.arguments ?? {}));
+    },
+  };
+
+  // An error carrying rpcCode is an answer to pass on; anything else is logged and reported as an internal error.
+  function reportFailure(e, method, id, isRequest) {
+    if (e?.rpcCode) {
+      if (isRequest) fail(id, e.rpcCode, e.message, e.rpcData);
+      return;
+    }
+    log(`${method} failed: ${e?.stack || e}`);
+    if (isRequest) fail(id, -32603, String(e?.message || e));
+  }
+
   async function handle(msg) {
-    if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.method !== 'string') {
-      if (msg && typeof msg === 'object' && !Array.isArray(msg) && msg.id !== undefined) return; // a response: ignore
+    if (!isObject(msg) || typeof msg.method !== 'string') {
+      if (isObject(msg) && msg.id !== undefined) return; // a response: ignore
       fail(msg?.id ?? null, -32600, 'Invalid request');
       return;
     }
     const { id, method, params } = msg;
     const isRequest = id !== undefined && id !== null;
+    const handler = Object.hasOwn(handlers, method) ? handlers[method] : null;
+    if (!handler) {
+      if (isRequest) fail(id, -32601, `Method not found: ${method}`);
+      return;
+    }
     try {
-      switch (method) {
-        case 'initialize':
-          reply(id, {
-            protocolVersion: PROTOCOL_VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
-            capabilities: { tools: {} },
-            serverInfo: { name: 'rca-files', version: '0' },
-          });
-          return;
-        case 'ping':
-          if (isRequest) reply(id, {});
-          return;
-        case 'tools/list':
-          reply(id, { tools: await listTools() });
-          return;
-        case 'tools/call':
-          if (!params || typeof params.name !== 'string') { fail(id, -32602, 'tools/call needs params.name'); return; }
-          reply(id, await callTool(params.name, params.arguments ?? {}));
-          return;
-        default:
-          if (isRequest) fail(id, -32601, `Method not found: ${method}`);
-      }
+      await handler(id, params, isRequest);
     } catch (e) {
-      if (e?.rpcCode) { if (isRequest) fail(id, e.rpcCode, e.message, e.rpcData); return; }
-      log(`${method} failed: ${e?.stack || e}`);
-      if (isRequest) fail(id, -32603, String(e?.message || e));
+      reportFailure(e, method, id, isRequest);
     }
   }
 
@@ -235,20 +274,28 @@ function serve({ listTools, callTool }) {
       if (!line.trim()) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { fail(null, -32700, 'Parse error'); continue; }
-      handle(msg);
+      handle(msg).catch((e) => log(`message handling failed: ${e?.stack || e}`));
     }
   });
 }
 
 // ---------- start ----------
 const env = process.env;
+let baseUrl = value(env.CREATIO_BASE_URL);
+while (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 const conn = {
-  baseUrl: value(env.CREATIO_BASE_URL).replace(/\/+$/, ''),
+  baseUrl,
   login: value(env.CREATIO_LOGIN),
   password: value(env.CREATIO_PASSWORD),
 };
 if (!conn.baseUrl || !conn.login || !conn.password) {
   log('missing base url / login / password: set CREATIO_BASE_URL, CREATIO_LOGIN and CREATIO_PASSWORD before starting the session');
+  process.exit(1);
+}
+// The login and password go to the site in the request body, so only an encrypted connection is accepted; plain http
+// only to this machine.
+if (!/^https:\/\//i.test(conn.baseUrl) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(conn.baseUrl)) {
+  log(`CREATIO_BASE_URL must start with https:// (got ${conn.baseUrl}): the login and password would travel unencrypted`);
   process.exit(1);
 }
 

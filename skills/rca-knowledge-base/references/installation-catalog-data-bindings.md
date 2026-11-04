@@ -746,8 +746,8 @@ appeared at.
 - Locking, local edits, name/UId clashes and environment drift — `installation-catalog-conflicts.md`.
 - Anything before the data stage in the delivery, and the restore decision — the spine owns both.
 
-**Evidence status of the three that used to be unverified** — all three were reproduced or settled on a
-live environment, and the entries were corrected by what was found:
+**Evidence status of IB3, IB9 and IB10** — each is reproduced or settled on a live environment, and its entry
+states what was found:
 
 - **IB3** — reproduced. Tier A **when the installer log is available**: the failing `INSERT` is printed in
   full and supplies the table, column and value. The `DETAIL` line is redacted by default, so do not ask
