@@ -61,8 +61,11 @@ class BrandingThemeBackgroundAssetOnlyTests(unittest.TestCase):
             prose(SKILL),
         )
 
-    def test_a_supplied_image_or_color_skips_the_palette_conversation(self):
-        self.assertIn("the user's own image or a color needs no palette conversation", prose(SKILL))
+    def test_only_a_generated_picture_needs_the_palette_conversation(self):
+        self.assertIn(
+            "Only a generated picture needs brand intake and the palette conversation first",
+            prose(SKILL),
+        )
 
     def test_removing_a_theme_background_has_a_route(self):
         self.assertIn(
@@ -75,13 +78,15 @@ class BrandingThemeBackgroundApplyTests(unittest.TestCase):
 
     def test_the_recap_names_the_background_target(self):
         self.assertIn(
-            "its source and its target (theme `<name>` or the whole site), its removal from theme "
-            "`<name>`, or none",
+            "the background: its source and target, the theme it is removed from, or none",
             prose(SKILL),
         )
 
-    def test_a_theme_background_is_not_announced_as_environment_wide(self):
-        self.assertIn("A theme background changes only accounts on that theme", prose(SKILL))
+    def test_only_a_site_background_is_environment_wide(self):
+        self.assertIn(
+            "the logos, the favicon and a site background are **environment-wide**",
+            prose(SKILL),
+        )
 
     def test_the_old_environment_wide_background_claim_is_gone(self):
         self.assertNotIn("the favicon and the background are **environment-wide**", prose(SKILL))
@@ -100,8 +105,8 @@ class BrandingThemeBackgroundApplyTests(unittest.TestCase):
 
     def test_the_mechanics_point_to_the_branding_guidance(self):
         self.assertIn(
-            "Setting, removing and reading it, the version it needs, and the fallback when the "
-            "environment lacks it follow clio's `branding` guidance",
+            "follow it to write the logos and favicon and to set, remove or read the background, "
+            "including the version a background needs and the fallback when the environment lacks it",
             prose(SKILL),
         )
 
@@ -115,8 +120,12 @@ class BrandingThemeBackgroundStatedOnceTests(unittest.TestCase):
             "Only when the user asks for the whole site",
             "Only when the user asks for one",
             "Removing the background from a theme",
-            "A theme background changes only accounts on that theme",
+            "the theme the user name",
+            "palette conversation first",
+            "environment-wide side effect",
+            "separate from the theme build",
             "Removing a theme background needs no such confirmation",
+            "the fallback when the environment lacks it",
             "| Accounts on that theme |",
             "| Every account whose theme has no background |",
         ):
