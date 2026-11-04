@@ -8,6 +8,7 @@ ASSETS = ROOT / "skills/creatio-branding-orchestrator/references/branding-assets
 OPENAI = ROOT / "skills/creatio-branding-orchestrator/agents/openai.yaml"
 AGENTS = ROOT / "AGENTS.md"
 SKILLS_README = ROOT / "skills/README.md"
+TELEMETRY = ROOT / "context/product-telemetry.md"
 
 TOOLKIT_DOCS = (SKILL, ASSETS, OPENAI, AGENTS, SKILLS_README)
 
@@ -15,6 +16,11 @@ CLIO_OWNED = (
     "set-background-image",
     "set-background-color",
     "remove-background",
+    "background-image-file",
+    "background-image-id",
+    "background-color",
+    "themeBackgroundSupported",
+    "panelIconBackground",
     "CrtBackgroundConfig",
     "DisableThemeBackground",
     "UseAccessibleDesktopColor",
@@ -91,9 +97,30 @@ class BrandingThemeBackgroundApplyTests(unittest.TestCase):
     def test_the_old_environment_wide_background_claim_is_gone(self):
         self.assertNotIn("the favicon and the background are **environment-wide**", prose(SKILL))
 
-    def test_the_gate_takes_its_side_effect_from_the_branding_guidance(self):
+    def test_the_gate_takes_its_side_effect_from_the_theming_guidance(self):
         self.assertIn(
-            "the `branding` guidance names an environment-wide side effect of setting one",
+            "the `theming` guidance names an environment-wide side effect of setting one "
+            "and how the access check shows whether it applies",
+            prose(SKILL),
+        )
+
+    def test_the_gate_comes_before_the_first_environment_wide_write(self):
+        self.assertIn(
+            "before the first write that makes any environment-wide change, "
+            "take a distinct, explicit confirmation separate from the summary confirmation",
+            prose(SKILL),
+        )
+
+    def test_the_gate_moves_before_the_theme_write_when_the_side_effect_applies(self):
+        self.assertIn(
+            "When the side effect applies, that first write is the theme write, so ask before creating "
+            "the theme; the one question covers the logos, the favicon and a site background too.",
+            prose(SKILL),
+        )
+
+    def test_a_declined_side_effect_drops_the_theme_background(self):
+        self.assertIn(
+            "a declined side effect means the theme is created without its background",
             prose(SKILL),
         )
 
@@ -103,12 +130,63 @@ class BrandingThemeBackgroundApplyTests(unittest.TestCase):
     def test_the_closing_message_says_who_sees_the_background(self):
         self.assertIn("Say who sees the background, per the targets in the Background step", prose(SKILL))
 
-    def test_the_mechanics_point_to_the_branding_guidance(self):
+    def test_the_mechanics_point_to_the_guidance_that_owns_each_background(self):
         self.assertIn(
-            "follow it to write the logos and favicon and to set, remove or read the background, "
-            "including the version a background needs and the fallback when the environment lacks it",
+            "the `theming` guidance for setting, changing, removing or reading a theme's background, "
+            "including the version it needs and the fallback when the environment lacks it, and the "
+            "`branding` guidance for the logos, the favicon and a site background",
             prose(SKILL),
         )
+
+
+class BrandingThemeBackgroundOrderTests(unittest.TestCase):
+
+    def test_the_background_step_ends_with_the_background_ready(self):
+        self.assertIn(
+            "By the end of this step the background is ready: the user's file, the color, or the "
+            "generated picture in its temporary file.",
+            prose(SKILL),
+        )
+
+    def test_the_theme_background_goes_into_the_theme_write(self):
+        self.assertIn(
+            "A theme's background is not a separate apply: it goes into the theme write itself",
+            prose(SKILL),
+        )
+
+    def test_an_existing_theme_changes_only_its_background(self):
+        self.assertIn(
+            "for an existing theme, an update that changes only the background and needs no CSS",
+            prose(SKILL),
+        )
+
+    def test_the_theme_is_applied_before_the_environment_wide_assets(self):
+        self.assertIn(
+            "Apply in this order: the theme with its background, then applying it to you (see below), "
+            "then the logos and the favicon, then a site background.",
+            prose(SKILL),
+        )
+
+    def test_a_refused_background_leaves_no_theme_and_offers_a_choice(self):
+        self.assertIn(
+            "If the theme write fails because of its background — for example, the image is refused — "
+            "the theme is not created: relay the reason, then ask whether to create it without a "
+            "background or with another file.",
+            prose(SKILL),
+        )
+
+
+class BrandingThemeBackgroundTelemetryTests(unittest.TestCase):
+
+    def test_the_skill_sends_theme_then_background_after_the_theme_write(self):
+        self.assertIn(
+            "a theme's background is written with the theme, so send `theme` and then `background` "
+            "after that one write",
+            prose(SKILL),
+        )
+
+    def test_the_branding_flow_row_lists_the_background_variant(self):
+        self.assertIn("per applied asset (`variant=theme` / `logo` / `background`)", prose(TELEMETRY))
 
 
 class BrandingThemeBackgroundStatedOnceTests(unittest.TestCase):
@@ -123,7 +201,10 @@ class BrandingThemeBackgroundStatedOnceTests(unittest.TestCase):
             "the theme the user name",
             "palette conversation first",
             "environment-wide side effect",
-            "separate from the theme build",
+            "separate from the summary confirmation",
+            "that first write is the theme write",
+            "Apply in this order",
+            "written with the theme",
             "Removing a theme background needs no such confirmation",
             "the fallback when the environment lacks it",
             "| Accounts on that theme |",
