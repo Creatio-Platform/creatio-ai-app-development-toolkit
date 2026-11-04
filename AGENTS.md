@@ -131,7 +131,7 @@ Use the branding flow when the request is about visual branding rather than busi
 
 - creating or restyling a theme, or matching a brandbook or company site
 - changing the app's brand colors or fonts
-- adding or changing the app's logos and browser-tab favicon, or generating a palette-matched app background
+- adding or changing the app's logos and browser-tab favicon, or setting or removing a background as part of a theme or for the whole site
 
 Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
 
