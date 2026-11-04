@@ -1,8 +1,9 @@
 name: Security checks
 
 on:
+  # No `branches:` filter on purpose: with `[main]` a PR stacked on a feature base got no
+  # secret scan until the stack reached main.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   schedule:

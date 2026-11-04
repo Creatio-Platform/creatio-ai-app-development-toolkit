@@ -12,10 +12,55 @@ on:
         required: false
         default: false
         type: boolean
+  # A merged release preparation PR releases itself: it is the only change that
+  # moves the canonical manifest version, and the `detect` job below releases
+  # only a version that has no tag yet.
+  push:
+    branches: [main]
+    paths: ['.claude-plugin/plugin.json']
+
+# One release at a time; a second run waits instead of racing the first for
+# the tag and the `release` branch.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  detect:
+    name: Detect a version to release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Read the canonical manifest version and check its tag
+        id: version
+        # A manual run always proceeds and names its version itself. A push
+        # proceeds only when the manifest version has no tag yet, so a manifest
+        # edit that does not change the version releases nothing.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)
+          echo "version=$PJ_VERSION" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$PJ_VERSION" >/dev/null 2>&1; then
+            echo "Tag $PJ_VERSION already exists; nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
     name: Release Gate + execute
+    needs: detect
+    if: ${{ needs.detect.outputs.should_release == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,7 +69,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_VERSION: ${{ inputs.version || needs.detect.outputs.version }}
     steps:
       # Mint a short-lived token for the dedicated release-bot GitHub App.
       # This is the ONLY identity allowed to update the protected `release`
@@ -34,21 +79,24 @@ jobs:
       # protected refs below run through this token via persisted credentials.
       - name: Mint release-bot app token (auth for git writes to protected refs)
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          # A push releases exactly the merged commit; a manual run releases the
+          # head of `main`. The `release` branch is later moved to $GITHUB_SHA,
+          # so the tag and the branch point at the same commit either way.
+          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
           fetch-depth: 0
           # Persist the app token so `git push` (tag + release branch) below
           # authenticates as the release-bot App, which holds the ruleset bypass.
           token: ${{ steps.app-token.outputs.token }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
 
@@ -80,8 +128,9 @@ jobs:
         run: node scripts/bump-version.js --check
 
       - name: Gate 4 — run tests
+        # Wheels only, pinned (kept equal to tests/requirements.txt), so no source-dist setup scripts run (S8541/S8544).
         run: |
-          pip install pytest
+          pip install --only-binary :all: pytest==9.0.3 pyyaml==6.0.2
           pytest tests/
 
       - name: Audit — warn on undeclared files containing the new version

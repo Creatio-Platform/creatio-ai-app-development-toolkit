@@ -3,8 +3,9 @@
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey, HEADER_TOP_REGION } from "./engine.mjs";
 import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
-  widgetsByMatch, profileCardsByEntity, knownCardActions,
+  widgetsByMatch, profileCardsByEntity, knownCardActions, FEATURE_CONNECTIONS,
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
+import { resolveRowTarget, runCarries } from "./mapping-registry.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -13,7 +14,7 @@ import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForIte
 // target — so the same rows serve the mapper, the `--verify` gate and the reference doc. The accessors below
 // are the mapper's view onto those rows; their semantics are unchanged.
 const ROLE = ITEM_ROLE_VALUES;
-// The member NAME for a kind, so a typed ⚠ reads `RADIO_GROUP 'IsPrimary'` — the identity a reviewer can act on.
+// The member NAME for a kind, so a typed ⚠ reads `RADIO_GROUP 'IsPrimary'` — the identity a reader can act on.
 const ITEM_KIND_NAME = Object.fromEntries(Object.entries(VIEW_ITEM_TYPE).map(([k, v]) => [v, k]));
 // The kind the schema stated, or null when it stated none. Null is not "unknown element": Classic reads a missing
 // itemType as a field, and it is the one case where a name-shaped fallback applies (see `dropVerdict`).
@@ -40,7 +41,7 @@ const isPrimaryDisplayItem = (i) => /getPrimaryDisplayColumnValue/i.test(i.capti
 // BaseModulePageV2 LEFT area that holds the profile islands (e.g. ContactContainer): a field nested
 // under it (field → ContactContainer → LeftModulesContainer) must resolve to the profile, NOT collapse
 // into a fallback tab. Adding it here is what routes those island fields to the side profile once the
-// base template is seeded (#18). Header stays separate (a WIDE header block → HeaderContainer, below).
+// base template is seeded. Header stays separate (a WIDE header block → HeaderContainer, below).
 const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header", "LeftModulesContainer"]); // classic → SideAreaProfileContainer
 const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its parent chain is unresolvable
 
@@ -73,7 +74,7 @@ function resolveOwner(startParent, index, profileAnchors = PROFILE_CONTAINERS) {
   while (parent && hops++ < 32) {
     if (profileAnchors.has(parent)) return { kind: "profile", via: parent, groups: [...groups].reverse() };
     const p = index.get(parent);
-    // `why` distinguishes the two unresolved causes so the caller's flag is accurate (#18): the ancestor
+    // `why` distinguishes the two unresolved causes so the caller's flag is accurate: the ancestor
     // name is not defined by ANY schema/template (missing seed) vs the chain is fully defined but never
     // reaches a profile/tab anchor (climbed to the page root — a wrong/incomplete seed).
     if (!p) return { kind: "unresolved", parent, why: "undefined-parent" };
@@ -108,8 +109,8 @@ const DVT_TYPE_NAME = {
   // CrtNUI 7.8.0 L2459-2532):
   //   * Classic RENDERS these, so classic field behaviour DOES exist to port: MAPPING -> `generateMappingEdit`
   //     (`Terrasoft.MappingEdit`, L2511-2512) and STAGE_INDICATOR -> `generateStageIndicator`
-  //     (`Terrasoft.BaseProgressBar`, L2520-2521). Choosing the Freedom counterpart is the mapping task
-  //     (ENG-95543); until it lands, no control is asserted here — but the decision must not tell the operator
+  //     (`Terrasoft.BaseProgressBar`, L2520-2521). Choosing the Freedom counterpart is the mapping task;
+  //     until it lands, no control is asserted here — but the decision must not tell the operator
   //     there is nothing to port.
   //   * Classic THROWS `UnsupportedTypeException` for these (they have no case, so they hit `default` L2523-2529):
   //     BLOB, IMAGE, FILE, FILE_LOCATOR, COLLECTION, ENTITY, ENTITY_COLLECTION, CUSTOM_OBJECT, COMPOSITE_OBJECT,
@@ -149,7 +150,7 @@ const CLIO_TYPE_ALIAS = {
 // ONE normalization for both the control choice and the reader-facing type label — they diverged before on the
 // numeric codes, and a label reading `Currency2` next to a control chosen for `money` is the same class of bug.
 const normalizeDvt = (t) => CLIO_TYPE_ALIAS[t] || DATAVALUETYPE_CODE[t] || t;
-// ENG-96483 review (Blocker) — the two types whose VALUE must never reach an editable cleartext field. They are
+// the two types whose VALUE must never reach an editable cleartext field. They are
 // IDENTIFIED precisely (DVT_TYPE_NAME has entries for HASH_TEXT / SECURE_TEXT), so the generic `field-control`
 // bucket — whose reason says the type "was not recognized" — was factually wrong about them AND truncated its
 // column list at 12 entries, so on a dense page the secret column could be the one that is not named. Their own
@@ -159,6 +160,8 @@ const secretTypeOf = (type) => {
   const t = normalizeDvt(String(type ?? "").toLowerCase());
   return SECRET_DVT.has(t) ? t : null;
 };
+// the stored-secret type of a resolved field column: only when no control was resolved and the column exists
+const storedSecretType = (ctl, missingColumn, meta) => ((!ctl && !missingColumn) ? secretTypeOf(meta.type) : null);
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
@@ -204,9 +207,8 @@ function scalarControl(t) {
   // via `generateStageIndicator`, so it is not a peer here; see the COVERAGE note above.) The security argument is
   // now the SECONDARY reason to withhold a control — the primary one is that Classic's `generateEditControl` has no
   // case for HASH_TEXT/SECURE_TEXT either and throws `UnsupportedTypeException`, so no classic field existed to
-  // port in the first place. Whether Freedom offers a
-  // masked component (a `crt.PasswordInput` is reported to exist, but only on a community answer — not Academy
-  // docs) is the mapping task's call, so no target is asserted here.
+  // port in the first place. The masked `crt.PasswordInput` (in the vendored component index) is what a field
+  // Classic MASKS becomes; a hashed or encrypted column is not given it here, since Classic never rendered one.
   // Phone / Email / Web link are TEXT-storage columns carrying a FORMAT on the column (verified on-stand: Contact.
   // Phone/MobilePhone = 42, Account.Web = 44, Contact.Email = "Email"). The Freedom field is a plain crt.Input bound
   // to the column — the phone/email/web-link rendering is inherited from the column's format, there is NO field-level
@@ -245,10 +247,15 @@ function control(dataType, contentType, ref) {
 // the branching carried no information. The arms that DO need the control, or the column name, stay as branches
 // below, where the condition is the point.
 //
-// ENG-96483 review (Blocker) — the two SECRET types are in here. `scalarControl` withholds a control for them on
+// the two SECRET types are in here. `scalarControl` withholds a control for them on
 // purpose, but the label fell through to plain `Text`, so the Layout table in `plan.md` — the verbatim operator
 // deliverable — rendered an encrypted or hashed column indistinguishably from any other text column. The Type cell
 // must never be able to read `Text` for one of these.
+// The Type labels of a hashed / encrypted column: the plan's "(not migrated)" verdict, read by the field's
+// deliverable status too.
+const HASHED_TYPE_LABEL = "Hashed text (not migrated)";
+const ENCRYPTED_TYPE_LABEL = "Encrypted text (not migrated)";
+export const SECRET_TYPE_LABELS = new Set([HASHED_TYPE_LABEL, ENCRYPTED_TYPE_LABEL]);
 const TYPE_LABEL = {
   phone: "Phone",
   email: "Email",
@@ -256,8 +263,8 @@ const TYPE_LABEL = {
   boolean: "Boolean",
   datetime: "Date/time",
   date: "Date",
-  hashtext: "Hashed text (not migrated)",
-  securetext: "Encrypted text (not migrated)",
+  hashtext: HASHED_TYPE_LABEL,
+  securetext: ENCRYPTED_TYPE_LABEL,
   integer: "Integer",
   decimal: "Decimal",
   float: "Decimal",
@@ -273,6 +280,7 @@ function labelFromColumnName(col) {
 // The label the resolved CONTROL implies, for the shapes the type alone does not name.
 function labelFromControl(ctl, t, meta) {
   if (ctl.type === "crt.Checkbox") return "Boolean";
+  if (ctl.type === "crt.PasswordInput") return "Masked text";
   if (ctl.picker === "datetime") return "Date/time";
   if (ctl.picker === "date") return "Date";
   if (ctl.multiline) return t === "richtext" ? "Rich text" : "Long text";
@@ -282,7 +290,7 @@ function fieldTypeLabel(col, meta, ctl) {
   if (ctl.lookup) return "Lookup";
   // same normalization as scalarControl: numeric codes AND clio's friendly names
   const t = normalizeDvt(String(meta.type || "").toLowerCase());
-  // SECRET TYPES FIRST — above the column-name fallback (PR #147 review). The name heuristic maps /email/i to
+  // SECRET TYPES FIRST — above the column-name fallback. The name heuristic maps /email/i to
   // "Email" and /phone|mobile/i to "Phone", so while these two sat in the generic TYPE_LABEL arm BELOW it, a
   // HASH_TEXT / SECURE_TEXT column named `UsrEmailHash`, `UsrMobilePinHash` or `UsrSecureEmail` printed in the
   // operator-facing Layout table as a migratable `Email` / `Phone` — the one label that must never be overridden
@@ -336,7 +344,8 @@ export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
 function featureView(r) {
   return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
     templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null,
-    // ENG-95683 — the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
+    requiresRegistry: !!r.meta.requiresRegistry, titled: !!r.meta.titled,
+    // the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
     // package/feature prerequisite BY KIND instead of parsing it out of `note`/`freedom`. null when the row gates
     // nothing (a plain component).
     gate: r.gate || null };
@@ -375,7 +384,7 @@ function isProfileCardModule(c) {
   if (!c.masterColumnName || c.hasDashboardConfig) return false;
   return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
 }
-// ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart from SysWidgetDashboard) is recognised
+// a record-scoped CARD WIDGET (a small indicator/chart from SysWidgetDashboard) is recognised
 // STRUCTURALLY by the two coordinates the migrator needs to convert it: BOTH `recordId` (the SysWidgetDashboard
 // record) and `widgetKey` (which widget in it) must be present. A module missing EITHER cannot be converted, so
 // it is deliberately NOT a card widget and keeps the old generic `component` decision (no silent drop). A module
@@ -386,7 +395,7 @@ function isProfileCardModule(c) {
 // documented in `references/classic-to-freedom-mapping.md` ("Recognise it") and pinned by a golden test.
 function isCardWidgetModule(c) {
   if (!c?.recordId || !c?.widgetKey) return false;
-  // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
+  // Mutually exclusive with isProfileCardModule: a module that ALSO carries
   // `masterColumnName` is a linked-record PROFILE CARD, handled by mapProfileCards — which runs BEFORE mapWidgets
   // and accounts for the key. Without this guard such a module would satisfy BOTH predicates and get a profile-card
   // decision AND a card-widget decision (a double decision R1 forbids), because mapWidgets never sees
@@ -431,25 +440,43 @@ export function mapToFreedom(eff, opts = {}) {
   // Produce a Freedom caption VALUE from a classic caption reference: the resolved literal text if the
   // manifest carries the string, else the `$`-binding as-is, else a synthesized key from the fallback
   // name. `resolved` gates whether the caller still flags it for manual resolution (#5/#13).
-  // Major 4 — user-visible text on the page must be a LOCALIZABLE BINDING, never an inline literal (clio
+  // user-visible text on the page must be a LOCALIZABLE BINDING, never an inline literal (clio
   // rejects hardcoded page text; AGENTS.md). So a caption returns the `$Resources.Strings.<key>` BINDING for
   // the page body, plus the display `text` for the PLAN ONLY, registered in `resourceStrings` so the agent
   // knows what to author. `key` = the ORIGINAL classic resource key when the schema had one, else a
   // synthesized `<name>Caption`. `resolved` = the text is known (no manual decision needed).
   const resourceStrings = {}; // resource key -> default-language text: the map the agent registers at build
+  // The same keys -> { culture: text } in every culture Classic holds (only when the manifest carries
+  // `resourceStrings`), and -> the Classic string each text was read from ("page · Key" / "<DetailSchema> · Key").
+  const pageCultures = opts.resourceStrings || null;
+  const resourceCultures = {};
+  const resourceSources = {};
+  const registerText = (key, t) => {
+    resourceStrings[key] = t.text;
+    if (t.cultures) resourceCultures[key] = t.cultures;
+    resourceSources[key] = t.source;
+  };
+  // A page string by its Classic key or `Resources.Strings.` reference: its key, text, cultures and source, or null.
+  const pageText = (raw) => {
+    if (!raw) return null;
+    const key = resources[resourceKey(raw)] == null ? raw : resourceKey(raw);
+    if (resources[key] == null) return null;
+    return { key, text: resources[key], cultures: pageCultures?.[key] ?? null, source: `page · ${key}` };
+  };
   const captionKey = (raw, fallbackName) => raw
     ? resourceKey(raw)
     : (fallbackName || "") + "Caption";
   const caption = (raw, fallbackName) => {
     const key = captionKey(raw, fallbackName);
-    const text = resolveText(raw) ?? resolveText((fallbackName || "") + "Caption");
-    if (text != null) resourceStrings[key] = text;
+    const hit = pageText(raw) ?? pageText((fallbackName || "") + "Caption");
+    const text = hit?.text ?? null;
+    if (hit) registerText(key, hit);
     return { binding: "$Resources.Strings." + key, text, key, resolved: text != null, synthesized: !raw };
   };
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
   // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
   const detailSchemas = opts.detailSchemas || {};
-  // ENG-93928 — parsed EMBEDDED PROFILE schemas { "AccountProfileSchema": { entity, columns } } from the
+  // parsed EMBEDDED PROFILE schemas { "AccountProfileSchema": { entity, columns } } from the
   // manifest, so a profile card's profiled entity and the columns it displayed are known facts, not guesses.
   const profileSchemas = opts.profileSchemas || {};
   // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from get-entity-schema-properties, so a field's
@@ -460,6 +487,13 @@ export function mapToFreedom(eff, opts = {}) {
   // lookup's referenced object "Lookup (Contact)".
   const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
   const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
+  // A field with no entity column behind it has no column title to auto-label from: its label is the Classic page
+  // string, in every culture — the one its own caption names (`config.caption`, then `labelConfig.caption`), else
+  // the one named after the field. Null for a column-bound field, and when the entity columns are not known.
+  const pageLabelFor = (col, caption) => {
+    if (!Object.keys(cols).length || cols[col] != null || columnTitles[col] != null) return null;
+    return pageText(caption) ?? pageText(col) ?? pageText(col + "Caption");
+  };
   // Name-bound field inserts → fields. Here, not in `mergeHierarchy`: that never receives `entityColumns`.
   eff = promoteNameBoundFields(eff, cols);
   const needsDecision = [];
@@ -477,7 +511,7 @@ export function mapToFreedom(eff, opts = {}) {
   // fields (entity-column-bound, defined in the child's base `*Page` that lands in the seed chain) ARE its content
   // and MUST be built + counted (else a standard child folds to 0 fields and the template threshold undercounts).
   // Framework chrome (templateOwned but NOT column-bound — BaseModulePageV2/BasePageV2 containers/actions) stays
-  // suppressed for children too. (Vanislemarina review §2 / Variant B.)
+  // suppressed for children too. (Variant B.)
   const isChildPage = !!opts.isChildPage;
   const isContentField = (f) => !f.templateOwned || (isChildPage && !!f.bindTo);
   // An image/photo item is emitted by mapImages as a crt.ImageInput — it must NOT ALSO be emitted here as a plain
@@ -509,8 +543,13 @@ export function mapToFreedom(eff, opts = {}) {
 
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
-  const ctx = { eff, cols, resources, resolveText, caption, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor,
-    index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage };
+  const ctx = { eff, cols, resources, resolveText, caption, pageText, registerText, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor, pageLabelFor,
+    index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage,
+    componentAvailable: opts.componentAvailable || (() => false), registrySource: opts.registrySource || null,
+    registryUnindexedVersion: opts.registryUnindexedVersion || null, featureStatus: opts.featureStatus || (() => null),
+    // the run's component registry `{ index, version, source }` (migrate.mjs `runRegistryFor`), or null: decides
+    // whether a row's version-gated `upgrade` target is emitted (crt.RadioGroup) or its fallback `target`.
+    registry: opts.registry || null };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -528,7 +567,7 @@ export function mapToFreedom(eff, opts = {}) {
   D.needsDecision.forEach(d => needsDecision.push(d));
   D.accountedFor.forEach(a => accountedFor.add(a));
 
-  // ---- embedded profile cards (linked-record blocks) → the Freedom side profile (ENG-93928) ----
+  // ---- embedded profile cards (linked-record blocks) → the Freedom side profile ----
   const _pc = mapProfileCards(ctx);
   const profileCards = _pc.profileCards;
   _pc.needsDecision.forEach(d => needsDecision.push(d));
@@ -559,14 +598,15 @@ export function mapToFreedom(eff, opts = {}) {
   _ca.accountedFor.forEach(a => accountedFor.add(a));
 
   // feature toggles / charts / methods → handler stubs / removals / referenced modules
-  const _rl = mapRemainingLogic(eff, payloadMethods, payloadComponents);
+  // a method a mapped component carries (its settings moved into the component) is not a handler to port
+  const _rl = mapRemainingLogic(eff, payloadMethods.filter((m) => !D.carriedMethods.has(m.name)), payloadComponents);
   const handlerStubs = _rl.handlerStubs;
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
 
-  // ---- imperative MEMBERS the engine used to read for their names at most (attributes) or not at all
+  // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
   // (messages / mixins / the full define() dep list) ----
-  mapImperativeMembers(eff, cols).needsDecision.forEach(d => needsDecision.push(d));
+  mapImperativeMembers(eff, cols, F.pageAttributes).needsDecision.forEach(d => needsDecision.push(d));
 
   // ---- Fix 2: LOUD unmapped-component drop ----
   const _drop = mapUnmappedDrop(eff, accountedFor, F.configGaps);
@@ -584,11 +624,17 @@ export function mapToFreedom(eff, opts = {}) {
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, standardMethodsFiltered, needsDecision,
     ruleSourceCount: payloadRules.length, // # of declarative page/entity rule DEFINITIONS considered (before mapping) — lets a caller detect "rules existed but none mapped into Logic"
-    // Major 4 — resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
+    // resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
     resources: resourceStrings,
+    // per-culture Classic values of those keys (present only for keys the manifest carried in every culture)
+    resourceCultures,
+    // the Classic string behind each key: "page · <Key>" or "<DetailSchema> · <Key>"
+    resourceSources,
     // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
     standardFeatures: D.standardFeatures,
+    // standard features the run has no evidence to build (see `withheldFeature`): a Layout row each, nothing built.
+    withheldFeatures: D.withheldFeatures,
     // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
     // compact-profile component wired by `referenceColumn`, or the read-only-fields island fallback.
     profileCards,
@@ -597,7 +643,7 @@ export function mapToFreedom(eff, opts = {}) {
     // DCM present for THIS page's entity (scoped: a child edit page does not inherit the parent's case) — the
     // coverage builder gates the case-bar / Next-steps deliverable rows on this, not on the raw inherited signal.
     dcmActive,
-    // ENG-95806 — record-scoped CARD WIDGETS (SysWidgetDashboard indicators) with their coordinates (widgetKey +
+    // record-scoped CARD WIDGETS (SysWidgetDashboard indicators) with their coordinates (widgetKey +
     // recordId) and resolved region: the agent groups them by recordId and converts each group via the migrator's
     // ConvertCardWidgetsProcess, placing the returned Freedom element — never hand-building a chart.
     cardWidgets,
@@ -612,7 +658,7 @@ export function mapToFreedom(eff, opts = {}) {
     headerLayout: F.headerLayout,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
-    // ENG-95543 tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
+    // tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
     // IS built; this is the wiring a build agent still has to author, published rather than left implicit.
     requestHandlers: F.requestHandlers,
     // The elements the shared mapping table emitted, so the design spec, the published `componentTypes` and the
@@ -669,7 +715,7 @@ function createContainers(ctx) {
         // catalog lists crt.TabContainer ("Single tab within a TabPanel") and crt.TabPanel but NO `crt.Tab`, nine
         // real Freedom pages across two stands carry 0 crt.Tab nodes, and a real tab insert reads
         // `{parentName:"Tabs", propertyName:"items", values:{type:"crt.TabContainer", items:[], caption:"#ResourceString(K)#"}}`.
-        // This previously emitted `crt.Tab` into `propertyName:"tabs"` with a `$Resources.Strings.*` caption — a
+        // Emitting `crt.Tab` into `propertyName:"tabs"` with a `$Resources.Strings.*` caption would be a
         // component that does not exist, in a slot that is not the one the platform fills, with the one caption
         // form the skill's own mapping reference says will NOT render on a tab.
         { operation: "insert", name: tab, parentName: "Tabs", propertyName: "items",
@@ -744,7 +790,7 @@ const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
 // Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
 // too) and surface the dynamic-visibility / ancestor-visibility decisions.
 //
-// PR review — hoisted OUT of `mapFields` to module scope rather than left as a closure over it. Sonar counts a
+// Hoisted OUT of `mapFields` to module scope rather than left as a closure over it. Sonar counts a
 // nested function's branching against its enclosing function, so `mapFields` sat one point over the S3776 ceiling
 // (16 against 15) while every one of its parts was already small. Nothing here reads `mapFields`'s locals: the two
 // facts it needs from the run — whether this is a mini page, and where to file a decision — come in as arguments.
@@ -774,12 +820,39 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   return vis;
 }
 
+// A TEXT field on a declared page attribute that Classic renders MASKED (`controlConfig: { protect: true }`, a
+// password-style text edit) is emitted as the Freedom password-style input `crt.PasswordInput`: editable as it was in Classic, its value masked on screen. Only
+// a text field: a masked Boolean, number, date or lookup keeps its typed control, since a text input over such a value
+// would hold it as free text. A field on an entity column keeps its own control whatever its masking. It is reported under the same decision kind as the hashed / encrypted columns, in its own
+// row because the reason differs: the stored value is the real secret in plain storage, and the protection is the
+// field's own configuration, not the column's storage. `crt.PasswordInput` is emitted only where the run's component
+// registry shows the target stand carries it; elsewhere the field is a read-only `crt.Input` and the row says why.
+const MASKED_CONTROL = Object.freeze({ type: "crt.PasswordInput" });
+// the read-only `crt.Input` a hashed or encrypted column gets (no Freedom field renders those values safely), and a
+// masked page-attribute field where the run cannot show the stand carries `crt.PasswordInput`
+const READ_ONLY_INPUT = Object.freeze({ type: "crt.Input", readOnly: true });
+// a plain single-line text control: what Classic's masked text edit stands for
+const isPlainTextControl = (c) => !!c && c.type === "crt.Input" && !c.multiline && !c.readOnly && !c.linkedDisplay;
+function maskedFieldsDecision(cols) {
+  return { kind: "secret-column", item: `(${cols.length} masked fields)`,
+    reason: `${cols.length} field(s) are MASKED on the classic page (\`controlConfig: { protect: true }\`, a password-style input). They are emitted as \`crt.PasswordInput\`, a password-style masked input that stays editable as it was in Classic. The masking is on screen only: the stored value is the real secret, not a hash or ciphertext, so anyone who can read the data source still reads it. \`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index (no Designer toolbar entry): verify on a stand that the built field masks its value. DECIDE per field: keep it, or drop it, and port the save logic the classic page ran for it. Fields: ${cols.join(", ")}` };
+}
+function maskedFallbackDecision(cols) {
+  return { kind: "secret-column", item: `(${cols.length} masked fields, not masked)`,
+    reason: `${cols.length} field(s) are MASKED on the classic page (\`controlConfig: { protect: true }\`, a password-style input), and this run's component registry cannot show that the target stand carries \`crt.PasswordInput\`, the Freedom masked input. They are emitted as a READ-ONLY \`crt.Input\` instead: not editable, and the value shows UNMASKED on screen. The stored value is the real secret, not a hash or ciphertext. Supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` and re-run \`--plan --out\` to build \`crt.PasswordInput\` on a stand that has it. DECIDE per field: keep it read-only, drop it, or build the masked input by hand. Fields: ${cols.join(", ")}` };
+}
+// The declared page attributes whose fields stay editable although the page's own methods write them (`this.set`):
+// such a field may be a value the page computes and only shows. Reported once, naming each field and its writers.
+function computedAttributeFieldsDecision(rows) {
+  return { kind: "field-attribute-computed", item: `(${rows.length} field(s))`,
+    reason: `${rows.length} field(s) bind a declared page attribute that the page's own methods write with \`this.set\`, and no attribute dependency reacts to a user change of it. Each is emitted EDITABLE, as Classic rendered it, because nothing static marks it read-only. The value may be one the page computes and only shows: if so, make the field read-only by hand. Fields (writing methods): ${rows.join(", ")}` };
+}
 // The per-field noise, FOLDED into one summary decision per kind — extracted from `mapFields` so its five
 // branches (collision density, unresolved controls, secret columns, split islands, missing labels) score against
 // this function rather than against the loop that fills the accumulators (Sonar S3776, CC 15). Pure: it reads the
 // accumulators and RETURNS the decisions, so the caller keeps ownership of `needsDecision`.
 function foldFieldSummaries(acc) {
-  const { collisionByContainer, fieldControlCols, secretCols, splitIslands, distinctProfileIslands,
+  const { collisionByContainer, fieldControlCols, secretCols, dupBoundCols, splitIslands, distinctProfileIslands,
     payloadFields, fieldsWithTitle } = acc;
   const out = [];
   const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
@@ -791,18 +864,32 @@ function foldFieldSummaries(acc) {
   // so it doesn't nag pages with a stray collision or two.
   if (totalCollisions >= 12) out.push({ kind: "layout-density", item: "(page layout)",
     reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
+  // The same entity column bound by several classic items. Freedom gives each control its own NAME but they
+  // share the attribute, so the value is editable in two places at once and the Layout table lists the column
+  // twice, in two regions, with nothing saying they are one field. Classic did this routinely (a header field
+  // repeated on a tab); Freedom is a narrower page and the repeat is usually not wanted. The engine keeps both —
+  // dropping one silently is worse — and asks.
+  if (dupBoundCols?.length) {
+    out.push({ kind: "duplicate-binding", item: `(${dupBoundCols.length} column(s))`,
+      reason: `${dupBoundCols.join(", ")} — each is bound by MORE THAN ONE classic item, so the Freedom page carries a second control (\`<col>_2\`) on the SAME attribute: one value, two editable places, and two Layout rows in different regions that nothing connects. Both are emitted rather than one dropped silently. DECIDE per column: keep both (the classic page deliberately showed it twice), or keep one and say which region loses it.` });
+  }
   if (fieldControlCols.length) {
     const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
     out.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
       reason: `${fieldControlCols.length} field(s): the entity column exists but its TYPE was not recognized (an unmapped/exotic DataValueType code that get-entity-schema-properties returned as a number), OR no \`manifest.entityColumns\` was supplied to resolve types — defaulted to \`crt.Input\`. Confirm the control on-stand: ${shown}` });
   }
-  // ENG-96483 review (Blocker) — the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
+  // the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
   // here on purpose: the whole point is that the operator can see every column whose value the classic page put
   // on screen and that this migration is NOT carrying over.
-  if (secretCols.length) {
-    const named = secretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
-    out.push({ kind: "secret-column", item: `(${secretCols.length} fields)`,
-      reason: `${secretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
+  const maskedCols = secretCols.filter((sc) => sc.type === "protect" && sc.shown).map((sc) => sc.col);
+  const unmaskedCols = secretCols.filter((sc) => sc.type === "protect" && !sc.shown).map((sc) => sc.col);
+  const storedSecretCols = secretCols.filter((sc) => sc.type !== "protect");
+  if (maskedCols.length) out.push(maskedFieldsDecision(maskedCols));
+  if (unmaskedCols.length) out.push(maskedFallbackDecision(unmaskedCols));
+  if (storedSecretCols.length) {
+    const named = storedSecretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
+    out.push({ kind: "secret-column", item: `(${storedSecretCols.length} fields)`,
+      reason: `${storedSecretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
   }
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
   // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
@@ -816,7 +903,7 @@ function foldFieldSummaries(acc) {
 }
 
 function mapFields(ctx, containers) {
-  const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
+  const { cols, colMeta, labelFor, pageLabelFor, registerText, index, profileAnchors, payloadFields } = ctx;
   const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
   const needsDecision = [], viewConfigDiff = [], accountedFor = new Set();
   const attributes = {}, pdsColumns = {};
@@ -843,9 +930,11 @@ function mapFields(ctx, containers) {
   // after the loop. The relocation / control-defaulting / naming behavior is unchanged — only the reporting folds.
   const collisionByContainer = new Map(); // parent -> { count, gridCols, sample: [] }
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
+  const dupBoundCols = [];                // cols the classic page binds MORE THAN ONCE (col, col_2, …)
   const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
+  const pageAttributes = new Set();       // page attributes the ChangeSet creates (no entity column behind them)
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
-  // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
+  // STABLE-SORT by the classic diff `order` first: the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
   // Map was assigned a LATER row (wrong vertical order). Fields with no explicit order keep their Map position
   // (Infinity sorts last, stably). Row assignment below then walks fields in true layout order.
@@ -913,9 +1002,17 @@ function mapFields(ctx, containers) {
       ...(c.image ? { value: "$" + col } : { control: "$" + col }),
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
-    // Major 4 — a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
-    // an inline label/caption (clio rejects hardcoded page text). `titleText`/`typeLabel` are PLAN-only metadata.
+    // a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
+    // an inline label/caption (clio rejects hardcoded page text). A field with no column binds its label to the
+    // Classic page string. `titleText`/`typeLabel`/`labelKey`/`labelSource` are PLAN-only metadata.
     if (lbl != null) values.titleText = lbl;
+    const pageLabel = pageLabelFor(col, index.get(f.name)?.caption);
+    if (pageLabel) {
+      registerText(pageLabel.key, pageLabel);
+      values.label = "$Resources.Strings." + pageLabel.key;
+      values.labelKey = pageLabel.key;
+      values.labelSource = pageLabel.source;
+    }
     values.typeLabel = fieldTypeLabel(col, meta, c);
     applyFieldTypeMeta(values, col, c, meta);
     applyHintTip(values, f, col);
@@ -949,6 +1046,108 @@ function mapFields(ctx, containers) {
     needsDecision.push({ kind: "container", item: f.name || f.bindTo, reason: `${why} — placed in ${FLAT_FALLBACK} for now` });
     return FLAT_FALLBACK; // parent chain unresolvable
   };
+  // A page attribute keeps its classic static default; the ChangeSet creates it, so it is accounted for here and the
+  // imperative-members pass does not ask for it to be created again (`pageAttributes`). Shared by the field pass and
+  // the radio groups, so a field and a group (or an option's `enabled`) on one attribute define it the same way.
+  const definePageAttribute = (attr, classic) => {
+    const v = classic?.value;
+    attributes[attr] = v === null || v === undefined ? {} : { value: v };
+    pageAttributes.add(attr);
+    accountedFor.add(attr);
+  };
+  // The attribute a field binds: a declared page attribute is the page's own state (no PDS path, no PDS column —
+  // neither exists on the entity); anything else is read through the primary data source.
+  const bindFieldAttribute = (col, pageAttr) => {
+    if (pageAttr) { definePageAttribute(col, pageAttr); return; }
+    attributes[col] = { modelConfig: { path: "PDS." + col } };
+    pdsColumns[col] = { path: col };
+  };
+  // A declared attribute whose value a field cannot hold as a plain page attribute: a lookup or a record id needs a
+  // values source the field pass does not build, an enum a value list, an image lookup a SysImage reference.
+  const NON_SCALAR_ATTR_TYPES = new Set([DATA_VALUE_TYPE.GUID, DATA_VALUE_TYPE.LOOKUP, DATA_VALUE_TYPE.ENUM, DATA_VALUE_TYPE.IMAGELOOKUP]);
+  // One decision per attribute, however many fields (col, col_2, …) bind it.
+  const reportedLookupAttrs = new Set();
+  const reportLookupAttributeField = (a) => {
+    if (reportedLookupAttrs.has(a.name)) return;
+    reportedLookupAttrs.add(a.name);
+    needsDecision.push({ kind: "field-attribute-lookup", item: a.name,
+    reason: `a field is bound to '${a.name}', a lookup (or other non-scalar) attribute the classic page declares with no entity column behind it — the field is kept as a read-only linked value over PDS.${a.name}, a column that does not exist. Build it by hand: a page attribute with its values source (for a lookup, its reference schema), or bind the field to the entity column the attribute stands for` });
+  };
+  // A field on a declared page attribute is read-only only on Classic's STATIC signals: the field is disabled
+  // (`enabled: false`) or read-only (`readonly: true`) in the diff. A value the page's own code writes
+  // (`this.set("X", …)`) is not evidence enough: an init method that sets a starting value the user then toggles
+  // looks the same. Such a field stays editable and is named, with its writing methods, in one folded
+  // `field-attribute-computed` decision, unless an attribute `dependencies` entry lists X in its columns (the classic
+  // "the user edits X and the page reacts" wiring, which settles it as an input). The writer map is built once.
+  const staticReadOnly = (f) => f.enabled === false || f.readonly === true;
+  const computedAttrFields = [];
+  let attrWriters = null;
+  const attributeWriters = (col) => {
+    if (!attrWriters) {
+      const watched = new Set((ctx.eff.attributes || []).flatMap((x) => (x.dependencies || []).flatMap((d) => d.columns || [])));
+      attrWriters = new Map();
+      for (const m of ctx.eff.methods || []) {
+        for (const w of m.facts?.writesAttrs || []) {
+          if (!watched.has(w)) attrWriters.set(w, [...(attrWriters.get(w) || []), m.name]);
+        }
+      }
+    }
+    return attrWriters.get(col) || [];
+  };
+  // Each attribute is listed once, however many fields bind it.
+  const notedComputedAttrs = new Set();
+  const noteComputedAttributeField = (col, f) => {
+    const writers = (staticReadOnly(f) || notedComputedAttrs.has(col)) ? [] : attributeWriters(col);
+    if (!writers.length) return;
+    notedComputedAttrs.add(col);
+    computedAttrFields.push(`${col} (${writers.join(", ")})`);
+  };
+  // A masked text field on a declared page attribute: `crt.PasswordInput` where the run's registry shows the target stand carries it, otherwise the
+  // read-only `crt.Input`. Either way it is named in a secret-column row, the one that matches what was emitted.
+  const passwordInputShown = runCarries(ctx.registry, MASKED_CONTROL.type);
+  const maskedField = (col) => {
+    secretCols.push({ col, type: "protect", shown: passwordInputShown });
+    return passwordInputShown ? MASKED_CONTROL : READ_ONLY_INPUT;
+  };
+  // An attribute that maps a column of a related source (`columnPath`, or ViewModelColumnType ENTITY_COLUMN, numeric
+  // 0) is that column's value, not page state: its field keeps the linked-value output.
+  const mapsRelatedColumn = (a) => !!a.columnPath || a.columnType === "ENTITY_COLUMN" || a.columnType === 0;
+  // The control for a field on a page attribute the classic view model declares, chosen from its dataValueType through
+  // the same selection a column's type goes through. A declared attribute is evidence the name is view-model state, not
+  // a column of a related data source, so it becomes an editable page attribute — unless its type cannot be one
+  // (reported, and the linked-value output kept: null). A lookup or other non-scalar attribute takes that path even
+  // when masked. A hashed or encrypted one keeps the linked-value output too (null), so its value is never put on
+  // screen, and is named with the stored secrets. An attribute with no
+  // type, or a code the engine does not know, is an editable crt.Input named in the field-control decision, like a
+  // column whose type is not recognized. A masked text attribute is a masked field.
+  const declaredAttributeField = (col, f) => {
+    const a = (ctx.eff.attributes || []).find((x) => x.name === col);
+    if (!a || mapsRelatedColumn(a)) return null;
+    const dvt = a.dataValueType;
+    const meta = { type: dvt == null ? null : String(dvt) };
+    const stored = secretTypeOf(meta.type);
+    if (stored) { secretCols.push({ col, type: stored }); return null; }
+    const known = dvt != null && DATAVALUETYPE_CODE[meta.type] !== undefined;
+    const c = known ? scalarControl(meta.type) : { type: "crt.Input" };
+    if (a.isLookup || a.isCollection || NON_SCALAR_ATTR_TYPES.has(dvt) || !c) { reportLookupAttributeField(a); return null; }
+    if (!known) fieldControlCols.push(col);
+    const masked = known && f.protect === true && isPlainTextControl(c);
+    if (!masked) noteComputedAttributeField(col, f);
+    const shown = masked ? maskedField(col) : c;
+    return { a, meta, c: staticReadOnly(f) ? { ...shown, readOnly: true } : shown };
+  };
+  // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
+  // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
+  // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
+  // built page shows one value in two places and the plan's Layout table lists the column twice in two
+  // different regions, where nothing connects them. A per-field line here is folded away and
+  // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
+  // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
+  const fieldElementName = (col) => {
+    nameCount[col] = (nameCount[col] || 0) + 1;
+    if (nameCount[col] === 2) dupBoundCols.push(col);
+    return nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+  };
   // Resolve a field's column, control type and unique element name (own function for Sonar CC 15). Splits the two
   // unresolved-control causes: a MISSING bound column → virtual-field decision naming nearest columns; a resolved
   // column whose TYPE didn't map → folded field-control summary. Mutates needsDecision/fieldControlCols/nameCount.
@@ -957,6 +1156,10 @@ function mapFields(ctx, containers) {
     const meta = colMeta(col);
     const haveCols = Object.keys(cols).length > 0;
     const missingColumn = !!f.bindTo && haveCols && !(col in cols);
+    // Only when the entity columns were supplied and lack the name: without them a declared attribute may as well be
+    // a column override (an `Owner` attribute carrying a lookupListConfig), which must keep its column binding.
+    const declared = missingColumn ? declaredAttributeField(col, f) : null;
+    if (declared) return { col, meta: declared.meta, missingColumn: false, nearMissing: [], c: declared.c, elName: fieldElementName(col), pageAttr: declared.a };
     // A bound column NOT on the entity is (almost always) a companion value shown FROM A RELATED DATA SOURCE
     // (e.g. Contact.Phone/Email/BirthDate on an Employee page via the Contact lookup). Freedom shows this
     // natively — add the related data source's column through the lookup and bind the input to it READ-ONLY.
@@ -965,20 +1168,18 @@ function mapFields(ctx, containers) {
     // the nearest existing columns only as a secondary hint for the rarer renamed/typo case.
     const nearMissing = missingColumn ? nearestColumns(col, cols) : [];
     const ctl = control(meta.type, f.contentType, meta.ref);
-    // ENG-96483 review (Blocker) — a HASH_TEXT / SECURE_TEXT column is FAIL-CLOSED here. `scalarControl` withheld
-    // the control deliberately, and the caller used to undo that one line later by defaulting to an editable
+    // a HASH_TEXT / SECURE_TEXT column is FAIL-CLOSED here. `scalarControl` withheld
+    // the control deliberately, so the caller must not undo that one line later by defaulting to an editable
     // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
     // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
     // than folded into the "type was not recognized" bucket, which was untrue for these two.
-    const secretType = (!ctl && !missingColumn) ? secretTypeOf(meta.type) : null;
+    // `controlConfig.protect` is read only for a field on a declared page attribute (`declaredAttributeField`); an
+    // entity column keeps its own control whatever the field's masking.
+    const secretType = storedSecretType(ctl, missingColumn, meta);
     if (!ctl && !missingColumn && !secretType) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     if (secretType) secretCols.push({ col, type: secretType });
-    const c = ctl || (secretType ? { type: "crt.Input", readOnly: true } : { type: "crt.Input" });
-    // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
-    // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
-    nameCount[col] = (nameCount[col] || 0) + 1;
-    const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    return { col, meta, missingColumn, nearMissing, c, elName };
+    const c = ctl || (secretType ? READ_ONLY_INPUT : { type: "crt.Input" });
+    return { col, meta, missingColumn, nearMissing, c, elName: fieldElementName(col), pageAttr: null };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
   // 24-col), assign a collision-free (span-aware) cell, and return the layoutConfig. Own function for Sonar CC 15;
@@ -1049,7 +1250,7 @@ function mapFields(ctx, containers) {
   };
   for (const { f, own } of resolved) {
     const parent = routeField(f, own);
-    const { col, meta, c, elName, missingColumn, nearMissing } = resolveFieldControl(f);
+    const { col, meta, c, elName, missingColumn, nearMissing, pageAttr } = resolveFieldControl(f);
     const layoutConfig = computeLayout(f, own, parent, col);
     const vis = fieldVisibility(f, own, col, { isMiniPage: ctx.isMiniPage, needsDecision });
     const values = buildFieldValues(f, col, c, meta, vis, layoutConfig);
@@ -1058,10 +1259,9 @@ function mapFields(ctx, containers) {
     // nearest existing columns for the secondary renamed-column case.
     if (missingColumn) { values.readOnly = true; values.linkedValue = true; if (nearMissing.length) values.linkedNearest = nearMissing; }
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
-    attributes[col] = { modelConfig: { path: "PDS." + col } };
-    pdsColumns[col] = { path: col };
+    bindFieldAttribute(col, pageAttr);
   }
-  // ---- ENG-95543: the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
+  // ---- the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
   // Placement deliberately goes through the SAME `routeField` / `computeLayout` closures the fields above use:
   // a second placement path would compute its own rows and overlap the fields already claiming those grid cells.
   // Emission order is the classic layout order (`order`), like the field pass, so a radio group between two
@@ -1144,6 +1344,9 @@ function mapFields(ctx, containers) {
     if (spec.from === SOURCE.VALUE_ATTR) return it.valueBindTo ? "$" + it.valueBindTo : null;
     if (spec.from === SOURCE.OPTION_CHILDREN) { const o = optionEntriesOf(it, sink); return o.length ? o : null; }
     if (spec.from === SOURCE.MENU_CHILDREN) { const m = menuEntriesOf(it, sink); return m.length ? m : null; }
+    // The group side of option ELEMENTS: the group carries an empty `items` and each option is its own child insert
+    // (`emitRadioGroup`), so the group can only emit when the options were collected first.
+    if (spec.from === SOURCE.OPTION_ELEMENTS) return sink.options?.length ? [] : null;
     return null;
   };
   // A candidate is CLIENT-authored, has no `generator` (in Classic a generator override wins over the itemType
@@ -1160,16 +1363,26 @@ function mapFields(ctx, containers) {
       .map((it, n) => ({ it, n, row: rowForItem(it) }))
       .filter((x) => x.row?.ownedBy === OWNER.TABLE)
       .sort((a, b) => ((a.it.order ?? Infinity) - (b.it.order ?? Infinity)) || (a.n - b.n));
-    for (const { it, row } of candidates) emitTableElement(it, row);
+    for (const { it, row } of candidates) {
+      // A row with a version-gated `upgrade` (RADIO_GROUP -> crt.RadioGroup) emits it only where the run's registry
+      // carries it and an emitter for that upgrade type exists; otherwise the row's own `target` is emitted.
+      const sel = resolveRowTarget(row, ctx.registry);
+      const emitUpgrade = sel.upgraded ? UPGRADE_EMITTERS[sel.target.componentType] : null;
+      if (emitUpgrade) emitUpgrade(it, sel.target);
+      else emitTableElement(it, row, sel);
+    }
   };
+  // The emitter of each `upgrade` component type. An upgrade is a generic row field, but its shape is not: a type
+  // with no emitter here keeps its row's fallback `target` rather than being built as a radio group.
+  const UPGRADE_EMITTERS = { "crt.RadioGroup": (it, target) => emitRadioGroup(it, target) };
   // ONE candidate's emission. Own fn for the same Sonar CC reason as the placement helpers above: inside the loop
   // every guard here also carried the loop's nesting weight, which is what pushed `mapFields` over the budget.
   // The row's `propMap` resolved against ONE element: the emitted `values`, plus the REQUIRED sources this element
   // could not supply. Own fn for Sonar CC 15, like the placement helpers above.
-  const resolveProps = (it, row, sink) => {
-    const values = { type: row.target.componentType };
+  const resolveProps = (it, target, sink) => {
+    const values = { type: target.componentType };
     const missing = [];
-    for (const [prop, spec] of Object.entries(row.target.propMap || {})) {
+    for (const [prop, spec] of Object.entries(target.propMap || {})) {
       const v = resolveSource(spec, it, sink);
       if (v === null || v === undefined) {
         if (spec.required) missing.push(`${prop} (from classic ${spec.from})`);
@@ -1179,9 +1392,26 @@ function mapFields(ctx, containers) {
     }
     return { values, missing };
   };
-  const emitTableElement = (it, row) => {
+  // An element's place on the page, shared by every table emission. Placement deliberately goes through the SAME
+  // `routeField` / `computeLayout` closures the fields use (see above).
+  const placeElement = (it, values) => {
+    const own = resolveOwner(it.parent, index, profileAnchors);
+    const parent = routeField(it, own);
+    values.layoutConfig = computeLayout(it, own, parent, it.name);
+    if (!fieldVisibility(it, own, it.name, { isMiniPage: ctx.isMiniPage, needsDecision })) values.visible = false;
+    return parent;
+  };
+  // The EMITTED element name goes through the same uniquifier the field pass uses. A field is emitted under its
+  // COLUMN name, not its classic element name, so a classic LABEL named `Name` beside a field element bound to
+  // column `Name` produced TWO inserts called `Name` in one container — applying that diff overwrites one control
+  // with the other.
+  const uniqueName = (name) => {
+    nameCount[name] = (nameCount[name] || 0) + 1;
+    return nameCount[name] === 1 ? name : `${name}_${nameCount[name]}`;
+  };
+  const emitTableElement = (it, row, sel = null) => {
     const sink = newSink();                   // sub-items absorbed + decisions/handlers held until it really emits
-    const { values, missing } = resolveProps(it, row, sink);
+    const { values, missing } = resolveProps(it, row.target, sink);
     // A row is tier A/B for the KIND; a single ELEMENT can still fall short of it — a radio group with no option
     // children, a button with no caption. Emitting a half-configured element would be the silent-drop failure in a
     // new costume, so the instance degrades to the typed ⚠ instead, carrying the exact reason.
@@ -1189,10 +1419,7 @@ function mapFields(ctx, containers) {
       configGaps.set(it.name, `its Freedom target (${row.target.componentType}) needs ${missing.join(" and ")}, which this classic element does not carry`);
       return;
     }
-    const own = resolveOwner(it.parent, index, profileAnchors);
-    const parent = routeField(it, own);
-    values.layoutConfig = computeLayout(it, own, parent, it.name);
-    if (!fieldVisibility(it, own, it.name, { isMiniPage: ctx.isMiniPage, needsDecision })) values.visible = false;
+    const parent = placeElement(it, values);
     // Tier B: the view is automatic, the behaviour is not. The element gets its `clicked` request and the request
     // goes on the worklist — the classic method it came from is already a stub row of its own (the engine resolves
     // a control's click binding as that method's trigger), so this adds the WIRING, not a second copy of the method.
@@ -1201,13 +1428,9 @@ function mapFields(ctx, containers) {
       values.clicked = { request };
       sink.handlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
     }
-    // The EMITTED element name goes through the same uniquifier the field pass uses. A field is emitted under its
-    // COLUMN name, not its classic element name, so a classic LABEL named `Name` beside a field element bound to
-    // column `Name` produced TWO inserts called `Name` in one container — applying that diff overwrites one
-    // control with the other. `accountedFor` and `tableElements.classic` keep the CLASSIC name: that is what the
-    // drop sweep and the reader match on.
-    nameCount[it.name] = (nameCount[it.name] || 0) + 1;
-    const elName = nameCount[it.name] === 1 ? it.name : `${it.name}_${nameCount[it.name]}`;
+    // `accountedFor` and `tableElements.classic` keep the CLASSIC name: that is what the drop sweep and the reader
+    // match on; only the emitted name is uniquified.
+    const elName = uniqueName(it.name);
     needsDecision.push(...sink.decisions);
     requestHandlers.push(...sink.handlers);
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: row.target.slot });
@@ -1229,18 +1452,233 @@ function mapFields(ctx, containers) {
       attributes[it.valueBindTo] = { modelConfig: { path: "PDS." + it.valueBindTo } };
       pdsColumns[it.valueBindTo] = { path: it.valueBindTo };
     }
+    // The run fell back to the row's target while the index DOES carry the upgrade on some version: the registry
+    // could not show that the target stand has it (no stand export, no pinned version), so say what a stand that has
+    // it would get and how to ask for it. Silent when the index carries the upgrade nowhere.
+    if (sel?.availableIn?.length) needsDecision.push({ kind: "registry-upgrade-available", item: it.name,
+      reason: `${itemKindName(it)} '${it.name}' was built as ${row.target.componentType}, which every indexed platform version renders. ${row.upgrade.componentType} — the closer match, with named options business rules can address — is in the component registry for ${sel.availableIn.join(", ")}, but ${upgradeRemedy(row.upgrade.componentType)}` });
+  };
+  // Why the run could not show the target stand carries the upgrade, and the one remedy that changes that. A run that
+  // already pinned a version the index does not know, or named an export that could not be read, asked for a specific
+  // stand: telling it to pin a version would repeat what it did, so only the stand's own export is named.
+  const upgradeRemedy = (upgradeType) => {
+    const rerun = `and re-run \`--plan --out\` to build ${upgradeType} on a stand that has it`;
+    const unindexed = ctx.registry?.unindexedVersion || ctx.registryUnindexedVersion;
+    if (ctx.registry?.source === "unreadable-export")
+      return `the component registry the manifest named could not be read, so the run fell back to the vendored index and cannot show that the target stand carries it. Supply a readable \`manifest.componentRegistry\` (the stand's registry export) ${rerun}`;
+    if (unindexed)
+      return `the pinned platform version '${unindexed}' is not in the engine's vendored component index, so only the target stand's own registry export can show it carries it. Supply \`manifest.componentRegistry\` (the stand's registry export) ${rerun}`;
+    return `this run's registry cannot show that the target stand carries it. Supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` ${rerun}`;
+  };
+
+  // ---- RADIO_GROUP -> crt.RadioGroup, the version-gated upgrade of the RADIO_GROUP row --------------------------
+  // The group is built with `items: []` and ONE named crt.RadioGroupItem child per built classic option (the classic
+  // option element's own name), because that is how crt.RadioGroup stores options and what lets a business rule or a
+  // package address a single option; a split group also gets hidden copies of the other groups' options (below). Every piece below is its own fn for Sonar CC 15.
+  const radioGroups = [];                     // every built group { name, attr, options, spec }, for the split-group pass
+  // The classic binding without a ContentBuilder `$` prefix (`value: { bindTo: "$UsrAttr" }`), and whether it had
+  // one: the `$` prefix is how a ContentBuilder page names a page attribute, so it is evidence of its own.
+  const radioAttr = (it) => {
+    if (typeof it.valueBindTo !== "string") return { attr: null, dollar: false };
+    return { attr: it.valueBindTo.replace(/^\$/, "") || null, dollar: it.valueBindTo.startsWith("$") };
+  };
+  // What the group is bound to, from positive evidence only:
+  // - `column`: the entity columns carry the name — the PDS attribute + column the fallback emits;
+  // - `attribute`: a `$` binding or an attribute the classic view model declares — a view-model attribute with no PDS
+  //   path (a PDS path would point at a column that does not exist);
+  // - `missing-column`: entity columns were supplied and carry neither — the PDS binding is kept and the group is
+  //   reported, because guessing "page attribute" would build a group whose value is never saved;
+  // - `unknown`: no entity columns and no other evidence — the PDS binding the fallback emits is kept.
+  const radioBinding = (attr, dollar) => {
+    const classic = (ctx.eff.attributes || []).find((a) => a.name === attr) || null;
+    if (ctx.cols[attr] != null) return { kind: "column", type: ctx.colMeta(attr).type, classic };
+    if (dollar || classic) return { kind: "attribute", type: null, classic };
+    return { kind: Object.keys(ctx.cols).length ? "missing-column" : "unknown", type: null, classic };
+  };
+  const LOOKUP_TYPES = new Set([DATA_VALUE_TYPE.GUID, DATA_VALUE_TYPE.LOOKUP]);
+  const GUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  // The column type as clio spells it ("Lookup", "Guid") or as a numeric code ("10", "0"), normalized like every
+  // other column type the mapper reads. A binding with no type at all (no column, no declared dataValueType) whose
+  // every option value is a record id is a lookup group too: custom values cannot hold record ids either way.
+  const isLookupBinding = (b, options) => ["lookup", "guid"].includes(normalizeDvt(String(b?.type ?? "").toLowerCase()))
+    || b?.classic?.isLookup === true || LOOKUP_TYPES.has(b?.classic?.dataValueType)
+    || (b?.type == null && b?.classic?.dataValueType == null && options.length > 0
+      && options.every((c) => typeof c.optionValue === "string" && GUID_RX.test(c.optionValue)));
+  // The option children: classic child items carrying a literal `value` (the same test `optionEntriesOf` uses).
+  const radioOptionsOf = (it, sink) => {
+    const out = orderedChildren(it.name).filter((c) => c.optionValue !== null && c.optionValue !== undefined);
+    out.forEach((c) => sink.claimed.push(c.name));
+    return out;
+  };
+  // Why THIS group cannot be built as crt.RadioGroup, or null. Each reason names what the reader has to port by hand;
+  // the drop sweep prefixes it with `classic RADIO_GROUP '<name>'`, so the ⚠ is typed by kind.
+  const radioGap = (it, attr, binding, options) => {
+    if (attr && isLookupBinding(binding, options))
+      return `it is bound to the lookup (Guid) ${binding.kind === "attribute" ? "attribute" : "column"} '${attr}' — crt.RadioGroup custom values cannot hold record ids, and the lookup values source is not mapped; rebuild the group on that lookup column by hand (Values source: Lookup)`;
+    if (options.length) return null;
+    const kids = orderedChildren(it.name).length;
+    if (kids) return `its Freedom target (crt.RadioGroup) needs option elements, and none of its ${kids} child item(s) carries a literal option value (the legacy card format, or options filled from code) — port the options by hand`;
+    return "its Freedom target (crt.RadioGroup) needs option elements, and its options are not declared in the schema (built in code) — port them by hand, or bind the group's `items` to an attribute the page fills";
+  };
+  const radioOptionCaption = (child, optName) => {
+    const key = `${optName}_caption`;
+    const hit = ctx.pageText(child.caption) ?? ctx.pageText(child.name + "Caption");
+    if (hit) ctx.registerText(key, hit);
+    else {
+      const named = child.caption ? ` ('${child.caption}')` : "";
+      needsDecision.push({ kind: "element-caption", item: optName,
+        reason: `radio group option '${optName}' has no caption the page strings resolve${named} — author the localized string for resource '${key}'` });
+    }
+    return `#ResourceString(${key})#`;
+  };
+  const radioOptionSource = (spec, child, optName) => {
+    if (spec.from === SOURCE.OPTION_VALUE) return child.optionValue;          // typed: true/false, numbers, text
+    if (spec.from === SOURCE.OPTION_CAPTION) return radioOptionCaption(child, optName);
+    if (spec.from === SOURCE.OPTION_DISABLED) return child.enabled === false ? true : null;
+    return null;
+  };
+  // An option Classic never shows (a static `visible: false`) is not built: a built option is shown, so building it
+  // would offer a value Classic never offered (the only hidden options are a split group's copies of options other
+  // groups build). It is reported, never dropped silently, and having no built option it is copied into no group.
+  const reportHiddenRadioOption = (child, groupName) => needsDecision.push({ kind: "radio-option-hidden", item: child.name,
+    reason: `radio group option '${child.name}' (group '${groupName}', value ${JSON.stringify(child.optionValue)}) is hidden in Classic (visible: false), so it is not built — a record that already holds that value shows it as an extra, disabled option. Build the option and hide it with a page business rule ("Hide elements") if it must stay addressable` });
+  // What a bound `enabled` names, when the option can bind its `disabled` to it: a Boolean entity column, or a Boolean
+  // page attribute the classic view model declares. A view-model method, an unknown name, a non-Boolean column or
+  // attribute, or a binding that carries a classic converter (Classic used the CONVERTED value) yields null. A
+  // declared attribute with no `dataValueType` is not Boolean, like a column of unknown type: Classic read its value
+  // by truthiness, which an inverted Boolean binding does not reproduce for every value it may hold.
+  const isBooleanDvt = (t) => normalizeDvt(String(t ?? "").toLowerCase()) === "boolean";
+  const radioEnabledKind = (name, converter) => {
+    if (converter) return null;
+    if (ctx.cols[name] != null) return isBooleanDvt(ctx.colMeta(name).type) ? "column" : null;
+    const declared = (ctx.eff.attributes || []).find((a) => a.name === name);
+    return declared && isBooleanDvt(declared.dataValueType) ? "attribute" : null;
+  };
+  // A bound `enabled` becomes the option's live `disabled`, inverted. The column or page attribute it reads is defined
+  // the way a group bound to it would define it, unless the page already defines it.
+  const bindOptionEnabled = (name, kind, groupName) => {
+    if (!Object.hasOwn(attributes, name)) {
+      const classic = (ctx.eff.attributes || []).find((a) => a.name === name) || null;
+      bindRadioAttribute(name, { kind, classic }, groupName);
+    }
+    return "$" + name + " | crt.InvertBooleanValue";
+  };
+  const reportOptionEnabled = (optName, groupName, name, converter) => {
+    const why = converter
+      ? `through the classic converter '${converter}', which a plain binding would drop`
+      : "which is neither a Boolean entity column nor a Boolean page attribute the classic page declares (a view-model method, a non-Boolean or untyped column or attribute, or a name the page does not define)";
+    needsDecision.push({ kind: "radio-option-rule", item: optName,
+      reason: `radio group option '${optName}' (group '${groupName}') is enabled by '${name}' ${why} — port '${name}' as a converter or a page attribute and bind the option's disabled to it (inverted)` });
+  };
+  const applyOptionEnabled = (child, values, optName, groupName) => {
+    const name = child.handlers?.enabled;
+    if (!name) return;
+    const converter = child.handlerConverters?.enabled ?? null;
+    const kind = radioEnabledKind(name, converter);
+    if (kind) values.disabled = bindOptionEnabled(name, kind, groupName);
+    else reportOptionEnabled(optName, groupName, name, converter);
+  };
+  // One option child insert, returned as { name, value, values } for the split-group pass (null when it is not built). A bound
+  // `visible` cannot be expressed on the option itself: it becomes a business rule on the named option ("Hide
+  // elements"), raised as a decision naming the option and the attribute.
+  const emitRadioOption = (child, groupName, spec) => {
+    if (child.visible === false) { reportHiddenRadioOption(child, groupName); return null; }
+    const optName = uniqueName(child.name);
+    const values = { type: spec.componentType };
+    for (const [prop, s] of Object.entries(spec.propMap || {})) {
+      const v = radioOptionSource(s, child, optName);
+      if (v !== null && v !== undefined) values[prop] = v;
+    }
+    applyOptionEnabled(child, values, optName, groupName);
+    viewConfigDiff.push({ operation: "insert", name: optName, values, parentName: groupName, propertyName: spec.slot });
+    if (child.visible === "dynamic") {
+      const by = child.handlers?.visible ? `the classic attribute '${child.handlers.visible}'` : "a bound classic condition";
+      needsDecision.push({ kind: "radio-option-rule", item: optName,
+        reason: `radio group option '${optName}' (group '${groupName}') is shown by ${by}, which an option element cannot bind — add a page business rule that hides option '${optName}' while that condition is false` });
+    }
+    return { name: optName, value: child.optionValue, values };
+  };
+  const bindRadioAttribute = (attr, binding, groupName) => {
+    if (binding.kind === "attribute") { definePageAttribute(attr, binding.classic); return; }
+    attributes[attr] = { modelConfig: { path: "PDS." + attr } };
+    pdsColumns[attr] = { path: attr };
+    if (binding.kind !== "missing-column") return;
+    const near = nearestColumns(attr, ctx.cols);
+    const hint = near.length ? ` (nearest entity columns: ${near.join(", ")})` : "";
+    needsDecision.push({ kind: "radio-group-binding", item: groupName,
+      reason: `radio group '${groupName}' is bound to '${attr}', which is neither a column of the entity${hint} nor an attribute the classic page declares — it is kept bound to PDS.${attr}, so its value is saved only if that column exists. Confirm the column (a renamed column: rebind the group), or declare '${attr}' as a page attribute` });
+  };
+  const emitRadioGroup = (it, target) => {
+    const sink = newSink();
+    const { attr, dollar } = radioAttr(it);
+    const binding = attr ? radioBinding(attr, dollar) : null;
+    const options = radioOptionsOf(it, sink);
+    const gap = radioGap(it, attr, binding, options);
+    if (gap) { configGaps.set(it.name, gap); return; }
+    sink.options = options;
+    const { values, missing } = resolveProps(it, target, sink);
+    if (missing.length) {
+      configGaps.set(it.name, `its Freedom target (${target.componentType}) needs ${missing.join(" and ")}, which this classic element does not carry`);
+      return;
+    }
+    values.control = "$" + attr;
+    const parent = placeElement(it, values);
+    const elName = uniqueName(it.name);
+    needsDecision.push(...sink.decisions);
+    viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: target.slot });
+    const built = options.map((child) => emitRadioOption(child, elName, target.children)).filter(Boolean);
+    accountedFor.add(it.name);
+    sink.claimed.forEach((c) => accountedFor.add(c));
+    bindRadioAttribute(attr, binding, elName);
+    radioGroups.push({ name: elName, attr, options: built, spec: target.children });
+  };
+  // A SPLIT group: one attribute shown in several classic groups, each with its own options. Each becomes its own
+  // crt.RadioGroup, and crt.RadioGroup shows a value that is not among its options as an extra, disabled option,
+  // where Classic left the other group empty. A value it carries as a HIDDEN option shows nothing selected instead,
+  // so after its own options each group gets a `visible: false` copy of every other group's built option whose value
+  // it lacks (deduplicated by value, the first occurrence wins). The copies are option children like the others, so
+  // they add no Layout row and, having no classic element, nothing to the drop sweep. A copy carries the built
+  // option's value and caption under the children spec's own keys, plus the spec's `hidden` key, so a renamed propMap
+  // key cannot leave the copies on the old one.
+  const COPY_SOURCES = new Set([SOURCE.OPTION_VALUE, SOURCE.OPTION_CAPTION]);
+  const hiddenCopyValues = (spec, o) => {
+    const values = { type: spec.componentType };
+    for (const [prop, s] of Object.entries(spec.propMap || {})) if (COPY_SOURCES.has(s.from) && prop in o.values) values[prop] = o.values[prop];
+    values[spec.hidden.prop] = spec.hidden.value;
+    return values;
+  };
+  const emitHiddenRadioCopies = (group, others) => {
+    const seen = new Set(group.options.map((o) => o.value));
+    for (const o of others.flatMap((g) => g.options)) {
+      if (seen.has(o.value)) continue;
+      seen.add(o.value);
+      const values = hiddenCopyValues(group.spec, o);
+      viewConfigDiff.push({ operation: "insert", name: uniqueName(group.name + "_" + o.name), values, parentName: group.name, propertyName: group.spec.slot });
+    }
+  };
+  const emitSplitRadioCopies = () => {
+    const byAttr = new Map();
+    for (const g of radioGroups) byAttr.set(g.attr, [...(byAttr.get(g.attr) || []), g]);
+    for (const groups of byAttr.values()) {
+      if (groups.length < 2) continue;
+      for (const g of groups) emitHiddenRadioCopies(g, groups.filter((x) => x !== g));
+    }
   };
   emitFromTable();
+  emitSplitRadioCopies();
 
-  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols,
+  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols, dupBoundCols,
     splitIslands, distinctProfileIslands, payloadFields, fieldsWithTitle }));
+  if (computedAttrFields.length) needsDecision.push(computedAttributeFieldsDecision(computedAttrFields));
   // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
   // header elements land in TopAreaProfileContainer rather than being crammed into the narrow left profile.
   return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion,
-    // ENG-95543 — tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
+    // tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
+    // the page attributes the fields and radio groups create (no entity column): `mapImperativeMembers` does not ask for them
+    pageAttributes,
     headerLayout: headerIsWide ? "wide" : null };
 }
 
@@ -1254,7 +1692,7 @@ function mapFields(ctx, containers) {
 function detectDetailAddMechanism(dinfo) {
   const am = dinfo?.addMode;
   if (!am?.editableGrid) return null;
-  // ENG-96327 (81305bd) — no `enableVia` build recipe: HOW to make a Freedom grid inline-editable (`crt.DataGrid`
+  // no `enableVia` build recipe: HOW to make a Freedom grid inline-editable (`crt.DataGrid`
   // editable/itemsCreation properties, resolved via get-component-info) is builder mechanics the build step owns —
   // the plan states the human fact (this detail is inline-editable, and WHICH columns), not the component wiring.
   return {
@@ -1264,9 +1702,9 @@ function detectDetailAddMechanism(dinfo) {
 }
 
 function mapDetails(ctx, containers, profileRegion) {
-  const { index, profileAnchors, detailSchemas, resolveText, payloadDetails } = ctx;
+  const { index, profileAnchors, detailSchemas, pageText, registerText, payloadDetails, componentAvailable, registrySource, registryUnindexedVersion, featureStatus } = ctx;
   const { ensureTab } = containers;
-  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set();
+  const needsDecision = [], details = [], standardFeatures = [], withheldFeatures = [], accountedFor = new Set(), carriedMethods = new Set();
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
   // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
   // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
@@ -1291,15 +1729,22 @@ function mapDetails(ctx, containers, profileRegion) {
   }
   // A standard Creatio feature is recognised by the detail SCHEMA name, OR (when auto-named SchemaNDetail hides
   // it) by its file-storage ENTITY (*File → Attachments) / ContactCommunication. Own fn for Sonar CC 15.
-  const matchDetailFeature = (d, dentity) => {
+  const matchDetailFeature = (d, dentity, dinfo) => {
     // ONE resolution, in the table's own documented order: exact schema name, then longest suffix, then the
     // ENTITY fallbacks. `meta.byEntity` is what tells the plan the match was inferred rather than named.
-    const r = resolveFeatureRow(d.schemaName, dentity);
+    const r = resolveFeatureRow(d.schemaName, dentity, { detailColumn: d.detailColumn, columns: dinfo?.columns ?? null });
     return { feat: r ? featureView(r) : null, featByEntity: !!r?.meta?.byEntity };
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
-  const emitStandardFeature = (d, dentity, tab, feat, featByEntity) => {
-    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
+  const emitStandardFeature = (d, dentity, tab, feat, featByEntity, listTitle = null) => {
+    const settings = feat.feature === FEATURE_CONNECTIONS ? connectionSettings(d, ctx) : null;
+    if (settings) {
+      settings.needsDecision.forEach((x) => needsDecision.push(x));
+      settings.carriedMethods.forEach((m) => { carriedMethods.add(m); accountedFor.add(m); });
+    }
+    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null,
+      caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null,
+      ...(settings ? { element: d.key, connections: settings.connections } : {}) });
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1311,7 +1756,7 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   // The decisions a genuine (non-feature) related list raises: unresolved name, unplaced tab, undeterminable
   // editability, its SEPARATE child edit-page migration, and an unresolved caption. Own fn for Sonar CC 15.
-  const flagDetailIssues = (d, dinfo, dentity, tab, detailTitle) => {
+  const flagDetailIssues = (d, dinfo, dentity, tab, detailTitle, detailTexts) => {
     if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
       const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
@@ -1327,15 +1772,20 @@ function mapDetails(ctx, containers, profileRegion) {
       reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-page-sources gathers these); an inline-editable grid then resolves from its grid config, otherwise it defaults to standard add/edit/delete via the child edit page. Or confirm view-only.` });
     needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
       reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
-    if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
-      reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
+    if (!detailTitle) needsDecision.push(detailCaptionDecision(d));
+    for (const t of detailTexts) if (t.text == null) needsDecision.push(detailTextDecision(d, t));
   };
-  // Build the emitted detail record (Expanded / inline-Editable list) — ENG-93929 editable-grid intent + columns.
-  const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle) => {
+  // Build the emitted detail record (Expanded / inline-Editable list) — editable-grid intent + columns.
+  const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle, detailTexts) => {
     const editable = detectDetailAddMechanism(dinfo);
+    if (detailTitle) registerText(detailTitle.key, detailTitle);
+    for (const t of detailTexts) if (t.text != null) registerText(t.key, t);
     details.push({
       composite: editable ? "Editable list" : "Expanded list", entity: dentity, detailSchema: d.schemaName,
-      caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      caption: detailTitle?.text ?? null, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      // the title's page key and Classic source, and the texts the detail body shows (its `Resources.Strings.*`)
+      captionKey: detailTitle?.key ?? null, captionSource: detailTitle?.source ?? null,
+      texts: detailTexts,
       columns: dinfo?.columns?.length ? dinfo.columns : null,
       editable,
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
@@ -1343,23 +1793,160 @@ function mapDetails(ctx, containers, profileRegion) {
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
     });
   };
+  // A list-shaped standard feature is titled like any related list: its Classic title in every culture. No title is
+  // a `detail-caption` decision only when the page names one (`captionName`) or the detail's strings were supplied;
+  // with neither, the list keeps its standard title. Component-shaped features carry no list title.
+  const standardFeatureTitle = (d, dinfo, feat) => {
+    if ((feat.uiShape || "list") !== "list" && !feat.titled) return null;
+    const title = classicDetailTitle(d, dinfo, pageText);
+    if (title) registerText(title.key, title);
+    else if (d.captionName || dinfo?.strings) needsDecision.push(detailCaptionDecision(d));
+    return title;
+  };
   // Emit ONE deduped placement: a standard feature (A3 analog) or a rebuilt custom detail. Own fn for Sonar CC 15.
   const emitDetail = ({ d, tab, own }) => {
     // Ensure the OWNING tab is emitted as a container so a tab holding ONLY details is still built (+ caption).
     if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
-    const { feat, featByEntity } = matchDetailFeature(d, dentity);
-    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); return; }
-    // detail TITLE: resolved page-caption resource → the detail's own title → a plain caption → null.
-    const resolvedDcap = d.caption ? resolveText(d.caption) : null;
-    const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
-    const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
-    flagDetailIssues(d, dinfo, dentity, tab, detailTitle);
-    buildCustomDetail(d, dinfo, dentity, tab, detailTitle);
+    const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
+    if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
+      const decided = featureStatus(withheldIds(feat.feature, d.schemaName || d.key));
+      needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
+      // A `build` answer builds it as if the registry carried it; anything else keeps its Classic place on record.
+      if (decided?.status !== "build") { withheldFeatures.push(withheldFeature(d, dentity, tab, feat, dinfo, ctx, registrySource)); return; }
+    }
+    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity, standardFeatureTitle(d, dinfo, feat)); return; }
+    const detailTitle = classicDetailTitle(d, dinfo, pageText);
+    const detailTexts = classicDetailTexts(d, dinfo);
+    flagDetailIssues(d, dinfo, dentity, tab, detailTitle, detailTexts);
+    buildCustomDetail(d, dinfo, dentity, tab, detailTitle, detailTexts);
   };
   for (const entry of bySig.values()) emitDetail(entry);
-  return { details, standardFeatures, needsDecision, accountedFor };
+  return { details, standardFeatures, withheldFeatures, needsDecision, accountedFor, carriedMethods };
+}
+
+// A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and
+// element name, and the `connections` tips. Nothing is registered or carried for it — no page string, no method
+// marked carried — so a page that never gets the component owes nothing for it.
+export const FEATURE_UNAVAILABLE = "feature-component-unavailable";
+// Its decision is recorded once, on either of two ids: its Layout row's `feature:<Feature>` or its confirm item.
+// `withheldIds` is THE order both are read in — by the mapper, the Layout row and the confirm row alike.
+export const withheldFeatureId = (feature) => `feature:${feature}`;
+export const withheldConfirmId = (item) => `confirm:${FEATURE_UNAVAILABLE}:${item}`;
+export const withheldIds = (feature, item) => [withheldFeatureId(feature), withheldConfirmId(item)];
+function withheldFeature(d, dentity, tab, feat, dinfo, ctx, registrySource) {
+  const quiet = { ...ctx, registerText: () => {} };
+  const title = (feat.uiShape || "list") !== "list" || feat.titled ? classicDetailTitle(d, dinfo, ctx.pageText) : null;
+  const settings = feat.feature === FEATURE_CONNECTIONS ? connectionSettings(d, quiet) : null;
+  return { feature: feat.feature, freedom: feat.freedom, componentType: feat.componentType, classicDetail: d.schemaName,
+    item: d.schemaName || d.key, entity: dentity, tab, uiShape: feat.uiShape || "list",
+    caption: title?.text ?? null, captionKey: title?.key ?? null, captionSource: title?.source ?? null,
+    ...(settings ? { element: d.key, connections: settings.connections } : {}),
+    withheld: { kind: FEATURE_UNAVAILABLE, registrySource: registrySource || null } };
+}
+
+// Classic hands the "Connected to" detail a tip per connection column through the page hook `onGetPageTips`
+// (BasePageV2 subscribes it for the detail and the detail merges each tip into that connection's field). The Freedom
+// component reads the same setting from its `connections` entry: `{ code, tooltip }`, the tooltip a page string
+// `<Element>_<Code>_tooltip`. The method is then carried, not ported. A hook whose body is not one static map is
+// left as a method to port, and named in a decision so the tips are not lost silently.
+// The component shows the connections its `connections` lists FIRST, in that order, then the rest of the object's —
+// so a page that carries tips for some connections shows those first; the decision says so.
+const CONNECTION_TIPS_METHOD = "onGetPageTips";
+const COLUMN_CODE = /^[A-Za-z_]\w{0,127}$/;
+function connectionSettings(d, ctx) {
+  const { eff, pageText, registerText } = ctx;
+  const out = { connections: [], needsDecision: [], carriedMethods: [] };
+  const hook = (eff.methods || []).find((m) => m.name === CONNECTION_TIPS_METHOD);
+  if (!hook) return out;
+  const tips = hook.facts?.returnsStrings;
+  // the detail key and each code become part of a page-string key and a `#ResourceString(...)#` macro, so only a
+  // column-name shape passes; one key that does not leaves the whole map a method to port — never carried in part
+  const badKeys = tips ? [d.key, ...Object.keys(tips)].filter((k) => !COLUMN_CODE.test(k ?? "")) : [];
+  if (!tips || badKeys.length) {
+    const quote = (k) => `'${k}'`;
+    const quotedKeys = badKeys.map(quote).join(", ");
+    const why = tips
+      ? `names ${quotedKeys}, which is not a column name, so no tip is carried`
+      : "has a body that is not one static `return { Column: text }` map";
+    out.needsDecision.push({ kind: "connection-settings", item: CONNECTION_TIPS_METHOD,
+      reason: `'${CONNECTION_TIPS_METHOD}' sets the tips of the "Connected to" connections, but ${why} — port each tip by hand to the \`connections\` entry of '${d.key}' (\`{ code, tooltip }\`)` });
+    return out;
+  }
+  for (const [code, value] of Object.entries(tips)) {
+    const key = `${d.key}_${code}_tooltip`;
+    const hit = value.resource ? pageText(value.resource) : { text: value.literal, cultures: null, source: `${CONNECTION_TIPS_METHOD} literal` };
+    if (hit) registerText(key, { ...hit, key });
+    else out.needsDecision.push({ kind: "connection-settings", item: key,
+      reason: `the tip of connection '${code}' is the page string '${value.resource}', which the manifest does not carry — supply the page resources, or author \`${key}\` by hand` });
+    out.connections.push({ code, tooltip: `#ResourceString(${key})#` });
+  }
+  out.carriedMethods.push(CONNECTION_TIPS_METHOD);
+  if (!out.connections.length) return out;
+  out.needsDecision.push({ kind: "connection-settings", item: d.key,
+    reason: `the tips of ${out.connections.length} connection(s) (${out.connections.map((c) => c.code).join(", ")}) are carried to the \`connections\` property of '${d.key}'; the component shows the listed connections first, then the rest of the object's — reorder the list in the Page designer if the object's order matters` });
+  return out;
+}
+
+// A standard feature whose component the run's registry does not carry: nothing is built in the detail's place —
+// neither the component nor a related list over the storage entity, which shows the object's settings, not the
+// record's connections. The decision names which registry answered, so "your stand lacks it" reads apart from
+// "nobody asked your stand".
+const REGISTRY_ANSWER = {
+  "stand-export": "the target stand's component registry does not carry it",
+  "vendored-pinned": "the vendored component index does not carry it for the pinned platform version",
+  "unreadable-export": "the component registry the manifest named could not be read, so the run fell back to the vendored index and its presence on the target stand is unknown",
+};
+function unavailableFeatureDecision(d, feat, registrySource, unindexedVersion, decided = null) {
+  const item = d.schemaName || d.key;
+  if (decided?.status === "build") {
+    return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature, decidedBy: decided.key,
+      reason: `classic '${item}' is the ${feat.feature} feature → ${feat.freedom}; no registry of the target stand shows \`${feat.componentType}\`, and the planning decision ${decided.decision || "(no D<N>)"} (\`${decided.key}\`) builds it anyway. Before building, confirm on the stand that \`${feat.componentType}\` resolves (\`get-component-info\`) and that every feature flag it needs is ON; \`--verify\` gates the built component` };
+  }
+  const answer = REGISTRY_ANSWER[registrySource]
+    || (unindexedVersion
+      ? `the pinned platform version '${unindexedVersion}' is not in the engine's vendored component index, so its presence on the target stand is unknown — only that stand's component registry export can confirm it`
+      : "no registry of the target stand was supplied (`manifest.componentRegistry`), so its presence is unknown");
+  return { kind: FEATURE_UNAVAILABLE, item, feature: feat.feature, ...(decided ? { decidedBy: decided.key } : {}),
+    reason: `classic '${d.schemaName || d.key}' is the ${feat.feature} feature → ${feat.freedom}, and ${answer}. Nothing is built in its place: keep the page without it, or — on a stand that carries \`${feat.componentType}\` — re-run the plan with that stand's component registry export in \`manifest.componentRegistry\` (the export inline, \`{ resolvedTargetVersion, components: [{ componentType, inputs, outputs }] }\`, or \`{ "file": "<path>" }\`)` };
+}
+
+// A related list's title in Classic's order (`BaseEntityPage.getDetailInfo`, then `BaseDetailV2.initDefaultCaption`):
+// the page string named by `details.<X>.captionName`, the page string `<X>DetailCaptionOnPage`, the detail's own
+// `Caption` string. The detail schema's caption (`title`) is never a title. Null when none of the three is readable.
+function classicDetailTitle(d, dinfo, pageText) {
+  const onPage = pageText(d.captionName) ?? pageText(d.key ? d.key + "DetailCaptionOnPage" : null);
+  if (onPage) return onPage;
+  const own = dinfo?.strings?.Caption;
+  if (!own) return null;
+  return { text: defaultCultureText(own), cultures: own, source: `${d.schemaName} · Caption`, key: detailTextKey(d, "Caption") };
+}
+// The texts a detail's body shows (`Resources.Strings.<Key>`), each read from the detail's own strings: text and
+// cultures, or `text: null` when the manifest does not carry that string.
+function classicDetailTexts(d, dinfo) {
+  return (dinfo?.textKeys || []).map((k) => {
+    const cultures = dinfo.strings?.[k] ?? null;
+    return { key: detailTextKey(d, k), classicKey: k, text: cultures ? defaultCultureText(cultures) : null, cultures,
+      source: `${d.schemaName} · ${k}` };
+  });
+}
+// A detail string's page key, namespaced by the detail's placement so two details' `Caption` never share a key.
+const detailTextKey = (d, k) => `${d.key || d.schemaName}_${k}`;
+function detailCaptionDecision(d) {
+  const named = d.captionName ? `the page string '${d.captionName}' (captionName), ` : "";
+  return { kind: "detail-caption", item: d.schemaName || d.key,
+    reason: `related list '${d.key}' has no Classic title — none of ${named}the page string '${d.key}DetailCaptionOnPage' or the '${d.schemaName}' detail's own Caption string could be read. Confirm the title; do NOT invent one, and do NOT use the detail schema's caption` };
+}
+function detailTextDecision(d, t) {
+  return { kind: "detail-text", item: t.source,
+    reason: `the '${d.schemaName}' detail shows the string '${t.classicKey}', and its Classic text could not be read — confirm the text; do NOT invent one or reuse a nearby caption` };
+}
+
+// The en-US text of a `{ culture: text }` map, else its first culture's.
+export function defaultCultureText(cultures) {
+  if (!cultures || typeof cultures !== "object") return null;
+  return typeof cultures["en-US"] === "string" ? cultures["en-US"] : (Object.values(cultures).find((v) => typeof v === "string") ?? null);
 }
 
 // Moment 5: card actions / ACTIONS menu → Freedom card actions (B7). Returns needsDecision[] / accountedFor[].
@@ -1386,7 +1973,7 @@ function mapCardActions(eff) {
 
 // ---- Imperative MEMBERS: attributes / messages / mixins / module deps -----------------------------------
 // These blocks reach the effective page now (see engine.mjs `mergeNamedFacts`). Each carries behaviour with a
-// documented Freedom target, and each previously produced NOTHING — no ChangeSet entry, no decision, no count.
+// documented Freedom target, and each would otherwise produce NOTHING — no ChangeSet entry, no decision, no count.
 // A `lookupListConfig.filters` filter and a declarative FILTRATION rule are the same user-visible behaviour
 // ("this lookup is filtered") reached two ways; only the declarative one was ever mapped, so the imperative one
 // could not even be compared against it.
@@ -1521,10 +2108,12 @@ function methodReason(stub) {
   return `imperative logic${where}${trigClause}${evidenceClauses(stub.evidence)} — implement as a Freedom handler, converter or virtual attribute (a declarative business rule only when it is genuinely declarative)`;
 }
 
-function mapImperativeMembers(eff, cols) {
+// `pageAttributes`: attributes the ChangeSet already creates as view-model attributes (a radio group's page
+// attribute) — not virtual attributes left for someone to create, so no `attribute-virtual` decision asks for them.
+function mapImperativeMembers(eff, cols, pageAttributes = new Set()) {
   const needsDecision = [];
   const client = (xs) => (xs || []).filter((x) => !x.fromTemplate);
-  const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n));
+  const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n)) || pageAttributes.has(n);
   const moduleDeps = client(eff.moduleDeps).map((d) => d.name);
   const mixinCovers = (m) => {
     const module = m.module || m.name;
@@ -1537,7 +2126,7 @@ function mapImperativeMembers(eff, cols) {
   for (const a of client(eff.attributes)) needsDecision.push(...attributeDecisions(a, hasColumn));
   for (const m of client(eff.messages)) needsDecision.push(messageDecision(m));
   // `covers` — the other member ids this one decision accounts for. A mixin is declared twice (in `mixins` and as a
-  // `define()` dependency) and the ledger tracks both; the aggregate below no longer lists mixin modules, so without
+  // `define()` dependency) and the ledger tracks both; the aggregate below does not list mixin modules, so without
   // this the dep member has no route to `decision` and the coverage gate blocks. Bare-name fallback is allowed only
   // when it resolves to a single actual define() dep; otherwise two modules with the same last segment must stay loud.
   for (const m of client(eff.mixins)) needsDecision.push({ kind: "mixin", item: m.name, detail: m.module || null,
@@ -1680,7 +2269,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 
   // charts/widgets not in the catalog -> B9/B10 (generic). An embedded PROFILE CARD is excluded: mapProfileCards
   // already mapped it to a concrete component, so repeating it here as "propose the closest component" would both
-  // duplicate the worklist and read as if the target were still unknown. A CARD WIDGET (ENG-95806) is likewise
+  // duplicate the worklist and read as if the target were still unknown. A CARD WIDGET is likewise
   // excluded: mapWidgets emitted a concrete card-widget decision for it, so a generic component entry here would
   // duplicate the worklist and re-vague a target that is now actionable.
   for (const c of payloadComponents)
@@ -1738,7 +2327,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   // parallel fresh Freedom rebuild builds the ALIVE set (which already excludes removed items), so "the client
   // removed X" needs no action — you just don't build X. Flagging removals only added noise (a re-laid-out base
   // element read as a "deletion to confirm"). The final scope is the answer; removals are not a worklist item.
-  // (`eff.removed` is still available for diagnostics; it just no longer generates ⚠ decisions.)
+  // (`eff.removed` is still available for diagnostics; it just does not generate ⚠ decisions.)
 
   // Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff)
   // e.g. CasesEstimateLabel → the SLA response/solution timer + its START/END buttons. The migration
@@ -1903,6 +2492,9 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
 
 // Map ONE classic rule into its Freedom page/entity business rule, or a needsDecision when it can't be mapped.
 // Mutates the three sinks — keeps the ruleType dispatch (and its nesting) out of mapRules's loop.
+const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+// The `lookup-value` row's `item`: fixed, so the evidence id derived from it survives a rule being added.
+const LOOKUP_VALUE_ITEM = "business-rule conditions";
 function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   if (r.ruleType === "FILTRATION") {
     const filter = r.filterColumn
@@ -1937,7 +2529,7 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // C4: flag a rule ONLY when its target resolves to NOTHING on the page — neither a mapped field NOR any known
   // element (tab / group / container). Business rules legitimately target more than fields: hiding a TAB or GROUP
   // hides all its fields, so a rule targeting `…TabLabel` / `…Group…` is valid, not a dangling reference. Those
-  // used to be mis-flagged as "no field for it"; now only a target absent from the whole page (an entity-only
+  // must not be mis-flagged as "no field for it"; only a target absent from the whole page (an entity-only
   // column with no element, or a stale binding) is surfaced.
   const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
   const ruleTargets = new Set(
@@ -1950,7 +2542,23 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
+  foldLookupValueRules();
   return { pageBusinessRules, entityBusinessRules, needsDecision };
+
+  // A condition comparing against a lookup-record GUID reads as an opaque id, so the display name is resolved
+  // on-stand before the rule is rebuilt. ONE row per page, and the targets ride in `reason`: `item` is the
+  // evidence id, and an id that moves when a rule is added detaches the status recorded against it.
+  function foldLookupValueRules() {
+    const carries = (r) => LOOKUP_GUID.test(JSON.stringify(r));
+    const targets = [...new Set([
+      ...pageBusinessRules.filter(carries).map((r) => r.element),
+      ...entityBusinessRules.filter(carries).map((r) => r.targetAttribute),
+    ].filter(Boolean))];
+    if (!targets.length) return;
+    needsDecision.push({ kind: "lookup-value", item: LOOKUP_VALUE_ITEM,
+      reason: `the conditions on ${targets.join(", ")} compare against lookup-record GUIDs; resolve each GUID to `
+        + "its display name on-stand before building, so the rule reads correctly" });
+  }
 
   // FOLD incomplete FILTRATIONs (dynamic / column-reference lookup filters, no static constant) into ONE concrete
   // line naming each lookup + its filter column(s). Own fn for Sonar CC 15; closes over entityBusinessRules/needsDecision.
@@ -2003,7 +2611,7 @@ function resolveImageBinding(i, cols, soleImageCol, soleUsed) {
     // An EXPLICIT bind to the sole IMAGELOOKUP column reserves it too. A SECOND image resolving to that column —
     // by auto-fallback OR by another explicit bind — is the SAME collision: two crt.ImageInput must not share one
     // column. Resolve it identically to the auto path: keep the FIRST on the column, FILL the second (drop its
-    // bind → boundCol null) and raise the image-column decision. (The guard previously fired only on the auto
+    // bind → boundCol null) and raise the image-column decision. (A guard firing only on the auto
     // path, so TWO explicit binds to soleImageCol both resolved to it — two widgets silently on one column.)
     if (soleUsed) { soleCollision = true; boundCol = null; }
     else usedSole = true;
@@ -2037,7 +2645,7 @@ function mapOneImage(i, ctx, F, soleImageCol, soleUsed) {
   const image = { classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !bound };
   if (soleCollision) decisions.push({ kind: "image-column", item: i.name,
     reason: `image '${i.name}' has no own column and the entity's sole IMAGELOOKUP column '${soleImageCol}' is already bound to another image — two crt.ImageInput widgets must not share one column. Pick or create a DISTINCT ImageLookup column for it (left as a FILL until then).` });
-  let attrEntry = null, pdsEntry = null;
+  let attrEntry, pdsEntry = null;
   if (boundCol && onEntity) {
     attrEntry = { key: attr, value: { modelConfig: { path: "PDS." + boundCol } } };
     pdsEntry = { key: boundCol, value: { path: boundCol } };
@@ -2121,7 +2729,7 @@ function profileCardTarget(c, entity, info) {
   };
 }
 
-// ENG-93928 — embedded profile cards (linked-record blocks) → the Freedom side profile. Runs as its OWN phase
+// embedded profile cards (linked-record blocks) → the Freedom side profile. Runs as its OWN phase
 // (not through the name-keyed widget catalog) and, critically, marks each module key as accounted for: the host
 // diff item shares that name, so this is what stops mapUnmappedDrop reporting the card as an "unknown embedded
 // module" — the exact failure this rule exists to fix. Returns profileCards[] + needsDecision[]/accountedFor[].
@@ -2165,7 +2773,7 @@ function mapProfileCards(ctx) {
 }
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
-// ENG-95806 — ALSO recognises record-scoped CARD WIDGETS (SysWidgetDashboard indicators): a card-widget branch
+// This moment ALSO recognises record-scoped CARD WIDGETS (SysWidgetDashboard indicators): a card-widget branch
 // runs BEFORE the base-chrome catalog and bypasses its `seenWidget` dedup / evidence gating entirely (a card
 // widget is genuine page content keyed by coordinates, not inherited chrome). `opts.index` (the layout tree) +
 // `opts.profileAnchors` let it resolve each widget's region the same way mapProfileCards does.
@@ -2221,10 +2829,14 @@ function mapWidgets(eff, opts = {}) {
     seenWidget.add(w.widget);
     // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
     if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null, signal: w.signal || null });
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null,
+      placement: w.placement || null, templateProvided: w.templateProvided ?? null, signal: w.signal || null });
     let tail;
     if (w.note) tail = ` — ${w.note}`;
-    else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    // `base` says the CLASSIC source was base chrome. It says nothing about the FREEDOM template, and the mapping
+    // row does: a widget whose row declares `templateProvided: false` must never be described as inherited.
+    else if (base && w.templateProvided !== false) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    else if (base) tail = " — ⚠ BUILD IT: the Freedom template does not provide this one, whatever the Classic template did";
     else tail = "; confirm the Freedom component";
     needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
   };
@@ -2234,7 +2846,7 @@ function mapWidgets(eff, opts = {}) {
     const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
     for (const w of (Array.isArray(defs) ? defs : [defs])) emitOneWidget(w, classic, base, classicEvident);
   };
-  // ENG-95806 — a card widget is CONTENT keyed by coordinates, so it skips the widget catalog, the seenWidget dedup
+  // a card widget is CONTENT keyed by coordinates, so it skips the widget catalog, the seenWidget dedup
   // and the base-chrome evidence gate. It must NOT leak an inherited one, though: a module carried in from a base /
   // seed layer (`fromTemplate`) is base-template chrome, and the dispatch loop below gates on `!c.fromTemplate` so
   // it never emits a per-page card-widget decision — that gate replaces the base-chrome evidence gate this branch
@@ -2277,7 +2889,7 @@ function mapWidgets(eff, opts = {}) {
   return { widgets, chromeWidgets, needsDecision, accountedFor, dcmActive: dcmPresent, cardWidgets };
 }
 
-// Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
+// Moment 4b: the ON-SAVE DUPLICATE CHECK — a second on-stand signal, for the same reason `dcm` is one.
 // Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
 // `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
 // `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
@@ -2489,7 +3101,7 @@ function listViewModelOps(columns, filters) {
 //
 // INPUT CONTRACT — `section.rowActions`, one entry per `DataGridActiveRow…` item the section declares:
 //   { name, caption?, condition?, package? }
-// FED BY THE FOLD since ENG-94714: `mapSectionView` reads the `activeRowActions` items off the folded section view
+// FED BY THE FOLD: `mapSectionView` reads the `activeRowActions` items off the folded section view
 // and `mergeRowActions` unions them with anything the manifest supplied, the fold winning. The manifest arm is kept
 // — it is how a row action read by hand off a stand still reaches the plan when no section bundle was collected.
 //
@@ -2530,7 +3142,7 @@ export const LIST_DECISION_KIND = {
   commandBar: "list-command-bar",
   rowAction: "list-row-action",
   process: "list-process",
-  // ENG-94714 — the two questions a folded section `diff` raises that no other surface absorbs.
+  // the two questions a folded section `diff` raises that no other surface absorbs.
   // `gridConfig`: the element declares configuration keys this engine models on no field. The founding case is the
   // section's `merge DataGrid` carrying `controlColumnName` / `applyControlConfig` / `controlCellClass`, which has
   // no obvious Freedom analog — so it is ASKED, never guessed at and never dropped.
@@ -2541,7 +3153,7 @@ export const LIST_DECISION_KIND = {
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
 // THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
-// answer. TWO shapes ask it, and the second was the ENG-95503 chain break: an EMPTY set was gated, while a FALLBACK
+// answer. TWO shapes ask it, and the second is where a chain breaks: an EMPTY set was gated, while a FALLBACK
 // set — the section declared no columns, so the resolver returned the entity's single display column — was rendered
 // as ⚠ prose in the design spec and raised no decision at all. So the question reached the operator while their
 // ANSWER had no published id to be recorded against, on exactly the shape this channel exists for.
@@ -2562,9 +3174,9 @@ function listColumnsDecision(section, columns) {
     return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
       reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
   }
-  // ENG-95850 (D) — A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
+  // A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
   // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
-  // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
+  // resolver can give and the engine accepts it (rejecting it as malformed would force a re-read with
   // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
   // profile can be SCOPED, so adopting one silently would migrate whatever scope happened to be read as the
   // section's default for everyone. So: use it, and ask once. Fixed literal `item`, same reason as the fallback
@@ -2648,7 +3260,7 @@ function listRowActionDecisions(rowActions) {
       reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` };
   });
 }
-// ENG-94714 — one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
+// one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
 // `OpportunitySectionV2` grid declares twenty such keys, and twenty rows would bury the two that carry a real
 // question (`controlColumnName`, `applyControlConfig`) under eighteen restatements of base grid wiring. The
 // element name is the stable half of the evidence id, so it is the `item`; the keys live in the reason.
@@ -2671,7 +3283,7 @@ function listSectionElementDecisions(section) {
       ? ` It carries ${e.conditions.map((c) => "`" + c.method + "` on `" + c.property + "`").join(" and ")} — that condition must survive the port.`
       : "";
     return { kind: LIST_DECISION_KIND.sectionElement, item: `section element: ${e.name}`,
-      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${captioned}${cond}` };
+      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happens to a section-declared element nobody publishes.${captioned}${cond}` };
   });
 }
 function listProcessDecision(section) {
@@ -2700,14 +3312,19 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
     ...(process ? [process] : []),
   ];
 }
-// ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------
+// The section methods the list analyzer READS — their effect is already in the positioned list ops, so a row for
+// one records work that is done, never a second build. Keep in step with what `mapSectionView` and the section
+// analyzer actually consume: a method that stops being read here must stop being marked.
+export const SECTION_VIEW_METHODS = new Set(["getGridDataColumns", "initFixedFiltersConfig", "getSectionActions",
+  "getAddRecordMiniPage"]);
+// ---- THE SECTION VIEW -------------------------------------------------------------------------
 //
 // Everything a section declares in its OWN `diff`, read off the folded section view and handed to
 // `buildListChangeSet`. Before this, the section `diff` was an unread field: every fact the plan carried about a
 // Classic list came from method bodies (`getGridDataColumns`, `initFixedFiltersConfig`, `getSectionActions`,
 // `getAddRecordMiniPage`), so an element the section INSERTED — a command-bar button, a `DataGridActiveRow…` row
 // action — reached nothing at all. Measured on two real bundles read from a stand: `OpportunitySectionV2` alone
-// declares eight such elements, all of them previously dropped without a trace.
+// declares eight such elements, all of which would otherwise be dropped without a trace.
 //
 // NOT `mapToFreedom`. That function maps a RECORD page, and the difference is not cosmetic: fed this same bundle
 // it emits one op and puts it in `SideAreaProfileContainer`, a record-page region. `buildListChangeSet` stays the
@@ -2737,8 +3354,11 @@ function listConditionsOf(item) {
 }
 
 // The keys this element declares that the engine models nowhere and that are worth a question — see
-// `LIST_PRESENTATION_PROPS` for the family that is not. Sorted by the projection already, so the order is stable.
-const listOpenProps = (item) => (item.unmodelledProps || []).filter((k) => !LIST_PRESENTATION_PROPS.has(k));
+// `LIST_PRESENTATION_PROPS` for the family that is not. `activeRowActions` is excluded too: it is the slot the
+// grid's row actions are inserted under, and this surface reads those row actions as `rowActions`, so the plan
+// already answers it and it is not a question. Sorted by the projection already.
+const listOpenProps = (item) => (item.unmodelledProps || [])
+  .filter((k) => !LIST_PRESENTATION_PROPS.has(k) && k !== LIST_ROW_ACTIONS_PROPERTY);
 
 // Which list surface an element sits on. The item's OWN identity is checked BEFORE its ancestry, because the two
 // elements that matter most answer for themselves: the grid IS an anchor (climbing from it would reach
@@ -2792,7 +3412,7 @@ function sectionDiffAction(item, menuItems = []) {
     conditions: listConditionsOf(item),
     parent: item.parent || null,
     order: item.order ?? null,
-    package: item.provenance?.[item.provenance.length - 1] || null,
+    package: declaringPackageOf(item),
     openProps: listOpenProps(item),
     // A STATIC literal, not a bound condition. `handlerBindings` only sees methods and `unmodelledValueKeys`
     // excludes these two, so a `visible: false` button reached the ChangeSet indistinguishable from an
@@ -2829,7 +3449,7 @@ function listMenuEntriesOf(owner, childrenByParent, claimed) {
       classicHandler: child.handlers?.click || null,
       conditions: listConditionsOf(child),
       order: child.order ?? null,
-      package: child.provenance?.[child.provenance.length - 1] || null,
+      package: declaringPackageOf(child),
     });
   }
   return out;
@@ -2849,7 +3469,7 @@ function sectionDiffRowAction(item) {
     condition: conditions[0]?.method || null,
     conditionProperty: conditions[0]?.property || null,
     conditions,
-    package: item.provenance?.[item.provenance.length - 1] || null,
+    package: declaringPackageOf(item),
     source: "sectionDiff",
   };
 }
@@ -2871,9 +3491,13 @@ function indexChildrenByParent(items) {
   }
   return childrenByParent;
 }
-// The package that last touched an element — the tail of its provenance chain, or null when it carries none.
-function lastProvenancePackage(item) {
-  return item.provenance?.[item.provenance.length - 1] || null;
+// The package that DECLARES a section element: the first client layer that defined or touched it (the fold's
+// `declaringPackage`), not a later layer that only hides or restyles it — so it is not the tail of `provenance`.
+// Example: Opportunity's `CreateOrderFromOpportunityButton` is declared by `OrderInSales`, which inserts it and
+// owns its click handler, not by `WorkSalesBase`, which only hides it. The full chain stays on the item's
+// `provenance` for a reader who needs every layer.
+function declaringPackageOf(item) {
+  return item.declaringPackage || null;
 }
 // A standalone LABEL is author-written copy; the LIST_ROWS row says it is carried WITH its caption, so it is
 // carried, not disclosed as "the list vocabulary has no reading for it" — which was false while the row existed.
@@ -2881,10 +3505,10 @@ function sectionViewLabel(item, region) {
   return { name: item.name, region,
     caption: item.caption ? resourceKey(item.caption) : null,
     conditions: listConditionsOf(item),
-    package: lastProvenancePackage(item) };
+    package: declaringPackageOf(item) };
 }
 // The grid itself and the containers are already owned by the list surface or are layout, so they are accounted for
-// and silent. `OWNER.FOLDED` is deliberately NOT in this list. It used to be, and it is what dropped a
+// and silent. `OWNER.FOLDED` is deliberately NOT in this list: including it is what drops a
 // section-declared MENU / MENU_ITEM to no surface at all: the fold it named did not exist on the list path. The fold
 // exists now, and what it claimed is skipped by the caller — so reaching here means nothing folded this element.
 function isAccountedForOnListSurface(region, row) {
@@ -2897,7 +3521,7 @@ function sectionViewOpenItem(item, region, caption = null) {
     kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),
     caption,
     conditions: listConditionsOf(item),
-    package: lastProvenancePackage(item) };
+    package: declaringPackageOf(item) };
 }
 export function mapSectionView(sectionEff) {
   if (!sectionEff) return null;
@@ -2906,7 +3530,7 @@ export function mapSectionView(sectionEff) {
   const childrenByParent = indexChildrenByParent(items);
   // Names a command-bar button folded into its own `menuItems`. Anything MENU-shaped that is NOT in here belongs
   // to no button on this surface and becomes a named open item — that is what makes "nothing is silently dropped"
-  // true for the menu family, which the blanket `OWNER.FOLDED` skip used to swallow.
+  // true for the menu family, which a blanket `OWNER.FOLDED` skip swallows.
   const foldedIntoMenus = new Set();
   const out = { commandBarActions: [], rowActions: [], gridConfig: [], openItems: [],
     counts: { items: items.length, sectionDeclared: 0, chrome: 0 } };
@@ -2915,7 +3539,7 @@ export function mapSectionView(sectionEff) {
     out.counts.sectionDeclared++;
     foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus });
   }
-  // The fold is claimed in a pass of its OWN, after the loop, not by a `continue` inside it (PR #176 review).
+  // The fold is claimed in a pass of its OWN, after the loop, not by a `continue` inside it.
   // `foldedIntoMenus` is filled as the loop runs, so a MENU / MENU_ITEM declared BEFORE its owning button reached
   // the in-loop guard with the set still empty: it landed in `openItems` and was folded into the button's
   // `menuItems` a few iterations later, so the same section body produced two different worklists depending on the
@@ -2930,7 +3554,7 @@ export function mapSectionView(sectionEff) {
 // case there is. Called from each routing arm rather than before them, so an arm can drop a key it just MODELLED.
 function pushGridConfig(out, item, region, props) {
   if (!props.length) return;
-  out.gridConfig.push({ name: item.name, region, props, package: lastProvenancePackage(item) });
+  out.gridConfig.push({ name: item.name, region, props, package: declaringPackageOf(item) });
 }
 // One section-declared element, routed to the surface that can read it. Extracted from `mapSectionView`'s loop so
 // each arm stands on its own: the loop was over the cognitive-complexity bound with the label arm added, and the
@@ -2955,7 +3579,7 @@ function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }
   if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
     out.labels ??= [];
     out.labels.push(sectionViewLabel(item, region));
-    // AND an open item, with its caption (PR #176 review). `labels` is a structured field with no reader in
+    // AND an open item, with its caption. `labels` is a structured field with no reader in
     // `designspec.mjs`, `migrate.mjs` or any decision list, so a section-declared LABEL was computed and then
     // discarded — the same "silently dropped" failure the MENU fold was raised for, arriving on another element
     // kind. The field stays for a structured consumer; the open item is what puts the label on the ⚠ worklist.
@@ -2967,7 +3591,9 @@ function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }
 }
 // THE LIST-PAGE CHANGESET. `null` when the run has no section at all (a mini/child page migration): a list page
 // that does not exist must not appear as a build deliverable.
-export function buildListChangeSet({ entity, section, entityColumns } = {}) {
+// `sectionCode` is the SECTION schema mapped like a page body. Folded in here so the list page has ONE ChangeSet,
+// the way the form page does: reading `handlerStubs` must not depend on which page kind is in hand.
+export function buildListChangeSet({ entity, section, entityColumns, sectionCode } = {}) {
   if (!section) return null;
   // `"?"` is the schema parser's stub for "the merged chain named no entity" — a name, not an entity. It must not
   // reach an op: `entitySchemaName: "?"` reads as configured and binds the grid's data source to a schema that does
@@ -3002,6 +3628,12 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
     // finished page body: a grid column still needs its GUID `id` (above), and a quick-filter op carries placement
     // facts only — the component's own nested config comes from `crt.QuickFilter`'s documentation.
     quickFilterConfigCompletedByBuilder: filters.length > 0,
-    needsDecision: listNeedsDecision(section, columns, filters, actions, rowActions),
+    // The section's own methods and member rows, folded beside the list page's own decisions. The caller hands
+    // these already marked and filtered — see `sectionCodeForList`.
+    handlerStubs: sectionCode?.handlerStubs || [],
+    needsDecision: [
+      ...listNeedsDecision(section, columns, filters, actions, rowActions),
+      ...(sectionCode?.needsDecision || []),
+    ],
   };
 }

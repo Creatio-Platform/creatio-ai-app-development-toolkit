@@ -20,10 +20,10 @@ export const USAGE_ATTEMPT_LIMIT = 5;
 export const USAGE_NONCE_CLAIM_ATTEMPTS = 8;
 
 // One read+parse of the 'usage' marker, and — if a reading is pending — one readOutcome call, per
-// Stop. lastReported() and inFlightReading() used to do this independently (each its own read/parse
-// pass over the same file), and rememberPending() read it a third time; Stop fires on every assistant
-// response for the life of a session, so tripling that cost bought nothing. Also performs the
-// promotion side effect lastReported() used to: once an outcome resolves, the pending record is
+// Stop. lastReported() and inFlightReading() doing this independently (each its own read/parse
+// pass over the same file), with rememberPending() reading it a third time, triples that cost for nothing:
+// Stop fires on every assistant response for the life of a session. Also performs the
+// promotion side effect: once an outcome resolves, the pending record is
 // cleared from the marker either way (promoted into `reported` on success, simply dropped on refusal).
 export function resolveAndPromoteUsageState(sessionId) {
 	let stored;
@@ -49,7 +49,7 @@ export function resolveAndPromoteUsageState(sessionId) {
 			}
 			writeUsageMarker(sessionId, reported, null);
 			// This nonce's request/outcome pair is done: promoted above, or abandoned as a refusal
-			// old enough that `outcome` is no longer 'pending'. Without this, the per-dispatch files
+			// old enough that `outcome` is not 'pending'. Without this, the per-dispatch files
 			// this design switched to (up to USAGE_ATTEMPT_LIMIT per session, every session that ever
 			// touches clio) would only ever be reclaimed by the once-a-week sweep.
 			removeDispatchFiles(sessionId, 'usage', stored.pending.nonce);

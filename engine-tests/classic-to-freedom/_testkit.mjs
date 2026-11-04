@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 // Shared golden-test helpers: build normalized ParsedSchema records and diff ops in ONE place, so the
 // schema/op shape lives here (both run.mjs and run-mapper.mjs import it) instead of two hand-kept copies
 // that could drift and silently feed mergeHierarchy a malformed fixture.
@@ -31,3 +35,31 @@ export const makeSchema = (pkg, o = {}) => ({
   methods: o.methods || [], attributes: [], modules: o.modules || [], features: o.features || [], actionHints: o.actionHints || [],
   refModules: o.refModules || [],
 });
+
+// THE USER'S APPROVAL OF ONE PLAN VERSION, recorded the way orchestrate-build.md 7.1 step 1 records it: a `## `
+// entry in `decisions.md` of the migration folder (the folder above the task folder `tasksDir`) holding both a
+// `Plan version:` field and a non-empty `Approved by:` field. `--tasks`, `--start` and `--route` write nothing
+// without it, so a fixture that slices or routes records it first. Appended to whatever decisions.md already holds,
+// and once per version. Refused for a task folder directly under the OS temp directory: its decisions.md would be
+// one file every fixture on the machine shares.
+export const approvalEntry = (planVersion) =>
+  `## Plan approved\n- Approved by: test\n- Plan version: \`${planVersion}\`\n`;
+export function approvePlan(tasksDir, planVersion) {
+  if (!planVersion) throw new Error("approvePlan: no plan version to approve");
+  const folder = path.dirname(path.resolve(tasksDir));
+  if (folder === path.resolve(os.tmpdir())) {
+    throw new Error(`approvePlan: ${tasksDir} sits directly in the temp directory; give it a migration folder of its own`);
+  }
+  fs.mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, "decisions.md");
+  let text = "";
+  try { text = fs.readFileSync(file, "utf8"); } catch { /* no decisions.md yet */ }
+  const entry = approvalEntry(planVersion);
+  if (!text.includes(entry)) {
+    let sep = "\n\n";
+    if (text === "") sep = "";
+    else if (text.endsWith("\n")) sep = "\n";
+    fs.writeFileSync(file, text + sep + entry);
+  }
+  return file;
+}

@@ -28,9 +28,9 @@ The coding agent owns the process lifecycle.
 
 For Claude Code, GitHub Copilot CLI, and Codex CLI the installer registers CAADT as a remote plugin
 marketplace served from the public Git repository (`MARKETPLACE_GIT_URL` in
-[install.py](../installer/install.py)) and installs `creatio-ai-app-development-toolkit@creatio`
-through the host CLI. The CLI manages the plugin payload on disk; the installer does not copy or
-overlay files into the host's plugin tree.
+[agent_cli.py](../installer/agent_cli.py), which `install.py` and `update.py` both import) and
+installs `creatio-ai-app-development-toolkit@creatio` through the host CLI. The CLI manages the
+plugin payload on disk; the installer does not copy or overlay files into the host's plugin tree.
 
 Cursor remains on the local file-copy install model.
 

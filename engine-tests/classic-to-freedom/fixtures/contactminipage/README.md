@@ -1,8 +1,8 @@
 # `ContactMiniPage` — real captured mini-page fixture (base-layer-driven)
 
 A second real Classic **mini page** for the mapper golden (`run-mapper.mjs`, "Minor4 real mini page …"), added
-alongside `activityminipage/` to widen the AC3 regression net (PR #58 review Minor 4 — "only one real mini-page
-fixture pins AC3 in CI"). It exercises a **different fold path** from `ActivityMiniPage`: there the real fields come
+alongside `activityminipage/` to widen the AC3 regression net: one real mini-page
+fixture alone would pin AC3 in CI. It exercises a **different fold path** from `ActivityMiniPage`: there the real fields come
 from *customer* override layers that `insert` them; here the fields live in the **base layout layer** (`CrtUIv2`)
 and a customer/product layer (`WorkLeadBase`) `merge`s onto them.
 

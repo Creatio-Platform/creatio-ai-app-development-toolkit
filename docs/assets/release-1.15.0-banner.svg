@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1330"/><stop offset="0.55" stop-color="#152252"/><stop offset="1" stop-color="#1d2f6b"/>
+    </linearGradient>
+    <linearGradient id="freedom" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f7cff"/><stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="beam1" gradientUnits="userSpaceOnUse" x1="392" y1="214" x2="462" y2="214">
+      <stop offset="0" stop-color="#6ea8ff" stop-opacity="0.15"/><stop offset="1" stop-color="#8ab4ff" stop-opacity="1"/>
+    </linearGradient>
+    <linearGradient id="beam2" gradientUnits="userSpaceOnUse" x1="742" y1="214" x2="812" y2="214">
+      <stop offset="0" stop-color="#6ea8ff" stop-opacity="0.15"/><stop offset="1" stop-color="#a78bfa" stop-opacity="1"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="420" fill="url(#bg)"/>
+  <g opacity="0.10" stroke="#9db4ff" stroke-width="1">
+    <path d="M0 60H1200M0 120H1200M0 180H1200M0 240H1200M0 300H1200M0 360H1200"/>
+    <path d="M60 0V420M180 0V420M300 0V420M420 0V420M540 0V420M660 0V420M780 0V420M900 0V420M1020 0V420M1140 0V420"/>
+  </g>
+
+  <!-- Classic section: a stack of layers, one with a no-op remove -->
+  <g>
+    <rect x="110" y="96" width="240" height="44" rx="9" fill="#0a1130" stroke="#50638f" stroke-width="1.6"/>
+    <rect x="96" y="148" width="240" height="44" rx="9" fill="#0d1636" stroke="#5c6fa3" stroke-width="1.6"/>
+    <rect x="82" y="200" width="240" height="44" rx="9" fill="#111b40" stroke="#6d81c4" stroke-width="1.6"/>
+    <rect x="68" y="252" width="240" height="44" rx="9" fill="#16224d" stroke="#6d81c4" stroke-width="1.6"/>
+    <g font-family="SFMono-Regular, Menlo, monospace" font-size="13">
+      <text x="128" y="123" fill="#6b7a9f">base</text>
+      <text x="114" y="175" fill="#8ea3d8">insert Group</text>
+      <text x="100" y="227" fill="#8ea3d8">merge Tab</text>
+      <text x="86" y="279" fill="#8ea3d8">remove "e"</text>
+    </g>
+    <path d="M172 274H236" stroke="#9db4ff" stroke-width="2" stroke-dasharray="4 4" opacity="0.6"/>
+    <rect x="248" y="263" width="46" height="22" rx="11" fill="#0e1735" stroke="#fbbf24" stroke-width="1.6"/>
+    <text x="271" y="278" fill="#fbbf24" font-size="11" text-anchor="middle" letter-spacing="0.8">NOTE</text>
+  </g>
+  <text x="220" y="368" fill="#8ea3d8" font-size="17" letter-spacing="2.5" text-anchor="middle">CLASSIC LAYERS</text>
+
+  <path d="M392 214H456" stroke="url(#beam1)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M462 214l-14-7v14z" fill="#8ab4ff"/>
+
+  <!-- Plan with decisions applied -->
+  <g>
+    <g filter="url(#glow)">
+      <rect x="484" y="118" width="236" height="192" rx="14" fill="#17295a" stroke="#8ab4ff" stroke-width="2"/>
+    </g>
+    <text x="602" y="150" fill="#c9d6ff" font-size="14" letter-spacing="0.6" text-anchor="middle" font-family="SFMono-Regular, Menlo, monospace">plan.md</text>
+    <g font-size="13" font-family="SFMono-Regular, Menlo, monospace">
+      <circle cx="512" cy="180" r="8" fill="none" stroke="#34d399" stroke-width="2"/>
+      <path d="M508 180l3 3 5-6" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round"/>
+      <text x="530" y="185" fill="#c9d6ff">build  Field Owner</text>
+      <circle cx="512" cy="212" r="8" fill="none" stroke="#34d399" stroke-width="2"/>
+      <path d="M508 212l3 3 5-6" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round"/>
+      <text x="530" y="217" fill="#c9d6ff">build  Related list</text>
+      <circle cx="512" cy="244" r="8" fill="none" stroke="#6b7a9f" stroke-width="2"/>
+      <path d="M507 244h10" stroke="#6b7a9f" stroke-width="2" stroke-linecap="round"/>
+      <text x="530" y="249" fill="#6b7a9f">won't do  D5</text>
+      <circle cx="512" cy="276" r="8" fill="none" stroke="#6b7a9f" stroke-width="2"/>
+      <path d="M507 276h10" stroke="#6b7a9f" stroke-width="2" stroke-linecap="round"/>
+      <text x="530" y="281" fill="#6b7a9f">n/a  Print</text>
+    </g>
+  </g>
+  <text x="602" y="100" fill="#9db4ff" font-size="14" letter-spacing="1.4" text-anchor="middle">DECISIONS APPLIED FIRST</text>
+  <text x="602" y="368" fill="#8ea3d8" font-size="17" letter-spacing="2.5" text-anchor="middle">APPROVABLE PLAN</text>
+
+  <path d="M742 214H806" stroke="url(#beam2)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M812 214l-14-7v14z" fill="#a78bfa"/>
+
+  <!-- Freedom section: list page wired to a child page -->
+  <g>
+    <rect x="834" y="96" width="196" height="226" rx="12" fill="#101a3f" stroke="url(#freedom)" stroke-width="2.5"/>
+    <rect x="848" y="110" width="168" height="30" rx="8" fill="url(#freedom)" opacity="0.9"/>
+    <rect x="860" y="120" width="80" height="10" rx="5" fill="#ffffff" opacity="0.85"/>
+    <g fill="#1b2a5b">
+      <rect x="848" y="150" width="80" height="26" rx="7"/><rect x="936" y="150" width="80" height="26" rx="7"/>
+      <rect x="848" y="186" width="168" height="122" rx="9"/>
+    </g>
+    <g fill="#6f8ad6">
+      <rect x="856" y="160" width="50" height="7" rx="3.5"/><rect x="944" y="160" width="60" height="7" rx="3.5"/>
+      <rect x="860" y="198" width="90" height="8" rx="4"/>
+    </g>
+    <g fill="#26386f">
+      <rect x="860" y="218" width="144" height="18" rx="4"/><rect x="860" y="242" width="144" height="18" rx="4"/><rect x="860" y="266" width="144" height="18" rx="4"/>
+    </g>
+    <rect x="860" y="242" width="144" height="18" rx="4" fill="none" stroke="#a78bfa" stroke-width="1.6"/>
+    <rect x="1066" y="196" width="96" height="120" rx="10" fill="#101a3f" stroke="#a78bfa" stroke-width="2"/>
+    <rect x="1076" y="208" width="76" height="16" rx="5" fill="url(#freedom)" opacity="0.85"/>
+    <g fill="#1b2a5b"><rect x="1076" y="232" width="76" height="16" rx="5"/><rect x="1076" y="254" width="76" height="16" rx="5"/><rect x="1076" y="276" width="76" height="28" rx="5"/></g>
+    <path d="M1004 251C1036 251 1036 240 1060 240" fill="none" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M1066 240l-11-6v12z" fill="#a78bfa"/>
+    <g filter="url(#glow)">
+      <circle cx="1030" cy="322" r="24" fill="#0f2a22" stroke="#34d399" stroke-width="3"/>
+      <path d="M1018 322l8 8 16-18" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+  <text x="996" y="374" fill="#c9d6ff" font-size="17" letter-spacing="2.5" text-anchor="middle">WIRED FREEDOM SECTION</text>
+</svg>

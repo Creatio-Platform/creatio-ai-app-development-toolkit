@@ -1,0 +1,9 @@
+{
+  "fields": [
+    "Contact", "MobilePhone", "Email", "Skype", "Job", "Office", "ExpertiseLevel",
+    "Market", "Segment", "InternalRequest", "Department", "StaffUnit", "Owner",
+    "Source", "CurrentWageLevel", "CurrentAccount", "ExpectedWageLevel",
+    "RejectReason", "Employee"
+  ],
+  "rules": ["RejectReason", "InternalRequest", "Job", "Employee", "ExpertiseLevel"]
+}

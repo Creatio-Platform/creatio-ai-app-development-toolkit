@@ -1,13 +1,13 @@
 // Offline unit tests for the hand-rolled infra parsers that otherwise run ONLY inside live-network / real-tree
-// CI jobs (Alexandr review): the ustar reader + integrity check in verify-vendor-upstream.mjs, and the
+// CI jobs: the ustar reader + integrity check in verify-vendor-upstream.mjs, and the
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readTarEntry, integrityOk, sha256Lf } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { readTarEntry, integrityOk, assertTarballIntegrity, sha256Lf } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_DECISION_KINDS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs";
@@ -16,6 +16,7 @@ import { vendoredIndex } from "../../plugins/creatio-migration/skills/classic-to
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { stripImports, buildManifest } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
+import * as diag from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/diagnostics.mjs";
 
 // git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
 // could otherwise shadow it (Sonar S4036). These are the stock install locations on the CI
@@ -84,6 +85,29 @@ check("integrity: accepts the correct sha512 SRI string", integrityOk(blob, good
 check("integrity: rejects a wrong hash", integrityOk(blob, "sha512-" + createHash("sha512").update(Buffer.from("other")).digest("base64")) === false);
 check("integrity: rejects a malformed / empty integrity string", integrityOk(blob, "") === false && integrityOk(blob, "not-an-sri") === false);
 check("integrity: supports the sha256 algorithm prefix too", integrityOk(blob, "sha256-" + createHash("sha256").update(blob).digest("base64")) === true);
+check("integrity: supports the sha384 algorithm prefix", integrityOk(blob, "sha384-" + createHash("sha384").update(blob).digest("base64")) === true);
+// A digest that matches is not enough: md5 and sha1 are collision-broken, so a registry string naming either
+// is rejected even when the bytes hash to it. Only sha256 / sha384 / sha512 are accepted.
+// The md5 / sha1 digests of `blob` are literals so the suite never calls a weak hash itself.
+const blobMd5 = "org/RlCQeA+N8htTVK/wSg==";
+const blobSha1 = "/E/s5arNOx4tFwtf3u5DV0m5BBc=";
+check("integrity: rejects a correct md5 digest (weak algorithm)", integrityOk(blob, "md5-" + blobMd5) === false);
+check("integrity: rejects a correct sha1 digest (weak algorithm)", integrityOk(blob, "sha1-" + blobSha1) === false);
+check("integrity: rejects a correct digest under an algorithm outside the allow-list",
+  integrityOk(blob, "sha224-" + createHash("sha224").update(blob).digest("base64")) === false);
+check("integrity: the SRI algorithm prefix must be lowercase (an uppercase prefix does not parse)",
+  integrityOk(blob, "SHA512-" + createHash("sha512").update(blob).digest("base64")) === false);
+
+// The registry record is checked fail-closed: a missing integrity string is an error, not a skipped check.
+const throwsWith = (fn, re) => { try { fn(); return false; } catch (e) { return re.test(e.message); } };
+check("integrity: a registry record whose integrity matches is accepted",
+  !throwsWith(() => assertTarballIntegrity(blob, { tarball: "x", integrity: good }), /./));
+check("integrity: a registry record with no dist.integrity throws",
+  throwsWith(() => assertTarballIntegrity(blob, { tarball: "x" }), /no dist\.integrity/));
+check("integrity: a registry record with an empty dist.integrity throws",
+  throwsWith(() => assertTarballIntegrity(blob, { tarball: "x", integrity: "" }), /no dist\.integrity/));
+check("integrity: a registry record whose integrity does not match throws",
+  throwsWith(() => assertTarballIntegrity(Buffer.from("other"), { tarball: "x", integrity: good }), /failed the registry's own dist\.integrity check/));
 
 console.log("\n===== glob → regex matcher (offline) =====");
 check("glob: `*` stays within a path segment (does NOT cross `/`)",
@@ -150,15 +174,18 @@ check("--stubs totals carry `members`, and the shortcut needs BOTH counts explic
 // The root-only GUARD itself is asserted behaviourally in run-mapper.mjs (a nested fold given a `section` bundle
 // emits no section scope). This pin only keeps the construction in its own function: inlined back into
 // `runMigration` it pushed that function past the repo's pinned Sonar cognitive complexity 15.
-check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or 1 scope and owns the root-only guard — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
-  /function sectionStubScopes\(manifest, opts, sectionEff\)/.test(mgSrc)
-    && /if \(opts\.scopeSchema \|\| !sectionEff\) return \[\];/.test(mgSrc)
+check("--stubs section scope: the root-only guard and the 0-or-1 shape survive the ChangeSet being SHARED — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
+  // The guard sits on the shared ChangeSet, and the digest is 0 or 1 scope off the back of it.
+  /function sectionChangeSetOf\(manifest, opts, sectionEff\)/.test(mgSrc)
+    && /if \(opts\.scopeSchema \|\| !sectionEff\) return null;/.test(mgSrc)
+    && /function sectionStubScopes\(manifest, opts, sectionChangeSet\)/.test(mgSrc)
+    && /if \(!sectionChangeSet\) return \[\];/.test(mgSrc)
     && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: an unusable Context result is a failed run, not a surface with nothing to describe — and the guard is a SHAPE check, not a truthiness test",
   // The block moved into `contextFailedReturn` — `run()` sat at the pinned Sonar cognitive complexity 15, the same
   // reason `sectionStubScopes` above is its own function.
   //
-  // PR #147 review — the guard is `isCensusShape`, not `!ctx`. A truthy value that is not a census (`{}`, `[]`, a
+  // the guard is `isCensusShape`, not `!ctx`. A truthy value that is not a census (`{}`, `[]`, a
   // `scopes` of the wrong type) was coerced to an empty scope list by `normalizeScopes` and took the "nothing to
   // describe" exit, reporting `complete: true` over a digest that may be full. What this line still pins cheaply
   // is that the guard tests the SHAPE; the outcome for eight different unusable results, and for a dead Context,
@@ -188,21 +215,97 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
 const mapperSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
   // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 10 and the check stays
-  // green. Naming the kinds a PR adds is what makes the assertion say which set it is pinning;
-  // ENG-94714 added `list-grid-config` and `list-section-element`, so both are named here.
+  // green. Naming the kinds is what makes the assertion say which set it pins, so
+  // `list-grid-config` and `list-section-element` are both named here.
   !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 10
     && LIST_DECISION_KINDS.includes("list-grid-config") && LIST_DECISION_KINDS.includes("list-section-element"),
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
     registrySize: LIST_DECISION_KINDS.length,
     missingNamed: ["list-grid-config", "list-section-element"].filter((k) => !LIST_DECISION_KINDS.includes(k)) }));
+// …and the same rule for the ⚠ Confirm worklist. It is RENDERED from `needsDecision`, and a row appended to the
+// rendered list reaches plan.md and no other channel: `confirmWorklistRows`, the one feed for `--checklist`,
+// `--verify` and the build tasks, maps the record alone.
+const designspecSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url)), "utf8");
+// BOTH producers of a Confirm line, not the renderer alone: a row pushed inside `foldedConfirmRows` reaches
+// plan.md by the same path and would leave a renderer-only pin green.
+const NL = "\n";
+const CONFIRM_PRODUCERS = ["renderConfirmWorklist", "foldedConfirmRows"];
+const bodyOfFn = (name) => {
+  const at = designspecSrc.indexOf("function " + name + "(");
+  return at < 0 ? "" : designspecSrc.slice(at, designspecSrc.indexOf(NL + "}", at));
+};
+const confirmBodies = CONFIRM_PRODUCERS.map(bodyOfFn);
+const confirmBody = confirmBodies.join(NL);
+check("designspec.mjs: the ⚠ Confirm worklist is rendered from `needsDecision` alone — neither producer appends to it, so a row cannot reach plan.md while reaching no build task",
+  confirmBodies.every((b) => b.length > 0)
+    && !/\b(?:confirm|rows|out)\.push\(\s*[`"']/.test(confirmBody)
+    && /foldedConfirmRows\(kept\)/.test(designspecSrc),
+  () => ({ producersFound: CONFIRM_PRODUCERS.map((n, k) => [n, confirmBodies[k].length]),
+    appended: confirmBody.split(NL).filter((l) => /\.push\(/.test(l)).map((l) => l.trim().slice(0, 90)) }));
+// …and the same rule one level up, for a whole ChangeSet FIELD: one the plan renders and no checklist builder
+// reads sends none of its content to a task. A field read by ONE side only is exempt only with a stated reason.
+const CHECKLIST_BUILDERS = ["checklistGroups", "buildPageRows", "buildLayoutGroupRows", "buildCoverageRows",
+  "buildCardActionRows", "buildListItems", "buildDashboardRows", "confirmWorklistRows", "qualityGateRows",
+  "tableElementRows", "standardFeatureRows", "handlerStubRows", "memberWorklistRows", "sectionLogicGroups"];
+// `headerLayout` decides the header TEMPLATE RECOMMENDATION banner and gates nothing; the `layout-type` decision
+// carries the question into the worklist. `profileCards` publishes a `profile-card` decision per card, so each one
+// already has a row — through the record, not through this field.
+// `withheldFeatures` is the same: each one publishes its `feature-component-unavailable` decision, and a `build` answer
+// maps it into `standardFeatures`, so it never needs a row of its own.
+const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards", "withheldFeatures",
+  // Triggers the quick-filter BUILD NOTE — advice on building rows that are themselves gated (`Quick filter — …`).
+  "quickFilterConfigCompletedByBuilder"]);
+const fieldsOfReturn = (startsAt) => {
+  const at = mapperSrc.indexOf(startsAt);
+  const m = at < 0 ? null : /\n {2}return \{([\s\S]*?)\n {2}\};/.exec(mapperSrc.slice(at));
+  return m ? [...m[1].matchAll(/[\s{,]([a-zA-Z][a-zA-Z0-9]*)\s*[,:}]/g)].map((x) => x[1]) : [];
+};
+// BOTH ChangeSets the plan renders: the record page's, and the list page's (read as `lcs.` there).
+// Each anchor is asserted to RESOLVE below: a rename or a reflow that empties one leg would otherwise shrink the
+// universe silently and report a parity that was never measured.
+const recordPageFields = fieldsOfReturn("const baseFieldOverrides");
+const listFields = fieldsOfReturn("export function buildListChangeSet(");
+const changeSetFields = [...new Set([...recordPageFields, ...listFields])];
+const checklistSrc = CHECKLIST_BUILDERS.map((n) => {
+  const at = designspecSrc.indexOf("function " + n + "(");
+  return at < 0 ? "" : designspecSrc.slice(at, designspecSrc.indexOf(NL + "}", at));
+}).join(NL);
+// `?.` counts as a read: the list ChangeSet is optional at most call sites, so every read of it is chained.
+const readsField = (src, f) => new RegExp(String.raw`\b(?:cs|lcs|changeSet|listChangeSet)\??\.${f}\b`).test(src);
+const planOnlyFields = changeSetFields.filter((f) =>
+  readsField(designspecSrc, f) && !readsField(checklistSrc, f) && !PLAN_ONLY_CHANGESET_FIELDS.has(f));
+check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a checklist builder — a field only the plan reads reaches no build task",
+  recordPageFields.length > 0 && listFields.length > 0 && planOnlyFields.length === 0,
+  () => ({ planOnlyFields, exempt: [...PLAN_ONLY_CHANGESET_FIELDS],
+    recordPage: recordPageFields.length, list: listFields.length }));
+// Base-field overrides are APPLIED ONTO the template's existing fields, so they build after the fields are laid
+// out and before coverage counts them. Pinned on the phase table itself: the ordering is the whole reason the
+// group has a phase of its own, and nothing else fails if it drifts.
+const tasksSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/tasks.mjs", import.meta.url)), "utf8");
+const phaseOfGroup = (title) => {
+  const line = tasksSrc.split(NL).find((l) => l.includes(title) && l.includes("],"));
+  // Sliced, not matched: a `\\d+` followed by a literal that can fail backtracks at every start offset.
+  const at = line ? line.indexOf("],") : -1;
+  if (at < 0) return null;
+  const head = line.slice(0, at);
+  const n = Number(head.slice(head.lastIndexOf(",") + 1).trim());
+  return Number.isInteger(n) ? n : null;
+};
+const PHASES = ["Form — Layout (by tab/region)", "Form — Base-field overrides", "Form — Coverage (verified)",
+  "List — Custom methods", "List — Other declared logic worklist", "Quality gates"].map(phaseOfGroup);
+const [lay, ovr, cov, listM, listL, gates] = PHASES;
+// Integers before comparison: a title that vanishes returns `null`, and `null < 35` compares as `0 < 35`.
+check("tasks.mjs: base-field overrides build between the layout that creates the fields and the coverage that counts them, and the list page's logic builds before its review",
+  PHASES.every(Number.isInteger) && lay < ovr && ovr < cov && listM < listL && listL < gates,
+  () => ({ layout: lay, overrides: ovr, coverage: cov, listMethods: listM, listLogic: listL, gates }));
 
 /* ================================================================================================
    Workflow scripts must PARSE. The host evaluates a `*.workflow.js` as an ASYNC FUNCTION BODY — top-level
    `await` and top-level `return` are legal there, so `node --check` on the file itself rejects a valid script
    and `import()` would EXECUTE it. Wrapping it the way the host does is the only honest syntax check.
    Why this exists: these scripts are edited as text and their prompts are template literals full of backticks,
-   so a stray backtick terminates the literal and breaks the file. That happened TWICE while writing ENG-94975,
-   and both times a human caught it — nothing in the suite would have failed. A broken workflow is not a subtle
+   so a stray backtick terminates the literal and breaks the file. That is easy to do and easy to miss:
+   only a human reading the text would catch it, and nothing else in the suite would fail. A broken workflow is not a subtle
    defect: the skill cannot run at all.
    ================================================================================================== */
 {
@@ -225,7 +328,7 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
      can show it, and that field rejects control characters: `\n` and `\t` pass, `\r` does not. So a Windows
      checkout with `core.autocrlf=true` (the Git for Windows default) turned the shipped LF blob into CRLF and the
      workflow failed schema validation before a single agent ran — reported from a real run, and mystifying at the
-     point of failure because nothing in the script is wrong. ENG-94529 pinned `*.workflow.js text eol=lf`.
+     point of failure because nothing in the script is wrong. `*.workflow.js text eol=lf` pins the blob.
      The ON-DISK check is the one that matters and it needs no git: run this suite on a checkout that converted
      the file and it goes red here, naming the file, instead of failing later inside the host. */
   for (const file of wfFiles) {
@@ -456,13 +559,13 @@ check("cba workflow: the repair set is built by `repairKeys` off all three lists
   /const toRepair = repairKeys\(uncoveredKeys, critiqueUncovered, wiringOnly\)/.test(cbaSrc));
 // The retry BEHAVIOUR is asserted executably against `retryOnDeath` further down — this pin only keeps the call
 // site WIRED to that helper. Source-matching alone was the whole defect: it proved the loop's shape was in the
-// file and nothing about whether a second attempt ever fires (PR#88 review, Major).
+// file and nothing about whether a second attempt ever fires.
 check("cba workflow: the Critique call site DELEGATES to the executable `retryOnDeath` helper, handing it the work STEP per attempt AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
   /const \{ result: critique, ran: critiqueReturned \} = yield\* retryOnDeath\(/.test(cbaSrc)
     && /critiqueStep,/.test(cbaSrc)
     && /log\(critiqueDeathLine\(attempt, error, willRetry\)\)/.test(cbaSrc));
 // Both legs must read the helper's `ran`, never `critique`'s truthiness: a falsy-but-present Critique result would
-// otherwise be reported as a phase that never ran, marking a real answer UNCHECKED (PR#88 review, Major).
+// otherwise be reported as a phase that never ran, marking a real answer UNCHECKED.
 check("cba workflow: a Critique that never ran is LOUD and machine-readable — the log says coverage.complete is arithmetic-only, and the result carries `critiqueRan` so the caller sees it without reading logs",
   /if \(!ran\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
     // `[ \t]*`, never `\s*`: `\s` matches the line terminator too, so under `/m` the quantifier overlaps the `^`
@@ -507,7 +610,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
 
 
-/* ---- ENG-95543: the reference doc is LINT-CHECKED against the shared mapping table -------------------------
+/* ---- the reference doc is LINT-CHECKED against the shared mapping table -------------------------
  * The ticket asks for the doc's classification rows to be generated from, or lint-checked against, the table.
  * Lint-checked, not generated: the rows carry build recipes, on-stand checks and a "Do NOT" column that no table
  * holds, and generating the file would delete exactly the part a human wrote. What the lint covers is the part
@@ -517,10 +620,50 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // Suffix classes the COMPONENT index cannot judge: requests and Angular services live in the CDN's
   // separate RequestRegistry, and a `*Handler` is platform-registered against a request, never placed on a page.
   const NON_COMPONENT_SUFFIX = /(?:Request|Service|Handler)$/;
+  // Pipe converters (`$Attr | crt.InvertBooleanValue`) are not components either: the component index does not carry
+  // them, so the ones the engine emits are listed here by name and checked the other way round below.
+  const PIPE_CONVERTERS = new Set(["crt.InvertBooleanValue"]);
+// The browser-check reference exists to stop ONE measured loop: eight minutes of re-probing a page whose main
+// thread was blocked, where no script could ever have answered. The rule and the order are what the file is for,
+// so the doc lint holds it to both, and SKILL.md must actually send a builder there.
+{
+  const p = "plugins/creatio-migration/skills/classic-to-freedom-migration/references/freedom-ui-browser-check.md";
+  const doc = readFileSync(fileURLToPath(new URL("../../" + p, import.meta.url)), "utf8");
+  const skill = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
+  check("browser-check doc: it states the ORDER — console, then the error boundary, then structure — because a component census tells you the page is absent while the console tells you why, which is the only actionable half",
+    () => /READ THE CONSOLE FIRST/.test(doc) && /error boundary/i.test(doc) && /STRUCTURE, LAST/.test(doc),
+    () => doc.slice(0, 400));
+  check("browser-check doc: it states that a TIMEOUT is the diagnosis, not a reason to retry — `execute_javascript` runs on the page's main thread, so a blocked page cannot answer even `document.title`",
+    () => /A TIMEOUT IS THE ANSWER, NOT A REASON TO RETRY/.test(doc) && /main thread/.test(doc),
+    () => doc.split("\n").filter((l) => /timeout/i.test(l)).slice(0, 4));
+  check("browser-check doc: it names the three runtime failures that shipped past `validate-page`, each with the place to look — a symptom table nobody can act on is a story, not a reference",
+    () => /primaryDataSourceName/.test(doc) && /_setPredefinedColumnDefinitions/.test(doc)
+      && /items attribute binding value/.test(doc) && /get-page/.test(doc),
+    () => doc.split("\n").filter((l) => /\|/.test(l)).slice(0, 6));
+  check("SKILL.md points a builder at it, in the step that opens a page — a reference nothing links to is a file nobody reads",
+    () => skill.includes("references/freedom-ui-browser-check.md"),
+    () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
+  // A builder is handed exactly the files its 7.3 row names, so a SKILL.md mention alone never reaches it: the
+  // page-build row itself must hand the reference, in the look-up column and not as a brief to read whole.
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  const pageBuildRows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4 && cells[0].startsWith("Page build"));
+  check("orchestrate-build.md 7.3: the page-build row hands `freedom-ui-browser-check.md` as a reference to look up, not as a brief — the row is what a builder is given, so a reference it does not name is never opened",
+    () => pageBuildRows.length === 1
+      && pageBuildRows[0][3].includes("`./references/freedom-ui-browser-check.md`")
+      && !pageBuildRows[0][2].includes("freedom-ui-browser-check.md"),
+    () => pageBuildRows);
+}
+
   const docPath = "plugins/creatio-migration/skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
-  // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect (ENG-95555) in its
+  // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect in its
   // DOC form: `crt.ContactCommunication` was written in prose long before anyone checked it against a stand, and
   // prose is what an agent reads when Node is unavailable.
   const allDocTypes = [...new Set((doc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || []))];
@@ -531,19 +674,23 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // on `crt.SaveDataRequest`). The component index cannot judge any of the three, so they are excluded here and
   // remain UNCHECKED — stated rather than silently folded in. The exclusion is kept honest below: a suffix-excluded
   // type that DOES appear in the index would mean the suffix is hiding a real component.
-  const isComponentName = (t) => !NON_COMPONENT_SUFFIX.test(t);
+  const isComponentName = (t) => !NON_COMPONENT_SUFFIX.test(t) && !PIPE_CONVERTERS.has(t);
   // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
   // it is the warning that it does not. Those are checked the other way round below.
   const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
-  const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t));
+  // A row marked `requiresRegistry` names a component newer than every indexed platform version on purpose: the mapper
+  // builds it only when the run's own registry carries it, so its absence from the vendored index is the expected
+  // state, not a typo. The doc and the code may both name it.
+  const REGISTRY_GATED = new Set(MAPPING_ROWS.filter((r) => r.meta?.requiresRegistry).map((r) => r.verify?.componentType).filter(Boolean));
+  const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t) && !REGISTRY_GATED.has(t));
   const unknownDocTypes = docTypes.filter((t) => !index.components[t]);
-  check(`ENG-95543 doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index`,
+  check(`doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index (the registry-gated rows' types excepted)`,
     docTypes.length >= 5 && unknownDocTypes.length === 0,
     () => ({ checked: docTypes.length, unknown: unknownDocTypes, excludedAsRequests: allDocTypes.filter((t) => !isComponentName(t)) }));
   // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
   // registry really carries is telling the reader to avoid something valid.
   const wrongCounterExamples = [...counterExamples].filter((t) => index.components[t]);
-  check("ENG-95543 doc lint: a type the doc names as a counter-example (\"NOT `crt.X`\") really is absent from the registry — otherwise the doc warns against a real component",
+  check("doc lint: a type the doc names as a counter-example (\"NOT `crt.X`\") really is absent from the registry — otherwise the doc warns against a real component",
     counterExamples.size >= 1 && wrongCounterExamples.length === 0,
     () => ({ counterExamples: [...counterExamples], alsoRealComponents: wrongCounterExamples }));
   // Every feature / widget the TABLE carries must be NAMED in the doc's standard-features section. Direction
@@ -558,15 +705,15 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const bare = (n) => { const t = n.trim(); const i = t.lastIndexOf("("); return (i > 0 && t.endsWith(")") ? t.slice(0, i) : t).trim(); };
   const tableNames = [...new Set(MAPPING_ROWS.flatMap((r) => [r.meta?.feature, ...(r.meta?.widgets || []).map((w) => w.widget)]).filter(Boolean))];
   const undocumented = tableNames.filter((n) => !section.includes(n) && !section.includes(bare(n)));
-  check("ENG-95543 doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
+  check("doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
     tableNames.length >= 8 && undocumented.length === 0,
     () => ({ names: tableNames, undocumented }));
   // A CODE-level audit, the counterpart of the doc lint: every `crt.*` COMPONENT type the engine's own modules
   // name must exist in the index. This is what catches a new control-table entry or a new row naming a type that
   // does not exist — the run-time check would only find it once some real page emitted it.
   //
-  // Two exclusions, both stated: `crt.*Request` / `crt.*Service` are not components (see above), and `crt.Tab` is
-  // an ACCEPTANCE spelling — `TAB_TYPES` carries it so `--verify` accepts a built page that still reports it,
+  // The exclusions, all stated: `crt.*Request` / `crt.*Service` and the pipe converters are not components (see
+  // above), and `crt.Tab` is an ACCEPTANCE spelling — `TAB_TYPES` carries it so `--verify` accepts a built page that still reports it,
   // measured on a live stand as a type no platform builds. The engine never EMITS it, and the golden suite asserts
   // that separately (a rich tabbed page emits `crt.TabContainer`).
   const engineSrc = ["mapper.mjs", "designspec.mjs", "migrate.mjs", "mapping-table.mjs", "mapping-registry.mjs"]
@@ -577,24 +724,27 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
   const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
-    .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
+    .filter((t) => isComponentName(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t) && !REGISTRY_GATED.has(t));
   const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
-  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers and the crt.Tab acceptance spelling)",
+  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers, pipe converters, the crt.Tab acceptance spelling and the registry-gated rows' types)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
   // a convenient way to hide a type. If the registry ever carries it, the exclusion is wrong.
-  check("ENG-95543 code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
+  check("code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
     codeCounterExamples.size >= 1 && [...codeCounterExamples].every((t) => !index.components[t]),
     () => [...codeCounterExamples].filter((t) => index.components[t]));
-  check("ENG-95543 code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
+  check("code lint: the pipe-converter exclusion is justified — every listed converter is named by the engine and is absent from the component index",
+    [...PIPE_CONVERTERS].every((t) => engineSrc.includes(t) && !index.components[t]),
+    () => [...PIPE_CONVERTERS].map((t) => ({ t, named: engineSrc.includes(t), component: !!index.components[t] })));
+  check("code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
     !index.components["crt.Tab"],
     () => Object.keys(index.components).filter((t) => t.startsWith("crt.Tab")));
 
   // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
   // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,
   // which is how the "change both in the same commit" rule quietly stops being followed.
-  check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
+check("doc lint: the sync note names the shared mapping table, not the catalogs that do not live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
 }
@@ -659,7 +809,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("build-workflows: a file that ends mid-import throws rather than returning a truncated module",
     () => throwsWith(["import {", "  a,"].join("\n"), "end of file"),
     "expected an 'end of file' error");
-  check("build-workflows: a single-line DOUBLE-quoted import is dropped without arming the skip — the quote style that used to delete an arbitrary span",
+check("build-workflows: a single-line DOUBLE-quoted import is dropped without arming the skip — the quote style that would otherwise delete an arbitrary span",
     () => {
       const out = stripImports(['import { x } from "./y.mjs"', "export const kept = 1", "const alsoKept = 2"].join("\n"), "synthetic.mjs");
       return !out.includes("import {") && out.includes("const kept = 1") && out.includes("const alsoKept = 2");
@@ -681,7 +831,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 // run-gate block proves all three commands meet the run-level gate. What that cannot isolate is the
 // `requires` ARGUMENT itself - it needs a workflow whose WORKFLOW_REQUIRES names a capability no step
 // repeats, which `behaviour-analysis` does not - so this stays as the cheap wiring guard for exactly that,
-// and no longer as the only thing standing behind the gate.
+// and not as the only thing standing behind the gate.
 {
   const cliSrc = readFileSync(path.join(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
@@ -693,10 +843,10 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => ({ calls: advanceCalls.length, withoutRequires: withoutRequires.map((c) => c.slice(0, 120)) }));
 }
 
-/* PR #147 REVIEW (architecture) — THE WORKFLOW IDENTITY MANIFEST IS THE PRODUCER'S PUBLISHED CONTRACT.
-   `installer/install.py` used to recover each workflow's name by lexing the generated JavaScript with a
-   hand-written JS sub-lexer in Python - the consumer parsing the producer's output language, while
-   `TARGETS` held `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
+/* REVIEW (architecture) — THE WORKFLOW IDENTITY MANIFEST IS THE PRODUCER'S PUBLISHED CONTRACT.
+   `installer/install.py` must not recover each workflow's name by lexing the generated JavaScript with a
+   hand-written JS sub-lexer in Python - that is the consumer parsing the producer's output language, while
+   `TARGETS` holds `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
    now emits `plugins/creatio-migration/skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
    Asserted here as well as in the drift gate, because the consequence of a stale row is not a red test:
    `provision_named_workflows` refuses a script the manifest does not carry, so it is a failed INSTALL. */
@@ -732,7 +882,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => manifest.workflows.map((w) => w.name).join(", "));
 }
 
-/* ENG-96483 REVIEW (Major) — THE MODULE'S VERIFICATION CONTRACT HAS ONE SOURCE OF TRUTH, AND THIS PINS IT.
+/* THE MODULE'S VERIFICATION CONTRACT HAS ONE SOURCE OF TRUTH, AND THIS PINS IT.
    There were three competing declarations of what verifying this module means — the CI job's enumerated steps,
    `engine/package.json` `scripts.test`, and this directory's README — and only the CI one was enforced, i.e. the
    one a contributor cannot see from inside the module. Someone following the documented path ran roughly half the
@@ -744,15 +894,16 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const enginePkg = JSON.parse(readFileSync(path.join(repoRoot, "plugins/creatio-migration/skills/classic-to-freedom-migration/engine/package.json"), "utf8"));
-  const prYml = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8");
+  // CRLF folded to LF: a Windows checkout (autocrlf) carries CRLF, and the job-boundary and step scans below are line-based.
+  const prYml = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8").replaceAll("\r\n", "\n");
   // The engine-goldens job only — the file carries other jobs whose `run:` lines are none of this contract's
   // business (the upstream-drift job runs `verify-vendor-upstream.mjs`, which is not part of the module's gate).
   // Sliced from the job's `name:` to the next line at job indentation, so a step added to a LATER job cannot
   // silently join this list.
-  // PR review — Sonar flagged the two lines this replaces: a nested ternary (S3358) and a super-linear regex
-  // (S8786, the `\n {2}…:\n` alternation backtracking across a long file). Both are gone: the slice is a plain
+  // Two Sonar rules constrain this helper: no nested ternary (S3358) and no super-linear regex
+  // (S8786 — a `\n {2}…:\n` alternation backtracks across a long file). Both are avoided: the slice is a plain
   // early return, and the job boundary is found by scanning LINES for one at job indentation — linear in the file,
-  // with no backtracking possible, and easier to read than the pattern it replaces.
+  // with no backtracking possible, and easier to read than a pattern-based match.
   const jobBoundarySlice = (yml, header) => {
     const at = yml.indexOf(header);
     if (at < 0) return "";
@@ -767,32 +918,439 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     return rest;
   };
   const jobSrc = jobBoundarySlice(prYml, "name: Classic\u2192Freedom engine goldens");
-  // Both sides reduced to the same vocabulary: the basename each command actually executes, plus `--check`.
-  // Tokenised rather than matched with one unanchored regex: `[A-Za-z0-9_-]+\.mjs` backtracks once
-  // per start position on a long run of word characters, which is super-linear on the whole file.
-  // Splitting on whitespace first makes every test anchored to a single short token.
-  const runnersIn = (text) => {
-    const tokens = text.split(/\s+/);
-    return tokens.flatMap((token, i) => {
-      const base = token.split("/").pop();
-      if (!/^[A-Za-z0-9_-]+\.mjs$/.test(base)) return [];
-      return [tokens[i + 1] === "--check" ? `${base} --check` : base];
-    }).filter((m) => !/_testkit|strip-comments/.test(m));
+  // Both sides reduced to the same vocabulary: the REPO-RELATIVE file each command executes, plus `--check`.
+  // Each command is resolved against the directory it runs in: a CI step's `working-directory` (repo root when absent), and the engine
+  // folder for `scripts.test`, which npm runs from there.
+  // Tokenised rather than matched with one unanchored regex (super-linear on a long file, S8786): every test
+  // below looks at one short whitespace-free token.
+  const ENGINE_REL = "plugins/creatio-migration/skills/classic-to-freedom-migration/engine";
+  const SAFE_PATH = /^[\w./-]+$/;
+  const runnersOfCommand = (command, cwd) => {
+    const tokens = command.trim().split(/\s+/);
+    const runners = [], unresolved = [];
+    tokens.forEach((token, i) => {
+      if (!token.includes(".mjs")) return;
+      const resolved = path.posix.normalize(path.posix.join(cwd, token));
+      // Fail closed: an expression, a quoted or escaping path is a runner this check cannot place, and skipping
+      // it would report a parity that was never measured.
+      if (!token.endsWith(".mjs") || !SAFE_PATH.test(token) || resolved.startsWith("../")) { unresolved.push(token); return; }
+      if (/_testkit|strip-comments/.test(resolved)) return;
+      runners.push(tokens[i + 1] === "--check" ? `${resolved} --check` : resolved);
+    });
+    return { runners, unresolved };
   };
-  const fromPkg = runnersIn(enginePkg.scripts?.test || "");
-  const fromCi = runnersIn(jobSrc);
-  check("ENG-96483 review (Major): the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
-    fromCi.length > 0 && fromPkg.length === fromCi.length && fromPkg.every((r, i) => r === fromCi[i]),
-    () => ({ scriptsTest: fromPkg, ciSteps: fromCi }));
-  check("ENG-96483 review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, all four runners and the drift check are all in it",
-    ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs"]
-      .every((r) => fromPkg.includes(r)),
-    () => fromPkg);
-  // And the README no longer states a claim nothing enforces.
+  // Drops a trailing YAML comment: a `#` at the start or after whitespace. A loop, not a regex, for the same S8786 reason.
+  const stripComment = (line) => {
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === "#" && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+    }
+    return line;
+  };
+  // The runners the job's steps execute, in step order. Only the flat single-line `working-directory:` / `run:`
+  // pair is understood; anything else that mentions a runner or a working directory — a `run: |` block, a
+  // `defaults:` at job or workflow level — lands in `unresolved`, and the check fails on it rather than skipping the step.
+  const mentionsRunner = (l) => l.includes(".mjs") || l.includes("working-directory");
+  // Every YAML block-scalar header (`|` or `>`, with or without a chomping or indentation indicator) opens a multi-line value.
+  const isBlockScalar = (value) => value.startsWith("|") || value.startsWith(">");
+  const indentOf = (line) => line.length - line.trimStart().length;
+  // Groups the lines after `steps:` into one entry list per step item; a runner mention before the first item is unresolved.
+  // The list ends at the first line indented no deeper than the `steps:` key: that line and the rest belong to the
+  // job, so a job-level key after the list is reported, never read as part of the last step.
+  const groupSteps = (stepLines, stepsIndent) => {
+    const steps = [], unresolved = [];
+    let itemIndent = null;
+    for (const [i, line] of stepLines.entries()) {
+      if (indentOf(line) <= stepsIndent) {
+        unresolved.push(...stepLines.slice(i).filter(mentionsRunner).map((l) => l.trim()));
+        break;
+      }
+      const item = /^( *)- /.exec(line);
+      if (item && (itemIndent === null || item[1].length === itemIndent)) {
+        itemIndent = item[1].length;
+        steps.push([line.slice(itemIndent + 2).trim()]);
+      } else if (steps.length) steps.at(-1).push(line.trim());
+      else if (mentionsRunner(line)) unresolved.push(line.trim());
+    }
+    return { steps, unresolved };
+  };
+  // A step's single-line `working-directory:` (repo root when absent) and `run:`; any other runner mention is unresolved.
+  const stepCommand = (entries) => {
+    let cwd = ".", run = null;
+    const unresolved = [];
+    for (const entry of entries) {
+      const kv = /^([A-Za-z-]+):\s*(\S.*)?$/.exec(entry);
+      const value = kv?.[2]?.trim();
+      if (kv?.[1] === "working-directory" && value) cwd = value;
+      else if (kv?.[1] === "run" && value && !isBlockScalar(value)) run = value;
+      else if (mentionsRunner(entry)) unresolved.push(entry);
+    }
+    return { cwd, run, unresolved };
+  };
+  const ciStepRunners = (job) => {
+    const lines = job.split("\n").map(stripComment).filter((l) => l.trim());
+    const stepsAt = lines.findIndex((l) => l.trim() === "steps:");
+    if (stepsAt < 0) return { runners: [], unresolved: ["no `steps:` block in the job"] };
+    const grouped = groupSteps(lines.slice(stepsAt + 1), indentOf(lines[stepsAt]));
+    const runners = [];
+    const unresolved = [...lines.slice(0, stepsAt).filter(mentionsRunner).map((l) => l.trim()), ...grouped.unresolved];
+    for (const entries of grouped.steps) {
+      const step = stepCommand(entries);
+      unresolved.push(...step.unresolved);
+      if (step.run === null) continue;
+      const r = runnersOfCommand(step.run, step.cwd);
+      runners.push(...r.runners);
+      unresolved.push(...r.unresolved);
+    }
+    return { runners, unresolved };
+  };
+  const scriptRunners = (scriptsTest) => {
+    const parts = scriptsTest.split("&&").map((c) => runnersOfCommand(c, ENGINE_REL));
+    return { runners: parts.flatMap((p) => p.runners), unresolved: parts.flatMap((p) => p.unresolved) };
+  };
+  // Every position where the two sequences disagree, named by the runner on each side.
+  const sequenceMismatches = (pkg, ci) => Array.from({ length: Math.max(pkg.length, ci.length) }, (_, i) => i)
+    .filter((i) => pkg[i] !== ci[i])
+    .map((i) => `#${i + 1}: scripts.test runs ${pkg[i] ?? "(nothing)"}, the CI job runs ${ci[i] ?? "(nothing)"}`);
+  // The workflow's `working-directory` lines outside its `jobs:` map — where a workflow-level `defaults:` sits, which
+  // would move every step that does not set its own directory. Top-level keys are the lines with no indentation.
+  const workflowLevelDirs = (yml) => {
+    const found = [];
+    let inJobs = false;
+    for (const line of yml.split("\n").map(stripComment)) {
+      if (/^\S/.test(line)) inJobs = line.startsWith("jobs:");
+      if (!inJobs && line.includes("working-directory")) found.push(line.trim());
+    }
+    return found;
+  };
+  const parityOf = (job, scriptsTest, workflowDirs = []) => {
+    const pkg = scriptRunners(scriptsTest), ci = ciStepRunners(job);
+    return { scriptsTest: pkg.runners, ciSteps: ci.runners, unresolved: [...pkg.unresolved, ...ci.unresolved, ...workflowDirs],
+      mismatches: sequenceMismatches(pkg.runners, ci.runners) };
+  };
+  // The one predicate the real check and every negative golden share.
+  const parityHolds = (p) => p.ciSteps.length > 0 && p.unresolved.length === 0 && p.mismatches.length === 0;
+  const missingRunners = (runners) => runners.filter((r) => !existsSync(path.join(repoRoot, r.replace(/ --check$/, ""))));
+
+  const scriptsTest = enginePkg.scripts?.test || "";
+  const real = parityOf(jobSrc, scriptsTest, workflowLevelDirs(prYml));
+  check("the CI job and `engine/package.json` `scripts.test` run the SAME runner files in the SAME order, resolved from where each actually runs — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
+    parityHolds(real),
+    () => real);
+  check("every runner both sides resolve to exists in the repo — two declarations that agree on a path nothing is at would still pass the parity check",
+    missingRunners(real.scriptsTest).length === 0,
+    () => missingRunners(real.scriptsTest));
+  check("the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
+    [`${ENGINE_REL}/verify-vendor.mjs`, "engine-tests/classic-to-freedom/run.mjs", "engine-tests/classic-to-freedom/run-mapper.mjs",
+      "engine-tests/classic-to-freedom/run-infra.mjs", "scripts/build-workflows.mjs --check", "engine-tests/classic-to-freedom/run-workflow-core.mjs",
+      "engine-tests/classic-to-freedom/run-workflow-parity.mjs", "engine-tests/classic-to-freedom/run-tasks.mjs"]
+      .every((r) => real.scriptsTest.includes(r)),
+    () => real.scriptsTest);
+
+  // Negative goldens: the guard must FAIL on the drift it exists to catch, not only pass on today's files.
+  const jobLines = jobSrc.split("\n");
+  const mapperStep = jobLines.findIndex((l) => l.includes("name: Run mapper goldens"));
+  const wdLine = jobLines.findIndex((l, i) => i > mapperStep && l.includes("working-directory:"));
+  const swapped = jobLines.map((l, i) => (i === wdLine ? l.replace(/working-directory:.*/, "working-directory: engine-tests/build-workflows") : l)).join("\n");
+  const swappedParity = parityOf(swapped, scriptsTest);
+  check("(negative) a CI step with its working-directory swapped fails the parity check, and the mismatch NAMES the runner that moved",
+    mapperStep >= 0 && wdLine > mapperStep && swapped !== jobSrc && !parityHolds(swappedParity)
+      && swappedParity.mismatches.length === 1 && swappedParity.mismatches[0].includes("run-mapper.mjs")
+      && swappedParity.mismatches[0].includes("engine-tests/build-workflows/run-mapper.mjs"),
+    () => ({ mapperStep, wdLine, mismatches: swappedParity.mismatches }));
+  const pkgSwapped = scriptsTest.replace("../../../../../engine-tests/classic-to-freedom/run-mapper.mjs", "../../../../engine-tests/classic-to-freedom/run-mapper.mjs");
+  const pkgSwappedParity = parityOf(jobSrc, pkgSwapped);
+  check("(negative) a `scripts.test` runner path with one `../` too few fails the parity check, and the mismatch names the file it resolves to",
+    pkgSwapped !== scriptsTest && !parityHolds(pkgSwappedParity) && pkgSwappedParity.mismatches.length === 1
+      && pkgSwappedParity.mismatches[0].includes("plugins/engine-tests/classic-to-freedom/run-mapper.mjs"),
+    () => pkgSwappedParity.mismatches);
+  check("(negative) a runner path that points at no file is reported missing, and only that one",
+    JSON.stringify(missingRunners(["engine-tests/classic-to-freedom/no-such-runner.mjs", "scripts/build-workflows.mjs --check"]))
+      === JSON.stringify(["engine-tests/classic-to-freedom/no-such-runner.mjs"]),
+    () => missingRunners(["engine-tests/classic-to-freedom/no-such-runner.mjs", "scripts/build-workflows.mjs --check"]));
+  // Each synthetic job below is paired with a `scripts.test` that runs the same file, so the only thing that can
+  // break parity is the construct under test.
+  const J = (lines) => lines.join("\n");
+  const RUN_IN_C2F = "node ../../../engine-tests/classic-to-freedom/run.mjs";
+  for (const header of ["|", "|-", ">+", ">2"]) {
+    const blockParity = parityOf(J(["    steps:", "      - name: Block-scalar step", "        working-directory: engine-tests/classic-to-freedom",
+      `        run: ${header}`, "          node run.mjs"]), RUN_IN_C2F);
+    check(`(negative) a runner inside a \`run: ${header}\` block is reported unresolved, so the parity check fails closed instead of silently dropping the step`,
+      !parityHolds(blockParity) && blockParity.ciSteps.length === 0 && blockParity.unresolved.some((u) => u.includes("run.mjs")),
+      () => blockParity);
+  }
+  const jobDefaultsFirst = parityOf(J(["    defaults:", "      run:", "        working-directory: engine-tests", "    steps:", "      - run: node run.mjs"]), "node ../../../run.mjs");
+  check("(negative) a job-level working-directory before `steps:` is reported unresolved and fails the parity check",
+    !parityHolds(jobDefaultsFirst) && jobDefaultsFirst.unresolved.some((u) => u.includes("working-directory")),
+    () => jobDefaultsFirst);
+  const jobDefaultsAfter = parityOf(J(["    steps:", "      - working-directory: engine-tests/classic-to-freedom", "        run: node run.mjs",
+    "    defaults:", "      run:", "        working-directory: elsewhere"]), RUN_IN_C2F);
+  check("(negative) a job-level working-directory AFTER `steps:` is reported unresolved and never rewrites the last step's directory",
+    !parityHolds(jobDefaultsAfter) && JSON.stringify(jobDefaultsAfter.ciSteps) === JSON.stringify(["engine-tests/classic-to-freedom/run.mjs"])
+      && jobDefaultsAfter.unresolved.some((u) => u.includes("working-directory: elsewhere")),
+    () => jobDefaultsAfter);
+  const workflowDefaults = J(["name: PR checks", "defaults:", "  run:", "    working-directory: elsewhere", "jobs:", "  goldens:", "    steps:", "      - run: node run.mjs"]);
+  const workflowDefaultsParity = parityOf(jobBoundarySlice(workflowDefaults, "goldens:"), "node ../../../run.mjs", workflowLevelDirs(workflowDefaults));
+  check("(negative) a workflow-level `defaults:` working-directory outside the job slice is reported unresolved and fails the parity check",
+    !parityHolds(workflowDefaultsParity) && workflowDefaultsParity.unresolved.some((u) => u.includes("working-directory: elsewhere"))
+      && ciStepRunners(jobBoundarySlice(workflowDefaults, "goldens:")).unresolved.length === 0 && workflowLevelDirs(prYml).length === 0,
+    () => ({ unresolved: workflowDefaultsParity.unresolved, real: workflowLevelDirs(prYml) }));
+  // And the README states no claim nothing enforces.
   const readme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
-  check("ENG-96483 review (Major): the README no longer prescribes its own two-runner subset, nor claims it is 'exactly what the CI job runs' — it points at the one declaration instead",
+  check("the README does not prescribe its own two-runner subset, nor claim it is 'exactly what the CI job runs' — it points at the one declaration instead",
     !/This is exactly what the CI job/.test(readme) && /scripts\.test/.test(readme) && /npm test/.test(readme),
     () => readme.split("\n").filter((l) => /CI job|npm test|scripts\.test/.test(l)).slice(0, 5).join("\n"));
+}
+
+// The parity check above proves both declarations run the same FILES; it cannot prove a runner works from any
+// directory, because the two declarations run from different ones by design. That half is held here: a manifest
+// piped on stdin (`-`) makes migrate.mjs take its base directory from the process cwd, so every runner call that
+// spawns it that way must pin `cwd`. A manifest passed as a file path sets its own base and needs nothing.
+{
+  const runnersDir = path.dirname(fileURLToPath(import.meta.url));
+  // The source of every `spawnSync(` call, sliced to its balanced closing parenthesis. A scan, not a regex (S8786).
+  const spawnCalls = (src) => {
+    const calls = [];
+    for (let at = src.indexOf("spawnSync("); at >= 0; at = src.indexOf("spawnSync(", at + 1)) {
+      let depth = 0, end = at + "spawnSync".length;
+      for (; end < src.length; end++) {
+        if (src[end] === "(") depth++;
+        else if (src[end] === ")" && --depth === 0) break;
+      }
+      calls.push(src.slice(at, end + 1));
+    }
+    return calls;
+  };
+  // migrate.mjs followed by `"-"` or a spread (a wrapper forwarding its caller's arguments, which may be `-`).
+  const spawnsStdinMigrate = (call) => /(?:migrate\.mjs"\)|MIGRATE), *(?:"-"|\.\.\.)/.test(call);
+  const unpinned = (call) => spawnsStdinMigrate(call) && !/\bcwd:/.test(call);
+  // run-infra.mjs is left out: the synthetic calls below are string literals in it.
+  const runnerFiles = readdirSync(runnersDir).filter((f) => f.endsWith(".mjs") && f !== "run-infra.mjs");
+  const calls = runnerFiles.flatMap((f) => spawnCalls(readFileSync(path.join(runnersDir, f), "utf8")).map((call) => ({ f, call })));
+  const offenders = calls.filter(({ call }) => unpinned(call)).map(({ f, call }) => `${f}: ${call.slice(0, 140)}`);
+  check("every golden runner that spawns migrate.mjs with a manifest on stdin pins the child's `cwd`, so the goldens pass from any directory (`npm test` runs them from the engine folder, CI from engine-tests/)",
+    offenders.length === 0, () => offenders);
+  check("the stdin-spawn scan sees the real call sites (run-mapper's runMigrate and run-tasks' stdin helpers), so a green result is not an empty scan",
+    // Both runners that pipe a manifest are seen, through at least the three stdin spawns they hold.
+    (() => {
+      const seen = calls.filter(({ call }) => spawnsStdinMigrate(call));
+      return seen.length >= 3 && ["run-mapper.mjs", "run-tasks.mjs"].every((f) => seen.some((c) => c.f === f));
+    })(),
+    () => calls.filter(({ call }) => spawnsStdinMigrate(call)).map(({ f }) => f));
+  check("(negative) an unpinned stdin spawn is flagged, while a pinned one and a file-path spawn are not",
+    unpinned('spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: m, encoding: "utf8" })')
+      && unpinned('spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: m })')
+      && !unpinned('spawnSync(process.execPath, [MIGRATE, "-"], { cwd: DIR, input: m })')
+      && !unpinned('spawnSync(process.execPath, [MIGRATE, manifestPath, "--next"], { encoding: "utf8" })'),
+    () => "scan predicate");
+  check("(negative) the call slicer follows nested parentheses to the call's own closing one",
+    spawnCalls('x = spawnSync(a, [b(c)], { input: JSON.stringify(m) }); y = 1;')[0] === 'spawnSync(a, [b(c)], { input: JSON.stringify(m) })',
+    () => spawnCalls('x = spawnSync(a, [b(c)], { input: JSON.stringify(m) }); y = 1;'));
+}
+
+
+// The orchestrator contract says ASK the engine which task to start. That instruction is the whole
+// point of the `--next` mode: without it the mode exists and nobody calls it, and the run goes back to scheduling
+// off `index.md` — a DERIVED report whose columns have already moved under a caller parsing them. A doc lint,
+// because the thing that can silently regress is a sentence, and the failure is invisible (every gate still
+// passes; the orchestrator simply re-derives a decision the engine already makes, and the two then disagree).
+{
+  // Step 7 is split by reader: SKILL.md keeps the six rules in short form with the `--next` invocation, and sends the
+  // driver to `references/orchestrate-build.md` ONCE, at approval, for the contract in full. So each sentence is
+  // linted in the file that carries it, and each slice has its own anti-vacuity guard. Both are whitespace-flattened:
+  // these docs hard-wrap, and a phrase straddling a line break is still the same sentence.
+  const flatten = (t) => t.replace(/\s+/g, " ");
+  const read = (rel) => readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/" + rel, import.meta.url)), "utf8");
+  const skill = read("SKILL.md");
+  const orchestrate = read("references/orchestrate-build.md");
+  const engineReadme = read("engine/README.md");
+  const step7 = flatten(skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8.")));
+  const orchStep7 = flatten(orchestrate.slice(orchestrate.indexOf("## Step 7"), orchestrate.indexOf("## Step 8")));
+  const orchStep8 = orchestrate.slice(orchestrate.indexOf("## Step 8"));
+  check("doc lint (anti-vacuity): SKILL.md step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
+    () => step7.length > 2000 && /7\.2 The orchestrator contract/.test(step7),
+    () => ({ len: step7.length, head: step7.slice(0, 120) }));
+  check("doc lint (anti-vacuity): the orchestration reference's step 7 was located and holds the contract in full",
+    () => orchStep7.length > 20000 && /7\.2 The orchestrator contract/.test(orchStep7) && /7\.5 Repair/.test(orchStep7),
+    () => ({ len: orchStep7.length, head: orchStep7.slice(0, 120) }));
+  check("doc lint: SKILL.md step 7 sends the driver to the orchestration reference ONCE, when the plan is approved — a reference nothing sends the driver to is a contract nobody reads",
+    () => /read `\.\/references\/orchestrate-build\.md` ONCE/.test(step7),
+    () => step7.slice(0, 600));
+  check("doc lint (AC4): step 7 carries the INVOCATION — the orchestrator is given the command that answers which task to start, not left to infer that one exists",
+    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7) && /--tasks <migration-folder>\/build-tasks --next/.test(orchStep7),
+    () => step7.split("`").filter((l) => /--next/.test(l)).slice(0, 4));
+  check("doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
+    () => /do not pick one from `index\.md`/i.test(step7) && /do not pick one from `index\.md`/i.test(orchStep7)
+      && /where you pick the next task from/i.test(orchStep7),
+    () => orchStep7.split(". ").filter((l) => /index\.md/.test(l)).slice(0, 6));
+  check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
+    () => ![step7, orchStep7].some((t) => /One task at a time, in the `Step` order the index lists/.test(t)),
+    () => orchStep7.split(". ").filter((l) => /`Step` order/.test(l)).slice(0, 4));
+  check("doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",
+    () => /is not a failure/.test(orchStep7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(orchStep7),
+    () => orchStep7.split(". ").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
+  check("doc lint: the engine README documents the mode, its verdicts and the clock-is-not-in-flight rule — the reference a reader reaches for when the skill's summary is not enough",
+    () => /--tasks <dir> --next/.test(engineReadme) && /KEEPS its clock/.test(engineReadme)
+      && /startBlocker/.test(engineReadme),
+    () => engineReadme.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+
+  // Step 8's exit-code dictionary is where an orchestrator looks up "what does exit 2 mean?". Every check above is
+  // sliced to step 7, so a verdict added to the engine and documented only there leaves the dictionary answering the
+  // same question a second, shorter way, and nothing sees it. Assert the count the dictionary states matches the
+  // verdicts it enumerates, and that every verdict the engine can print has an entry. The dictionary is one
+  // paragraph, hard-wrapped, so it is read as a paragraph and flattened.
+  const dictLine = flatten(orchStep8.split(/\n\s*\n/).find((p) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(p.trimStart())) || "").trim();
+  const statedCounts = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7 };
+  const verdictMarks = (dictLine.match(/⛔/g) || []).length;
+  // A REFUSAL is one of them: a mode that declines to touch the folder prints its banner and exits 2 like any
+  // other verdict, so a dictionary that left it out would send a reader looking up that banner to nothing.
+  const exit2Verdicts = ["VERIFY INCOMPLETE", "GATE BLOCKED", "DISPATCH GATE", "NOT BUILT", "RUN HALTED", "NOTHING WRITTEN", "EVIDENCE MIS-FILED"];
+  check("doc lint: step 8's exit-2 dictionary states as many verdicts as it enumerates — the count and the list are two answers to one question, and a reader is free to believe either",
+    () => {
+      const stated = statedCounts[(/^\*\*Exit 2 is ([A-Z]+) /.exec(dictLine) || [])[1]];
+      return Boolean(stated) && stated === verdictMarks;
+    },
+    () => ({ dictLine: dictLine.slice(0, 160), verdictMarks }));
+  check("doc lint: every exit-2 verdict the engine can print has an entry in step 8's dictionary — including the halted run, whose remedy is a decision rather than a command",
+    () => exit2Verdicts.every((v) => dictLine.includes(v)),
+    () => ({ missing: exit2Verdicts.filter((v) => !dictLine.includes(v)) }));
+}
+
+console.log("\n===== run diagnostics (offline, injected runner) =====");
+{
+  // A stubbed runner stands in for clio and git, so every branch is exercised without a network or a clio install.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "diag-"));
+  const settings = path.join(tmp, "appsettings.json");
+  writeFileSync(settings, JSON.stringify({ Environments: { Demo: { Uri: "https://demo.example", Password: "secret" } } }));
+  const clioInfo = `[INF] - clio:   8.1.0.134\n[INF] - gate:   2.0.0.53\n[INF] - settings file path: ${settings}\n`;
+  const stand = "[WAR] - cliogate is not installed\n" + JSON.stringify({ coreVersion: "10.0.0.858", dbEngineType: "PostgreSql",
+    frameworkDescription: ".NET Framework 4.8", user: { displayValue: "Supervisor" }, userAccount: { displayValue: "Our company" } });
+  const runner = (over = {}) => (cmd, args) => {
+    const key = `${cmd} ${args.filter((a) => !a.startsWith("/") && !/^[A-Z]:/.test(a)).join(" ")}`;
+    if (key in over) return over[key];
+    if (key === "clio info") return { ok: true, out: clioInfo };
+    if (key.startsWith("clio get-info")) return { ok: true, out: stand };
+    if (key === "git -C rev-parse --abbrev-ref HEAD") return { ok: true, out: "feature/x\n" };
+    if (key === "git -C rev-parse --short HEAD") return { ok: true, out: "abc1234\n" };
+    return { ok: false, out: "" };
+  };
+  const root = path.join(tmp, "plugin");
+  const mk = (rel, content) => { const f = path.join(root, rel); mkdirSync(path.dirname(f), { recursive: true }); writeFileSync(f, content); };
+  mk(".codex-plugin/plugin.json", JSON.stringify({ version: "1.12.0" }));
+  const out = diag.render(diag.collect({ environment: "demo", root, run: runner() }));
+  check("diagnostics: the skill version is read from the first plugin.json present, and a non-git install prints no branch/commit (it is not an error)",
+    () => out.includes("classic-to-freedom-migration `1.12.0`\n") && !/branch|commit/.test(out.split("\n")[2]), () => out);
+  check("diagnostics: clio and bundled cliogate versions come from `clio info`", () => out.includes("`8.1.0.134` (CLI on PATH) · bundled cliogate `2.0.0.53`"), () => out);
+  check("diagnostics: the stand URL is looked up case-insensitively in the clio settings file, and nothing else from that entry is printed",
+    () => out.includes("`demo` · `https://demo.example`") && !out.includes("secret"), () => out);
+  check("diagnostics: the stand line carries version, DB and framework, a missing product reads `unknown (cliogate not installed)`, and the session's user/account never appear",
+    () => out.includes("Creatio `10.0.0.858` · product unknown (cliogate not installed) · DB `PostgreSql` · `.NET Framework 4.8`")
+      && !/Supervisor|Our company/.test(out), () => out);
+  mkdirSync(path.join(root, ".git"), { recursive: true });
+  const withGit = diag.render(diag.collect({ environment: "demo", root, run: runner() }));
+  check("diagnostics: a git checkout adds its branch and short commit", () => withGit.includes("`1.12.0` · branch `feature/x` · commit `abc1234`"), () => withGit);
+  const detached = diag.render(diag.collect({ environment: "demo", root, run: runner({ "git -C rev-parse --abbrev-ref HEAD": { ok: true, out: "HEAD\n" } }) }));
+  check("diagnostics: a detached checkout says so instead of printing the literal `HEAD` as a branch", () => detached.includes("branch detached · commit `abc1234`"), () => detached);
+  const down = diag.render(diag.collect({ environment: "demo", root, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - Could not connect to the Creatio application at 'https://demo.example'." } }) }));
+  check("diagnostics: an unreachable stand is `unknown (<clio's reason>)`, and the other lines are still filled",
+    () => down.includes("- **Stand:** unknown (Could not connect to the Creatio application at 'https://demo.example'.)") && down.includes("`8.1.0.134`"), () => down);
+  const noClio = diag.render(diag.collect({ environment: "demo", root, run: () => ({ ok: false, error: "clio not found on PATH" }) }));
+  check("diagnostics: with no clio every clio-derived value names that reason instead of failing",
+    () => noClio.includes("**clio:** unknown (clio not found on PATH)") && noClio.includes("**Stand:** unknown (clio not found on PATH)"), () => noClio);
+  const bare = diag.render(diag.collect({ root: tmp, run: runner() }));
+  check("diagnostics: no plugin.json and no --environment still render a block, each gap with its reason",
+    () => bare.includes("unknown (no plugin.json beside the skill)") && bare.includes("unknown (no --environment given)") && !bare.includes("**Stand:**"), () => bare);
+  // The Claude Code plugin cache is not a git checkout; its build comes from the registry beside the cache.
+  const plugins = path.join(tmp, "plugins");
+  const cached = path.join(plugins, "cache", "creatio", "toolkit", "1.12.0");
+  mkdirSync(path.join(cached, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(cached, ".claude-plugin", "plugin.json"), JSON.stringify({ version: "1.12.0" }));
+  const listing = path.join(tmp, "listing");
+  mkdirSync(path.join(listing, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+    "toolkit@other": [{ installPath: path.join(plugins, "cache", "other", "toolkit", "1.12.0"), gitCommitSha: "ffffffffffffffffffffffffffffffffffffffff" }],
+    "toolkit@creatio": [{ installPath: cached, gitCommitSha: "a5d7e1fd9c62aaaabbbbccccddddeeeeffff0000" }] } }));
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing } }));
+  const listPlugins = (source) => writeFileSync(path.join(listing, ".claude-plugin", "marketplace.json"), JSON.stringify({ plugins: [{ name: "toolkit", source }] }));
+  listPlugins({ source: "url", url: "https://example/toolkit.git", ref: "feature/ENG-1-x" });
+  const fromRegistry = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a plugin cache without `.git` reads the installed commit from `installed_plugins.json` (the record whose installPath is this dir) and the branch from the marketplace ref",
+    () => fromRegistry.includes("`1.12.0` · branch `feature/ENG-1-x` (marketplace ref) · commit `a5d7e1f`"), () => fromRegistry);
+  const registryD = diag.collect({ environment: "demo", root: cached, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - timeout" } }) });
+  const registryJson = JSON.stringify(registryD);
+  check("diagnostics: the `--json` object renders through `normalize` exactly as the CLI block — registry branch, commit and a stand error survive the round trip into the plan",
+    () => diag.render(diag.normalize(JSON.parse(registryJson), (s) => s)) === diag.render(registryD), () => diag.render(registryD));
+  listPlugins({ source: "github", repo: "o/toolkit" });
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing, source: { source: "github", repo: "o/m", ref: "release" } } }));
+  const marketRef = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a plugin entry with no ref takes the branch from the marketplace source ref",
+    () => marketRef.includes("branch `release` (marketplace ref) · commit `a5d7e1f`"), () => marketRef);
+  writeFileSync(path.join(plugins, "known_marketplaces.json"), JSON.stringify({ creatio: { installLocation: listing } }));
+  const commitOnly = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a registry record whose marketplace names no branch prints the commit alone, never `detached`",
+    () => commitOnly.includes("`1.12.0` · commit `a5d7e1f`\n") && !commitOnly.includes("detached"), () => commitOnly);
+  // The registry names the cache by the path Claude Code wrote; a symlinked config dir reaches the same directory.
+  const linked = path.join(tmp, "linked-plugins");
+  let symlinked = true;
+  try { symlinkSync(plugins, linked, "dir"); } catch { symlinked = false; }
+  if (symlinked) {
+    writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+      "toolkit@creatio": [{ installPath: path.join(linked, "cache", "creatio", "toolkit", "1.12.0"), gitCommitSha: "a5d7e1fd9c62aaaabbbbccccddddeeeeffff0000" }] } }));
+    const viaLink = diag.render(diag.collect({ root: cached, run: runner() }));
+    check("diagnostics: a registry installPath that reaches the cache through a symlink still matches it",
+      () => viaLink.includes("commit `a5d7e1f`"), () => viaLink);
+  }
+  writeFileSync(path.join(plugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "toolkit@creatio": [{ installPath: cached, gitCommitSha: "" }] } }));
+  const noSha = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a registry record with an empty commit prints the version alone and does not throw",
+    () => noSha.includes("classic-to-freedom-migration `1.12.0`\n"), () => noSha);
+  mkdirSync(path.join(cached, ".git"));
+  const checkoutWins = diag.render(diag.collect({ root: cached, run: runner() }));
+  check("diagnostics: a git checkout is read from git even when a registry record exists — git names the commit that is on disk",
+    () => checkoutWins.includes("branch `feature/x` · commit `abc1234`"), () => checkoutWins);
+  const json = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/diagnostics.mjs"), "--json"],
+    { encoding: "utf8", env: { PATH: "" } });
+  check("diagnostics: `--json` prints the same values as one object, the shape `manifest.runDiagnostics` takes",
+    () => { const d = JSON.parse(json.stdout); return json.status === 0 && typeof d.skillVersion === "string" && d.clioVersion === "unknown (clio not found on PATH)"; },
+    () => json.stdout);
+  check("diagnostics: the CLI entry point exits 0 and prints the block even when nothing can be read",
+    () => {
+      const r = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/diagnostics.mjs")],
+        { encoding: "utf8", env: { PATH: "" } });
+      return r.status === 0 && r.stdout.startsWith("### Run diagnostics") && r.stdout.includes("unknown (clio not found on PATH)");
+    });
+
+  // The checks above inject a runner or empty PATH, so they reach only the not-found branch of the PATH lookup.
+  // These give the lookup a real directory tree, with env and platform injected, so a hit is exercised on every OS.
+  const bin = (rel) => { const d = path.join(tmp, "bin", rel); mkdirSync(d, { recursive: true }); return d; };
+  const posixDir = bin("posix");
+  writeFileSync(path.join(posixDir, "clio"), "");
+  check("diagnostics: findOnPath returns the tool's absolute path from a POSIX PATH hit",
+    () => diag.findOnPath("clio", { PATH: [bin("empty"), posixDir].join(path.delimiter) }, "linux") === path.join(posixDir, "clio"));
+  const shadowDir = bin("shadow");
+  mkdirSync(path.join(shadowDir, "clio"));
+  check("diagnostics: findOnPath skips a directory named like the tool and keeps searching PATH",
+    () => diag.findOnPath("clio", { PATH: [shadowDir, posixDir].join(path.delimiter) }, "linux") === path.join(posixDir, "clio"));
+  const winDir = bin("win");
+  writeFileSync(path.join(winDir, "clio.exe"), "");
+  check("diagnostics: on win32 findOnPath reads `Path` when `PATH` is absent and tries PATHEXT extensions lowercased",
+    () => diag.findOnPath("clio", { Path: winDir, PATHEXT: ".EXE;.CMD" }, "win32") === path.join(winDir, "clio.exe"));
+  check("diagnostics: on win32 findOnPath does not take an extensionless file for the tool",
+    () => diag.findOnPath("clio", { Path: posixDir, PATHEXT: ".EXE;.CMD" }, "win32") === null);
+  // defaultRun reads the real process PATH; node itself is the child, so no extra tool has to be installed.
+  const nodeName = path.basename(process.execPath, path.extname(process.execPath));
+  const savedPath = process.env.PATH;
+  process.env.PATH = [path.dirname(process.execPath), savedPath].filter(Boolean).join(path.delimiter);
+  try {
+    const answered = diag.defaultRun(nodeName, ["-e", "process.stdout.write('hi')"]);
+    check("diagnostics: defaultRun spawns a tool found on PATH and returns its output",
+      () => answered.ok === true && answered.out === "hi" && answered.status === 0, () => answered);
+    const silent = diag.defaultRun(nodeName, ["-e", "setTimeout(() => {}, 10000)"], 300);
+    check("diagnostics: defaultRun maps a timed-out child to `no answer in N s`",
+      () => silent.ok === false && silent.error === "no answer in 0.3 s", () => silent);
+  } finally {
+    process.env.PATH = savedPath;
+  }
+  rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);

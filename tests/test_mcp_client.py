@@ -206,7 +206,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_resolve_clio_cmd_survives_unbalanced_quotes(self):
         # `shlex.split()` raises ValueError ("No closing quotation") on a stray unmatched quote -- a
-        # plausible typo in a manually edited env var. This used to abort MCP client startup with an
+        # plausible typo in a manually edited env var. This would otherwise abort MCP client startup with an
         # unhandled exception instead of the normal "clio not found" diagnostic.
         with patch.dict(os.environ, {"CLIO_CMD": '"clio'}):
             self.assertEqual(mcp_client._resolve_clio_cmd(), ['"clio'])
@@ -286,7 +286,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_load_cli_arguments_reads_a_file_under_the_tool_tree(self):
         # The SECOND base, and the home store is patched to somewhere unrelated so this test can
-        # only pass if the TOOL-TREE store is the one that resolved. Previously the fixture went
+        # only pass if the TOOL-TREE store is the one that resolved. A fixture that went
         # under os.getcwd(), which on a Linux CI runner is itself inside $HOME — so the home store
         # served it on the first iteration and the second base was never exercised at all.
         with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
@@ -583,7 +583,7 @@ class ParamValidationTests(unittest.TestCase):
 
 
 class ForceKillSharedClientTests(unittest.TestCase):
-    # PR #55 R2-5: pin the sanctioned kill API's kill-and-swallow contract directly (the
+    # R2-5: pin the sanctioned kill API's kill-and-swallow contract directly (the
     # preflight only exercises it indirectly), so a refactor can't silently break it.
 
     def test_kills_captured_proc(self):
@@ -603,7 +603,7 @@ class ForceKillSharedClientTests(unittest.TestCase):
         proc.kill.assert_called_once()
 
     def test_propagates_unexpected_error(self):
-        # PR #55 R2-4: an unexpected kill failure must NOT be swallowed (else an orphaned
+        # R2-4: an unexpected kill failure must NOT be swallowed (else an orphaned
         # clio child is indistinguishable from the normal no-op).
         proc = Mock()
         proc.kill.side_effect = RuntimeError("unexpected")
@@ -618,7 +618,7 @@ class ForceKillSharedClientTests(unittest.TestCase):
 
 
 class EnsureStartedEncodingTests(unittest.TestCase):
-    # PR #55 R2-3: _ensure_started uses Popen(encoding="utf-8", errors="replace"); prove a
+    # R2-3: _ensure_started uses Popen(encoding="utf-8", errors="replace"); prove a
     # malformed-byte stream from the clio child is decoded with replacement chars instead
     # of raising mid-readline (so a corrupt response is classified, not a masked crash).
     def test_ensure_started_replaces_invalid_utf8_without_raising(self):
@@ -644,7 +644,7 @@ class EnsureStartedEncodingTests(unittest.TestCase):
 
 
 class ForceKillRealSubprocessTests(unittest.TestCase):
-    # PR #55 R3: prove the FULL chain — real Popen + real _shared_client + the real
+    # prove the FULL chain — real Popen + real _shared_client + the real
     # force_kill_shared_client() — actually terminates a genuinely blocked child (not a
     # mock). This is the PR's core no-orphan safety guarantee; mocks can't falsify it.
     def test_force_kill_terminates_a_real_blocked_child(self):
@@ -669,7 +669,7 @@ class ForceKillRealSubprocessTests(unittest.TestCase):
 
 
 class InitializeOnceValidationTests(unittest.TestCase):
-    # PR #55 R3: _initialize_once must NOT mark itself initialized when the handshake
+    # _initialize_once must NOT mark itself initialized when the handshake
     # response never arrived (child killed mid-initialize / EOF) — it must raise, so
     # call_method aborts instead of writing to a dead pipe and triggering call_mcp_tool's
     # retry-driven re-spawn.

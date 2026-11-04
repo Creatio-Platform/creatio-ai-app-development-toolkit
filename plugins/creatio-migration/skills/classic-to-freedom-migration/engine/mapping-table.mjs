@@ -91,10 +91,18 @@ export const SOURCE = {
   OPTION_CHILDREN: "optionChildren",  // child items carrying a literal `value` -> the option array
   MENU_CHILDREN: "menuChildren",      // MENU / MENU_ITEM descendants -> the owning button's menuItems
   LITERAL: "literal",                 // a constant stated on the row itself (`value`)
+  // The OPTION-ELEMENT sources of an `upgrade` target whose options are child elements of their own (see `upgrade`
+  // on the RADIO_GROUP row). `OPTION_ELEMENTS` is the group's side: the group carries `items: []` and each option
+  // becomes a named child insert, so the source is required (no options = no group, exactly as `OPTION_CHILDREN`).
+  // The other three are read off ONE option child each: its literal value, its caption and its static enablement.
+  OPTION_ELEMENTS: "optionElements",
+  OPTION_VALUE: "optionValue",
+  OPTION_CAPTION: "optionCaption",
+  OPTION_DISABLED: "optionDisabled",
 };
 
 // GATE KIND — the STRUCTURED {kind,id} intent a row carries about WHY its Freedom target might not resolve on a
-// given stand (ENG-95683). Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
+// given stand. Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
 // the CrtCustomer360App package AND the CommonCommunicationsBehavior feature") — a human could read it, but the
 // registry gate could not branch on it, so a real component gated behind an absent package produced the same
 // "settle the target" guidance as a fabricated type that no re-plan-free action can fix. The taxonomy is aligned
@@ -110,10 +118,31 @@ export const SOURCE = {
 // the two names the guidance tells an operator to install/enable, resolved BY KIND instead of parsed out of prose.
 export const GATE_KIND = { COMPONENT: "component", COMPOSITE: "composite", COMPOSITE_ONLY: "compositeOnly" };
 
+// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE ---------------------------------
+// `meta.feature` is a JOIN KEY, not a caption: the rows below declare it, `GUIDED_FEATURES` decides from it which
+// components are routed to the guidance item, and `companionRows` in designspec.mjs decides from it which page
+// owes the `AttachmentListDS` evidence row. That was three independent spellings of one string, and the failure
+// mode is SILENT in the worst direction — rename the row and not the gate and the page simply stops being told it
+// owes a data source, which reads exactly like a page that never needed one. Nothing goes red; the gate quietly
+// gets weaker. So the name is declared here and imported by every consumer, and `run-mapper.mjs` scans engine
+// source to prove no fourth spelling reappears: the constant alone does not stop one being typed next to it.
+//
+// Declared ABOVE `MAPPING_ROWS` because a module-level `const` is in the temporal dead zone until its own line
+// runs, and the rows are BUILT at module-evaluation time — a declaration below them would throw on import.
+export const FEATURE_ATTACHMENTS = "Attachments";
+export const FEATURE_FEED = "Feed";
+
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
-function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
+// `upgrade` is a SECOND, version-gated target: `{ componentType, slot, propMap, gateInputs?, children? }`, emitted
+// INSTEAD of `target` only when the run's registry positively carries it (and its `children.componentType`) on the
+// version the run targets, together with every input a target lists in `gateInputs` — `resolveRowTarget` in
+// mapping-registry.mjs decides, and the mapper builds it only for an upgrade type it has an emitter for. `target`
+// stays the fallback every indexed version renders: a row with an upgrade still validates clean against the oldest
+// index, and a run whose registry cannot show the newer component builds `target`.
+function row({ match, role, tier, ownedBy, target = null, upgrade = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
   return Object.freeze({ match: Object.freeze(match), role, tier, ownedBy, target: target && Object.freeze(target),
+    upgrade: upgrade && Object.freeze({ ...upgrade, children: upgrade.children && Object.freeze(upgrade.children) }),
     verify: verify && Object.freeze(verify), uiShape, notes, meta: meta && Object.freeze(meta), gate: gate && Object.freeze(gate) });
 }
 const byItemType = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType }, ...rest });
@@ -195,8 +224,29 @@ const ITEM_TYPE_ROWS = [
         // Required for a reason: a radio group emitted WITHOUT its options renders as an empty control, which is
         // the silent drop this row exists to prevent. No options ⇒ the instance degrades to a typed decision.
         items: { from: SOURCE.OPTION_CHILDREN, required: true } } },
+    // crt.RadioGroup stores options the way Classic does: each option is a NAMED child element
+    // (`crt.RadioGroupItem`, caption resource `<option name>_caption`), so business rules and packages can address one
+    // option. It is not in every platform version, so it is the version-gated upgrade and crt.IconRadioButton stays
+    // the fallback. `valuesSource: "custom"` because the options are value/caption pairs; the lookup values source is
+    // out of scope (a lookup-bound classic group is reported, not migrated).
+    // The gate also needs the option's `caption` input (`gateInputs`): a build that carries crt.RadioGroupItem
+    // without it shows each option's raw value (true / 0 / "a") as its caption, so such a registry keeps the fallback.
+    upgrade: { componentType: "crt.RadioGroup", slot: "items",
+      propMap: { control: { from: SOURCE.VALUE_ATTR, required: true }, label: { from: SOURCE.CAPTION },
+        valuesSource: { from: SOURCE.LITERAL, value: "custom" },
+        items: { from: SOURCE.OPTION_ELEMENTS, required: true } },
+      children: { componentType: "crt.RadioGroupItem", slot: "items", gateInputs: ["caption"],
+        propMap: { value: { from: SOURCE.OPTION_VALUE }, caption: { from: SOURCE.OPTION_CAPTION },
+          disabled: { from: SOURCE.OPTION_DISABLED } },
+        // How a split group's hidden copy of another group's option is hidden: the element-level `visible` every
+        // Freedom view element accepts (what a page business rule toggles), not a component input.
+        hidden: { prop: "visible", value: false } } },
     verify: { componentType: "crt.IconRadioButton" },
-    notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become `items[]` and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning.",
+    notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become the options and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning. "
+      + "Where the run's registry carries crt.RadioGroup and a crt.RadioGroupItem with the `caption` input (a stand export, or a pinned platform version that has both), the group is built as crt.RadioGroup with `valuesSource: custom`, `items: []` and one named crt.RadioGroupItem child per built classic option, followed in a split group by a hidden (`visible: false`) copy of each other group's option it lacks (caption `#ResourceString(<option name>_caption)#`, the classic `enabled: false` as `disabled: true`); elsewhere — including an unpinned run over the vendored union index — it stays crt.IconRadioButton. "
+      + "Option values keep their classic TYPE (true/false, numbers, text), because the group writes the option value back unchanged. "
+      + "The Page Designer cannot edit a group with custom values: its options are changed in the page schema. "
+      + "Required: no required validator is added for a Boolean/Integer group — a new record already holds false / 0, which preselects an option exactly as in Classic and which the required validator treats as filled anyway.",
   }),
   // HYPERLINK -> crt.Link. The caption is derivable; the destination is not — a classic hyperlink navigates from
   // its click METHOD, so `href` cannot be read off the schema. `mode: "preventDefault"` is the registry's own
@@ -231,7 +281,7 @@ const ITEM_TYPE_ROWS = [
 //
 // STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as a generic detail. Each row
 // is keyed by SCHEMA_SUFFIX, which covers the exact name AND the entity-prefixed variants a real site uses
-// (`ApplicantEmailDetailV2` -> Emails); prefixed variants were previously missed and fell through as generic
+// (`ApplicantEmailDetailV2` -> Emails); prefixed variants must not be missed and fall through as generic
 // details, then dropped.
 //
 // `verify.componentType` is the type the BUILT page is gated on, so it must be a type the stand really resolves —
@@ -256,13 +306,19 @@ const profileCardRow = (entity, componentType, pkg, shows) => row({
   verify: { componentType }, gate: pkg ? { kind: GATE_KIND.COMPOSITE, id: pkg } : null,
   meta: { profileCard: { type: componentType, pkg, shows } },
 });
-const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null, gate = null }) =>
+// `requiresRegistry` marks a component that only newer platform versions carry: the mapper builds it only when the
+// run's own registry (a stand export, or a pinned version) positively carries it. The table check judges the row
+// against the union of indexed versions, so its absence from an older version is not an error, and its absence
+// from the vendored index altogether is an advisory. `titled` gives a
+// component-shaped feature the Classic detail's title, for a component that replaces the whole detail and has a
+// caption of its own.
+const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null, gate = null, requiresRegistry = false, titled = false }) =>
   row({
     match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix, ...(qualifiers ? { qualifiers } : {}) },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape,
     verify: componentType ? { componentType, ...(satisfies ? { satisfies } : {}) } : null,
     notes, gate,
-    meta: { feature: name, freedom, templateProvided, uiShape },
+    meta: { feature: name, freedom, templateProvided, uiShape, ...(requiresRegistry ? { requiresRegistry } : {}), ...(titled ? { titled } : {}) },
   });
 // The Communication-options note is shared by the SCHEMA row and the ENTITY fallback row: the entity fallback is
 // how a real site's detail is usually recognised (its schema is an auto-named `SchemaNDetail`), so pointing the
@@ -271,11 +327,13 @@ const feature = (suffix, { feature: name, freedom, componentType = null, uiShape
 // the structured form the registry gate can branch on: absent on the stand ⇒ install `CrtCustomer360App` / enable
 // `CommonCommunicationsBehavior` and re-run the BUILD (the plan is correct), NOT a re-plan.
 const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" };
-// ENG-96327 — the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
+// the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
 // read get-component-info, do NOT downgrade to a plain grid over ContactCommunication, etc.) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed. The human-relevant part is the on-stand
 // PREREQUISITE / decision, which the short note keeps.
 const COMMS_NOTE = "Native Communication-options component — requires the CrtCustomer360App package + CommonCommunicationsBehavior feature on-stand; confirm, or raise adding it.";
+export const FEATURE_CONNECTIONS = "Connections";
+const CONNECTIONS_NOTE = "One crt.Connections element in the Classic detail's place; the platform builds a field per connection of the object at run time, so the page stores no child element per connection. It renders only with the UseConnectionsComponent feature ON (OFF by default) — enable it on the stand, or the page shows no connections.";
 const FEATURE_ROWS = [
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
   // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
@@ -283,8 +341,14 @@ const FEATURE_ROWS = [
   // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
   feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
     componentType: "crt.ApprovalList", uiShape: "component" }),
-  feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
-    uiShape: "component", templateProvided: true }),
+  // The Attachments composite is FOUR parts and a build that lands three of them still answers "the component is
+  // on the page". Measured: a run shipped the ExpansionPanel, the toolbar and the file list's data source, left the
+  // file list itself with neither `columns` nor an `items` binding, passed `--verify`, and threw
+  // `TypeError: ... is not iterable` out of the platform's column preprocessor the first time the page opened —
+  // it reads the element's `columns` before anything else runs. Naming the parts is the difference.
+  feature("FileDetailV2", { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
+    uiShape: "component", templateProvided: true,
+    notes: "Attachments is a COMPOSITE, not one element: crt.ExpansionPanel -> crt.GridContainer -> crt.FileList in the body, plus a toolbar (upload / refresh / search) in `tools`. The file list itself needs FOUR things and three of them are not the element: (1) `columns` — an array, each column an `id` GUID, a `code`, a `caption` and a `dataValueType`; the platform iterates this before rendering and THROWS when it is absent, so a file list without it breaks the whole page, not just itself; (2) `items` bound to a collection attribute (`items: '$<name>'`); (3) that attribute declared with `isCollection: true` and one nested attribute per column; (4) the element's own entity data source over the attachment entity, scope `viewElement`, keyed `<name>DS`. `masterRecordColumnValue` / `recordColumnName` alone wire nothing." }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
   // filtered to the master record, the SAME UI as any other child list. They are NOT the Freedom Timeline
   // (an aggregate chronological feed; a separate classic component mapped by the MODULE_KEY row for Timeline) and
@@ -298,7 +362,7 @@ const FEATURE_ROWS = [
   // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
   feature("ContactCommunicationDetail", { feature: "Communication options",
     freedom: "Freedom Communication-options component (crt.CommunicationOptions)", componentType: "crt.CommunicationOptions", uiShape: "component",
-    // `satisfies` — the LEGACY expected type this row's real component answers for. ENG-95470 kept this pair in its
+    // `satisfies` — the LEGACY expected type this row's real component answers for. This pair lives here rather than in its
     // own interim table in designspec.mjs and said it would be repointed here; this is that repoint. A plan
     // produced by an older engine EXPECTED `crt.ContactCommunication` (the entity name with a `crt.` prefix, which
     // resolves to nothing on a stand), and a correctly built page carrying `crt.CommunicationOptions` must read ✅
@@ -309,8 +373,16 @@ const FEATURE_ROWS = [
     satisfies: ["crt.ContactCommunication"],
     gate: COMMS_GATE,
     notes: COMMS_NOTE }),
+  // "Connected to" (`EntityConnectionsDetailV2`, and `EmailEntityConnectionsDetailV2` by suffix) is NOT a related
+  // list over `EntityConnection`: that entity stores which lookup columns of the OBJECT are connections, and each
+  // connection is an ordinary lookup column of the record. Its Freedom analog takes the same set from the object,
+  // so one `crt.Connections` element replaces the whole detail — no field per connection and no stored children.
+  feature("EntityConnectionsDetailV2", { feature: FEATURE_CONNECTIONS,
+    freedom: "Freedom Connections component (crt.Connections)", componentType: "crt.Connections", uiShape: "component",
+    requiresRegistry: true, titled: true,
+    notes: CONNECTIONS_NOTE }),
   // Feed. Its classic origin is the ESN feed CONTAINER, not a detail schema, so it is keyed by container name —
-  // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry used to hold.
+  // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry holds.
   // Without it the Feed row silently left the `--verify` gate when that map was absorbed.
   row({ match: { by: MATCH.CONTAINER_NAME, containerName: "ESNFeedContainer" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET, uiShape: "component",
@@ -318,7 +390,7 @@ const FEATURE_ROWS = [
     // ONE row, two consumers: `meta.feature` is what the standard-feature gate reads, `meta.widgets` is what the
     // widget builder reads. Feed was in BOTH catalogs before (a FEATURE_TYPE entry and a WIDGET_BY_CONTAINER entry)
     // — the clearest case of the duplication this table exists to end.
-    meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
+    meta: { feature: FEATURE_FEED, freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
       widgets: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }] } }),
 ];
 
@@ -326,11 +398,29 @@ const FEATURE_ROWS = [
 // bound ENTITY says what it is. They are rows, not `if`s, so they resolve through the same table and are visible
 // to the same registry check. `*File` is a PREDICATE, not an equality test — hardcoding it as one is how an
 // `ApplicantFile` detail stopped being Attachments.
+// Columns only a `BaseVisa` descendant carries: who approves, what for, and whether the approval was withdrawn.
+const VISA_COLUMNS = new Set(["VisaOwner", "Objective", "IsCanceled"]);
+const hasVisaShape = (columns) => !Array.isArray(columns) || columns.length === 0 || columns.some((c) => VISA_COLUMNS.has(typeof c === "string" ? c : c?.name));
 const FEATURE_ENTITY_ROWS = [
   row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.FileList" },
-    meta: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
+    meta: { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
+  // A custom-named approvals detail (`UsrSchema7Detail` over `UsrContractVisa`) misses the `VisaDetailV2` suffix row.
+  // Without this fallback it is counted as a related list the gate expects as a `crt.DataGrid`, while the builder
+  // correctly ships a `crt.ApprovalList` — so the row can never close on a correct page. The entity must be exactly
+  // `<detailColumn>Visa` (`UsrContractVisa` keyed by `UsrContract`): a `Visa` suffix alone also names business lists
+  // such as an employee's travel visas, which must stay related lists rather than gate two approval components.
+  // Standard FK naming gives a travel-visa list the same shape (`UsrEmployeeVisa` keyed by `UsrEmployee`), so when
+  // the detail's own schema was read (`columns` non-empty) it must also show an approval column; a detail whose
+  // columns are all business columns stays a related list. Without columns the match stays an inference, and the
+  // plan asks the user to confirm it.
+  row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v, c) => typeof v === "string"
+      && typeof c?.detailColumn === "string" && c.detailColumn !== "" && v === `${c.detailColumn}Visa`
+      && hasVisaShape(c.columns) } },
+    role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
+    verify: { componentType: "crt.ApprovalList" },
+    meta: { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)", templateProvided: false, uiShape: "component", byEntity: true } }),
   row({ match: { by: MATCH.ENTITY, entity: "ContactCommunication" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.CommunicationOptions" },
@@ -345,7 +435,7 @@ const FEATURE_ENTITY_ROWS = [
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-// ENG-96327 — SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
+// SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
 // flag-icon / tools slot, and the SysSchema `DcmSchemaManager` on-stand check) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed.
 const DCM_PROGRESS_NOTE = "Case-stage progress bar — auto-populates from the object's DCM case (nothing to hand-author).";
@@ -358,7 +448,7 @@ const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; au
 // plan always has a definite answer here.
 const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
 const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
-// ENG-95543 — the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
+// the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
 // `mapWidgets` consumes them directly, and rewriting that builder was not part of giving the data one home.
 // `verify.componentType` is stated wherever the Freedom component type is KNOWN and registry-resolvable — the DCM
 // pair and the Feed. It was prose-only before, so a fabricated type there could never have been caught.
@@ -388,8 +478,8 @@ const WIDGET_ROWS = [
 // profile-card row keyed the same way would be returned by `resolveFeatureRow` as if a Contact-bound detail were a
 // standard feature. The match kind is the discriminator.
 //
-// `meta.pkg` stays HAND-CURATED. The registry has no package field at all — `appliesToCustomEntities` exists on 8
-// of 205 components and says nothing about packages — so the ticket's "package metadata replaces the hardcoded
+// `meta.pkg` stays HAND-CURATED. The registry has no package field at all — `appliesToCustomEntities` exists on 11
+// of 220 components and says nothing about packages — so the ticket's "package metadata replaces the hardcoded
 // package knowledge" is not available. What the registry DOES give is the check that the component type is real,
 // which is now applied to all four rows.
 const PROFILE_CARD_ROWS = [
@@ -401,9 +491,11 @@ const PROFILE_CARD_ROWS = [
 
 // The standard card actions (the classic ACTIONS menu / toolbar items) -> Freedom card actions (B7). Element NAMES,
 // so they get their own match kind; they are recognised by name because that is what the classic body carries.
-const CARD_ACTION_ROWS = ["PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton"]
-  .map((name) => row({ match: { by: MATCH.ELEMENT_NAME, elementName: name }, role: ROLE.MAPPED, tier: TIER.VIEW_ONLY,
-    ownedBy: OWNER.WIDGET, verify: { componentType: "crt.Button" }, meta: { cardAction: name } }));
+// `signal` names the on-stand signal that proves whether anything stands behind the action (a printable, a process
+// connected to the section); an action without one is template chrome.
+const CARD_ACTION_ROWS = [["PrintButton", "printables"], ["ProcessButton", "processes"], ["ViewOptionsButton"], ["TagButton"], ["ReloadDataButton"]]
+  .map(([name, signal]) => row({ match: { by: MATCH.ELEMENT_NAME, elementName: name }, role: ROLE.MAPPED, tier: TIER.VIEW_ONLY,
+    ownedBy: OWNER.WIDGET, verify: { componentType: "crt.Button" }, meta: { cardAction: name, ...(signal ? { signal } : {}) } }));
 export const MAPPING_ROWS = Object.freeze([...ITEM_TYPE_ROWS, ...FEATURE_ROWS, ...FEATURE_ENTITY_ROWS,
   ...WIDGET_ROWS, ...PROFILE_CARD_ROWS, ...CARD_ACTION_ROWS]);
 
@@ -457,7 +549,10 @@ export function rowForItem(item) {
 // `rows` is a parameter for the same reason it is on `resolveRow`: the longest-suffix rule can only be pinned
 // against a table that HAS two overlapping suffixes, and today's rows do not overlap — so a check written against
 // the live table would pass whichever way the sort ran.
-export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS } = {}) {
+// `detailColumn` is the detail's FK to the master; the `*Visa` entity row needs it to tell an approvals detail from a
+// business list whose entity name merely ends in `Visa`, and `columns` (the detail schema's bound columns, when it was
+// read) to tell it from a list whose entity name also matches that shape.
+export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS, detailColumn = null, columns = null } = {}) {
   const suffixRows = rows.filter((r) => r.match.by === MATCH.SCHEMA_SUFFIX);
   if (schemaName) {
     const exact = suffixRows.find((r) => r.match.schemaNameSuffix === schemaName);
@@ -470,7 +565,7 @@ export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_RO
     const byEntity = rows.filter((r) => r.match.by === MATCH.ENTITY);
     const exact = byEntity.find((r) => r.match.entity === entity && !r.match.qualifiers);
     if (exact) return exact;
-    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity }));
+    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity, detailColumn, columns }));
     if (pred) return pred;
   }
   return null;
@@ -483,12 +578,12 @@ export function featureVerifyType(featureName) {
   return r?.verify.componentType || null;
 }
 
-// ENG-95859 — a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
+// a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
 // approval MODULE/widget placed ABOVE the profile island (`crt.Approval`) PLUS the approval LIST
 // (`crt.ApprovalList`, already gated by `featureVerifyType` above) — the FEATURE_ROWS note for Approvals has said
-// so in prose since ENG-95254, and the build recipe repeats it, but
+// so in prose, and the build recipe repeats it, but
 // `featureVerifyType` only ever answered ONE componentType, so the module half had NO row to gate `--verify` on.
-// Two real builds (the base measurement run and its ENG-95859 recurrence) added only `crt.ApprovalList` and had
+// Two real builds (the base measurement run and its recurrence) added only `crt.ApprovalList` and had
 // the missing module recorded as a "proposal" instead of a hard MISSING — a rule read twice and applied to one of
 // two halves is exactly the defect this table exists to close by machine. One entry per feature whose second half
 // has a KNOWN static componentType (confirmed via `get-component-info search="approval"`: `crt.Approval` is a
@@ -497,6 +592,82 @@ export function featureVerifyType(featureName) {
 const FEATURE_SECOND_HALF = { Approvals: ["crt.Approval"] };
 export function featureVerifyExtraTypes(featureName) {
   return FEATURE_SECOND_HALF[featureName] || [];
+}
+
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE ----------------------------------------------------
+   The rows above answer WHICH Freedom component a classic Feed / Attachments becomes and WHETHER a template tends
+   to ship it (`meta.templateProvided`). Neither they nor anything else in this repository answers HOW the component
+   is CONFIGURED — and that is the reported defect: a page migrated onto a non-basic template gets the components
+   and none of the property values the section/app CREATION flow produces, so the Feed queries nothing and the
+   attachments list shows nothing.
+
+   THE SETTINGS ARE PUBLISHED ONCE, AS KNOWLEDGE, NOT HERE. The value set was measured read-only from a page the
+   creation flow built, and lives in clio-knowledge as the guidance item named below, which a builder reads at build
+   time through `get-guidance`; `get-component-info` stays authoritative for the property VOCABULARY. So the plan
+   ROUTES a builder to that item by its stable id and asserts nothing about the values themselves.
+
+   WHY A POINTER AND NOT A COPY (approved requirement R7). A table of values here would be a SECOND source of truth
+   for the same knowledge, free to drift from the one the builder actually reads — the duplication this ticket
+   exists to end. And the engine could not maintain it honestly even if that were wanted: `migrate.mjs` renders the
+   plan OFFLINE, under plain `node`, with no clio and no stand, so it can never check a value it printed. Naming the
+   item costs one string and keeps the run's only claim a true one: here is the component you owe, and here is where
+   its settings are defined. Two engine tests hold the line — one over the rendered plan, one over every engine
+   source file — so the decision cannot decay back into a paste without going red.
+
+   THE ROUTE IS OWED ON BOTH PATHS, which is why nothing here branches on the template. The guidance item covers the
+   MERGE case (the template ships the container and the component is merged onto it) and the INSERT case (the
+   template ships neither and the component is built outright) alike, so the builder needs it either way — whether
+   the plan tells it the template provides the component or tells it to add one.
+
+   AND IT IS OWED ON THE BASIC TEMPLATE TOO, against the wording of the ticket's fourth acceptance criterion
+   ("when a basic template is used, existing migration behavior is not affected"). A basic-template plan DOES
+   change: it gains the route. Measured, not reasoned - the end-to-end run of 2026-09-17 migrated
+   `UsrToMigrate2App_FormPage` on `PageWithTabsFreedomTemplate`, the basic template, and the route is what sent the
+   builder to fetch the guidance article before it produced a working Feed, working Attachments and a correctly
+   bound tag control. On that template the components are MERGED onto containers the template already ships, and a
+   merge still owes the property set: the template supplies the container, never the configuration. Gating the
+   route on template family would have broken that run. Two checks in `run-mapper.mjs` pin it - the route IS
+   present on the basic template, and the basic-template plan is byte-identical to the top-area one once the
+   template NAME is substituted, so nothing else varies by family either. The rationale and the AC reconciliation
+   are written down in `docs/guidance-item-contract-decision.md` rather than left in a review thread.
+
+   THE ROUTE IS UNCONDITIONAL; THE MERGE-vs-INSERT VERDICT IS NOT PRINTED AT ALL. `meta.templateProvided` is a flat
+   per-row flag carrying no per-template verdict, so for a GUIDED component it is not printed as one: the Layout
+   cell names `planMeta.formTemplate` (threaded into `rowsForFeatures` / `rowsForWidgets` from `renderDesignSpec`'s
+   `opts`) and instructs the builder to read that template's merged bundle on-stand before writing — the one check
+   that can be performed where clio and the stand exist. The flag still drives every NON-guided row, which is what
+   it is honest for. Deciding the verdict here would need a measured per-template capability table, and an
+   unmeasured template would be a guess either way; the instruction is correct for every template, measured or not.
+
+   The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`.
+   Renaming it there without renaming it here produces a plan that points at nothing, which is why the engine tests
+   spell the literal out rather than importing this constant. Only RUNTIME consumption needs the clio release that
+   carries the item; the plan needs the id alone.                                                                  */
+export const STANDARD_COMPONENTS_GUIDANCE_ID = "page-modification-standard-components";
+// The companion artifact an attachments component is inert without: it is what the component reads its records
+// from, so a page carrying the component and not this lists nothing — and a gate that counted only the component
+// would call that page done. The measured creation-flow page declares it in its OWN model configuration even though
+// it MERGED onto a template-shipped container, so it is the page's deliverable whichever path the component took.
+// This is a deliverable NAME, not one of the property values: the plan has to be able to say WHICH artifact is owed
+// and `--verify` has to be able to gate it. Its SHAPE — the entity it binds, its scope, its attribute — stays in
+// the guidance item, with everything else the builder configures.
+export const ATTACHMENTS_DATA_SOURCE = "AttachmentListDS";
+// The features that item covers, by the same `meta.feature` name the rows above carry. A feature absent from this
+// set gets no route: Approvals and Communication options have their own recipes elsewhere, and pointing them at an
+// item that says nothing about them would be a false instruction.
+const GUIDED_FEATURES = new Set([FEATURE_ATTACHMENTS, FEATURE_FEED]);
+export function featureGuidanceId(featureName) {
+  return GUIDED_FEATURES.has(featureName) ? STANDARD_COMPONENTS_GUIDANCE_ID : null;
+}
+// Feed reaches the plan as a WIDGET (keyed by its classic container) while Attachments reaches it as a standard
+// FEATURE — one row, two consumers, as the ESNFeedContainer row's own comment says. So the widget's rendered label
+// is resolved back to the feature name THROUGH THAT ROW rather than by a hand-kept second list: a row that carries
+// both `meta.feature` and `meta.widgets` is exactly the pair, and a rename on either side moves both at once.
+const WIDGET_FEATURE = Object.freeze(Object.fromEntries(MAPPING_ROWS
+  .filter((r) => r.meta?.feature && Array.isArray(r.meta.widgets))
+  .flatMap((r) => r.meta.widgets.map((w) => [w.widget, r.meta.feature]))));
+export function widgetGuidanceId(widgetLabel) {
+  return featureGuidanceId(WIDGET_FEATURE[widgetLabel]);
 }
 
 // The row for a bare itemType VALUE, with NO fallback of any kind — `undefined` means the table has no entry for
@@ -509,9 +680,13 @@ export function rowForItemType(itemType) {
 // ---- DERIVED VIEWS of the moved catalogs -------------------------------------------------------------------
 // The mapper's widget / profile-card / card-action builders consume these shapes. They are BUILT FROM the rows, so
 // the data has one home and the builders did not have to be rewritten around a new shape.
+// Each widget def carries its ROW's `templateProvided` down with it, so the design spec does not infer template
+// provision from the CLASSIC side — "this came from the Classic base template" — and print "provided by the
+// Freedom template" for Feed, whose row says `templateProvided: false`. A live run believed the spec, shipped a
+// form page with no Feed, and the gap surfaced at verify: a 21-minute user question and a second sub-agent.
 export function widgetsByMatch(by) {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === by && r.meta?.widgets)
-    .map((r) => [r.match[by], r.meta.widgets]));
+    .map((r) => [r.match[by], r.meta.widgets.map((w) => ({ templateProvided: r.meta.templateProvided ?? null, ...w }))]));
 }
 export function profileCardsByEntity() {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === MATCH.PROFILE_ENTITY)
@@ -520,10 +695,15 @@ export function profileCardsByEntity() {
 export function knownCardActions() {
   return new Set(MAPPING_ROWS.filter((r) => r.meta?.cardAction).map((r) => r.meta.cardAction));
 }
+// Card action name → the on-stand signal key that decides whether it is built (`PrintButton` → `printables`,
+// `ProcessButton` → `processes`).
+export function cardActionSignals() {
+  return new Map(MAPPING_ROWS.filter((r) => r.meta?.cardAction && r.meta.signal).map((r) => [r.meta.cardAction, r.meta.signal]));
+}
 
 // The Freedom types accepted for a PLANNED component type: the type itself, plus any row whose real component
-// `satisfies` that (legacy) name. ENG-95470 held this as its own interim table with the note "repointed [to the
-// shared table] when ENG-95543 lands" — this is that repoint, so the analog knowledge has one home like the rest.
+// `satisfies` that (legacy) name. This is the one home for the analog knowledge, like the rest of the
+// table, rather than an interim copy of its own.
 export function analogsOf(plannedType) {
   return MAPPING_ROWS.filter((r) => (r.verify?.satisfies || []).includes(plannedType))
     .map((r) => r.verify.componentType);
@@ -536,11 +716,11 @@ export function satisfiedLegacyTypes() {
 // The `crt.*` component type a row NAMES as its Freedom target — the thing it emits (`target.componentType`) with the
 // thing the built page is gated on (`verify.componentType`) as the fallback. Exported as the ONE resolver so the gate
 // lookup below, `gateConflicts`/`gateShapeIssues`, the registry-side check, and any future reader agree on where a
-// row's real type lives AND on the emit-over-verify precedence (ENG-95683 RC-7) — a second private copy that reordered
+// row's real type lives AND on the emit-over-verify precedence (RC-7) — a second private copy that reordered
 // these would silently attach a gate to a different type than `--verify` gates on.
 export const rowComponentType = (r) => r?.target?.componentType || r?.verify?.componentType || null;
 
-// The structured gate intent for a component type, resolved BY KIND from the shared rows (ENG-95683). This is the
+// The structured gate intent for a component type, resolved BY KIND from the shared rows. This is the
 // typed replacement for reading a package/feature prerequisite out of a row's prose: given a `crt.*` type, return
 // the `{ kind, id?, feature? }` a row records for it, or null. A null answer is meaningful — it says "no row gates
 // this type", which the registry guidance reads as "not a package-install away" (a real component simply absent on
@@ -553,13 +733,13 @@ export function gateForComponentType(type) {
   return null;
 }
 
-// The ONE-GATE-PER-TYPE invariant (ENG-95683). `gateForComponentType` returns the FIRST matching row's gate, so two
+// The ONE-GATE-PER-TYPE invariant. `gateForComponentType` returns the FIRST matching row's gate, so two
 // rows carrying DIFFERENT gates for the same component type would let array order silently decide the winner.
 // Repeating a type with the SAME gate is legal and expected — the Communication-options schema row and the entity
 // fallback row both carry `COMMS_GATE` — so the invariant is one-gate-VALUE-per-type, not one-row-per-type; only a
 // DIVERGENT gate for a single type is a defect. `validateTable` folds these into its errors so the CI table check
 // fails on a conflict rather than a build resolving a stale gate. Returns one finding per conflicting type.
-// Key-order-independent identity of a gate value (ENG-95683 RC-8): key on the fields themselves, not `JSON.stringify`,
+// Key-order-independent identity of a gate value (RC-8): key on the fields themselves, not `JSON.stringify`,
 // which is key-INSERTION-order sensitive — an inline-constructed `{ id, kind }` (which `gateShapeIssues` accepts,
 // since it keys on a Set) would hash differently from the constructor's `{ kind, id }` and read as a spurious
 // conflict. Safe direction only today, but this removes the foot-gun for any future inline gate.
@@ -581,7 +761,7 @@ export function gateConflicts(rows = MAPPING_ROWS) {
   return out;
 }
 
-// The GATE SHAPE contract (ENG-95683 review). `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
+// The GATE SHAPE contract. `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
 // gates for a type — and left its sibling unchecked: a MALFORMED gate. Both are silent-wrong in the same way. A gate
 // whose `id` key is mistyped (`{ kind: "composite", package: "X" }`) reaches `registrySettleGuidance` as an id-less
 // gate and gets the "fix the mapping or the plan, re-plan" dead end — the exact message the by-kind branch exists to
@@ -618,7 +798,7 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
 }
 
 
-// ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
+// ---- LIST-PAGE VOCABULARY ---------------------------------------------------------------------
 //
 // A SECOND, SMALLER TABLE, read ONLY by the section-view mapper. The rows above answer "what does this classic
 // element become on a Freedom FORM page"; these answer the same question for a LIST page, and for the same
@@ -679,7 +859,7 @@ const listRow = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType
 const LIST_ROWS = [
   // The grid IS the list page. Absorbed by the surface `buildListChangeSet` already owns (`LIST_GRID` =
   // `DataTable`, its `values.columns[]` merge and the `PDS_*` view-model attributes), so the element emits nothing
-  // of its own and needs no component type — but it is no longer UNMAPPED, because the engine really does build a
+  // of its own and needs no component type — but it is not UNMAPPED, because the engine really does build a
   // Freedom equivalent for it.
   listRow(VIEW_ITEM_TYPE.GRID, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: LIST_OWNER, uiShape: "list",
     notes: "On a SECTION this is the list itself, not an editable-grid detail: `buildListChangeSet` already emits it as `DataTable` with the section's columns and quick filters. Configuration it carries that the engine models on no field (`controlColumnName`, `applyControlConfig`, `controlCellClass`) is raised as a `list-grid-config` open item rather than folded into that merge." }),

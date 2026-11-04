@@ -169,7 +169,11 @@ Derivation rules:
   of the effect (including the degenerate branch — "no products → launch directly") · the complete
   cross-boundary contract, one item listing every parameter with its per-branch values
   (`07-boundaries.md`) · every guard and the message it shows · anything the behaviour must *not*
-  do (a hardcoded id where the source reads a setting).
+  do (a hardcoded id where the source reads a setting) · for a unit that rebinds an inherited
+  element (`06-platform-patterns.md` → *Rebinding an inherited element*), one criterion naming the
+  data the element now shows or acts on and one stating that the element's standard source is not
+  used, with that source named — "the menu lists records of X filtered by Y, not the registered print
+  forms".
 - **Behaviour terms, target-neutral.** "An action button captioned from a localizable resource",
   not a Freedom component name and not a Classic element name. This skill describes the Classic
   side; naming the target is the consumer's job (non-goals in `SKILL.md`).

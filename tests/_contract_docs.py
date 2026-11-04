@@ -1,9 +1,9 @@
 """The orchestration contract as the tests read it.
 
-Plugin split: the contract that used to be one root `AGENTS.md` is now the thin root `AGENTS.md`
-(repository-wide rules), the orchestrator's `references/orchestration-policy.md` (the app-workflow
-contract: gates, Business Plan format, routing, support mode) and the core `context/essentials.md`
-(global invariants). Contract assertions read the union so a rule can live in whichever file owns it.
+The contract is split across three files: the thin root `AGENTS.md` (repository-wide rules), the
+orchestrator's `references/orchestration-policy.md` (the app-workflow contract: gates, Business Plan
+format, routing, support mode) and the core `context/essentials.md` (global invariants). Contract
+assertions read the union so a rule can live in whichever file owns it.
 
 Every file is read unconditionally: a missing one is a failure here, not a silently smaller union
 that would let every negative assertion (`assertNotIn`) over the vanished text pass vacuously.

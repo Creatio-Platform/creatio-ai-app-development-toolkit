@@ -8,8 +8,7 @@ Provenance (important):
 - `supportunitemployee/` — **synthetic**, hand-written. Compact bodies for `SupportUnitEmployeePage`
   (entity `SupportUnit`): base `SupportCalendar_base.js` (8 profile fields, 3 tabs, 3 details, 4 rules,
   a method, two base-tab merges) + override `SupportService.js` (one analytics widget module). This
-  directory used to hold verbatim stand exports with module dumps / `recordId`s; those were replaced
-  with synthetic bodies.
+  directory holds synthetic bodies rather than verbatim stand exports with module dumps / `recordId`s.
 - `contract/` — **real client-schema layers** of the `ContractPageV2` page (entity `Contract`) from the
   Creatio product: these are Creatio's own configuration metadata, taken from **this same public,
   MIT-licensed toolkit repo**, and include **real method bodies** (`getActions`, `onEntityInitialized`,
@@ -20,5 +19,8 @@ Provenance (important):
   `WorkContractsProcess.js` → trimmed to ~6 asserted ops. The remaining layers (notably `CoreContracts.js`)
   are **intentionally kept with real bodies** — that fidelity is exactly what this golden is meant to guard.
 - The base seed `_base/BaseModulePageV2_skeleton.js` is a synthetic minimal parent-template skeleton.
+- `tasks-aggregate-rows/` — a task folder (its build task only) in the one-row coverage format (`Fields — N expected`,
+  `Related lists — N expected`) with a `built` cell on the main page's Fields row and a `wont-do (D3)` cell on its
+  Related lists row. `run-tasks.mjs` copies it and never edits it in place.
 
 `employeescore/` was removed — no runner loaded it.

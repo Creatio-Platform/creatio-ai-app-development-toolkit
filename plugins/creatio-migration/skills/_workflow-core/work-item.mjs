@@ -7,8 +7,8 @@
 // back a validated result; the CORE decides what runs next. Nothing in this file
 // knows about `agent()`, `parallel()` or any other vendor API.
 //
-// WHY A PROTOCOL AND NOT A FUNCTION CALL. The migration workflows used to call
-// `agent()` directly, which made the orchestration executable on exactly one
+// WHY A PROTOCOL AND NOT A FUNCTION CALL. A migration workflow that called
+// `agent()` directly would be executable on exactly one
 // host. Describing the same work as DATA is what lets Claude Code, Codex and a
 // plain CLI run the identical decision sequence — and what lets the suite assert
 // the sequence without an AI runtime at all.
@@ -51,7 +51,7 @@ const ACCESS_VALUES = new Set(Object.values(ACCESS))
 // distinguishes a NULLISH return ("terminal death — the host already exhausted
 // its own retries") from a REJECTION ("the host refused, the schema threw, the
 // prompt was malformed"), and reports which one happened. Collapsing them was a
-// real defect (PR#88 review), so the protocol names all three states rather than
+// real defect, so the protocol names all three states rather than
 // leaving an adapter to invent a convention:
 //
 //   OUTCOME.VALUE — the item produced a result. Driven into the generator with

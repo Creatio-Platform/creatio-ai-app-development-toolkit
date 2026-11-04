@@ -48,9 +48,24 @@ package. Everything below follows from that one fact.
 | App has **no** primary package at all | `new-app` | Typical of an app created by *installing* a package: the wrapper carries a primary package only when the package shipped an app descriptor. `get-app-info` fails with *"Primary package not found in response."* — that error IS the evidence, not a tool defect. |
 | No app owns the entity's package | `new-app` | `create-app` gives the new app its own editable primary package. |
 | User accepts URL/page-binding reachability only | `pages-only-no-menu` | Legitimate, but it must be an approved decision recorded in `decisions.md` — never a silent fallback after a failed registration. |
+| A Freedom section for the object is already in the menu, and the user chose to extend it | `existing-section` | Nothing is registered and no app is created, so the app's primary package does not matter. The Classic customizations go as extensions of the existing list and form pages into a new package; `sectionHost` names both pages. Only by the user's choice, asked once before the plan. |
+| A Freedom section for the object is already in the menu, and the user chose a parallel one | `new-app` + `planMeta.parallelSection: true` | A second section over the same object, built from the full Classic page; the existing section is not changed. Only by the user's choice, asked once before the plan. |
 
-Record the answers in `manifest.placement` (see SKILL.md step 3.1); `migrate.mjs --plan` refuses to
-present a plan until they are resolved.
+Record the answers in `manifest.placement` — `targetPackageEditable`, `application`,
+`primaryPackage`, `targetPackageInApplication` and `sectionHost.mode`, each as
+`{ "resolved": true, … }`; `migrate.mjs --plan` refuses to present a plan until they are resolved.
+`existing-section` registers nothing, so it needs only `targetPackageEditable` and `sectionHost`
+(with `listPage` / `formPage`).
+
+**`new-app` is ONE `create-app` call, never `create-app` followed by `create-app-section`.** Pass
+`optional-template-data-json` with BOTH `useExistingEntitySchema: true` and `entitySchemaName: "<Entity>"`
+(the entity must already exist), and the app's own section lands on your object. Omit them and Creatio
+mints a new canonical entity named after the app and a starter section on it — three pages that migrate
+nothing — and a following `create-app-section` then adds a second section beside that one. The two
+tools are not the same mechanism: `create-app` calls `AppInstallerService.svc/CreateApp`, the platform's
+app generator; `create-app-section` writes the section through `DataService/json/SyncReply/InsertQuery`,
+which is why it takes ~90 s, contends with itself, and has no template argument. Use it for a SECOND
+section in an app that already exists — the `existing-app` row above.
 
 **Never repair an app's package composition unasked.** Linking a package to an application or
 flipping its primary flag changes which package owns the app's identity and where the Section Wizard
@@ -93,6 +108,100 @@ For each Classic page/detail, record:
 | Section grid | Freedom list page or list component bound to the target data source. |
 | Actions menu | Freedom actions, buttons, or handler-backed commands. |
 | Mini page | Freedom mini page, modal, side panel, or explicit UX decision if the Classic interaction has no direct analog. |
+| Radio group (`ViewItemType.RADIO_GROUP`) | `crt.RadioGroup` with named `crt.RadioGroupItem` options where the target stand carries it, else `crt.IconRadioButton` — see *Radio groups* below. |
+
+### Fields that are not entity columns
+
+When the entity columns are supplied and a field's `bindTo` is not one of them, the engine reads the Classic view
+model first:
+
+- **A page attribute the Classic page declares** (`attributes: { UsrX: { dataValueType, value } }`) is the page's own
+  state, so the field is an **editable** control over a page attribute: the attribute keeps its Classic default
+  (`{ value }`, or `{}` with none), with no PDS path and no PDS column, and it raises no `attribute-virtual` decision
+  (the ChangeSet creates it). The control comes from the attribute's `dataValueType` through the same selection as a
+  column's type: Boolean → `crt.Checkbox`, text → `crt.Input`, numbers → `crt.NumberInput`, dates → a date picker. An
+  attribute with no `dataValueType`, or a code the engine does not know, gets an editable `crt.Input` and is named in
+  the `field-control` decision. Logic that computes the attribute stays on the imperative-logic worklist. Other
+  bindings to the same attribute — a radio option's `disabled`, a radio group — read the same page attribute.
+- **A page attribute field Classic disables statically** (`enabled: false` or `readonly: true` on the field) gets
+  the same page attribute and control, but **read-only**. Only these static signals make it read-only, and only from
+  the layer that states them last: a later layer that states `enabled` or `readonly` as a binding, or removes the key
+  (`remove … properties`), clears the literal; removing `controlConfig` clears the masking the same way.
+- **A page attribute the page's own methods write** (`this.set("UsrX", …)`), with no attribute `dependencies` entry
+  listing it in its `columns`, stays **editable**, as Classic rendered it: an init method that sets a starting value
+  the user then toggles looks the same as a computed value. Every such field is named, with the method(s) that write
+  it, in one `field-attribute-computed` decision (each attribute once, however many fields bind it): if the value is
+  one the page computes and only shows, make the field read-only by hand. A dependency on the attribute is the Classic "the user changes it and the page reacts" wiring,
+  so such an attribute is not named.
+- **A masked text field on a declared page attribute** (`controlConfig: { protect: true }`, a password-style input,
+  on an attribute whose type gives a plain single-line `crt.Input`) is a `crt.PasswordInput`, a
+  password-style masked input that stays editable as in Classic, and is named in a `secret-column` decision of its own
+  (`(<n> masked fields)`). The masking is on screen only: the stored value is the real secret, not a hash or
+  ciphertext. `crt.PasswordInput` is `compositeOnly` (no Designer toolbar entry), so verify on a stand that the built
+  field masks its value. It is emitted only where the run's component registry shows the target stand carries it
+  (a stand export, or a pinned `manifest.platformVersion` the vendored index carries it on, as for radio groups);
+  otherwise (no registry or an unindexed pinned version, both the vendored union, or an export without it) the field
+  is a **read-only** `crt.Input`, which shows the value unmasked, named in a `secret-column` row
+  (`(<n> masked fields, not masked)`) that says so and how to re-run with the stand's registry or a pinned version.
+- **A masked field on an entity column** is emitted exactly as if it were not masked, whatever its type, and is named
+  in no `secret-column` row: the masking of entity columns is not migrated. A masked non-text page attribute keeps the
+  control its type gives, also with no row. A hashed or encrypted column keeps its read-only `crt.Input`. A masked name
+  that is neither an entity column nor a declared attribute keeps the read-only linked value below unchanged.
+- **A hashed or encrypted page attribute** (`HASH_TEXT` / `SECURE_TEXT`) is never made a page attribute, so its value
+  is not put on screen: the field keeps the read-only linked value below, and the attribute is named in the hashed /
+  encrypted `secret-column` row like such a column.
+- **A Lookup (or other non-scalar) page attribute** (Lookup, Guid, Enum, image lookup, a collection, `isLookup`, or a
+  type with no field control) keeps the read-only linked value below and raises one `field-attribute-lookup` decision
+  naming the attribute (one per attribute, however many fields bind it), also when the field is masked: its values
+  source has to be built by hand.
+- **A page attribute that maps a related column** (`columnPath`, or `type: Terrasoft.ViewModelColumnType.ENTITY_COLUMN`,
+  numeric `0`)
+  is that column's value, not page state: its field keeps the read-only linked value below, as an undeclared name.
+- **A name the page does not declare** is a value shown from a related data source: a read-only field
+  (`linkedValue`) over `PDS.<name>`, with the nearest entity columns as a hint for a renamed column.
+
+### Radio groups
+
+The engine builds a Classic `RADIO_GROUP` as `crt.RadioGroup` only when the run's component registry shows the target
+stand carries `crt.RadioGroup` and a `crt.RadioGroupItem` with the `caption` input: a stand registry export
+(`manifest.componentRegistry`) or a pinned `manifest.platformVersion` that has them. A build whose `crt.RadioGroupItem`
+has no `caption` would show each option's raw value as its caption, so it keeps `crt.IconRadioButton` too, as does every
+other run: every indexed version renders it, and an unpinned run never assumes the newer component. An unpinned run
+raises a `registry-upgrade-available` decision naming the indexed versions that would get `crt.RadioGroup`. A folded
+page (mini page, typed or child page) uses the root run's registry unless its own bundle names one.
+
+- **Shape.** The group gets `control`, `label`, `valuesSource: "custom"` and `items: []`; each Classic option becomes
+  its own `crt.RadioGroupItem` insert (`parentName` = the group, `propertyName: "items"`), named after the Classic
+  option element, with `caption: "#ResourceString(<option name>_caption)#"`. Named options are what lets a business
+  rule ("Hide elements", "Make read-only") or a package address one option.
+- **Values keep their Classic type.** Boolean options are `true` / `false`, Integer options numbers, Text options
+  strings: the group writes the option value back unchanged, so the bound column gets a value of its own type. A
+  business rule that compares the column with an option value compares typed values too.
+- **Designer.** The Page Designer cannot edit a group with custom values: change its options in the page schema.
+- **Binding.** A group bound to an entity column keeps the PDS attribute and column. A group bound to a page
+  attribute (including a ContentBuilder `$Attr`) gets a page attribute with no PDS path.
+- **Disabled options.** A Classic `enabled: false` option is emitted with `disabled: true`. An option whose `enabled`
+  is bound to a Boolean entity column or to a Boolean page attribute the Classic page declares gets a live
+  `disabled: "$<name> | crt.InvertBooleanValue"`; the column gets its PDS attribute and column, the page attribute is
+  created with its Classic default. Any other bound `enabled` (a view-model method, a name the page does not define, a
+  non-Boolean column or page attribute, a declared page attribute with no `dataValueType`, or a binding with a Classic
+  `bindConfig` converter) is emitted without `disabled` and raises a `radio-option-rule` decision: port that name as a
+  converter or a page attribute and bind the option's `disabled` to it, inverted. When layers disagree, the highest
+  layer that states `enabled` wins: a static `enabled: false` over a lower layer's binding stays `disabled: true`.
+- **Split groups.** Several Classic groups on one attribute become separate `crt.RadioGroup` elements, each with its
+  own options. After its own options, each group also carries a `visible: false` `crt.RadioGroupItem` copy of every
+  other group's option whose value it does not have (named `<group>_<option>`, the other option's value and caption
+  resource; a value several groups share is copied once). On a creatio-ui build that handles hidden option values, a
+  value chosen in another group is then a known, hidden option, so the group shows nothing selected, as in Classic.
+  Limit: a creatio-ui build without hidden-value handling still shows the other group's value as an extra
+  "no longer available" option. The copies add no Layout rows. A Classic option that is hidden (`visible: false`) is
+  not built, so it is not copied either.
+- **Required.** No required validator is added for a Boolean / Integer group: a new record already holds `false` /
+  `0`, which preselects an option exactly as in Classic, and the required validator treats that value as filled
+  anyway.
+- **Not migrated, reported.** A group whose options are not in the schema (built in code), whose child items carry no
+  literal option value (the legacy card format), or that is bound to a lookup (Guid) column is reported as a typed
+  `RADIO_GROUP` warning and no element is emitted. Port it by hand (a lookup group: Values source Lookup).
 
 ## Standard features, widgets & actions
 
@@ -103,7 +212,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 
 > **Keep this in sync with the engine.** These rows encode the same standard-feature / widget knowledge as the
 > shared mapping table `../engine/mapping-table.mjs` (the FEATURE, WIDGET, PROFILE_CARD and CARD_ACTION rows —
-> the four hand catalogs that used to live in `mapper.mjs` were absorbed into it). The engine is what actually
+> the four hand catalogs that would otherwise live in `mapper.mjs` are absorbed into it). The engine is what actually
 > emits `standardFeatures` / `widgets` / `cardActions` at runtime; this table is the human-readable guidance and
 > the hand-mapping fallback when Node is unavailable. When you add, rename, or reclassify a feature/widget,
 > change **both in the same commit** — they must not drift.
@@ -115,20 +224,21 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 
 | Classic thing | Engine signal | Freedom target | Do NOT |
 | --- | --- | --- | --- |
-| Approvals / Visa | `standardFeatures` `uiShape: "component"` | **TWO components — add BOTH, and `--verify` now gates BOTH (ENG-95859):** the approval **module/widget** (`crt.Approval`) as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). Before ENG-95859 only `crt.ApprovalList` was machine-checked, so a build that added just the list read the same as one that added both — see the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing — this now reads ❌ MISSING under `--verify`, not a proposal to raise). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
-| Attachments / Feed | `standardFeatures` `uiShape: "component"` | the native Attachments / Feed component | rebuild as a generic list. |
+| Approvals / Visa | `standardFeatures` `uiShape: "component"` (by the `VisaDetailV2` schema suffix, or inferred from a `<detailColumn>Visa` entity — e.g. `UsrContractVisa` keyed by `UsrContract` — when the detail schema is custom-named; an entity that merely ends in `Visa` stays a related list, and so does a `<detailColumn>Visa` detail whose read columns (`manifest.detailSchemas`) carry none of `VisaOwner` / `Objective` / `IsCanceled` — e.g. an employee's travel visas, `UsrEmployeeVisa` keyed by `UsrEmployee`. With no columns read, the match is an inference the plan asks you to confirm) | **TWO components — add BOTH, and `--verify` gates BOTH:** the approval **module/widget** (`crt.Approval`) as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). Gating only `crt.ApprovalList` would leave the other half unmachine-checked, so a build that added just the list read the same as one that added both — see the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing — this now reads ❌ MISSING under `--verify`, not a proposal to raise). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
+| Attachments / Feed | `standardFeatures` `uiShape: "component"` | the native Attachments (`crt.FileList`) / Feed (`crt.Feed`) component | rebuild as a generic list. **On a RECONCILE where the Freedom page already ships the component, KEEP it as-is and do NOT migrate the Classic counterpart** (`FileDetailV2` / `ESNTab`); close its row with `--decide <rowKey> --wont-do` (reason: `standard Freedom component kept — counterpart not migrated`). See `existing-freedom-reconcile.md`. |
 | Activities / Emails | `standardFeatures` `uiShape: "list"` | a **filtered related list** — a DataGrid of the child records (Activity/Task, Email) filtered to the master. This IS their native form, not a downgrade. | turn them into a `crt.Timeline` or an email-client component. |
 | Means of communication (`ContactCommunication` — "Средства связи контакта") | `standardFeatures` `uiShape: "component"` (inferred by the `ContactCommunication` entity) | the native **Communication-options component** (`crt.CommunicationOptions`, the compositeOnly component the "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY name; `get-component-info` for its contract — it requires the `CrtCustomer360App` package AND the `CommonCommunicationsBehavior` feature). | rebuild it as a plain Expanded-list / DataGrid over `ContactCommunication` (loses the typed add-communication UI, type icons). If the component/package is unavailable on the stand, RAISE it as a decision (add the dependency / confirm) — do NOT silently fall back to a grid. |
-| Timeline | `widgets` (only when the classic page has an actual Timeline) | `crt.Timeline` | invent a Timeline for Activities/Emails — those are lists (row above). |
+| Timeline | `widgets` (only when the classic page has an actual Timeline) | `crt.Timeline` | invent a Timeline for Activities/Emails — those are lists (row above). **On a RECONCILE where the Freedom page already ships Timeline, KEEP it as-is and do NOT migrate the Classic `TimelineTab`** (close the row with `--decide <rowKey> --wont-do`, reason: `standard Freedom component kept — counterpart not migrated`). |
 | Action Dashboard = **Case progress bar** + **Next steps** (two components) | `widgets` (`Case progress bar` / `Next steps`) | **The default Freedom form template ships NEITHER — you must ADD them** when the object has a configured DCM case: the **progress bar** on the page top, and **Next steps** as a **NEW tab in the tab container, next to the Feed tab**. Both **auto-populate from the object's case** — do not hand-author stages/steps. **Check on-stand whether the object has a DCM case:** DCM cases are `SysSchema` records with **`ManagerName = 'DcmSchemaManager'`** (the case-schema manager) — query `SysSchema` filtered by `ManagerName eq 'DcmSchemaManager'` and find the case for your entity (match via the case caption/metadata and the object's own `Stage`/case-stage column; a DCM-driven object carries one). Some cases have an active + previous version sharing one caption (e.g. `Recruiting_v11` active, `Recruiting_v1` previous) — take the active one. **A hit ⇒ add both components; no hit ⇒ nothing to add.** ⚠ Do NOT filter by `ManagerName = 'CaseSchemaManager'` — that name is wrong, returns 0 rows, and reads as a false "no case". | treat them as template-provided / "nothing to migrate", or hand-author stage/step lists per page. Conclude "no case" from a query that returned 0 without confirming the filter used `DcmSchemaManager` (not `CaseSchemaManager`). |
 | Duplicates (side widget) | `widgets` (`Duplicates`) | the Freedom duplicates widget — surface it only when the classic page actually carried the `DuplicatesWidgetContainer` **with** its own layer evidence (an inherited-but-empty base container is chrome). No registry component is published under a duplicates name, so resolve the exact target on-stand (`get-component-info`, search "duplicate") before building. | assume the target is NOT `crt.Duplicates` — nothing in the component registry is named that; and do not migrate the widget from an inherited base container with no evidence the classic page used it. |
 | Recommendations (side widget) | `chromeWidgets` (hidden by default) | inherited base-template container (`BasePageV2`), **empty by default**, filled at runtime by `RecommendationModuleUtilities` (the **Next-Best-Offer / product recommendations**, `RecommendedProduct`). The engine classifies it as base **chrome and HIDES it from the plan** (kept in `chromeWidgets`). Surface it manually ONLY if the live page actually renders recommendations (NBO rules configured for the entity) → then wire the Freedom product-selection / recommendations component. | treat it as page content just because it is in the schema — it's always present but usually empty. |
 | **Embedded profile card** — a compact card of a LINKED record dropped into the page by `modules` config (a "requester" block on a request page; `AccountProfile` on `ContactPageV2`) | `profileCards[]` + a `profile-card` ⚠ item | the native Freedom **compact profile** in the **side profile**, keyed by the PROFILED entity: Contact → `crt.ContactCompactProfile`, Account → `crt.AccountCompactProfile`, user → `crt.UserCompactProfile` (the first two need the `CrtCustomer360App` package). Wire it with `referenceColumn: "$<masterColumnName>"` + `readonly: true`. No native component for that entity ⇒ rebuild the card as its own read-only-fields island. Full recipe below. | treat it as an "unknown embedded module" and drop the card (that is exactly the gap this rule closes); mistake the **actions/DCM dashboard** module for a profile card (it carries `masterColumnName` too, but nested under `dashboardConfig`); assume the native card shows everything the classic one did — it does **not** render Phone/Email/JobTitle-style columns, which must be added beside it. |
 | **Card widget** — a record-scoped indicator/chart embedded by `modules` config, its data stored per record in **`SysWidgetDashboard`** (e.g. the KPI charts on a Campaign page). The module carries `widgetKey` (which widget) + `recordId` (its `SysWidgetDashboard` record). | `cardWidgets[]` + a `card-widget` ⚠ item (carries `widgetKey`, `recordId`, `region`) | **converted by the migrator, never hand-built.** Group the widgets by `recordId`; per group make ONE `ConvertCardWidgetsProcess` call (batch the group's `widgetKeys`) and place the returned `freedomElementConfig` in the widget's `region`. Full recipe below. | hand-build a chart/list as a substitute; make one process call per widget instead of one per `recordId`; confuse it with a **section dashboard** (`SysDashboard`, the analytics section) — that is a different store and out of scope here. |
 | Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
+| Connected to (object connections, `EntityConnectionsDetailV2` / `EmailEntityConnectionsDetailV2` / «Связи объекта») | `standardFeatures` (feature `Connections`) when the run's registry carries `crt.Connections`; otherwise `withheldFeatures` + a `feature-component-unavailable` item | ONE `crt.Connections` element, named after the Classic detail (`EntityConnections`), in the Classic detail's tab, its `caption` the Classic detail title. The platform builds a field per connection of the object at run time: the page stores NO child element and NO `crt.ComboBox` per connection. Tips the Classic page sets in `onGetPageTips` become `connections` entries `{ code, tooltip: "#ResourceString(<Element>_<Code>_tooltip)#" }`; the component shows listed connections first. It renders only with the `UseConnectionsComponent` feature ON (OFF by default) | **Built only on positive evidence** — `manifest.componentRegistry` (the stand's export) or a pinned `platformVersion` that carries `crt.Connections`; a union of versions is not evidence. Without it nothing is built in the detail's place — NOT a related list over `EntityConnection`, which holds the object's connection settings, not the record's connections — it keeps a `⚠ not built` Layout row in its Classic tab. Record the answer as ONE `manifest.deliverableStatus` entry on `<pageKey>#feature:Connections` (or its confirm item): `wont-do` + `D<N>` closes the row; `build` + `D<N>` builds it as if the registry carried it, gated by `--verify`. Never in `decisionsWithoutDeliverable`. **On a RECONCILE where the Freedom page already shows "Connected to" (a `crt.Connections` or a group of connection lookups), KEEP it and close the row with `--decide <rowKey> --wont-do`** (reason: `standard Freedom component kept — counterpart not migrated`). See `existing-freedom-reconcile.md`. |
 | Run process (record page) | `needsDecision` `process-launch` / `cardActions` | a Freedom "Run process" card action — **only if a process is connected to the section**. Check `ProcessInModules` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) — that is what fills the menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the name. None connected ⇒ **drop the button**; if some are, name each in the plan. | fabricate a process name, or migrate the button when nothing is connected. The base `ProcessButton` names none; only a literal `executeProcess`/`RunProcessRequest` name in a method is captured directly. `SysProcessEntity`/`VwSysProcessEntity` ("Object in process") are runtime process↔record instances — NOT the section config. |
-| Print (record page) | `cardActions` (Print) | a Freedom print action — **only if printables/reports exist** for the section. Check `SysModuleReport` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) / `ShowInCard eq true` (record card); read each `Caption`/`Type`/`SysReportSchemaUId`\|`FileName`. None ⇒ **drop the button**. | migrate the Print button when the section has no printables (it would be a dead button). |
-| Standard page chrome — View options, Tag, Reload, Save/Close/Discard | `cardActions` / base buttons | native Freedom capabilities: **ViewOptions is not migrated**; **Tag is provided by the default template**; Save/Close/Discard/Reload are standard page chrome. | present them as bespoke actions to build. |
+| Print (record page) | `cardActions` (Print) | a Freedom print action — **only if printables/reports exist** for the section. Check `SysModuleReport` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) / `ShowInCard eq true` (record card); read each `Caption`/`Type`/`SysReportSchemaUId`\|`FileName`. None ⇒ **drop the button** — unless a step-5.1 behaviour card says a client layer binds the print button's menu to a collection its own code fills (`controlConfig.menu.items`): `SysModuleReport` does not describe that menu, so the card decides the button. | migrate the Print button when the section has no printables (it would be a dead button); drop a print menu a client layer builds itself because `SysModuleReport` returned nothing. |
+| Standard page chrome — View options, Tag, Reload, Save/Close/Discard | `cardActions` / base buttons | native Freedom capabilities: **ViewOptions is not migrated**; **Tag is provided by the default template**; Save/Close/Discard/Reload are standard page chrome. The checklist folds only these into one `Card actions — native` row; a custom `getActions` action gets its own `Card action — <name>` row, closed by a built element whose name, caption or `clicked.request` spells the action name as whole words, ignoring case and separators (`CalculateSaasMetricsMenuItem`, caption "Calculate SaaS metrics" and `usr.CalculateSaaSMetricsRequest` all close `calculateSaaSMetrics`; `RecalculateSaaSMetricsMenuItem` does not). A word boundary is a separator, a lower→upper case step or the end of an acronym; a digit right after a letter is not one. When the card declares a longer hint that contains this one (`approve` / `approveAll` / `massApprove`), `ApproveAllMenuItem` closes only `approveAll` and `MassApproveMenuItem` only `massApprove`. Only a crt.Button, a crt.MenuItem or an element with a `clicked` request counts — a field, tab or label named after the action (`PostDate` for `post`) does not. A `remove` op is not evidence, and only ASCII letters and digits are compared, so a localized caption cannot close the row — name the menu item (or its `clicked.request`) after the action. | present them as bespoke actions to build. |
 | Section actions / add-record mini page / list columns | manifest `section` → the spec's `### List page` block | Freedom list-page actions / a mini page / confirmed list columns | treat these as record-page concerns — they are a *separate* list-page surface the record-page migration does not cover. |
 
 Keep an engine-matched standard feature AS its shape unless you confirm on-stand it genuinely does not use
@@ -149,7 +259,7 @@ plan. The accepted pairs are a small **curated hand table** (`COMPONENT_ANALOGS`
 | `crt.ContactCommunication` (the `ContactCommunication` entity name with a `crt.` prefix — never a real component) | `crt.CommunicationOptions` (the native Communication-options component) | *Means of communication*, above |
 
 > **Interim, and deliberately so.** This table is the **hand-maintained** role/analog source until the
-> ENG-95543 component registry lands; at that point `resolveComponentVk` / `componentTypesOf` repoint to the
+> component registry lands; at that point `resolveComponentVk` / `componentTypesOf` repoint to the
 > registry (same expected set, one call site) and this table is retired. Until then, keep it in sync with the
 > rows above **in the same commit** — the engine constant and this table must not drift. Match STRICTLY against
 > a curated pair; a Freedom analog is never inferred from a name family, so a wrong component cannot falsely
@@ -170,7 +280,7 @@ alone doesn't say. Run each query at plan time and act on the result; never buil
 body" while a `⚠` on-stand check is still pending — the classic body having no dashboard/button does NOT mean
 the section has no case/process.
 
-**On-save duplicate check → does this entity have one, and will it survive?** (ENG-94274) Two separate facts,
+**On-save duplicate check → does this entity have one, and will it survive?** Two separate facts,
 because they fail differently.
 
 1. **Is there a rule?** `odata-read DuplicatesRule` (a `BaseLookup` in `CrtDeduplication`); select
@@ -493,9 +603,9 @@ above) — it is a different store, and only these `SysWidgetDashboard` card wid
 recognises each one and emits `changeSet.cardWidgets[]` plus a `card-widget` ⚠ item; this section is the build
 recipe.
 
-> The migrator process `ConvertCardWidgetsProcess` (crt-dashboards-migrator-app, ENG-95805) and the clio
+> The migrator process `ConvertCardWidgetsProcess` (crt-dashboards-migrator-app) and the clio
 > `run-process` MCP tool are separate, sibling subtasks. The contract below is **verified against the released
-> migrator (ENG-95805)** — re-confirm the field names on each migrator release. If either dependency is not yet
+> migrator** — re-confirm the field names on each migrator release. If either dependency is not yet
 > available on the stand, the whole `card-widget` set stays `TODO`/`BLOCKED` — do NOT hand-build a substitute.
 
 **Recognise it — the Classic side.** In the page's `modules` block, a `CardWidgetModule` whose
@@ -524,7 +634,7 @@ reason; grepping the engine for `CardWidgetModule` will not explain it. An **inh
 from a base/seed layer, `fromTemplate`) is base-template chrome and is **not** emitted — only a card widget the
 page's own layer declares becomes a decision.
 
-**Ordered steps (contract verified against the released migrator, ENG-95805).**
+**Ordered steps (contract verified against the released migrator).**
 
 1. **Take the engine's output.** Work `changeSet.cardWidgets[]` (each `{ key, widgetKey, recordId, region }`)
    / the `card-widget` ⚠ items. Do not re-derive the coordinates by hand.
@@ -597,7 +707,7 @@ page's own layer declares becomes a decision.
 
 ## Classic layout & business rules: read ALL package schemas, not just the top one
 
-> **Preferred: run the bundled deterministic engine (`engine/migrate.mjs`, see SKILL.md step 4) instead of merging schemas by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across schemas with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
+> **Preferred: run the bundled deterministic engine (`node engine/migrate.mjs <manifest>`) instead of merging schemas by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across schemas with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
 
 `get-client-unit-schema` (and any single-schema read) returns only the OWN body of the
 top-most replacing schema for that name. For a base-product Classic page that top schema is

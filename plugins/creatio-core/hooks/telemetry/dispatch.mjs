@@ -237,7 +237,7 @@ function looksComplete(answer) {
 export function readOutcome(sessionId, kind, nonce) {
 	const file = markerPath(sessionId, `${kind}-${nonce}-outcome`);
 	let stat;
-	let answer = '';
+	let answer;
 	try {
 		stat = fs.statSync(file);
 		answer = fs.readFileSync(file, 'utf8');

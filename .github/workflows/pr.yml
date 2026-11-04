@@ -18,13 +18,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
       - name: Install dependencies
-        # --only-binary :all: → wheels only, so no source-dist setup scripts run (S8541); pinned version (S8544).
+        # --only-binary :all: → wheels only, so no source-dist setup scripts run (S8541); pinned versions, kept equal to tests/requirements.txt by tests/test_frontmatter_yaml.py (S8544).
         # Quoted: the unquoted `:all: ` (colon-space) makes YAML parse this as a nested mapping → workflow startup_failure.
-        run: "pip install --only-binary :all: pytest==8.3.4"
+        run: "pip install --only-binary :all: pytest==9.0.3 pyyaml==6.0.2"
       - name: Run tests
         run: pytest tests/
 
@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
       - name: Check manifest sync
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
       # supply-chain AUTHENTICITY anchor (the other half of verify-vendor.mjs): independently fetch the pinned
@@ -54,18 +54,41 @@ jobs:
       - name: Anchor vendored parser to upstream npm
         run: node plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs
 
+  lint:
+    name: ESLint (skills, hooks, scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+      # Dev-only tooling from the root package.json, installed exactly as locked. --ignore-scripts: no package
+      # lifecycle script runs on the runner. None of it ships: the root package.json is outside the release manifest.
+      - name: Install lint tooling
+        run: npm ci --ignore-scripts
+      # Blocking: any finding fails the job. Scope and ignores live in eslint.config.mjs, not on this command line.
+      - name: ESLint
+        run: npm run lint
+
   engine-goldens:
     name: Classic→Freedom engine goldens (${{ matrix.os }})
     strategy:
-      fail-fast: false   # a failure on one OS must NOT cancel the other — the engine + verify-vendor deliberately normalize CRLF/LF, so a platform-specific red is exactly the signal we need to see
+      fail-fast: false   # a failure on one OS must NOT cancel the others — the engine + verify-vendor deliberately normalize CRLF/LF, so a platform-specific red is exactly the signal we need to see
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]   # macos-latest: a piped stdin read is non-blocking there (EAGAIN), which neither Linux nor Windows exercises
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '20'
+      # COVERAGE, ubuntu leg only. Node itself writes raw V8 coverage for every process started while
+      # NODE_V8_COVERAGE is set — each golden runner and every child process it spawns — so no runner's command
+      # line below changes and coverage cannot alter what the goldens gate. The windows leg never sets it and is the
+      # unchanged control. The report is rendered once, by the last steps of this job.
+      - name: Enable V8 coverage collection (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: echo "NODE_V8_COVERAGE=$GITHUB_WORKSPACE/coverage/tmp" >> "$GITHUB_ENV"
       # supply-chain gate: the vendored acorn parser (the one executable processing untrusted schema-body)
       # must match its pinned upstream SHA-256 — a swapped/drifted bundle fails the build here.
       - name: Verify vendored parser integrity
@@ -109,3 +132,47 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-workflow-parity.mjs
+      # The approved plan sliced into a FOLDER of one-task files (`--tasks <dir>`), which an orchestrator walks one
+      # task at a time instead of holding every deliverable in one context: content-derived ids (an inserted page
+      # must not renumber a recorded status onto another task), the leaf-first build order, the caller's status and
+      # notes surviving a re-run, nothing ever deleted, and a plan-level gap writing no folder at all.
+      - name: Run task-slicing goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-tasks.mjs
+      # The coverage report for everything the steps above ran, ubuntu leg only. Informational: no threshold is
+      # configured, so a low percentage can never fail this job, and `continue-on-error` keeps a broken report
+      # (registry outage, c8 crash, artifact service) from failing it either — the failed step still shows in the
+      # run, only the goldens decide the check. `always()` so a red golden still gets its report.
+      # NODE_V8_COVERAGE is unset for these tool processes, so npm and c8 do not record themselves.
+      - name: Install coverage tooling (ubuntu only)
+        if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: env -u NODE_V8_COVERAGE npm ci --ignore-scripts
+      - name: Coverage report (ubuntu only)
+        if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: |
+          mkdir -p coverage
+          env -u NODE_V8_COVERAGE npm run --silent coverage:report > coverage/summary.txt
+          cat coverage/summary.txt
+          {
+            echo "## Engine coverage (V8, every golden runner above)"
+            echo
+            echo "Per file: statements, branches, functions, lines, over the engine and workflow-core sources under \`plugins/creatio-migration/skills/\`. \`All files\` is the overall total. No threshold is enforced."
+            echo
+            echo '```text'
+            cat coverage/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report (ubuntu only)
+        if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: engine-coverage
+          path: |
+            coverage/
+            !coverage/tmp/
+          if-no-files-found: warn
+          retention-days: 14

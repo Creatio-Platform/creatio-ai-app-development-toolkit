@@ -1,0 +1,132 @@
+{
+ "entity": "M",
+ "seed": [
+  {
+   "pkg": "BaseModulePageV2",
+   "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}}],methods:{init:function(){return 1;},getActions:function(){return 2;},onSaved:function(){return 3;},setColumns:function(){return 4;},loadValues:function(){return 5;},onRender:function(){return 6;},onEntry:function(){return 7;},onExit:function(){return 8;}}};});"
+  }
+ ],
+ "schemas": [
+  {
+   "pkg": "P",
+   "body": "define(\"MPage\",[],function(){return{entitySchemaName:\"M\",details:{R1:{schemaName:\"R1D\",entitySchemaName:\"C1\",filter:{detailColumn:\"m\",masterColumn:\"Id\"}},R2:{schemaName:\"R2D\",entitySchemaName:\"C2\",filter:{detailColumn:\"m\",masterColumn:\"Id\"}}},diff:[{operation:\"insert\",name:\"T\",parentName:\"Tabs\",values:{itemType:15,isTab:true}},{operation:\"insert\",name:\"R1\",parentName:\"T\",values:{itemType:2}},{operation:\"insert\",name:\"R2\",parentName:\"T\",values:{itemType:2}},{operation:\"insert\",name:\"MainF\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"MainF\"}},{operation:\"insert\",name:\"MainF2\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"MainF2\"}}]};});"
+  }
+ ],
+ "detailSchemas": {
+  "R1D": {
+   "entity": "C1",
+   "columns": [
+    "Number"
+   ],
+   "editPage": "C1Page"
+  },
+  "R2D": {
+   "entity": "C2",
+   "columns": [
+    "Number"
+   ],
+   "editPage": "C2Page"
+  }
+ },
+ "childPageSchemas": {
+  "C1Page": {
+   "entity": "C1",
+   "seed": [
+    {
+     "pkg": "BaseModulePageV2",
+     "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}}],methods:{init:function(){return 1;},getActions:function(){return 2;},onSaved:function(){return 3;},setColumns:function(){return 4;},loadValues:function(){return 5;},onRender:function(){return 6;},onEntry:function(){return 7;},onExit:function(){return 8;}}};});"
+    }
+   ],
+   "schemas": [
+    {
+     "pkg": "P",
+     "body": "define(\"C1Page\",[],function(){return{entitySchemaName:\"C1\",details:{G:{schemaName:\"GD\",entitySchemaName:\"G1\",filter:{detailColumn:\"c\",masterColumn:\"Id\"}}},diff:[{operation:\"insert\",name:\"GT\",parentName:\"Tabs\",values:{itemType:15,isTab:true}},{operation:\"insert\",name:\"G\",parentName:\"GT\",values:{itemType:2}},{operation:\"insert\",name:\"C1F\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"C1F\"}}]};});"
+    }
+   ],
+   "detailSchemas": {
+    "GD": {
+     "entity": "G1",
+     "columns": [
+      "Number"
+     ],
+     "editPage": "G1Page"
+    }
+   },
+   "childPageSchemas": {
+    "G1Page": {
+     "entity": "G1",
+     "seed": [
+      {
+       "pkg": "BaseModulePageV2",
+       "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}}],methods:{init:function(){return 1;},getActions:function(){return 2;},onSaved:function(){return 3;},setColumns:function(){return 4;},loadValues:function(){return 5;},onRender:function(){return 6;},onEntry:function(){return 7;},onExit:function(){return 8;}}};});"
+      }
+     ],
+     "schemas": [
+      {
+       "pkg": "P",
+       "body": "define(\"G1Page\",[],function(){return{entitySchemaName:\"G1\",diff:[{operation:\"insert\",name:\"G1F\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"G1F\"}}]};});"
+      }
+     ]
+    }
+   }
+  },
+  "C2Page": {
+   "entity": "C2",
+   "seed": [
+    {
+     "pkg": "BaseModulePageV2",
+     "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}}],methods:{init:function(){return 1;},getActions:function(){return 2;},onSaved:function(){return 3;},setColumns:function(){return 4;},loadValues:function(){return 5;},onRender:function(){return 6;},onEntry:function(){return 7;},onExit:function(){return 8;}}};});"
+    }
+   ],
+   "schemas": [
+    {
+     "pkg": "P",
+     "body": "define(\"C2Page\",[],function(){return{entitySchemaName:\"C2\",diff:[{operation:\"insert\",name:\"C2F\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"C2F\"}}]};});"
+    }
+   ]
+  }
+ },
+ "addRecordMiniPage": false,
+ "section": {
+  "schemas": [],
+  "listColumns": {
+   "success": true,
+   "sectionSchema": "MSection",
+   "entity": "M",
+   "source": "schema-default",
+   "columns": [
+    {
+     "name": "Name"
+    }
+   ]
+  }
+ },
+ "planMeta": {
+  "scope": "single-section",
+  "environment": "test",
+  "package": "P → UsrM",
+  "approach": "Parallel rebuild",
+  "whatItDoes": "M register.",
+  "sectionSchema": "MSection",
+  "listTemplate": "ListPageV3",
+  "formTemplate": "FormPageTemplate"
+ },
+ "signals": {
+  "dcm": {
+   "resolved": true,
+   "present": false
+  },
+  "processes": {
+   "resolved": true,
+   "present": false
+  },
+  "printables": {
+   "resolved": true,
+   "present": false
+  },
+  "deduplication": {
+   "resolved": true,
+   "present": false
+  }
+ }
+}

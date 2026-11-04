@@ -39,7 +39,6 @@ const overrideArg = process.argv[2] ? realpathSafe(process.argv[2]) : null;
 const tmpReal = realpathSafe(os.tmpdir());
 const tmpRoot = tmpReal + path.sep;
 const VENDOR_DIR = overrideArg && (overrideArg === tmpReal || overrideArg.startsWith(tmpRoot)) ? overrideArg : DEFAULT_VENDOR;
-const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 
 const sha256Lf = (buf) =>
   createHash("sha256").update(Buffer.from(buf.toString("utf8").replaceAll("\r\n", "\n"), "utf8")).digest("hex");
