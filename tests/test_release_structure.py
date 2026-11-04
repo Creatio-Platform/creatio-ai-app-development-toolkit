@@ -204,10 +204,10 @@ def known_cross_plugin_refs(entry_path):
 
 class ReleaseStructureTests(unittest.TestCase):
     def test_root_manifest_is_a_meta_plugin_over_the_family(self):
-        # Plugin split: the root Claude manifest installs the whole family through `dependencies`;
-        # it ships no components of its own (a plugin rooted at `./` would otherwise auto-discover
-        # a root `skills/` dir, the duplication the split removes). Codex/Copilot/Cursor have no
-        # meta-plugin concept, so the root carries no manifest for them.
+        # The root Claude manifest installs the whole family through `dependencies` and ships no
+        # components of its own: a plugin rooted at `./` would otherwise auto-discover a root
+        # `skills/` dir and load every skill twice. Codex installs each plugin, so the root carries
+        # no Codex manifest.
         meta = read_json(".claude-plugin/plugin.json")
         self.assertEqual(meta["name"], "creatio-ai-app-development-toolkit")
         self.assertRegex(meta["version"], r"^\d+\.\d+\.\d+$")
@@ -215,8 +215,28 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertEqual(tuple(meta["dependencies"]), PLUGINS)
         for key in ("hooks", "skills", "mcpServers"):
             self.assertNotIn(key, meta)
-        for stale in (".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"):
-            self.assertFalse((ROOT / stale).exists(), f"{stale} must not exist at the root any more")
+        self.assertFalse((ROOT / ".codex-plugin/plugin.json").exists(), "the root carries no Codex manifest")
+
+    def test_copilot_and_cursor_root_manifests_bundle_the_family(self):
+        # Copilot and Cursor have no dependency mechanism. Under the meta-plugin's name each loads
+        # every plugin's skills from one manifest, so an existing Copilot install keeps every skill
+        # when `copilot plugin update` fetches that name, and the Cursor local copy keeps them too.
+        meta = read_json(".claude-plugin/plugin.json")
+        skill_dirs = [f"./plugins/{plugin}/skills/" for plugin in PLUGINS]
+        for relative in (".github/plugin/plugin.json", ".cursor-plugin/plugin.json"):
+            bundle = read_json(relative)
+            self.assertEqual(bundle["name"], meta["name"], relative)
+            self.assertEqual(bundle["version"], meta["version"], relative)
+            self.assertEqual(bundle["skills"], skill_dirs, relative)
+            self.assertEqual(bundle["mcpServers"], "./plugins/creatio-core/.mcp.json", relative)
+            self.assertNotIn("dependencies", bundle, relative)
+        for directory in skill_dirs:
+            self.assertTrue((ROOT / directory).is_dir(), directory)
+        self.assertEqual(read_json(".cursor-plugin/plugin.json")["rules"], "./plugins/creatio-app-builder/rules/")
+        # The release surface carries both manifests to the Copilot install and the Cursor copy.
+        runtime = read_json(".release-manifest.json")["plugin_runtime"]
+        self.assertIn(".github/plugin", runtime)
+        self.assertIn(".cursor-plugin", runtime)
 
     def test_every_plugin_ships_four_manifests_that_share_identity(self):
         for plugin in PLUGINS:
@@ -286,29 +306,42 @@ class ReleaseStructureTests(unittest.TestCase):
         copilot = read_json(".github/plugin/marketplace.json")
         canonical_version = read_json(".claude-plugin/plugin.json")["version"]
 
-        # Claude: the meta-plugin first (pinned to the moving `release` branch as before), then
-        # every plugin of the family from its subdirectory.
+        # Every entry pins its payload to the moving `release` branch. The hosts read a catalog from
+        # the repository's default branch, so an entry that resolved against the catalog's own
+        # checkout would install unreleased `main` content.
+        url = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
+        repo = "Creatio-Platform/creatio-ai-app-development-toolkit"
+        release_root = {"source": "url", "url": url, "ref": "release"}
+        # Claude: the meta-plugin first, then every plugin of the family from its subdirectory.
         self.assertEqual(claude["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(
-            claude["plugins"][0]["source"],
-            {
-                "source": "url",
-                "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
-                "ref": "release",
-            },
-        )
+        self.assertEqual(claude["plugins"][0]["source"], release_root)
         self.assertEqual(tuple(p["name"] for p in claude["plugins"][1:]), PLUGINS)
         for entry in claude["plugins"][1:]:
-            self.assertEqual(entry["source"], f"./plugins/{entry['name']}")
-        # Codex: `local` sources (the only subdirectory form Codex documents for an in-repo catalog).
+            self.assertEqual(
+                entry["source"],
+                {"source": "git-subdir", "url": url, "path": f"plugins/{entry['name']}", "ref": "release"},
+            )
+        # Codex: the installer materializes `path` from the release it runs from.
         self.assertEqual(tuple(p["name"] for p in codex["plugins"]), PLUGINS)
         for entry in codex["plugins"]:
-            self.assertEqual(entry["source"], {"source": "local", "path": f"./plugins/{entry['name']}"})
-        # Copilot: relative paths. The release-tooling follow-up switches these to `github` + `ref: release` + `path`
-        # objects so a Copilot install never reads unreleased `main` content.
-        self.assertEqual(tuple(p["name"] for p in copilot["plugins"]), PLUGINS)
-        for entry in copilot["plugins"]:
-            self.assertEqual(entry["source"], f"./plugins/{entry['name']}")
+            self.assertEqual(
+                entry["source"],
+                {"source": "git-subdir", "url": url, "path": f"./plugins/{entry['name']}", "ref": "release"},
+            )
+        # Copilot: the bundle under the meta-plugin's name first, then every plugin on its own.
+        bundle = copilot["plugins"][0]
+        self.assertEqual(bundle["name"], "creatio-ai-app-development-toolkit")
+        self.assertEqual(bundle["source"], release_root)
+        # Copilot reads a plugin's skills and MCP servers from the payload's own manifest, so the
+        # bundle's live in `.github/plugin/plugin.json` alone.
+        for key in ("skills", "mcpServers"):
+            self.assertNotIn(key, bundle)
+        self.assertEqual(tuple(p["name"] for p in copilot["plugins"][1:]), PLUGINS)
+        for entry in copilot["plugins"][1:]:
+            self.assertEqual(
+                entry["source"],
+                {"source": "github", "repo": repo, "path": f"plugins/{entry['name']}", "ref": "release"},
+            )
         for catalog in (claude, codex, copilot):
             for entry in catalog["plugins"]:
                 self.assertEqual(entry["version"], canonical_version, entry["name"])

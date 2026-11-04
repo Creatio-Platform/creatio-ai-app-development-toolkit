@@ -5,6 +5,14 @@
       "field": "version"
     },
     {
+      "path": ".cursor-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": ".github/plugin/plugin.json",
+      "field": "version"
+    },
+    {
       "path": "plugins/creatio-core/.claude-plugin/plugin.json",
       "field": "version"
     },
@@ -119,6 +127,10 @@
     {
       "path": ".github/plugin/marketplace.json",
       "field": "plugins.3.version"
+    },
+    {
+      "path": ".github/plugin/marketplace.json",
+      "field": "plugins.4.version"
     }
   ],
   "audit": {

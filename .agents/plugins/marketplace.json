@@ -8,8 +8,10 @@
       "name": "creatio-core",
       "version": "1.16.0",
       "source": {
-        "source": "local",
-        "path": "./plugins/creatio-core"
+        "source": "git-subdir",
+        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
+        "path": "./plugins/creatio-core",
+        "ref": "release"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -21,8 +23,10 @@
       "name": "creatio-app-builder",
       "version": "1.16.0",
       "source": {
-        "source": "local",
-        "path": "./plugins/creatio-app-builder"
+        "source": "git-subdir",
+        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
+        "path": "./plugins/creatio-app-builder",
+        "ref": "release"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -34,8 +38,10 @@
       "name": "creatio-ui",
       "version": "1.16.0",
       "source": {
-        "source": "local",
-        "path": "./plugins/creatio-ui"
+        "source": "git-subdir",
+        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
+        "path": "./plugins/creatio-ui",
+        "ref": "release"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -47,8 +53,10 @@
       "name": "creatio-migration",
       "version": "1.16.0",
       "source": {
-        "source": "local",
-        "path": "./plugins/creatio-migration"
+        "source": "git-subdir",
+        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
+        "path": "./plugins/creatio-migration",
+        "ref": "release"
       },
       "policy": {
         "installation": "AVAILABLE",

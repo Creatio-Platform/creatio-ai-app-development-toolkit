@@ -3,7 +3,9 @@
 Every installable unit of the Creatio AI App Development Toolkit lives here, one directory per plugin with its own host
 manifests (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, `.github/plugin/`) and one flat `skills/` directory.
 The root catalogs (`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, `.github/plugin/marketplace.json`)
-list them; the root `.claude-plugin/plugin.json` is a meta-plugin that installs the whole family on Claude Code.
+list them, each entry pinned to the `release` branch. The root `.claude-plugin/plugin.json` is a meta-plugin that installs
+the whole family on Claude Code; GitHub Copilot CLI and Cursor have no dependencies, so their root manifests
+(`.github/plugin/plugin.json`, `.cursor-plugin/plugin.json`) list every plugin's `skills/` under the same name.
 
 | Plugin | Owns |
 |---|---|

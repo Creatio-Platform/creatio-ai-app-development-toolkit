@@ -1955,6 +1955,24 @@ class InstallCursorTests(unittest.TestCase):
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())
 
+    def test_the_local_copy_carries_the_bundle_manifest_and_every_path_it_names(self):
+        # Cursor loads a local plugin through its root manifest. A path the copy lacks loads nothing,
+        # and the skills of every plugin of the family are reached only through that manifest.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / ".cursor").mkdir()
+
+            installer.install_cursor(ROOT, home)
+
+            local = home / ".cursor" / "plugins" / "local" / installer.PLUGIN_NAME
+            manifest = json.loads((local / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
+            skills = sorted(path.parent.name for directory in manifest["skills"] for path in (local / directory).glob("*/SKILL.md"))
+            shipped = sorted(path.parent.name for path in ROOT.glob("plugins/*/skills/*/SKILL.md"))
+            self.assertEqual(skills, shipped)
+            self.assertTrue((local / manifest["mcpServers"]).is_file())
+            self.assertTrue(any((local / manifest["rules"]).glob("*.mdc")))
+
     def test_analytics_context_falls_back_to_unknown_without_manifest(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
@@ -2058,6 +2076,28 @@ class McpConfigMergeTests(unittest.TestCase):
                 if "telemetry-routing.mjs" in item["command"]
             ]
             self.assertEqual(len(entries), 1)
+
+    def test_merge_cursor_telemetry_hook_replaces_the_single_plugin_layout_entry(self):
+        # The same local plugin directory kept the hook at its root in the single-plugin layout. The
+        # copy replaces that file, so its entry would start a missing script on every MCP call.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            plugin_dir = Path(temp) / "plugin"
+            single = f'node "{(plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+            elsewhere = f'node "{(Path(temp) / "other" / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+            (cursor_home / "hooks.json").write_text(
+                json.dumps({"version": 1, "hooks": {"afterMCPExecution": [{"command": single}, {"command": elsewhere}]}}),
+                encoding="utf-8",
+            )
+
+            installer.merge_cursor_telemetry_hook(cursor_home, plugin_dir)
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            commands = [item["command"] for item in config["hooks"]["afterMCPExecution"]]
+            current = f'node "{(plugin_dir / installer.TELEMETRY_HOOK_RELATIVE).as_posix()}"'
+            self.assertEqual(commands, [elsewhere, current])
 
     def test_merge_cursor_telemetry_hook_leaves_a_broken_file_untouched(self):
         # A hand-broken hooks.json is the developer's file. Rewriting it with our single entry

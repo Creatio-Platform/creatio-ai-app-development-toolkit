@@ -25,7 +25,7 @@ and so a user installs only the profile they need on Claude Code, Codex CLI, Git
 | ----------- | ----------- | ------- |
 | Several plugins are served from one repository and one marketplace | `plugins/<name>/` per plugin; the three catalogs (`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, `.github/plugin/marketplace.json`) list each plugin with the host's own `source` shape | Verified live on Claude Code 2.1.263, Codex CLI 0.130/0.153, Copilot CLI 1.0.46 |
 | A plugin is installable on its own | one flat `skills/` and four host manifests per plugin; every plugin depends only on `creatio-core` | Cross-plugin file references are replaced by skill names / clio `get-guidance` in a follow-up change |
-| The existing install name keeps working | root `.claude-plugin/plugin.json` becomes a dependencies-only meta-plugin `creatio-ai-app-development-toolkit` | Claude only; on Codex/Copilot the installer performs one install per plugin |
+| The existing install name keeps working | root `.claude-plugin/plugin.json` becomes a dependencies-only meta-plugin `creatio-ai-app-development-toolkit`; on Copilot and Cursor the same name is one plugin whose root manifest lists every plugin's `skills/` | Copilot and Cursor have no dependency mechanism; Codex gets one materialized install per plugin |
 | A downstream toolkit depends on CAADT plugins instead of copying them | the consumer declares `dependencies` on the CAADT plugins it needs (Claude) and its installer installs the same list from the `creatio` marketplace (all hosts) | Copies are deleted in the same release the dependency is introduced |
 | Named profiles for end users | `install.py --profile minimal \| app-builder \| full` | Follow-up change to the installer |
 | Skills stay discoverable by description on every host | skill names unchanged; hosts namespace them as `<plugin>:<skill>` | Verified in live sessions on all three hosts |
@@ -36,7 +36,7 @@ and so a user installs only the profile they need on Claude Code, Codex CLI, Git
 | ----------- | ----------- | ------- |
 | Git history of every moved file survives | `git mv` only; no copy-then-delete | `git log --follow` on a moved SKILL.md shows the pre-move history |
 | No duplicate skills reach the model | one home per skill; a downstream marketplace never re-exports CAADT plugins; a consumer installer refuses a plugin already installed from another marketplace | Both Claude and Copilot expose duplicates when the same name arrives twice (see §8) |
-| Users of the `release` channel never receive unreleased content | catalog entries pin the payload to the `release` branch (`url`/`github`/`git-subdir` + `ref`); the Copilot catalog on `main` is always valid | Copilot reads the catalog from the default branch only and accepts no ref (see §8) |
+| Users of the `release` channel never receive unreleased content | every catalog entry pins its payload to the `release` branch (`url`/`github`/`git-subdir` + `ref`); the Copilot catalog on `main` is always valid | Copilot reads the catalog from the default branch (see §8) |
 | One line-ending convention | `.gitattributes` pins text files to LF | Makes diffs between CAADT and downstream copies show content, not CRLF noise |
 | Manifests cannot drift | one `plugin.yaml` per plugin generates the four host manifests and the three catalogs; `--check` in CI | Follow-up change to the release tooling |
 | The change is releasable as a major version | 2.0.0 with an updater that migrates a 1.x single-plugin install | Install composition changes, so semver MAJOR |
@@ -49,7 +49,7 @@ and so a user installs only the profile they need on Claude Code, Codex CLI, Git
 | ---------------------- | ------ | ----------- | ---------- |
 | Assumptions & Concerns | HIGH   | Codex CLI has no non-interactive plugin install: `codex plugin add`/`install` do not exist. Enabling a plugin in `config.toml` does not load its skills; only the `/plugins` browser's install cache does. | The installer performs the two steps the browser does (copy into `plugins/cache/<marketplace>/<plugin>/<version>/`, write `[plugins."<plugin>@<marketplace>"] enabled = true`) — PR #168. |
 | Assumptions & Concerns | HIGH   | Double installation: the same plugin from two marketplaces, or the same skill name from two plugins, coexists and both skill bodies are shown to the model on Claude and Copilot. | A downstream marketplace does not re-export CAADT plugins; it deletes its copies in the release that starts depending on `creatio-core`; its installer refuses a name already installed from another marketplace. |
-| Assumptions & Concerns | Medium | Copilot CLI reads a marketplace only from the repository's default branch and accepts no ref; a relative `./plugins/<n>` entry on `main` installs unreleased content. | Today only the Claude meta-plugin entry is pinned (`url` + `ref: release`); the per-plugin Codex and Copilot entries are relative sources. The release-tooling follow-up switches them to `github` + `ref: release` + `path` objects; until it ships, `main` is not announced as released and keeps a valid catalog at all times. |
+| Assumptions & Concerns | Medium | Copilot CLI reads a marketplace from the repository's default branch; a relative `./plugins/<n>` entry on `main` would install unreleased content. | Every entry of the three catalogs is pinned: `url` + `ref: release` for the repository root, `git-subdir` (Claude, Codex) or `github` + `path` (Copilot) + `ref: release` for each plugin. |
 | Assumptions & Concerns | Medium | A plugin rooted at the repository root auto-discovers a root `skills/` directory, recreating the duplication the split removes. | The meta-plugin lives at the root only once root `skills/` is gone (PR #169); during the spike it lived in `plugins/creatio-ai-app-development-toolkit/`. |
 | Assumptions & Concerns | Medium | Plugin dependencies exist only in Claude Code; Codex and Copilot have no dependency or meta-plugin mechanism. | "A consumer requires CAADT plugins" is enforced by the consumer's installer on every host; `dependencies` is a Claude-only convenience. |
 | Assumptions & Concerns | Medium | The telemetry hook moves into `creatio-core` and therefore runs for every consumer of the core, including ones that previously removed it. | Decision pending (§9); if unacceptable, split `creatio-core` and `creatio-telemetry`. The hook is non-blocking and consent-gated. |
@@ -88,6 +88,9 @@ CAADT and its downstream copies.
 **Installation is host-specific but profile-driven.** Claude Code, Codex CLI and Copilot CLI register the
 marketplace and install the plugins of a profile; Cursor copies the plugins of the profile. Codex has no
 install verb, so the installer materializes the plugin cache and enables the plugin in `config.toml` itself.
+Until profiles exist the installer installs the whole family: through the meta-plugin's `dependencies` on
+Claude, and through one root manifest that lists every plugin's `skills/` on Copilot and Cursor, which have
+no dependency mechanism.
 
 **Downstream toolkits depend, they do not copy.** A consumer toolkit keeps its own marketplace with its own
 plugins and declares its needs on CAADT plugins; its installer registers the `creatio` marketplace first and
@@ -144,7 +147,7 @@ sequenceDiagram
     C->>C: resolve dependencies → creatio-core (tags <plugin>--v<ver>)
     U->>X: plugin marketplace add <repo>
     U->>X: copy plugins/<n> → $CODEX_HOME/plugins/cache/creatio/<n>/<ver>/; config.toml [plugins."<n>@creatio"] enabled=true
-    U->>G: plugin marketplace add <repo> (default branch catalog); plugin install <n>@creatio (payload pinned to release once the release tooling lands)
+    U->>G: plugin marketplace add <repo> (default branch catalog); plugin install <n>@creatio (payload pinned to release)
 ```
 
 ---
@@ -155,9 +158,8 @@ The change affects the **software supply chain of the toolkit**, not Creatio app
 STRIDE analysis was performed; the relevant observations are recorded here:
 
 - Copilot CLI reads the catalog from the default branch, so an unpinned catalog entry would install unreleased
-  `main` content into a user's agent. Mitigation: `ref: release` pinning of every per-plugin catalog entry, which the
-  release-tooling follow-up adds; at the time of this decision only the Claude meta-plugin entry is pinned, and `main`
-  is not released until that follow-up ships.
+  `main` content into a user's agent. Mitigation: `ref: release` pinning of every catalog entry of the three
+  catalogs.
 - Two installs of the same skill name reach the model; a malicious or stale duplicate could shadow the
   canonical one. Mitigated by the no-re-export rule and by installers refusing duplicates.
 - Installer paths derived from environment variables were flagged as untrusted input (S2083); the installer
@@ -226,8 +228,10 @@ prompt-input` renders the model-visible skill list without a model call.
 #### 7.16 Backward Compatibility
 
 **Stack:** Backend
-The install name `creatio-ai-app-development-toolkit@creatio` survives as the Claude meta-plugin; Codex and
-Copilot 1.x installs are migrated by `update.py` to the profile set. Skill names are unchanged, so prompts and
+The install name `creatio-ai-app-development-toolkit@creatio` survives: as the Claude meta-plugin, and on Copilot
+as one plugin that carries every plugin's skills, so a 1.x Copilot install keeps working through
+`copilot plugin update`. `update.py` installs on Claude the dependencies a meta-plugin update declares, and the
+installer re-materializes every plugin on Codex. Skill names are unchanged, so prompts and
 docs that name a skill keep working; only the namespace prefix changes.
 
 #### 7.18 Extensibility

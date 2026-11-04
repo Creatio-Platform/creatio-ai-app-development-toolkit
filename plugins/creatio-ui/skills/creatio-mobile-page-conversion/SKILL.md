@@ -14,9 +14,9 @@ flow.
 ## File resolution (read first)
 
 The conversion playbook lives next to this file at `./references/page-to-mobile-conversion.md`. Other
-toolkit files referenced here live under the **toolkit root** — the directory that contains `AGENTS.md`,
-the parent of the `skills/` folder this file lives in (`../../` from this file). Resolve every path below
-accordingly.
+toolkit files referenced here live under the **plugin root** — the parent of the `skills/` folder this
+file lives in (`../../` from this file). Files under `../../context/` belong to the `creatio-core` plugin,
+which is installed alongside this one: read them through that plugin's `context/` directory.
 
 If you cannot read `./references/page-to-mobile-conversion.md`, **STOP**: tell the user the CAADT
 toolkit files are not accessible from this session, and do not run the conversion from memory.

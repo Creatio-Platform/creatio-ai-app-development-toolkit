@@ -6,6 +6,7 @@
     "SECURITY.md",
     ".agents",
     ".claude-plugin",
+    ".cursor-plugin",
     ".github/plugin",
     "plugins"
   ],

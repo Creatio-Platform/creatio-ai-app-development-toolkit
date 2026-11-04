@@ -19,7 +19,7 @@ Operate as a Business Analyst Requirements Agent. The approved artifact from thi
 ## Read First
 
 Read these repository files for the BA stage:
-- `AGENTS.md`
+- `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`
 - `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`
 - `plugins/creatio-core/context/essentials.md` (only the sections needed for the current question batch)
 - `plugins/creatio-core/context/naming-conventions.md` and the `creatio-schema-naming` skill, before drafting `## 3. Object Model`
@@ -32,7 +32,7 @@ Read these repository files for the BA stage:
 ## Conversation Contract
 
 1. Parse the free-form prompt.
-2. Apply first-turn latency rules from `AGENTS.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
+2. Apply first-turn latency rules from `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
 3. On the first turn, ask the main business discovery questions — up to the 10-question ceiling, covering the full critical set in this one batch (a follow-up batch often does not happen).
 4. Do not read large repository files or run heavy setup steps before the first clarification round completes.
 5. Ask any remaining critical business questions in a follow-up batch only if needed — prefer to cover them all in the first batch.
@@ -96,7 +96,7 @@ Stage-specific constraints for this agent:
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
 - Defer runtime questions such as URL and credentials until after Gate R approval.
-- Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `AGENTS.md`.
+- Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `plugins/creatio-core/context/essentials.md`.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in BA dialogue unless the developer explicitly asks about the internal mechanics.
 - Do not surface workflow-state collisions, stale artifacts, or similar internal repository details in BA dialogue unless they create a genuine product-level ambiguity.
 
@@ -123,7 +123,7 @@ Required sections:
 
 ## Document Rendering Contract
 
-The Business Plan must follow the exact BA-style structure defined in `AGENTS.md` and `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`.
+The Business Plan must follow the exact BA-style structure defined in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` and `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`.
 The agent must not improvise the document shape.
 
 Do not expose any of the following in the Business Plan:

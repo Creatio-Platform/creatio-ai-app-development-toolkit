@@ -57,10 +57,13 @@ export function readSkillVersion(root) {
 }
 
 // Branch and commit are extras: an install that is not a git checkout simply has none, and that is not an error.
+// In a checkout of the toolkit the plugin is `<repo>/plugins/<plugin>`, so the `.git` it belongs to is the repo's.
 export function readGitRef(root, run) {
-  if (!existsSync(path.join(root, ".git"))) return null;
-  const branch = run("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"]);
-  const commit = run("git", ["-C", root, "rev-parse", "--short", "HEAD"]);
+  const repo = path.basename(path.dirname(root)) === "plugins" ? path.resolve(root, "..", "..") : null;
+  const gitRoot = [root, repo].find((dir) => dir && existsSync(path.join(dir, ".git")));
+  if (!gitRoot) return null;
+  const branch = run("git", ["-C", gitRoot, "rev-parse", "--abbrev-ref", "HEAD"]);
+  const commit = run("git", ["-C", gitRoot, "rev-parse", "--short", "HEAD"]);
   if (!commit.ok) return null;
   const name = branch.ok ? branch.out.trim() : "";
   return { branch: name && name !== "HEAD" ? name : null, commit: commit.out.trim() };

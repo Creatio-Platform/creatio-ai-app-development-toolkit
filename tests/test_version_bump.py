@@ -21,14 +21,15 @@ class VersionBumpTests(unittest.TestCase):
         configured = {(entry["path"], entry["field"]) for entry in config["files"]}
 
         plugins = ("creatio-core", "creatio-app-builder", "creatio-ui", "creatio-migration")
-        expected = {(".claude-plugin/plugin.json", "version")}
+        # The root manifests: the Claude meta-plugin and the Copilot and Cursor bundles.
+        expected = {(f"{host}/plugin.json", "version") for host in (".claude-plugin", ".github/plugin", ".cursor-plugin")}
         for plugin in plugins:
             for host in (".claude-plugin", ".codex-plugin", ".cursor-plugin", ".github/plugin"):
                 expected.add((f"plugins/{plugin}/{host}/plugin.json", "version"))
-        # Claude catalog: meta-plugin + 4 plugins; Codex and Copilot catalogs: the 4 plugins.
+        # Claude and Copilot catalogs: the meta-plugin's name + 4 plugins; Codex catalog: the 4 plugins.
         expected |= {(".claude-plugin/marketplace.json", f"plugins.{i}.version") for i in range(5)}
         expected |= {(".agents/plugins/marketplace.json", f"plugins.{i}.version") for i in range(4)}
-        expected |= {(".github/plugin/marketplace.json", f"plugins.{i}.version") for i in range(4)}
+        expected |= {(".github/plugin/marketplace.json", f"plugins.{i}.version") for i in range(5)}
         self.assertEqual(configured, expected)
 
     def test_repo_versions_are_in_sync(self):

@@ -4,7 +4,9 @@ The toolkit ships as a plugin family under `plugins/<name>/` (`creatio-core`, `c
 `creatio-migration`), each with its own host manifests and a flat `skills/` directory, plus a root
 `.claude-plugin/plugin.json` meta-plugin that installs the whole family on Claude Code through `dependencies`. The root
 catalogs (`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, `.github/plugin/marketplace.json`) list
-the plugins. See [`plugins/README.md`](../plugins/README.md) for what each plugin owns and
+the plugins, each entry pinned to the `release` branch. GitHub Copilot CLI and Cursor have no dependency mechanism: the
+root `.github/plugin/plugin.json` and `.cursor-plugin/plugin.json` install the whole family under the meta-plugin's
+name by listing every plugin's `skills/`. See [`plugins/README.md`](../plugins/README.md) for what each plugin owns and
 [`versioning-and-release.md`](versioning-and-release.md) for the version and release flow.
 
 The canonical list of files that ship in the release zip is defined in [`.release-manifest.json`](../.release-manifest.json) at the repository root. Two sections:
@@ -18,7 +20,9 @@ Included release files (full list lives in `.release-manifest.json`):
 
 - `.claude-plugin/plugin.json` (the meta-plugin) and `.claude-plugin/marketplace.json` for Claude Code.
 - `.agents/plugins/marketplace.json` for the Codex CLI marketplace catalog.
-- `.github/plugin/marketplace.json` for the GitHub Copilot CLI marketplace catalog.
+- `.github/plugin/marketplace.json` for the GitHub Copilot CLI marketplace catalog, and `.github/plugin/plugin.json`, the
+  manifest that installs the whole family on Copilot.
+- `.cursor-plugin/plugin.json`, the manifest of the Cursor local plugin that the installer copies.
 - `plugins/` — every plugin with its four host manifests (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, `.github/plugin/`) and `skills/`; the core `context/`, `hooks/` and `.mcp.json` (clio MCP); the app-builder `runtime/`, `rules/` (the Cursor rule) and orchestrator `references/`.
 - `AGENTS.md` for the repository-wide rules.
 - `LICENSE`, `README.md`, and `SECURITY.md` for license compliance, in-zip product overview, and the vulnerability-reporting channel.
@@ -36,6 +40,6 @@ Deferred:
 - MCP registry discovery through `server.json`.
 - Custom CAADT MCP server package.
 - `gh skill install` packaging.
-- Installer profiles (installing a subset of the family per host) and per-plugin `ref: release` pinning of the Codex and Copilot catalog entries; until then the Claude meta-plugin entry is the only pinned catalog entry.
+- Installer profiles (installing a subset of the family per host).
 - Replacing the remaining cross-plugin relative references in skill files with skill names or clio `get-guidance` articles.
 - Registry/tarball marketplace and a CAADT-owned auto-updater. (Claude Code plugin auto-update is enabled via Claude's own marketplace settings — `extraKnownMarketplaces.creatio.autoUpdate` — not a CAADT-owned mechanism.)

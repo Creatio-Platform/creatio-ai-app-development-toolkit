@@ -1,6 +1,6 @@
 # Creatio Platform Essentials
 
-> **Scope note for this repository:** This file is platform reference material only. It does not override the gate order in `AGENTS.md`: draft and approve the Business Plan first, then collect runtime inputs, resolve the environment, and execute through clio MCP. Exact tool contracts still come from `get-tool-contract`.
+> **Scope note for this repository:** This file is platform reference material only. It does not override the gate order of the `creatio-app-orchestrator` skill's orchestration policy: draft and approve the Business Plan first, then collect runtime inputs, resolve the environment, and execute through clio MCP. Exact tool contracts still come from `get-tool-contract`.
 
 This file contains the high-level platform overview and the local MCP workflow shape. Use the topic-specific files below for naming conventions, package structure, and clio CLI commands. For the executable MCP contract (parameter names, response shapes, error codes), use `get-tool-contract` and the clio MCP guidance resources.
 

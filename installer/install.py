@@ -37,6 +37,9 @@ WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
 WORKFLOW_MANIFEST_RELATIVE = "plugins/creatio-migration/skills/_workflow-core/workflows.json"
 # A single-plugin tree (one cached plugin version, checkouts from before the plugin split) keeps the manifest here.
 LEGACY_WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
+# The manifest names each script by its repository path. The cached migration plugin is a
+# single-plugin tree rooted at this prefix, so there its scripts sit at the path without it.
+WORKFLOW_PLUGIN_PREFIX = WORKFLOW_MANIFEST_RELATIVE.removesuffix(LEGACY_WORKFLOW_MANIFEST_RELATIVE)
 # A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
 # than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
 # the base and an absolute value discards the base entirely, which would turn the installer into an
@@ -335,6 +338,8 @@ PLUGINS_DIR_NAME = "plugins"
 # The telemetry floor hook ships inside the core plugin; the Cursor install registers this file
 # (copied under the local plugin dir by copy_plugin_runtime_surface) in hooks.json.
 TELEMETRY_HOOK_RELATIVE = "plugins/creatio-core/hooks/telemetry-routing.mjs"
+# Where the single-plugin layout kept the hook, relative to the same Cursor plugin directory.
+SINGLE_PLUGIN_TELEMETRY_HOOK_RELATIVE = "hooks/telemetry-routing.mjs"
 
 
 def mcp_config_path(repo_root: Path) -> Path:
@@ -424,8 +429,10 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     that coupling and its silent mis-parse.
     """
     manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    single_plugin_tree = False
     if not manifest_path.is_file() and (source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE).is_file():
         manifest_path = source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE
+        single_plugin_tree = True
     if not manifest_path.is_file():
         raise RuntimeError(
             f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
@@ -465,6 +472,8 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
                 f"A provisioned name must match creatio-[A-Za-z0-9._-]+ and contain no path "
                 f"separator, because it is written to ~/.claude/workflows/<name>.js."
             )
+        if single_plugin_tree and script.startswith(WORKFLOW_PLUGIN_PREFIX):
+            script = script[len(WORKFLOW_PLUGIN_PREFIX):]
         names[script] = name
     return names
 
@@ -1093,6 +1102,12 @@ def install_claude(repo_root: Path, home: Path) -> None:
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
+    """Copy the plugin runtime surface into one Cursor local plugin.
+
+    Cursor loads a local plugin through the `.cursor-plugin/plugin.json` at its root, so the
+    root manifest that the surface carries lists every plugin's `skills/` directory, the
+    app-builder rules and the core MCP declaration.
+    """
     cursor_home = home / ".cursor"
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
     remove_tree_if_exists(local_plugin_dir, "Cursor")
@@ -1163,11 +1178,14 @@ def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> No
     # Matched on the exact rendered command, not a "telemetry-routing.mjs" substring: a developer's
     # own hook at a different path that happens to contain that filename (a wrapper, a copy kept for
     # comparison) would otherwise be silently dropped and replaced on every reinstall — exactly the
-    # data loss the shape guard above exists to prevent.
+    # data loss the shape guard above exists to prevent. The single-plugin layout of this same
+    # directory kept the hook at its root; that command names a file the copy above replaced, so
+    # it is dropped by the same exact match.
+    owned = {command, f'node "{(local_plugin_dir / SINGLE_PLUGIN_TELEMETRY_HOOK_RELATIVE).as_posix()}"'}
     existing = [
         item
         for item in existing_hooks
-        if not isinstance(item, dict) or item.get("command") != command
+        if not isinstance(item, dict) or item.get("command") not in owned
     ]
     hooks["afterMCPExecution"] = [*existing, entry]
     try:
