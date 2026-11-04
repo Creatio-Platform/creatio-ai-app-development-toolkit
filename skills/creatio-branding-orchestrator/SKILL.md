@@ -1,6 +1,6 @@
 ---
 name: creatio-branding-orchestrator
-description: Use when the user wants to brand or theme a Creatio app — match a brandbook, a company site, or chosen colors and fonts; add or change the app's logos and browser-tab favicon; or generate a palette-matched app background. Collects brand inputs, runs the guided palette conversation through clio, gathers logos, and applies the theme, logos, favicon, and background.
+description: Use when the user wants to brand or theme a Creatio app — match a brandbook, a company site, or chosen colors and fonts; add or change the app's logos and browser-tab favicon; or set or remove a background as part of a theme, or for the whole site. Collects brand inputs, runs the guided palette conversation through clio, gathers logos, and applies the theme, logos, favicon, and background.
 ---
 
 # Creatio Branding Orchestrator
@@ -26,8 +26,8 @@ are not accessible from this session, and do not run the branding flow from memo
 ## When to use
 
 - The user wants to style, brand, or theme the app; match a brandbook or company site;
-  change the app's brand colors or fonts; add or change the app's logos; or refresh the
-  app background.
+  change the app's brand colors or fonts; add or change the app's logos; or set or remove a
+  background as part of a theme, or for the whole site.
 - Not for business modeling (entities, pages, logic) — that stays with the app workflow.
 - Branding is independent of building an app — it can run before, after, or without it.
 - Branding produces no Business Plan and is exempt from Gate P and Gate R.
@@ -42,9 +42,13 @@ theme name:
 - Logos only (add or change): resolve the environment, then go straight to the logo step and
   apply the logos. No palette conversation; offer the background only if the user brings it up. A
   favicon-only request takes the same path — the logo step, its favicon rules alone, no logo file.
-- Background only: the background is recolored from palette stops, so run brand intake and the
-  palette conversation first to settle the colors, then generate and apply the background. Skip
-  logos (unless asked), fonts, and the theme build.
+- Background only: ask which theme gets it, unless the user asked for the whole site (see the
+  targets in the Background step). Then collect the source:
+  - a generated picture is recolored from palette stops, so run brand intake and the palette
+    conversation first;
+  - the user's own image or a color needs no palette conversation.
+- Removing the background from a theme: ask which theme. Nothing else is collected.
+- On a background-only or removal request, skip logos (unless asked), fonts, and the theme build.
 - Everything else still holds: the single final summary and confirmation before applying, and
   the environment-wide visibility warning in Build and apply.
 
@@ -179,7 +183,20 @@ sanitized per the logo rules above before it is uploaded, whatever its source.
 Once the logo step is done (applied or skipped), tell the user you can also generate a background
 picture recolored to match the chosen palette, for a more consistent look, and ask whether to
 include it. The user can refuse; record the choice — the final summary must say whether a
-background will be generated or not.
+background will be set or not.
+
+| Target | Who sees it | When |
+| --- | --- | --- |
+| A theme | Accounts on that theme | Default: the theme this run builds, or the theme the user names |
+| The whole site | Every account whose theme has no background | Only when the user asks for the whole site |
+
+| Source | When |
+| --- | --- |
+| A generated picture | Default |
+| The user's own image | The user supplies a file. Sanitize an SVG per the Logos step |
+| A solid color | Only when the user asks for one |
+
+A generated picture:
 
 - Templates live in `./references/backgrounds/` — five SVG templates whose color slots are marked
   with palette tokens. Always use the primary template (`background-1.svg`). Use another template
@@ -196,9 +213,11 @@ background will be generated or not.
   defense-in-depth ahead of the sanitize step, not a substitute for it — sanitizing the recolored
   SVG must not be the only control against SVG/XML injection from scraped input.
 - Sanitize the recolored SVG the same as a logo — the sanitize rule and its strip list live in
-  the Logos step — then save it to a temporary file. It is applied during Build and apply following
-  clio's `branding` guidance (via `get-guidance`), which sets the file as the shell
-  background.
+  the Logos step — then save it to a temporary file.
+
+The background is applied during Build and apply. Setting, removing and reading it, the version it
+needs, and the fallback when the environment lacks it follow clio's `branding` guidance (via
+`get-guidance`).
 
 ## Fonts — after the background
 
@@ -222,15 +241,16 @@ hard limit and returns a clear error if the name is too long, which you relay.
 - Never show a color as a bare hex string — render the actual color as a swatch (see The palette conversation and Build and apply for when and how).
 - The logos and the background are the opposite: never render them in the conversation by
   default — no image previews when offering, extracting, generating, or recapping them.
-  Describe them in words instead (source and file name for a logo; template and palette stops
-  for the background). Render one only when the user explicitly asks to see it.
+  Describe them in words instead (source and file name for a logo or the user's own background;
+  template and palette stops for a generated background). Render one only when the user
+  explicitly asks to see it.
 - Handle changes of mind gracefully — if the user revisits an earlier choice, re-run the
   affected step through the color tool and continue; don't force a fixed script.
 - Intake, palette, logo, background, and font steps are not approval gates. The logo-extraction
   and background questions are in-flow choices like any color choice; there is one confirmation
   before building the theme (see below). That build confirmation covers the theme, which is a
   per-user change — it does **not** stand in for the environment-wide apply gate below.
-- Logo and background writes need their own explicit confirmation, separate from the theme build —
+- Environment-wide writes need their own explicit confirmation, separate from the theme build —
   see the environment-wide apply gate in Build and apply.
 - Out of scope — advanced design tokens (borders, icons, states) and typography
   beyond font-family (font-weight, letter-spacing, font-size, line-height).
@@ -242,9 +262,9 @@ base (-500) colors (primary, secondary, accent, success, error) — each rendere
 swatch, not bare hex — any non-default font(s), and the theme name, plus a brief reminder of any
 color the user chose to keep despite a low-contrast warning. The recap must also state plainly
 whether the logos will be changed (and from which files) or left as they are — naming the favicon that
-goes with them, or the favicon by itself when it is the whole request — and whether a palette-matched
-background will be generated or not, and name the package the new branding data will be added to —
-choosing that package, checking it can take the data, and passing it to every apply is owned by clio's
+goes with them, or the favicon by itself when it is the whole request — and the background: its source
+and its target (theme `<name>` or the whole site), its removal from theme `<name>`, or none. Name the
+package the new branding data will be added to — choosing that package, checking it can take the data, and passing it to every apply is owned by clio's
 `branding` guidance (via `get-guidance`); follow it before presenting the recap and state the name it
 settles on. Show full stops or other detail only if asked. If the user wants to change something,
 return to the relevant block (primary / secondary / accent / success / error / logo / background /
@@ -254,22 +274,26 @@ After the single final confirmation, follow clio's theming guidance to build the
 the collected inputs and create the theme on the environment. The build, the exact tool
 sequence, the license preconditions, and how a theme is applied live in that guidance.
 
-Then, when the user included them, apply the branding assets. Unlike the theme (a per-user
-change), the logos, the favicon and the background are **environment-wide** — they change the look for
-every user, including pre-login surfaces such as the login page. So before the first apply/upload call
-for any of them, take a distinct, explicit confirmation separate from the theme build above: state
-plainly that this will change branding for everyone on the environment, name what will change — the
-logos with their favicon, the favicon on its own, and/or the background — and proceed only on an
-explicit yes. This gate is per apply,
-not the in-flow "include logos/background?" choice collected earlier. If the user declines here, leave
+Then, when the user included them, apply the branding assets. A theme background goes on the theme
+just created, or on the theme the user named. Unlike the theme (a per-user change), the logos, the
+favicon and a site background are **environment-wide** — they change the look for every user,
+including pre-login surfaces such as the login page. A theme background changes only accounts on that
+theme, but the `branding` guidance names an environment-wide side effect of setting one. So before the
+first apply/upload call for any environment-wide change, take a distinct, explicit confirmation separate
+from the theme build above: state plainly that this will change branding for everyone on the
+environment, name what will change — the logos with their favicon, the favicon on its own, the site
+background, and/or that side effect — and proceed only on an explicit yes. Removing a theme background
+needs no such confirmation. This gate is per apply, not the in-flow "include logos/background?" choice
+collected earlier. If the user declines here, leave
 the assets unchanged and say so. The concrete tool mechanics live in clio's branding guidance
-(the `branding` guidance, via `get-guidance`) — follow it to write the logos and favicon and to set the recolored
-SVG as the shell background. Skipped logos or a declined background mean the corresponding apply
+(the `branding` guidance, via `get-guidance`) — follow it to write the logos and favicon and to set or
+remove the background. Skipped logos or a declined background mean the corresponding apply
 simply does not happen.
 
 Close the flow by telling the user which package the branding data was added to — the package the
 recap named, since the same one goes to the theme, the logos, and the background. The logo and
-background applies name it in their own results; relay that and their warnings.
+background applies name it in their own results; relay that and their warnings. Say who sees the
+background, per the targets in the Background step.
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
 other:
@@ -301,8 +325,9 @@ other:
     it matches the new default, so there is nothing to clear and nothing changes.
 
 Whenever the look an account actually renders changes — because you applied the theme to that
-account, because you made it the default and that account has no personal theme of its own, or
-because logos or the background changed for everyone — remind that user that an already-open page
+account, because you made it the default and that account has no personal theme of its own, because
+the background of that account's theme changed, or because logos or the site background changed for
+everyone — remind that user that an already-open page
 keeps the old look until it is **refreshed**. The favicon is the one exception: a refresh is not
 enough, so when it changed, say that the user has to sign out and back in, and that an already-open
 tab may keep the old icon until it is closed and reopened.
