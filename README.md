@@ -135,6 +135,12 @@ Use the repository docs by responsibility:
 Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
 Repository docs do not define clio tool parameter or response shapes.
 
+## RCA Agent
+
+The toolkit also carries the RCA agent, which investigates Creatio configuration incidents read-only and reports
+the root cause with evidence and a recommendation. How to set it up and use it:
+[RCA AI Agent for Creatio](modules/rca/docs/README.md).
+
 ## More Documentation
 
 - [Install guide](docs/install.md)

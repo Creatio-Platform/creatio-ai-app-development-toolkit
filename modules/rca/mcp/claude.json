@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "rca-creatio-http": {
+      "type": "http",
+      "url": "${CREATIO_HTTP_MCP_URL}",
+      "headers": {
+        "X-Creatio-Base-Url": "${CREATIO_BASE_URL}",
+        "X-Creatio-Client-Id": "${CREATIO_CLIENT_ID}"
+      }
+    },
+    "rca-files": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/modules/rca/scripts/rca-files-mcp.mjs"]
+    }
+  }
+}

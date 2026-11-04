@@ -1,0 +1,5 @@
+---
+display_name: "RCA Activity Log Read"
+short_description: "Read the Creatio Configuration Activity Log for an incident"
+default_prompt: "Use $rca-cal-read to find this incident in the Configuration Activity Log and walk its operation tree."
+---
