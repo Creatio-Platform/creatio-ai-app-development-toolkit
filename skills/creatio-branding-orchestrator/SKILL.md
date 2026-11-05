@@ -1,6 +1,6 @@
 ---
 name: creatio-branding-orchestrator
-description: Use when the user wants to brand or theme a Creatio app — match a brandbook, a company site, or chosen colors and fonts; add or change the app's logos and browser-tab favicon; or set or remove a background as part of a theme, or for the whole site. Collects brand inputs, runs the guided palette conversation through clio, gathers logos, and applies the theme, logos, favicon, and background.
+description: Use when the user wants to brand or theme a Creatio app — match a brandbook, a company site, or chosen colors and fonts; add or change the app's logos and browser-tab favicon; or set or remove a background. Collects brand inputs, runs the guided palette conversation through clio, gathers logos, and applies the theme, logos, favicon, and background.
 ---
 
 # Creatio Branding Orchestrator
@@ -27,7 +27,7 @@ are not accessible from this session, and do not run the branding flow from memo
 
 - The user wants to style, brand, or theme the app; match a brandbook or company site;
   change the app's brand colors or fonts; add or change the app's logos; or set or remove a
-  background as part of a theme, or for the whole site.
+  background (see Background).
 - Not for business modeling (entities, pages, logic) — that stays with the app workflow.
 - Branding is independent of building an app — it can run before, after, or without it.
 - Branding produces no Business Plan and is exempt from Gate P and Gate R.
@@ -191,7 +191,7 @@ include it. The user can refuse; record the choice for the final summary.
 | --- | --- |
 | A generated picture | Default |
 | The user's own image | The user supplies a file. Sanitize an SVG per the Logos step |
-| A solid color | Only when the user asks for one |
+| A solid color | Only when the user asks for one, and only for a theme |
 
 A generated picture:
 
@@ -261,42 +261,34 @@ goes with them, or the favicon by itself when it is the whole request — and th
 and target, the theme it is removed from, or none. Name the package the new branding data will be added to —
 choosing that package, checking it can take the data, and passing it to every apply is owned by clio's
 `branding` guidance (via `get-guidance`); follow it before presenting the recap and state the name it
-settles on. A background for an existing theme goes to that theme's own package instead; say so.
+settles on. A background for an existing theme goes to that theme's own package instead, as the
+`theming` guidance says; name it.
 Show full stops or other detail only if asked. If the user wants to change something,
 return to the relevant block (primary / secondary / accent / success / error / logo / background /
 font / name / package) and re-present the summary.
 
 After the single final confirmation, follow clio's theming guidance to build the theme CSS from
 the collected inputs and create the theme on the environment. The build, the exact tool
-sequence, the license preconditions, and how a theme is applied live in that guidance. A theme's
-background is not a separate apply: it goes into the theme write itself — the create for a new
-theme, or, for an existing theme, an update that changes only the background and needs no CSS.
+sequence, the license preconditions, and how a theme is applied live in that guidance. The
+theme's background goes into that same write; for an existing theme it is an update that changes
+only the background.
 
-Apply in this order: the theme with its background, then applying it to you (see below), then the
-logos and the favicon, then a site background. If the theme write fails because of its background,
-nothing is written: relay the reason, then ask whether to go on without a background or with another
+Then apply the theme to you (see below), then the logos and the favicon, then a site background;
+clio's `branding` guidance has the mechanics of the last two. If the theme write fails because of
+its background, the theme write changes nothing, but an image uploaded for it stays: relay the
+reason, reuse that image on a retry, and ask whether to go on without a background or with another
 file.
 
-Unlike the theme (a per-user change), the logos, the favicon and a site background are
-**environment-wide** — they change the look for every user, including pre-login surfaces such as the
-login page. A theme background is not, but the `theming` guidance names an environment-wide side
-effect of setting one. So before the first write that makes any environment-wide change, take a
-distinct, explicit confirmation separate from the summary confirmation: state plainly that this will
-change branding for everyone on the environment, name what will change — the logos with their
+The logos, the favicon and a site background are **environment-wide**, and the `theming` and
+`branding` guidance name an environment-wide side effect of setting any background. Before the first write that
+makes such a change — the theme write, when the theme gets a background — take one explicit
+confirmation, separate from the summary: name what changes for everyone — the logos with their
 favicon, the favicon on its own, the site background, and/or that side effect — and proceed only on
-an explicit yes. When the theme gets a background, that first write is the theme write, so ask
-before it; the one question covers the logos, the favicon and a site background too. Removing a
-theme background needs no such confirmation. This gate is not the in-flow "include
-logos/background?" choice collected earlier. If the user declines here, leave those assets unchanged
-and say so; a declined side effect is handled per the `theming` guidance.
+a yes. Removing a theme background needs none. If the user declines, leave those assets unchanged
+and say so; a declined side effect is handled per that guidance.
 
-The tool mechanics live in clio's guidance (via `get-guidance`): `theming` for a theme's background,
-including the version it needs and the fallback when the environment lacks it; `branding` for the
-logos, the favicon and a site background. Skipped logos or a declined background mean that apply
-does not happen.
-
-Close the flow by naming the package the branding data was added to, as the recap did. Relay the
-warnings of each apply. Say who sees the background, per the targets in the Background step.
+Close by naming the package the recap named, relaying each apply's warnings, and saying who sees the
+background (see the targets in the Background step).
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
 other:

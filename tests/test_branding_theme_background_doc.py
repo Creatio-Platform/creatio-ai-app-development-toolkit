@@ -30,7 +30,7 @@ SKILL_RULES = (
     "| Every account whose theme has no background |",
     "Default: the theme this run builds, or the theme the user names",
     "Only when the user asks for the whole site",
-    "| A solid color | Only when the user asks for one |",
+    "| A solid color | Only when the user asks for one, and only for a theme |",
     "| The user's own image | The user supplies a file. Sanitize an SVG per the Logos step |",
     "Background only: ask which theme gets it, unless the user asked for the whole site",
     "Only a generated picture needs brand intake and the palette conversation first",
@@ -38,34 +38,29 @@ SKILL_RULES = (
     "By the end of this step the background is ready: the user's file, the color, or the generated "
     "picture in its temporary file.",
     "the background: its source and target, the theme it is removed from, or none",
-    "A background for an existing theme goes to that theme's own package instead; say so.",
-    "A theme's background is not a separate apply: it goes into the theme write itself",
-    "for an existing theme, an update that changes only the background and needs no CSS",
-    "Apply in this order: the theme with its background, then applying it to you (see below), "
-    "then the logos and the favicon, then a site background.",
-    "If the theme write fails because of its background, nothing is written: relay the reason, "
-    "then ask whether to go on without a background or with another file.",
-    "the logos, the favicon and a site background are **environment-wide**",
-    "the `theming` guidance names an environment-wide side effect of setting one.",
-    "before the first write that makes any environment-wide change, "
-    "take a distinct, explicit confirmation separate from the summary confirmation",
-    "When the theme gets a background, that first write is the theme write, so ask before it; "
-    "the one question covers the logos, the favicon and a site background too.",
-    "Removing a theme background needs no such confirmation",
-    "a declined side effect is handled per the `theming` guidance.",
-    "`theming` for a theme's background, including the version it needs and the fallback when the "
-    "environment lacks it; `branding` for the logos, the favicon and a site background",
-    "Say who sees the background, per the targets in the Background step",
+    "A background for an existing theme goes to that theme's own package instead, as the `theming` guidance says; name it.",
+    "The theme's background goes into that same write; for an existing theme it is an update that "
+    "changes only the background.",
+    "Then apply the theme to you (see below), then the logos and the favicon, then a site background; "
+    "clio's `branding` guidance has the mechanics of the last two.",
+    "If the theme write fails because of its background, the theme write changes nothing, but an image "
+    "uploaded for it stays: relay the reason, reuse that image on a retry, and ask whether to go on without "
+    "a background or with another file.",
+    "The logos, the favicon and a site background are **environment-wide**, and the `theming` and "
+    "`branding` guidance name an environment-wide side effect of setting any background.",
+    "Before the first write that makes such a change — the theme write, when the theme gets a "
+    "background — take one explicit confirmation, separate from the summary",
+    "Removing a theme background needs none.",
+    "a declined side effect is handled per that guidance.",
+    "saying who sees the background (see the targets in the Background step)",
     "a theme write that carries a background also sends `background` — after `theme` for a new theme, "
     "alone when it only changes or removes the background",
     "Default: the theme this run builds",
     "the theme the user name",
     "palette conversation first",
     "environment-wide side effect",
-    "separate from the summary confirmation",
-    "that first write is the theme write",
-    "Apply in this order",
-    "the fallback when the environment lacks it",
+    "separate from the summary",
+    "goes into that same write",
     "carries a background",
 )
 
@@ -85,11 +80,12 @@ class BrandingThemeBackgroundDocTests(unittest.TestCase):
     def test_the_branding_flow_row_lists_the_background_variant(self):
         self.assertIn("per applied asset (`variant=theme` / `logo` / `background`)", prose(TELEMETRY))
 
-    def test_every_routing_line_offers_a_background_as_part_of_a_theme(self):
+    def test_every_routing_line_names_a_background_and_leaves_its_targets_to_the_skill(self):
         for path in ROUTING_DOCS:
             with self.subTest(path=path.name):
-                self.assertIn("as part of a theme", prose(path))
-                self.assertNotIn("palette-matched app background", prose(path))
+                self.assertRegex(prose(path), r"\ban? (app )?background\b")
+                if path != SKILL:
+                    self.assertNotIn("whole site", prose(path))
 
     def test_clio_tools_settings_features_and_versions_stay_out_of_the_toolkit(self):
         for path in ROUTING_DOCS + (ASSETS,):
