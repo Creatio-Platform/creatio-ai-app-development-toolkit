@@ -183,6 +183,39 @@ class AcquireSourceTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class RuntimeDirTests(unittest.TestCase):
+    """version_check is imported from the runtime of whichever layout the updater runs from."""
+
+    def setUp(self):
+        self.upd = load_update()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.plugin_runtime = self.root / "plugins" / "creatio-app-builder" / "runtime"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_the_plugin_layout_keeps_it_in_the_app_builder_plugin(self):
+        self.plugin_runtime.mkdir(parents=True)
+        self.assertEqual(self.upd.runtime_dir(self.root), self.plugin_runtime)
+
+    def test_a_single_plugin_tree_keeps_it_at_the_root(self):
+        (self.root / "runtime").mkdir()
+        self.assertEqual(self.upd.runtime_dir(self.root), self.root / "runtime")
+
+    def test_the_plugin_layout_wins_when_a_tree_has_both(self):
+        self.plugin_runtime.mkdir(parents=True)
+        (self.root / "runtime").mkdir()
+        self.assertEqual(self.upd.runtime_dir(self.root), self.plugin_runtime)
+
+    def test_a_tree_without_one_names_the_plugin_layout(self):
+        self.assertEqual(self.upd.runtime_dir(self.root), self.plugin_runtime)
+
+    def test_this_checkout_resolves_to_the_app_builder_runtime(self):
+        self.assertEqual(self.upd.runtime_dir(ROOT), ROOT / "plugins" / "creatio-app-builder" / "runtime")
+        self.assertTrue((self.upd.runtime_dir(ROOT) / "version_check.py").is_file())
+
+
 class NativeUpdateCommandsTests(unittest.TestCase):
     def setUp(self):
         self.upd = load_update()
@@ -385,6 +418,37 @@ class UpdateAgentsTests(unittest.TestCase):
         self.assertEqual((updated, list(failed)), ([], ["claude"]))
 
 
+# `claude plugin list --json` as Claude Code 2.1.270 prints it while the meta-plugin's `creatio-ui`
+# dependency is not installed (install paths shortened).
+CLAUDE_LIST_WITH_A_MISSING_DEPENDENCY = """[
+  {
+    "id": "creatio-ai-app-development-toolkit@creatio",
+    "version": "2.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:/h/.claude/plugins/cache/creatio/creatio-ai-app-development-toolkit/2.0.0",
+    "installedAt": "2026-11-04T16:07:17.752Z",
+    "lastUpdated": "2026-11-04T16:07:17.752Z",
+    "errors": [
+      "Dependency \\"creatio-ui@creatio\\" is not installed \u2014 run `claude plugin install creatio-ui@creatio`, or check that its marketplace is added"
+    ],
+    "errorDetails": [
+      {"type": "dependency-unsatisfied", "plugin": "creatio-ai-app-development-toolkit", "dependency": "creatio-ui@creatio"}
+    ]
+  },
+  {
+    "id": "creatio-core@creatio",
+    "version": "2.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:/h/.claude/plugins/cache/creatio/creatio-core/2.0.0",
+    "installedAt": "2026-11-04T16:07:23.513Z",
+    "lastUpdated": "2026-11-04T16:07:23.513Z",
+    "mcpServers": {"clio": {"command": "clio", "args": ["mcp-server"]}}
+  }
+]"""
+
+
 class ClaudeFamilyUpdateTests(unittest.TestCase):
     """`claude plugin update` updates the plugin it names and installs nothing: the updater brings
     the rest of the family current and installs every dependency an updated plugin declares."""
@@ -408,7 +472,10 @@ class ClaudeFamilyUpdateTests(unittest.TestCase):
 
         def fake(cmd, **kw):
             self.calls.append(cmd)
-            stdout = json.dumps(pending.pop(0)) if cmd[-2:] == ["list", "--json"] else ""
+            stdout = ""
+            if cmd[-2:] == ["list", "--json"]:
+                listing = pending.pop(0)
+                stdout = listing if isinstance(listing, str) else json.dumps(listing)
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
 
         with patch.object(self.upd.subprocess, "run", side_effect=fake):
@@ -439,10 +506,26 @@ class ClaudeFamilyUpdateTests(unittest.TestCase):
         self._run([[self._entry("creatio-ui")], [self._entry("creatio-ui", missing=["vault@elsewhere"])]])
         self.assertEqual(self._installs(), [])
 
+    def test_the_listing_claude_prints_is_read(self):
+        self._run([CLAUDE_LIST_WITH_A_MISSING_DEPENDENCY, CLAUDE_LIST_WITH_A_MISSING_DEPENDENCY, "[]"])
+        self.assertIn(["claude", "plugin", "update", "creatio-core@creatio"], self.calls)
+        self.assertEqual(self._installs(), [["claude", "plugin", "install", "creatio-ui@creatio"]])
+
     def test_a_dependency_that_stays_missing_fails_the_update(self):
         stuck = [self._entry("creatio-ui", missing=["creatio-core@creatio"])]
         with self.assertRaisesRegex(RuntimeError, "creatio-core@creatio"):
-            self._run([stuck] * (self.upd._DEPENDENCY_ROUNDS + 1))
+            self._run([stuck] * (self.upd._DEPENDENCY_ROUNDS + 2))
+        self.assertEqual(len(self._installs()), self.upd._DEPENDENCY_ROUNDS)
+
+    def test_a_chain_that_settles_on_the_last_round_succeeds(self):
+        rounds = self.upd._DEPENDENCY_ROUNDS
+        missing = [self._entry("creatio-ui", missing=["creatio-core@creatio"])]
+        self._run([[self._entry("creatio-ui")]] + [missing] * rounds + [[self._entry("creatio-ui")]])
+        self.assertEqual(len(self._installs()), rounds)
+
+    def test_a_listing_that_is_not_a_list_fails_the_update(self):
+        with self.assertRaisesRegex(RuntimeError, "not the list of installed plugins"):
+            self._run([{"plugins": []}])
 
     def test_a_listing_that_is_not_json_fails_the_update(self):
         def fake(cmd, **kw):

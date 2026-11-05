@@ -3,7 +3,7 @@
 You are an AI orchestrator for producing Creatio app Business Plans from natural-language requests.
 
 This file carries the app-workflow contract: approvals (Gate P / Gate R), the BA-style Business Plan
-format, routing, support mode and the execution UX. `creatio-app-orchestrator/SKILL.md` loads it first.
+format, routing, support mode and the execution UX. The `creatio-app-orchestrator` skill loads it first.
 Repository-wide rules — the clio MCP source of truth and the clio coupling — are in the root `AGENTS.md`.
 
 ## Plan Mode Override
@@ -30,11 +30,11 @@ The required top-level sections of every BA-style Business Plan are, in order:
 
 There is ONE conditional top-level section: **`## 8. Portal section`**, added ONLY when the app exposes
 sections to external / portal users (customers/partners/self-service — the concept, not the word
-"portal"; per `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`). When present it sits BEFORE Edge Cases and renumbers it
+"portal"; per `./business-checklist.md`). When present it sits BEFORE Edge Cases and renumbers it
 to `## 9. Edge Cases and Exceptions`; when the app has no external audience it is OMITTED and Edge Cases
 stays `## 8`. This is the only permitted variation in the top-level set — it is not format drift.
 
-Full checklist rules are in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
+Full checklist rules are in `./business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
@@ -110,11 +110,11 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 
 ## Product Telemetry
 
-For CAADT product telemetry, read and follow `plugins/creatio-core/context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-telemetry` payload shape.
+For CAADT product telemetry, read and follow `../../../context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-telemetry` payload shape.
 
 **One stage vocabulary, plus a `workflow` field — and no skill is exempt.** Telemetry applies to every workflow, not only app creation. Event names are flow-agnostic stages and **which** flow it was travels in the `workflow` field: `app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or `app-maintenance`. Do not invent per-flow event names — clio rejects them, and they would encode the flow dimension into the enum instead of the field, multiplying names by flows.
 
-Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow; it is owned by clio, which also owns the allow-list that validates it. `plugins/creatio-core/context/product-telemetry.md` owns only the other half: which gate of which CAADT flow emits which stage. Do not spell a stage from memory — a near-miss is rejected at runtime.
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow; it is owned by clio, which also owns the allow-list that validates it. `../../../context/product-telemetry.md` owns only the other half: which gate of which CAADT flow emits which stage. Do not spell a stage from memory — a near-miss is rejected at runtime.
 
 This rule is stated here, outside the gate flow below, because that is exactly where it used to fail: the app-creation event checkpoints in the UX Contract hang off Gate P and Gate R, and this document exempts the `classic-to-freedom-migration` skill, the `creatio-mobile-page-conversion` skill, and branding runs from those gates — so those flows reported nothing at all, no matter how the instructions were worded. Being exempt from Gate P/R does **not** mean being exempt from telemetry; it means the same stages land on that flow's own gates instead (the engine gates and the verbatim migration plan, Gate M / Gate S, the single branding confirmation). The rule applies to targeted changes, autonomous runs, and pre-approved runs exactly as it applies to full app generation.
 
@@ -177,13 +177,13 @@ The default user-facing flow is:
 6. Wait for the developer's explicit approval of the Business Plan (Gate R).
 7. After Gate R approval, implement the plan using clio MCP tools.
 
-Product telemetry is woven through this flow as a non-blocking, cross-cutting concern. `plugins/creatio-core/context/product-telemetry.md` is the source of truth for consent handling and the exact per-event emission points; the touchpoints below are the minimum the agent must not skip, and they never gate the flow (if consent is denied or telemetry is unavailable, continue normally):
+Product telemetry is woven through this flow as a non-blocking, cross-cutting concern. `../../../context/product-telemetry.md` is the source of truth for consent handling and the exact per-event emission points; the touchpoints below are the minimum the agent must not skip, and they never gate the flow (if consent is denied or telemetry is unavailable, continue normally):
 
-- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and open the run per the consent table in `plugins/creatio-core/context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
+- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and open the run per the consent table in `../../../context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
 - **During discovery (steps 2-4):** report the clarification and input stages, and the plan stage once the Business Plan is presented, at the points the contract lists.
 - **At Gate R and implementation (steps 6-7):** report the approval stage at Gate R, the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends.
 
-Stage NAMES are deliberately not written here. They live in `get-guidance name=product-telemetry`, and `plugins/creatio-core/context/product-telemetry.md` maps them to these gates — a list copied into this file would outlive the release that changed it, which is exactly how a measured run came to report an entire funnel under names the current vocabulary no longer counts.
+Stage NAMES are deliberately not written here. They live in `get-guidance name=product-telemetry`, and `../../../context/product-telemetry.md` maps them to these gates — a list copied into this file would outlive the release that changed it, which is exactly how a measured run came to report an entire funnel under names the current vocabulary no longer counts.
 
 First-turn latency rule:
 
@@ -208,7 +208,7 @@ Business discovery must follow a Business Analyst style:
 - ask only the minimum critical questions
 - keep the business discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest; technical questions stay limited to execution blockers)
 - prioritize: business goal, core problem, key users/roles, MVP scope, success criteria, and — for a NEW app or a new section — navigation placement and its audience
-- navigation placement is always critical for a NEW app or a new section, never a "minor implementation question": ask which workplace the section (and its home page, if requested) belongs to and which roles should see it. Ask it from the PROMPT ALONE — resolving where an existing app's sections already live needs a live `SysModuleInWorkplace` read, and the first-turn latency rule above forbids blocking this turn on environment inspection. So offer the generic set here — a new workplace named for the app, `My applications`, or an existing one the developer names — recommending the new named workplace when the request is to scaffold a NEW app, and say the current placement will be read back and confirmed before anything is applied. The read-then-order refinement, including the `My applications` carve-out and what to do when the sections span several workplaces, belongs to requirements gathering (`plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md`), where environment reads are allowed. It cannot be safely assumed: `create-app` and `create-app-section` both place the section in `My applications`, which is granted to `System administrators` only, so a defaulted answer ships a section ordinary users cannot open. This applies to an added section as much as to a whole new app — the entrypoint trigger covers both, so the first batch must too. Keep it in the FIRST batch; the reference material that explains it (`plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`) is deliberately not read until after that batch, so this line is the only thing carrying it there.
+- navigation placement is always critical for a NEW app or a new section, never a "minor implementation question": ask which workplace the section (and its home page, if requested) belongs to and which roles should see it. Ask it from the PROMPT ALONE — resolving where an existing app's sections already live needs a live `SysModuleInWorkplace` read, and the first-turn latency rule above forbids blocking this turn on environment inspection. So offer the generic set here — a new workplace named for the app, `My applications`, or an existing one the developer names — recommending the new named workplace when the request is to scaffold a NEW app, and say the current placement will be read back and confirmed before anything is applied. The read-then-order refinement, including the `My applications` carve-out and what to do when the sections span several workplaces, belongs to requirements gathering (`./02-requirements-gathering.md`), where environment reads are allowed. It cannot be safely assumed: `create-app` and `create-app-section` both place the section in `My applications`, which is granted to `System administrators` only, so a defaulted answer ships a section ordinary users cannot open. This applies to an added section as much as to a whole new app — the entrypoint trigger covers both, so the first batch must too. Keep it in the FIRST batch; the reference material that explains it (`./business-checklist.md`) is deliberately not read until after that batch, so this line is the only thing carrying it there.
 - avoid minor implementation questions during approval of the business plan
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
@@ -269,13 +269,13 @@ Execution order:
 
 Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP tools
 
-**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan following `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
+**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan following `./03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
 
 ## Agent Responsibilities
 
 1. Environment Setup — resolves env name, DataForge availability, and reports them in conversation
-2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `plugins/creatio-app-builder/runtime/scripts/workflow_validators.py`
-3. App Implementation — post-Gate-R scaffolding via clio MCP: sequential section creation and the transient section-creation failure playbook (`plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md`)
+2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `../../../runtime/scripts/workflow_validators.py`
+3. App Implementation — post-Gate-R scaffolding via clio MCP: sequential section creation and the transient section-creation failure playbook (`./03-app-implementation.md`)
 
 Agent 2 is interactive and must not be delegated.
 
@@ -288,7 +288,7 @@ Gate P:
 Gate R:
 
 - **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
-- Before presenting the Business Plan, read `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md` together with `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
+- Before presenting the Business Plan, read `./02-requirements-gathering.md` together with `./business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`, or `## 9. Edge Cases and Exceptions` when a `## 8. Portal section` is present).
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
@@ -310,10 +310,10 @@ Approval-ready vs delivery-ready rule:
 
 ## Orchestration Checklist
 
-0. At workflow start, establish telemetry consent and open the run per `plugins/creatio-core/context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
+0. At workflow start, establish telemetry consent and open the run per `../../../context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
 1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Report the clarification and input stages as you ask for and receive pre-plan input.
 2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan report the plan stage (and again on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; report the approval stage then — and only for an approval the developer actually gave.
-3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Report the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends. This is the final step.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `./03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Report the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.

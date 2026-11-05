@@ -405,10 +405,32 @@ def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
     return servers
 
 
-def workflow_manifest_names(source_root: Path) -> dict[str, str]:
-    """Map each bundled workflow script (repo-relative POSIX path) to its declared name.
+def _resolve_workflow_manifest(source_root: Path) -> tuple[Path, str]:
+    """The workflow manifest of a source tree, and the prefix its script paths carry beyond that tree.
 
-    Read from the GENERATED manifest at ``plugins/creatio-migration/skills/_workflow-core/workflows.json`` (or the single-plugin ``skills/_workflow-core/workflows.json``), which
+    A checkout or a release keeps the manifest under the migration plugin, and the manifest names
+    every script by its repository path. A single-plugin tree (one cached plugin version) keeps it
+    at ``skills/_workflow-core/``: rooted at the migration plugin, its scripts sit at the manifest's
+    paths without WORKFLOW_PLUGIN_PREFIX, and a single-plugin release names them without it anyway.
+    """
+    manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    if manifest_path.is_file():
+        return manifest_path, ""
+    single_plugin_manifest = source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE
+    if single_plugin_manifest.is_file():
+        return single_plugin_manifest, WORKFLOW_PLUGIN_PREFIX
+    raise RuntimeError(
+        f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
+        f"bundled workflow script cannot be provisioned as a named workflow: {source_root}. "
+        f"Re-run the installer from a current release, or run "
+        f"`node scripts/build-workflows.mjs` in a checkout."
+    )
+
+
+def workflow_manifest_names(source_root: Path) -> dict[str, str]:
+    """Map each bundled workflow script (POSIX path relative to ``source_root``) to its declared name.
+
+    Read from the GENERATED manifest that ``_resolve_workflow_manifest`` locates, which
     ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
     from, under the same ``--check`` drift gate.
 
@@ -428,18 +450,7 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     a parser. There is deliberately no fallback - one that no test exercises would carry exactly
     that coupling and its silent mis-parse.
     """
-    manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
-    single_plugin_tree = False
-    if not manifest_path.is_file() and (source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE).is_file():
-        manifest_path = source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE
-        single_plugin_tree = True
-    if not manifest_path.is_file():
-        raise RuntimeError(
-            f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
-            f"bundled workflow script cannot be provisioned as a named workflow: {source_root}. "
-            f"Re-run the installer from a current release, or run "
-            f"`node scripts/build-workflows.mjs` in a checkout."
-        )
+    manifest_path, strip_prefix = _resolve_workflow_manifest(source_root)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -472,9 +483,7 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
                 f"A provisioned name must match creatio-[A-Za-z0-9._-]+ and contain no path "
                 f"separator, because it is written to ~/.claude/workflows/<name>.js."
             )
-        if single_plugin_tree and script.startswith(WORKFLOW_PLUGIN_PREFIX):
-            script = script[len(WORKFLOW_PLUGIN_PREFIX):]
-        names[script] = name
+        names[script.removeprefix(strip_prefix)] = name
     return names
 
 

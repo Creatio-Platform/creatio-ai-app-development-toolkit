@@ -159,7 +159,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
         agents = agents_contract_text()
 
         self.assertIn("Product Telemetry", agents)
-        self.assertIn("plugins/creatio-core/context/product-telemetry.md", agents)
+        self.assertIn("context/product-telemetry.md", agents)
         self.assertIn("source of truth for consent handling", agents)
 
     def test_agents_states_the_rule_outside_the_gate_flow(self):

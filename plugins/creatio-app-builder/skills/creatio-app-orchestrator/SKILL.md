@@ -13,9 +13,11 @@ This skill ships inside the `creatio-app-builder` plugin. Its **toolkit root** i
 directory two levels up from this file (`../../`): it holds `runtime/` and `rules/`, and this
 skill's own `references/` folder holds the orchestration policy, the stage runbooks and the
 business checklist. Resolve every path below against those locations, not your current working
-directory. Files under `../../context/` belong to the `creatio-core` plugin and are installed
-alongside this one; until a follow-up change replaces those paths with skill names, read them through the
-`creatio-core` plugin's `context/` directory.
+directory; a path inside a file under `references/` is relative to that file (`./` is the
+`references/` folder, `../../../` the plugin root). Files under the plugin root's `context/`
+(`../../context/` here, `../../../context/` in `references/`) belong to the `creatio-core` plugin and
+are installed alongside this one; until a follow-up change replaces those paths with skill names,
+read them through the `creatio-core` plugin's `context/` directory.
 
 If you cannot read `./references/orchestration-policy.md`, STOP: tell the user the CAADT toolkit
 files are not accessible from this session, and do not produce a plan from memory.

@@ -51,16 +51,23 @@ from pathlib import Path
 
 # Allow running as `python installer/update.py` from a checkout, an extracted
 # release, or an installed plugin directory. The installer dir holds agent_cli
-# (shared with install.py); the runtime dir holds version_check. Since the plugin
-# split the runtime ships inside the app-builder plugin; a tree from before the
-# split (one cached plugin version) still carries it at the root.
+# (shared with install.py); the runtime dir holds version_check.
 _INSTALLER_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _INSTALLER_DIR.parent
-_RUNTIME_DIR_CANDIDATES = (
-    _REPO_ROOT / "plugins" / "creatio-app-builder" / "runtime",
-    _REPO_ROOT / "runtime",
-)
-_RUNTIME_DIR = next((d for d in _RUNTIME_DIR_CANDIDATES if d.is_dir()), _RUNTIME_DIR_CANDIDATES[0])
+
+
+def runtime_dir(repo_root: Path) -> Path:
+    """The directory that holds version_check in the tree rooted at *repo_root*.
+
+    The plugin layout ships it in the app-builder plugin's `runtime/`; a single-plugin tree
+    (one cached plugin version) carries `runtime/` at its root. The plugin layout wins when a
+    tree has both, and is the answer when it has neither, so a missing runtime names that path.
+    """
+    candidates = (repo_root / "plugins" / "creatio-app-builder" / "runtime", repo_root / "runtime")
+    return next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
+
+
+_RUNTIME_DIR = runtime_dir(_REPO_ROOT)
 
 for _dir in (_INSTALLER_DIR, _RUNTIME_DIR):
     if str(_dir) not in sys.path:
@@ -180,7 +187,10 @@ def _run_step(command: list[str]) -> str:
 def claude_marketplace_plugins(cli: list[str]) -> list[dict]:
     """The installed plugins of the CAADT marketplace, as `claude plugin list --json` reports them.
 
-    An empty listing is read as no plugins, so a CLI that prints nothing never fails the update.
+    The listing is a JSON array with one object per installed plugin; an unmet dependency shows up
+    in that object's `errorDetails` as a `dependency-unsatisfied` item naming `<plugin>@<marketplace>`.
+    An empty listing is read as no plugins. Anything else fails the update rather than reading as
+    "nothing to do": the dependency check below would otherwise pass without having looked.
     """
     output = _run_step([*cli, "plugin", "list", "--json"]).strip()
     if not output:
@@ -189,9 +199,11 @@ def claude_marketplace_plugins(cli: list[str]) -> list[dict]:
         entries = json.loads(output)
     except ValueError as error:
         raise RuntimeError(f"`claude plugin list --json` did not print JSON: {error}") from error
-    suffix = f"@{agent_cli.MARKETPLACE_NAME}"
     if not isinstance(entries, list):
-        return []
+        raise RuntimeError(
+            f"`claude plugin list --json` printed a {type(entries).__name__}, not the list of installed plugins"
+        )
+    suffix = f"@{agent_cli.MARKETPLACE_NAME}"
     return [
         entry for entry in entries
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"].endswith(suffix)
@@ -226,14 +238,17 @@ def update_claude_family(cli: list[str]) -> None:
     for entry in claude_marketplace_plugins(cli):
         if entry["id"] != agent_cli.PLUGIN_SOURCE:
             _run_step([*cli, "plugin", "update", entry["id"]])
-    missing: list[str] = []
+    # Every install round is followed by a fresh listing, so the last round is judged by what
+    # Claude reports after it rather than by what it set out to install.
+    missing = missing_claude_dependencies(claude_marketplace_plugins(cli))
     for _ in range(_DEPENDENCY_ROUNDS):
-        missing = missing_claude_dependencies(claude_marketplace_plugins(cli))
         if not missing:
             return
         for dependency in missing:
             _run_step([*cli, "plugin", "install", dependency])
-    raise RuntimeError(f"Claude Code still reports these dependencies as not installed: {', '.join(missing)}")
+        missing = missing_claude_dependencies(claude_marketplace_plugins(cli))
+    if missing:
+        raise RuntimeError(f"Claude Code still reports these dependencies as not installed: {', '.join(missing)}")
 
 
 def _version_sort_key(name: str) -> tuple[int, ...]:

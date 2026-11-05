@@ -102,7 +102,7 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         content = read_text(AGENTS)
         self.assertIn("Ask it from the PROMPT ALONE", content)
         self.assertNotIn("READ where that app's sections already live", content)
-        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md", content)
+        self.assertIn("`./02-requirements-gathering.md`", content)
 
     def test_existing_app_read_back_never_recommends_my_applications(self):
         # Every app this toolkit built before the placement question existed sits in My applications.

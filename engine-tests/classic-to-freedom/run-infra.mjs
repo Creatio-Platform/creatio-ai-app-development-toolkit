@@ -1250,6 +1250,27 @@ console.log("\n===== run diagnostics (offline, injected runner) =====");
   check("diagnostics: a git checkout adds its branch and short commit", () => withGit.includes("`1.12.0` · branch `feature/x` · commit `abc1234`"), () => withGit);
   const detached = diag.render(diag.collect({ environment: "demo", root, run: runner({ "git -C rev-parse --abbrev-ref HEAD": { ok: true, out: "HEAD\n" } }) }));
   check("diagnostics: a detached checkout says so instead of printing the literal `HEAD` as a branch", () => detached.includes("branch detached · commit `abc1234`"), () => detached);
+  {
+    // A checkout of the toolkit keeps the plugin at `<repo>/plugins/<plugin>` and the `.git` at the repository root.
+    const repo = mkdtempSync(path.join(os.tmpdir(), "diag-repo-"));
+    const plugin = path.join(repo, "plugins", "creatio-migration");
+    mkdirSync(plugin, { recursive: true });
+    const gitDirs = [];
+    const recording = (cmd, args) => { gitDirs.push(args[1]); return runner()(cmd, args); };
+    check("diagnostics: a plugin folder with no `.git` here or at the repository root is not a checkout",
+      () => diag.readGitRef(plugin, recording) === null && gitDirs.length === 0, () => gitDirs);
+    mkdirSync(path.join(repo, ".git"));
+    const fromRepo = diag.readGitRef(plugin, recording);
+    check("diagnostics: a plugin under `plugins/` of a checkout reads the branch and commit of the repository root",
+      () => fromRepo?.branch === "feature/x" && fromRepo?.commit === "abc1234"
+        && gitDirs.length === 2 && gitDirs.every((dir) => dir === path.resolve(repo)), () => ({ fromRepo, gitDirs }));
+    const other = mkdtempSync(path.join(os.tmpdir(), "diag-other-"));
+    const cached = path.join(other, "cache", "creatio-migration");
+    mkdirSync(cached, { recursive: true });
+    mkdirSync(path.join(other, ".git"));
+    check("diagnostics: a `.git` two levels up counts only for a plugin that sits in a `plugins/` folder",
+      () => diag.readGitRef(cached, runner()) === null, () => diag.readGitRef(cached, runner()));
+  }
   const down = diag.render(diag.collect({ environment: "demo", root, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - Could not connect to the Creatio application at 'https://demo.example'." } }) }));
   check("diagnostics: an unreachable stand is `unknown (<clio's reason>)`, and the other lines are still filled",
     () => down.includes("- **Stand:** unknown (Could not connect to the Creatio application at 'https://demo.example'.)") && down.includes("`8.1.0.134`"), () => down);

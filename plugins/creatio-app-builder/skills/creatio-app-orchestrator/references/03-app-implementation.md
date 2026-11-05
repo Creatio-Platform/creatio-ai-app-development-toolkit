@@ -16,7 +16,7 @@ execution stage where scaffolding tools such as `create-app` and `create-app-sec
 
 ## Context
 
-Read `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` for the orchestration contract and `plugins/creatio-core/context/INDEX.md` for the smallest relevant
+Read `./orchestration-policy.md` for the orchestration contract and `../../../context/INDEX.md` for the smallest relevant
 reference set. Resolve the executable MCP contract — tool names, parameters, response shapes, and
 `in-progress` semantics — through `get-tool-contract`; do not hardcode payload shapes here.
 
@@ -108,7 +108,7 @@ rather than half-applying a navigation change. The same holds for `name=home-pag
 the home page as created but not reachable.
 
 If the plan does not state a placement, that is a Gate R defect, not something to decide here: stop and
-ask the developer (see `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`, "Users, access and ownership").
+ask the developer (see `./business-checklist.md`, "Users, access and ownership").
 
 Tell the developer that navigation is cached, so they must log out and back in to see the app — a
 browser refresh is not enough.
@@ -269,7 +269,7 @@ When `create-app-section` fails with an error of this class:
   (for example `Readers → Reader → Members`) waste time and risk creating duplicate sections. The
   caption is not the cause of a transient contention failure — ignore any error text that suggests
   changing it. This mirrors the anti-speculative-retry rule for environment registration in
-  `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md`.
+  `./01-environment-setup.md`.
 - **Do not run `compile-creatio` as a speculative fix during scaffolding.** Section and schema
   mutations are DB-first and immediately runtime-accessible; they do not need a compile. Only run
   `compile-creatio` when a runbook step or the developer explicitly requires it.

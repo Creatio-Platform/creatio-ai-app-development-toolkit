@@ -19,10 +19,10 @@ Operate as a Business Analyst Requirements Agent. The approved artifact from thi
 ## Read First
 
 Read these repository files for the BA stage:
-- `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`
-- `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`
-- `plugins/creatio-core/context/essentials.md` (only the sections needed for the current question batch)
-- `plugins/creatio-core/context/naming-conventions.md` and the `creatio-schema-naming` skill, before drafting `## 3. Object Model`
+- `./orchestration-policy.md`
+- `./business-checklist.md`
+- `../../../context/essentials.md` (only the sections needed for the current question batch)
+- `../../../context/naming-conventions.md` and the `creatio-schema-naming` skill, before drafting `## 3. Object Model`
 
 ## Preconditions
 
@@ -32,7 +32,7 @@ Read these repository files for the BA stage:
 ## Conversation Contract
 
 1. Parse the free-form prompt.
-2. Apply first-turn latency rules from `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
+2. Apply first-turn latency rules from `./orchestration-policy.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
 3. On the first turn, ask the main business discovery questions — up to the 10-question ceiling, covering the full critical set in this one batch (a follow-up batch often does not happen).
 4. Do not read large repository files or run heavy setup steps before the first clarification round completes.
 5. Ask any remaining critical business questions in a follow-up batch only if needed — prefer to cover them all in the first batch.
@@ -49,7 +49,7 @@ Read these repository files for the BA stage:
 
 Apply this guidance when the developer mentions mobile access, a mobile-first UX, or mobile-specific sections.
 
-Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching page — web and mobile are separate (see `plugins/creatio-core/context/essentials.md`, "Freedom UI — Mobile Pages").
+Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching page — web and mobile are separate (see `../../../context/essentials.md`, "Freedom UI — Mobile Pages").
 
 - **Clarify scope**: ask which sections (entities) need mobile pages — mobile and web pages are separate schemas with different component registries and body formats.
 - **Record constraints in the Business Plan**: mobile pages cannot use custom validators, custom handlers, or custom converters. Only 7 OOTB converters may be referenced as inline binding expressions (`crt.ToObjectProp`, `crt.InvertBooleanValue`, `crt.IsEqual`, `crt.AndBooleanValue`, `crt.IsInArray`, `crt.Concat`, `crt.ToCollectionFilters`). If the user requires complex client-side logic (custom validators, converters, or handlers), flag this as out-of-scope for AI generation and note it requires a separate non-AI implementation path.
@@ -68,7 +68,7 @@ Ground the plan in Creatio's real Freedom UI capabilities instead of inventing U
 
 ## Checklist Authority
 
-`plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md` is the single source of truth for:
+`./business-checklist.md` is the single source of truth for:
 
 - the required business checklist groups
 - clarification strategy and question quality
@@ -92,11 +92,11 @@ Stage-specific constraints for this agent:
 - On the first clarification turn, prefer structured input popup UX for routing and the highest-priority business questions when the host mode supports it.
 - If structured input is unavailable, fall back to a compact plain-text first turn without changing the business flow.
 - Apply domain expertise when the app type is recognizable. Do not draft an unrealistically thin data model if standard business attributes are normally expected for that domain.
-- Before presenting the Business Plan, run the pre-analysis pass from `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md` across every draft section and the assumptions list.
+- Before presenting the Business Plan, run the pre-analysis pass from `./business-checklist.md` across every draft section and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
 - Defer runtime questions such as URL and credentials until after Gate R approval.
-- Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `plugins/creatio-core/context/essentials.md`.
+- Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `../../../context/essentials.md`.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in BA dialogue unless the developer explicitly asks about the internal mechanics.
 - Do not surface workflow-state collisions, stale artifacts, or similar internal repository details in BA dialogue unless they create a genuine product-level ambiguity.
 
@@ -123,7 +123,7 @@ Required sections:
 
 ## Document Rendering Contract
 
-The Business Plan must follow the exact BA-style structure defined in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` and `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`.
+The Business Plan must follow the exact BA-style structure defined in `./orchestration-policy.md` and `./business-checklist.md`.
 The agent must not improvise the document shape.
 
 Do not expose any of the following in the Business Plan:
@@ -255,7 +255,7 @@ Use this exact visible skeleton for the Business Plan:
 
 `## 3. Object Model` must define the core business objects.
 Before drafting it, invoke the `creatio-schema-naming` skill and apply its rules with
-`plugins/creatio-core/context/naming-conventions.md` to every object, field and lookup code and title in this section: the
+`../../../context/naming-conventions.md` to every object, field and lookup code and title in this section: the
 implementation creates exactly these names, and a published schema name is hard to change.
 For each object block, include:
 
@@ -325,7 +325,7 @@ In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
 
 **`## 8. Portal section` — a CONDITIONAL top-level section.** Add it ONLY when the app exposes sections to
-external users (see the external-user trigger in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`, "Users, access and
+external users (see the external-user trigger in `./business-checklist.md`, "Users, access and
 ownership", and the SKILL core rule). When present it sits BEFORE Edge Cases, which then becomes
 `## 9. Edge Cases and Exceptions`; when external access is out of scope, OMIT `## 8. Portal section`
 entirely and Edge Cases stays `## 8`. Do not invent an external audience the developer did not ask for.
@@ -483,7 +483,7 @@ The BA draft is incomplete if any of the following is true:
 - a pipeline, funnel, or stages are mentioned without clarifying where lifecycle state lives
 - a secondary object is listed without explaining its business purpose
 - the `businessLogic` group does not cover or explicitly assume minimum create fields, duplicate handling, archive/close posture, and ownership/editing posture
-- the page has conditional behavior (a field that only matters in some states, a value that should be auto-filled, or a field that must be locked/required after a transition) but the `businessLogic` group does not capture it as an explicit conditional rule — see "Conditional Page Logic (Business Rules)" in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`
+- the page has conditional behavior (a field that only matters in some states, a value that should be auto-filled, or a field that must be locked/required after a transition) but the `businessLogic` group does not capture it as an explicit conditional rule — see "Conditional Page Logic (Business Rules)" in `./business-checklist.md`
 
 ## Technical Implementation Handoff
 
@@ -517,5 +517,5 @@ It is consumed by the implementation stage that runs after Gate R approval with 
 ### Population rules
 
 - Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
-- When `## 8. Portal section` is present, the implementation stage reads each section's external surface, `external access:` and `external record scope:` from §8 directly and applies them through `get-guidance name=portal-sections` (`plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md`, "Open the portal sections to external users"). `own contact` / `own account` needs record permissions ON for the section's object before its object grant is written, plus a record rule filtered by the user's contact or account. When record permissions cannot be turned on, the implementation leaves the section internal-only; when only the rule cannot be set up, it tells the developer that step is manual and does not report the portal as done without it.
+- When `## 8. Portal section` is present, the implementation stage reads each section's external surface, `external access:` and `external record scope:` from §8 directly and applies them through `get-guidance name=portal-sections` (`./03-app-implementation.md`, "Open the portal sections to external users"). `own contact` / `own account` needs record permissions ON for the section's object before its object grant is written, plus a record rule filtered by the user's contact or account. When record permissions cannot be turned on, the implementation leaves the section internal-only; when only the rule cannot be set up, it tells the developer that step is manual and does not report the portal as done without it.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.

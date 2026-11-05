@@ -195,6 +195,21 @@ CROSS_PLUGIN_REFS_PENDING_CLEANUP = {
     "plugins/creatio-migration/skills/classic-to-freedom-migration/SKILL.md": {
         "../../context/product-telemetry.md": f"{CORE_CONTEXT}/product-telemetry.md",
     },
+    f"{ORCHESTRATOR_REFERENCES}/01-environment-setup.md": {
+        "../../../context/clio-cli-reference.md": f"{CORE_CONTEXT}/clio-cli-reference.md",
+        "../../../README.md": "README.md",
+        "../../../docs/install.md": "docs/install.md",
+    },
+    f"{ORCHESTRATOR_REFERENCES}/02-requirements-gathering.md": {
+        "../../../context/essentials.md": f"{CORE_CONTEXT}/essentials.md",
+        "../../../context/naming-conventions.md": f"{CORE_CONTEXT}/naming-conventions.md",
+    },
+    f"{ORCHESTRATOR_REFERENCES}/03-app-implementation.md": {
+        "../../../context/INDEX.md": f"{CORE_CONTEXT}/INDEX.md",
+    },
+    f"{ORCHESTRATOR_REFERENCES}/orchestration-policy.md": {
+        "../../../context/product-telemetry.md": f"{CORE_CONTEXT}/product-telemetry.md",
+    },
 }
 
 
@@ -643,23 +658,39 @@ class ReleaseStructureTests(unittest.TestCase):
                 self.assertIn(f"`{ref}`", content, f"{entry}: `{ref}` is listed as pending cleanup but not referenced")
                 self.assertTrue((ROOT / target).is_file(), f"{entry}: `{ref}` -> {target} missing")
 
-    def test_orchestration_policy_references_resolve_from_the_repository_root(self):
-        # The policy moved three levels below the plugin root. Its file references are written
-        # repository-relative (`plugins/...`): each must exist, and none may still carry a bare
-        # pre-split `context/`, `runbooks/` or `runtime/` path or an up-level anchor.
-        policy = ROOT / ORCHESTRATOR_REFERENCES / "orchestration-policy.md"
-        refs = [r for r in re.findall(r"`([^`]+)`", policy.read_text(encoding="utf-8")) if looks_like_path(r) and "://" not in r]
-        self.assertTrue(refs)
-        for ref in refs:
-            if ref.startswith("plugins/"):
-                self.assertTrue((ROOT / ref).is_file(), f"orchestration-policy.md: `{ref}` does not exist")
-                continue
-            self.assertFalse(ref.startswith(("../", "./")), f"orchestration-policy.md: `{ref}` must not be anchored relative to the policy file")
-            self.assertFalse(
-                ref.startswith(("context/", "runbooks/", "runtime/", "skills/")),
-                f"orchestration-policy.md: `{ref}` is a pre-split bare path",
-            )
-        self.assertTrue(any(ref.startswith("plugins/") for ref in refs))
+    def test_orchestrator_references_resolve_from_their_own_folder(self):
+        # The policy, the runbooks and the checklist ship inside the creatio-app-builder plugin. An
+        # installed plugin holds no `plugins/` folder, so a file reference is written relative to the
+        # file that carries it: `./` for the `references/` folder, `../../../` for the plugin root.
+        # It must resolve there, unless it is a listed cross-plugin reference to creatio-core.
+        checked = 0
+        for entry_path in sorted((ROOT / ORCHESTRATOR_REFERENCES).glob("*.md")):
+            text = entry_path.read_text(encoding="utf-8")
+            # Commands inside fenced blocks run from the agent's working directory, not from the file.
+            prose = re.sub(r"^```.*?^```", "", text, flags=re.M | re.S)
+            refs = [
+                ref for ref in re.findall(r"`([^`\n]+)`", prose) + re.findall(r"\]\(([^)\s]+)", prose)
+                # A command line or a home-relative example names no shipped file.
+                if looks_like_path(ref) and "://" not in ref and " " not in ref and not ref.startswith(("~", "/"))
+            ]
+            known = known_cross_plugin_refs(entry_path)
+            for ref in refs:
+                self.assertFalse(
+                    ref.startswith("plugins/"),
+                    f"{entry_path.name}: `{ref}` is a repository path; an installed plugin has no `plugins/` folder",
+                )
+                self.assertTrue(
+                    ref.startswith(("./", "../../../")),
+                    f"{entry_path.name}: `{ref}` must be anchored with `./` (this folder) or `../../../` (the plugin root)",
+                )
+                resolved = (entry_path.parent / ref).resolve()
+                if ref in known:
+                    self.assertFalse(resolved.exists(), f"{entry_path.name}: `{ref}` resolves — drop it from CROSS_PLUGIN_REFS_PENDING_CLEANUP")
+                    self.assertTrue((ROOT / known[ref]).is_file(), f"{entry_path.name}: `{ref}` -> intended {known[ref]} is missing")
+                else:
+                    self.assertTrue(resolved.is_file(), f"{entry_path.name}: `{ref}` -> {resolved} does not exist")
+                checked += 1
+        self.assertGreater(checked, 10, "no file references were checked; the extraction may match nothing")
 
     def test_plugin_hook_commands_resolve_inside_their_plugin(self):
         # The telemetry hooks moved from the root manifest into the core plugin's. A stale

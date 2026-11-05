@@ -1359,6 +1359,57 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
                 installer.enable_claude_marketplace_auto_update(settings_path)
 
 
+class CodexCatalogGuardTests(unittest.TestCase):
+    """A Codex catalog name becomes a cache path segment and a manifest version a directory name,
+    so both are checked before anything is copied."""
+
+    def _names(self, plugins):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            catalog = root / ".agents" / "plugins" / "marketplace.json"
+            catalog.parent.mkdir(parents=True)
+            catalog.write_text(json.dumps({"name": "creatio", "plugins": plugins}), encoding="utf-8")
+            return installer.codex_catalog_plugin_names(root)
+
+    def test_the_shipped_catalog_names_every_plugin_directory(self):
+        installer = load_installer()
+        names = installer.codex_catalog_plugin_names(ROOT)
+        self.assertEqual(names, ["creatio-core", "creatio-app-builder", "creatio-ui", "creatio-migration"])
+        for name in names:
+            self.assertTrue((ROOT / "plugins" / name / ".codex-plugin" / "plugin.json").is_file(), name)
+
+    def test_an_entry_that_could_leave_the_tree_or_reach_another_plugin_is_rejected(self):
+        rejected = {
+            "a path that climbs out": [{"name": "x", "source": {"path": "../x"}}],
+            "a path to another plugin": [{"name": "creatio-core", "source": {"path": "./plugins/other"}}],
+            "a name with a separator": [{"name": "../evil", "source": {"path": "./plugins/../evil"}}],
+            "no source": [{"name": "creatio-core"}],
+            "a string source": [{"name": "creatio-core", "source": "./plugins/creatio-core"}],
+            "an entry that is not an object": ["creatio-core"],
+        }
+        for label, plugins in rejected.items():
+            with self.subTest(label), self.assertRaisesRegex(RuntimeError, "Unexpected Codex catalog entry"):
+                self._names(plugins)
+
+    def test_an_empty_catalog_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "No plugins listed"):
+            self._names([])
+
+    def test_a_manifest_version_that_is_not_semver_is_rejected(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            plugin = Path(temp)
+            (plugin / ".codex-plugin").mkdir()
+            for version in ("1.2", "latest", "../1.0.0", 3):
+                with self.subTest(version=version):
+                    (plugin / ".codex-plugin" / "plugin.json").write_text(
+                        json.dumps({"version": version}), encoding="utf-8"
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "No valid semantic version"):
+                        installer.codex_plugin_version(plugin)
+
+
 class InstallCodexTests(unittest.TestCase):
     """Codex registers the remote marketplace via its CLI.
 
