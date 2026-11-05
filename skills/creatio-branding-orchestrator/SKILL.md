@@ -274,10 +274,9 @@ theme's background goes into that same write; for an existing theme it is an upd
 only the background.
 
 Then apply the theme to you (see below), then the logos and the favicon, then a site background;
-clio's `branding` guidance has the mechanics of the last two. If the theme write fails because of
-its background, the theme write changes nothing, but an image uploaded for it stays: relay the
-reason, reuse that image on a retry, and ask whether to go on without a background or with another
-file.
+clio's `branding` guidance has the mechanics of the last two. If the theme write fails, it changes
+nothing, but an image uploaded for it stays: relay the reason and reuse that image on a retry. When
+the background itself was refused, ask whether to go on without a background or with another file.
 
 The logos, the favicon and a site background are **environment-wide**, and the `theming` and
 `branding` guidance name an environment-wide side effect of setting any background. Before the first write that
