@@ -162,7 +162,7 @@ CONFIG_FILES = (".gitattributes", ".sonarcloud.properties")
 # Markdown under these roots is reference material, so every line counts rather
 # than only its comments. ``SHIPPED_DOC_ROOTS`` are the entries `.release-manifest.json`
 # ships to end users and coding agents, so only the markers R3 names apply there.
-SHIPPED_DOC_ROOTS = ("skills", "runbooks", "context")
+SHIPPED_DOC_ROOTS = ("plugins",)
 DOC_ROOTS = SHIPPED_DOC_ROOTS + ("engine-tests",)
 
 # The golden runners state their checks as title strings rather than comments,
@@ -207,7 +207,7 @@ EXEMPT_PATHS = (
     "tests/test_comment_hygiene.py",
     # A dated gap analysis whose subject IS the before-state it measured; its
     # `file:line` references deliberately point at the code as it was.
-    "skills/classic-to-freedom-migration/docs/imperative-logic-gap.md",
+    "plugins/creatio-migration/skills/classic-to-freedom-migration/docs/imperative-logic-gap.md",
     "engine-tests/classic-to-freedom/baseline",
 )
 
@@ -511,11 +511,11 @@ class CommentHygieneTests(unittest.TestCase):
 
     def test_shipped_docs_carry_only_the_shipped_marker_set(self):
         """Product prose answers for ticket and PR refs — not for contributor vocabulary."""
-        self.assertEqual(SHIPPED_DOC_MARKERS, marker_kinds_for("skills/a/b.md", None))
+        self.assertEqual(SHIPPED_DOC_MARKERS, marker_kinds_for("plugins/a/skills/b/c.md", None))
         self.assertNotIn("review_round", SHIPPED_DOC_MARKERS)
         self.assertIsNone(marker_kinds_for("engine-tests/a/b.md", None))
-        self.assertIsNone(marker_kinds_for("skills/a/b.mjs", "//"))
-        shipped = marker_kinds_for("context/essentials.md", None)
+        self.assertIsNone(marker_kinds_for("plugins/a/skills/b/c.mjs", "//"))
+        shipped = marker_kinds_for("plugins/creatio-core/context/essentials.md", None)
         self.assertEqual(
             [], markers_in("Use a stable slug, for example `gdpr-for-creatio`.", shipped)
         )
@@ -560,7 +560,7 @@ class CommentHygieneTests(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.assertTrue(is_exempt(entry))
         self.assertTrue(is_exempt(".ai/specs/ENG-95806-migrate-card-widgets.md"))
-        self.assertFalse(is_exempt("skills/classic-to-freedom-migration/engine/mapper.mjs"))
+        self.assertFalse(is_exempt("plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs"))
 
     def test_exemptions_are_live_paths(self):
         """Every exemption names a path that exists, so the list cannot go stale."""

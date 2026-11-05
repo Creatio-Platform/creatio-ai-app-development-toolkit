@@ -35,8 +35,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "classic-to-freedom-migration",
-  "engine", "registry", "component-index.json");
+const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "plugins", "creatio-migration", "skills",
+  "classic-to-freedom-migration", "engine", "registry", "component-index.json");
 // The taxonomy fields, carried verbatim when a component publishes them. Only 8 of 200 components do, which is
 // why a Tier-C ranking cannot rest on them alone — the index records what exists rather than implying coverage.
 const TAXONOMY = ["category", "synonyms", "useCases", "whenToUse", "whenNotToUse", "appliesToCustomEntities", "entityCouplingNote"];

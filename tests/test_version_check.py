@@ -1,4 +1,4 @@
-"""Tests for runtime/version_check.py — installed-version reader and the
+"""Tests for plugins/creatio-app-builder/runtime/version_check.py — installed-version reader and the
 release-zip self-fetch helper used by installer/update.py.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = ROOT / "runtime"
+RUNTIME_DIR = ROOT / "plugins" / "creatio-app-builder" / "runtime"
 
 
 def load_version_check():

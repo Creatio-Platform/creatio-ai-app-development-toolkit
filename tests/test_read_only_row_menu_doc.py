@@ -4,10 +4,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-GUIDELINES = ROOT / "skills/creatio-ui-guidelines/references"
+GUIDELINES = ROOT / "plugins/creatio-core/skills/creatio-ui-guidelines/references"
 LAYOUT = GUIDELINES / "page-layout-and-controls.md"
 CHECKLISTS = GUIDELINES / "review-checklists.md"
-BUILD_PAGE = ROOT / "skills/classic-to-freedom-migration/references/build-page.md"
+BUILD_PAGE = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/references/build-page.md"
 
 
 def prose(path):

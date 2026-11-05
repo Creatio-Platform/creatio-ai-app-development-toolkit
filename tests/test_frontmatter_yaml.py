@@ -57,8 +57,8 @@ def _yaml_files():
 class FrontmatterYamlTests(unittest.TestCase):
     def test_discovery_finds_the_shipped_files(self):
         names = {p.relative_to(ROOT).as_posix() for p in _markdown_files()}
-        self.assertIn("skills/creatio-app-orchestrator/SKILL.md", names)
-        self.assertIn("rules/creatio-app-orchestrator.mdc", names)
+        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md", names)
+        self.assertIn("plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc", names)
         self.assertTrue(_yaml_files())
 
     def test_markdown_frontmatter_parses_strictly(self):

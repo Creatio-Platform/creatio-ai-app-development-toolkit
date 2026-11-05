@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "plugins" / "creatio-app-builder") not in sys.path:
+    sys.path.insert(0, str(ROOT / "plugins" / "creatio-app-builder"))
 
 from runtime.scripts.workflow_validators import validate_requirements_doc, WorkflowError
 

@@ -5,17 +5,17 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
-  VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { LIST_GRID } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+  VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_GRID } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
-  LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+  LIST_DECISION_KINDS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes, carriesComponent } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
-import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes, carriesComponent } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/reads.mjs";
+import { assembleBuilt, entityOfBundle } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -27,7 +27,7 @@ const runMigration = (manifest, opts) => {
   RUNS.push({ manifest, result });
   return result;
 };
-const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
+const ENGINE_DIR = path.join(DIR, "..", "..", "plugins", "creatio-migration", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
 // Every migrate.mjs child process goes through here, so the CLI goldens see the same working directory wherever
 // the runner was started from. A manifest piped on stdin (`-`) takes the child's cwd as its base directory, and
@@ -1223,7 +1223,7 @@ check("ContactCommunication: detail over the ContactCommunication entity → Com
   () => ({ features: commcs.standardFeatures.map(s => s.feature), details: commcs.details.map(d => d.entity) }));
 // the verbose base-component build recipes were TRIMMED out of the plan/notes; they live once in the
 // mapping DOC the build agent is handed. Assert the DOC (the source of truth the agent reads) still carries each.
-const MAPPING_DOC = fs.readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md", import.meta.url)), "utf8");
+const MAPPING_DOC = fs.readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md", import.meta.url)), "utf8");
 check("the mapping DOC (build agent's source) carries the base-component recipes trimmed from the plan — Approvals two-components, Activities/Emails not-a-Timeline, Communication-options crt.CommunicationOptions, DCM PageWithTabsAndProgressBarTemplate + DcmSchemaManager + flag-icon",
   /TWO components/.test(MAPPING_DOC) && /crt\.CommunicationOptions/.test(MAPPING_DOC) && /Timeline/.test(MAPPING_DOC)
   && /DcmSchemaManager/.test(MAPPING_DOC) && /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC),
@@ -4179,7 +4179,7 @@ check("a reuse child publishes BOTH the RelatedPage-binding row and the client-d
 // would force exit 2 with no sanctioned answer.
 check("the reconcile rows carry NO vk — visible obligation, not an unclosable gate",
   reconcileRows.every((r) => !r.vk), () => reconcileRows.map((r) => r.vk));
-const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
+const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
 
 // --- THE SECTION BOUNDARY — the fourth child resolution ----------------------------------------------
 // Migrating "this section" means this section's own pages. A related list whose child entity owns ANOTHER SECTION is
@@ -6486,7 +6486,7 @@ check("F2 dashboards verify: a non-V3 template gets the SAME ⚠ for the same mi
      WRONG answer rather than no answer (stand: the section's layers live in `ML`, whose SysDashboard binding
      holds an unrelated empty-`Section` dashboard, while the section's genuinely packaged dashboard is bound in
      the unrelated `TestPkg`) — so the agent reports it stand-only and silently drops delivery. ---- */
-const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration");
+const SKILL_DIR = path.join(DIR, "..", "..", "plugins", "creatio-migration", "skills", "classic-to-freedom-migration");
 const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
 const MAPPING_REF = "classic-to-freedom-mapping.md";
 // "The skill" is SKILL.md plus the procedure references it hands out by reader (the dashboards brief, the

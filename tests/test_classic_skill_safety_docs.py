@@ -4,8 +4,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
-MIGRATION_REFERENCES = ROOT / "skills/classic-to-freedom-migration/references"
+MIGRATION_SKILL = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/SKILL.md"
+MIGRATION_REFERENCES = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/references"
 # The builder's brief: the step-8 evidence and gate-toggle rules bind the sub-agent that
 # builds a page, so they live in the file that sub-agent is handed, not in SKILL.md.
 BUILD_PAGE = MIGRATION_REFERENCES / "build-page.md"
@@ -29,15 +29,15 @@ MIGRATION_SPLIT_REFERENCES = tuple(
         "manifest-conditional-inputs.md",
     )
 )
-CARD_CONTRACT = ROOT / "skills/classic-ui-expert/references/08-card-contract.md"
-MEMBER_LEDGER = ROOT / "skills/classic-ui-expert/references/03-member-ledger.md"
-REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-following.md"
-SURFACE_RESOLUTION = ROOT / "skills/classic-ui-expert/references/01-surface-resolution.md"
-CLASSIC_SKILL = ROOT / "skills/classic-ui-expert/SKILL.md"
-PLATFORM_PATTERNS = ROOT / "skills/classic-ui-expert/references/06-platform-patterns.md"
+CARD_CONTRACT = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/08-card-contract.md"
+MEMBER_LEDGER = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/03-member-ledger.md"
+REFERENCE_FOLLOWING = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/05-reference-following.md"
+SURFACE_RESOLUTION = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/01-surface-resolution.md"
+CLASSIC_SKILL = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/SKILL.md"
+PLATFORM_PATTERNS = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/06-platform-patterns.md"
 # The two build-time reconcile modes.
-RECONCILE_DOC = ROOT / "skills/classic-to-freedom-migration/references/existing-freedom-reconcile.md"
-BUILD_EXEC_DOC = ROOT / "skills/classic-to-freedom-migration/references/build-task-execution.md"
+RECONCILE_DOC = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/references/existing-freedom-reconcile.md"
+BUILD_EXEC_DOC = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/references/build-task-execution.md"
 RECONCILE_MODE_GATE_HEAD = "**Before you cut — on a RECONCILE, choose the reconcile mode."
 
 EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
@@ -497,7 +497,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"dashboards step must route through the migrator; missing {missing}")
         discovery = bullet(content, "- **Classic dashboards of the section:**")
         self.assertIn("SysDashboard", discovery)
-        dod = read_text(ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md")
+        dod = read_text(ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/references/migration-documentation.md")
         self.assertIn("Classic dashboards: the Dashboards Migrator is installed", dod)
 
     def test_step7_resolves_its_dispatch_route_before_the_first_start(self):

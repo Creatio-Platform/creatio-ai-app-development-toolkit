@@ -7,7 +7,9 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -45,6 +47,33 @@ def _make_release_zip(path: Path, version: str) -> None:
 # update.py — detection
 # ---------------------------------------------------------------------------
 
+
+
+class UpdateStartsStandaloneTests(unittest.TestCase):
+    """`python installer/update.py` must import on its own.
+
+    The module-level `import version_check` depends on update.py putting the runtime directory on
+    sys.path itself. Inside one `pytest tests/` process that is masked: mcp_client.py (imported by
+    other test modules) inserts the very same directory. A subprocess is the only honest check.
+    """
+
+    def test_help_runs_in_a_fresh_interpreter(self):
+        result = subprocess.run(
+            [sys.executable, str(UPDATE_PATH), "--help"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PYTHONPATH": ""},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+
+    def test_runtime_dir_points_at_the_app_builder_plugin(self):
+        upd = load_update()
+        self.assertEqual(
+            upd._RUNTIME_DIR,
+            upd._REPO_ROOT / "plugins" / "creatio-app-builder" / "runtime",
+        )
+        self.assertTrue((upd._RUNTIME_DIR / "version_check.py").is_file())
 
 class DetectTargetsTests(unittest.TestCase):
     def setUp(self):
@@ -154,6 +183,39 @@ class AcquireSourceTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class RuntimeDirTests(unittest.TestCase):
+    """version_check is imported from the runtime of whichever layout the updater runs from."""
+
+    def setUp(self):
+        self.upd = load_update()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.plugin_runtime = self.root / "plugins" / "creatio-app-builder" / "runtime"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_the_plugin_layout_keeps_it_in_the_app_builder_plugin(self):
+        self.plugin_runtime.mkdir(parents=True)
+        self.assertEqual(self.upd.runtime_dir(self.root), self.plugin_runtime)
+
+    def test_a_single_plugin_tree_keeps_it_at_the_root(self):
+        (self.root / "runtime").mkdir()
+        self.assertEqual(self.upd.runtime_dir(self.root), self.root / "runtime")
+
+    def test_the_plugin_layout_wins_when_a_tree_has_both(self):
+        self.plugin_runtime.mkdir(parents=True)
+        (self.root / "runtime").mkdir()
+        self.assertEqual(self.upd.runtime_dir(self.root), self.plugin_runtime)
+
+    def test_a_tree_without_one_names_the_plugin_layout(self):
+        self.assertEqual(self.upd.runtime_dir(self.root), self.plugin_runtime)
+
+    def test_this_checkout_resolves_to_the_app_builder_runtime(self):
+        self.assertEqual(self.upd.runtime_dir(ROOT), ROOT / "plugins" / "creatio-app-builder" / "runtime")
+        self.assertTrue((self.upd.runtime_dir(ROOT) / "version_check.py").is_file())
+
+
 class NativeUpdateCommandsTests(unittest.TestCase):
     def setUp(self):
         self.upd = load_update()
@@ -239,11 +301,15 @@ class UpdateAgentsTests(unittest.TestCase):
             updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
 
         self.assertEqual((updated, list(failed)), (["claude"], []))
+        # The two steps, then the family listing: once to update the other installed plugins and
+        # once to find a dependency that is not installed (an empty listing has neither).
         self.assertEqual(
             calls,
             [
                 ["claude", "plugin", "marketplace", "update", "creatio"],
                 ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+                ["claude", "plugin", "list", "--json"],
+                ["claude", "plugin", "list", "--json"],
             ],
         )
 
@@ -352,6 +418,124 @@ class UpdateAgentsTests(unittest.TestCase):
         self.assertEqual((updated, list(failed)), ([], ["claude"]))
 
 
+# `claude plugin list --json` as Claude Code 2.1.270 prints it while the meta-plugin's `creatio-ui`
+# dependency is not installed (install paths shortened).
+CLAUDE_LIST_WITH_A_MISSING_DEPENDENCY = """[
+  {
+    "id": "creatio-ai-app-development-toolkit@creatio",
+    "version": "2.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:/h/.claude/plugins/cache/creatio/creatio-ai-app-development-toolkit/2.0.0",
+    "installedAt": "2026-11-04T16:07:17.752Z",
+    "lastUpdated": "2026-11-04T16:07:17.752Z",
+    "errors": [
+      "Dependency \\"creatio-ui@creatio\\" is not installed \u2014 run `claude plugin install creatio-ui@creatio`, or check that its marketplace is added"
+    ],
+    "errorDetails": [
+      {"type": "dependency-unsatisfied", "plugin": "creatio-ai-app-development-toolkit", "dependency": "creatio-ui@creatio"}
+    ]
+  },
+  {
+    "id": "creatio-core@creatio",
+    "version": "2.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:/h/.claude/plugins/cache/creatio/creatio-core/2.0.0",
+    "installedAt": "2026-11-04T16:07:23.513Z",
+    "lastUpdated": "2026-11-04T16:07:23.513Z",
+    "mcpServers": {"clio": {"command": "clio", "args": ["mcp-server"]}}
+  }
+]"""
+
+
+class ClaudeFamilyUpdateTests(unittest.TestCase):
+    """`claude plugin update` updates the plugin it names and installs nothing: the updater brings
+    the rest of the family current and installs every dependency an updated plugin declares."""
+
+    def setUp(self):
+        self.upd = load_update()
+        self.calls = []
+
+    def _entry(self, name, missing=()):
+        entry = {"id": f"{name}@creatio", "version": "2.0.0", "enabled": True}
+        if missing:
+            entry["errorDetails"] = [
+                {"type": "dependency-unsatisfied", "plugin": name, "dependency": dependency}
+                for dependency in missing
+            ]
+        return entry
+
+    def _run(self, listings):
+        """Answer each `plugin list --json` with the next listing; every other step succeeds."""
+        pending = list(listings)
+
+        def fake(cmd, **kw):
+            self.calls.append(cmd)
+            stdout = ""
+            if cmd[-2:] == ["list", "--json"]:
+                listing = pending.pop(0)
+                stdout = listing if isinstance(listing, str) else json.dumps(listing)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+        with patch.object(self.upd.subprocess, "run", side_effect=fake):
+            self.upd.update_claude_family(["claude"])
+
+    def _installs(self):
+        return [cmd for cmd in self.calls if cmd[:3] == ["claude", "plugin", "install"]]
+
+    def test_a_declared_dependency_that_is_not_installed_is_installed(self):
+        meta = "creatio-ai-app-development-toolkit"
+        self._run([
+            [self._entry(meta), self._entry("creatio-core")],
+            [
+                self._entry(meta, missing=["creatio-ui@creatio", "creatio-migration@creatio"]),
+                self._entry("creatio-core"),
+            ],
+            [self._entry(name) for name in (meta, "creatio-core", "creatio-ui", "creatio-migration")],
+        ])
+        self.assertIn(["claude", "plugin", "update", "creatio-core@creatio"], self.calls)
+        # The meta-plugin itself is updated by the step before this one.
+        self.assertNotIn(["claude", "plugin", "update", f"{meta}@creatio"], self.calls)
+        self.assertEqual(self._installs(), [
+            ["claude", "plugin", "install", "creatio-ui@creatio"],
+            ["claude", "plugin", "install", "creatio-migration@creatio"],
+        ])
+
+    def test_a_dependency_of_another_marketplace_is_never_installed(self):
+        self._run([[self._entry("creatio-ui")], [self._entry("creatio-ui", missing=["vault@elsewhere"])]])
+        self.assertEqual(self._installs(), [])
+
+    def test_the_listing_claude_prints_is_read(self):
+        self._run([CLAUDE_LIST_WITH_A_MISSING_DEPENDENCY, CLAUDE_LIST_WITH_A_MISSING_DEPENDENCY, "[]"])
+        self.assertIn(["claude", "plugin", "update", "creatio-core@creatio"], self.calls)
+        self.assertEqual(self._installs(), [["claude", "plugin", "install", "creatio-ui@creatio"]])
+
+    def test_a_dependency_that_stays_missing_fails_the_update(self):
+        stuck = [self._entry("creatio-ui", missing=["creatio-core@creatio"])]
+        with self.assertRaisesRegex(RuntimeError, "creatio-core@creatio"):
+            self._run([stuck] * (self.upd._DEPENDENCY_ROUNDS + 2))
+        self.assertEqual(len(self._installs()), self.upd._DEPENDENCY_ROUNDS)
+
+    def test_a_chain_that_settles_on_the_last_round_succeeds(self):
+        rounds = self.upd._DEPENDENCY_ROUNDS
+        missing = [self._entry("creatio-ui", missing=["creatio-core@creatio"])]
+        self._run([[self._entry("creatio-ui")]] + [missing] * rounds + [[self._entry("creatio-ui")]])
+        self.assertEqual(len(self._installs()), rounds)
+
+    def test_a_listing_that_is_not_a_list_fails_the_update(self):
+        with self.assertRaisesRegex(RuntimeError, "not the list of installed plugins"):
+            self._run([{"plugins": []}])
+
+    def test_a_listing_that_is_not_json_fails_the_update(self):
+        def fake(cmd, **kw):
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Installed plugins:", stderr="")
+
+        with patch.object(self.upd.subprocess, "run", side_effect=fake):
+            with self.assertRaisesRegex(RuntimeError, "did not print JSON"):
+                self.upd.update_claude_family(["claude"])
+
+
 class NamedWorkflowRefreshTests(unittest.TestCase):
     """`claude plugin update` never touches user scope, so the mirror in
     ~/.claude/workflows/ has to be rewritten from the updated plugin cache."""
@@ -406,6 +590,29 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
         self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), ["creatio-x"])
         mirrored = self.home / ".claude" / "workflows" / "creatio-x.js"
         self.assertIn("// new", mirrored.read_text(encoding="utf-8"))
+
+    def test_the_migration_plugin_cache_is_read_before_the_single_plugin_one(self):
+        # The migration plugin ships the scripts; its manifest names them by repository path, while
+        # the cached plugin holds them at the plugin root.
+        self._write_cached_plugin("1.16.0", "creatio-x", body="// single plugin\n")
+        root = (
+            self.home / ".claude" / "plugins" / "cache" / self.upd.agent_cli.MARKETPLACE_NAME
+            / self.upd.agent_cli.WORKFLOW_PLUGIN_NAME / "2.0.0"
+        )
+        script = root / "skills" / "some-skill" / "some.workflow.js"
+        script.parent.mkdir(parents=True)
+        script.write_text("// migration plugin\n", encoding="utf-8")
+        manifest = root / "skills" / "_workflow-core" / "workflows.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"workflows": [{
+            "name": "creatio-x",
+            "script": "plugins/creatio-migration/skills/some-skill/some.workflow.js",
+            "phases": ["Describe"],
+        }]}), encoding="utf-8")
+
+        self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), ["creatio-x"])
+        mirrored = self.home / ".claude" / "workflows" / "creatio-x.js"
+        self.assertEqual(mirrored.read_text(encoding="utf-8"), "// migration plugin\n")
 
     def test_no_cached_plugin_leaves_the_previous_mirror_alone(self):
         workflows_dir = self.home / ".claude" / "workflows"
@@ -573,15 +780,16 @@ class UpdateMainTests(unittest.TestCase):
         acquire.assert_called_once()
         # The named-workflow mirror is refreshed as part of the Claude update.
         refresh.assert_called_once()
-        # Claude two-step + Cursor install.py reinstall = 3 subprocess calls.
-        self.assertEqual(len(calls), 3)
+        # Claude two-step + two family listings + Cursor install.py reinstall = 5 subprocess calls.
+        self.assertEqual(len(calls), 5)
         self.assertEqual(calls[0], ["claude", "plugin", "marketplace", "update", "creatio"])
         self.assertEqual(
             calls[1],
             ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
         )
+        self.assertEqual(calls[2:4], [["claude", "plugin", "list", "--json"]] * 2)
         install_script = str(fresh_root / "installer" / "install.py")
-        self.assertEqual(calls[2][1:], [install_script, "--target", "cursor"])
+        self.assertEqual(calls[4][1:], [install_script, "--target", "cursor"])
         printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
         self.assertIn("Updated 2 agent(s) to v0.2.0", printed)
         self.assertIn("claude", printed)

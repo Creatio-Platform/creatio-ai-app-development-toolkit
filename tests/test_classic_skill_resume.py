@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL_DIR = ROOT / "skills/classic-to-freedom-migration"
+SKILL_DIR = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration"
 SKILL = SKILL_DIR / "SKILL.md"
 ORCHESTRATE = SKILL_DIR / "references/orchestrate-build.md"
 ENGINE_README = SKILL_DIR / "engine/README.md"

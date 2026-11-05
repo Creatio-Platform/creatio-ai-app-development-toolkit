@@ -1,13 +1,13 @@
 # Decision: shipped toolkit code takes no runtime dependency
 
 **Status:** accepted · **Scope:** the code the release ships and runs on the developer's machine —
-`skills/`, `hooks/` and `runtime/` (`plugin_runtime`) plus `installer/` (`release_extras`) · **Raised in** the Technology Principles audit
+`plugins/` — every plugin's `skills/`, `hooks/` and `runtime/` (`plugin_runtime`) — plus `installer/` (`release_extras`) · **Raised in** the Technology Principles audit
 ENG-99929, recorded under ENG-100096
 
 ## The observation
 
-Every Node module under `skills/` and `hooks/` imports only `node:` built-ins and its own siblings, and
-every Python script under `runtime/` and `installer/` imports only the standard library. Several files
+Every Node module under a plugin's `skills/` and `hooks/` imports only `node:` built-ins and its own siblings, and
+every Python script under `plugins/creatio-app-builder/runtime/` and `installer/` imports only the standard library. Several files
 say so in a header line ("Zero dependencies (node built-ins)"), but nothing said *why*, or where the
 rule stops. So it read as a habit, and it invited two opposite mistakes:
 
@@ -18,7 +18,7 @@ Three hand-written helpers show what the rule costs where it arguably does not a
 
 | Helper | Where | Replaceable by |
 | --- | --- | --- |
-| ustar reader `readTarEntry` | `skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs` | `tar` / `tar-stream` |
+| ustar reader `readTarEntry` | `plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs` | `tar` / `tar-stream` |
 | SRI checker `integrityOk` | same file | `ssri` |
 | Sonar glob matcher `toRegex` | `scripts/check-sonar-exclusions.mjs` | `picomatch` / `minimatch` |
 
@@ -72,19 +72,19 @@ ships in the release zip without being installed into the agent's home.
 
 | In scope — no runtime dependency | Out of scope — npm / pip dev dependencies allowed |
 | --- | --- |
-| `skills/**` (`plugin_runtime`; the migration engine and every other skill script) | `.github/workflows/` (workflow steps; never shipped) |
-| `hooks/**` (`plugin_runtime`) | `scripts/` (CI and maintenance scripts) |
-| `runtime/**` (`plugin_runtime`) | `engine-tests/` (goldens and their runners) |
+| `plugins/*/skills/**` (`plugin_runtime`; the migration engine and every other skill script) | `.github/workflows/` (workflow steps; never shipped) |
+| `plugins/creatio-core/hooks/**` (`plugin_runtime`) | `scripts/` (CI and maintenance scripts) |
+| `plugins/creatio-app-builder/runtime/**` (`plugin_runtime`) | `engine-tests/` (goldens and their runners) |
 | `installer/**` (`release_extras`; runs before anything else is installed) | `tests/` (the pytest suite) |
 
-The other `plugin_runtime` entries — `.github/plugin`, the `.claude-plugin` / `.codex-plugin` /
-`.cursor-plugin` / `.agents` manifests, `.mcp.json`, `context/`, `rules/`, `runbooks/` and the top-level
-Markdown files — ship but carry data only (JSON manifests, Markdown and `.mdc` rule files), so the rule has nothing to bind
+The other `plugin_runtime` entries — `.github/plugin`, the `.claude-plugin` / `.agents` catalogs, every
+plugin's host manifests and `.mcp.json`, `plugins/creatio-core/context/`, `plugins/creatio-app-builder/rules/`,
+the skills' `references/` and the top-level Markdown files — ship but carry data only (JSON manifests, Markdown and `.mdc` rule files), so the rule has nothing to bind
 there. It applies the moment one of them gains code.
 
 The boundary is *what runs on the developer's machine from the release*, not *which directory a file
 sits in*, and one file straddles it: **`verify-vendor-upstream.mjs` is CI-only although it lives under
-`skills/`.** It ships because the release copies the whole `skills/` tree, but nothing on the developer's
+`plugins/creatio-migration/skills/`.** It ships because the release copies the whole `plugins/` tree, but nothing on the developer's
 machine runs it; it needs the network, and `.github/workflows/pr.yml` is its only caller. It sits next
 to the engine because it checks the engine's `vendor/` directory.
 
@@ -95,8 +95,8 @@ What this means for the three helpers above:
   engineering call, not something this rule settles.
 - The **Sonar glob matcher** can be replaced in place: `scripts/` is out of scope.
 - The **ustar reader and SRI checker** can be replaced once `verify-vendor-upstream.mjs` moves out of
-  `skills/` (for example to `scripts/`). Until then keep it import-clean, so the statement in
-  `package.json` that nothing under `skills/` or `hooks/` imports a dev dependency stays true without
+  `plugins/` (for example to `scripts/`). Until then keep it import-clean, so the statement in
+  `package.json` that nothing under `plugins/` imports a dev dependency stays true without
   exceptions.
 
 ## When to revisit

@@ -1,6 +1,9 @@
 # Install Creatio AI App Development Toolkit
 
-This repository is the root plugin package for the Creatio AI App Development Toolkit.
+This repository is the `creatio` plugin marketplace of the Creatio AI App Development Toolkit: four
+plugins under `plugins/` (`creatio-core`, `creatio-app-builder`, `creatio-ui`, `creatio-migration`) and,
+under the name `creatio-ai-app-development-toolkit`, one install that brings all of them. See
+[`plugins/README.md`](../plugins/README.md) for what each plugin owns.
 
 ## Prerequisites
 
@@ -9,7 +12,7 @@ This repository is the root plugin package for the Creatio AI App Development To
 
 ## MCP
 
-The plugin includes `.mcp.json`, which starts the global clio MCP server:
+The `creatio-core` plugin includes `.mcp.json`, which starts the global clio MCP server:
 
 ```json
 {
@@ -28,11 +31,21 @@ The coding agent owns the process lifecycle.
 
 For Claude Code, GitHub Copilot CLI, and Codex CLI the installer registers CAADT as a remote plugin
 marketplace served from the public Git repository (`MARKETPLACE_GIT_URL` in
-[agent_cli.py](../installer/agent_cli.py), which `install.py` and `update.py` both import) and
-installs `creatio-ai-app-development-toolkit@creatio` through the host CLI. The CLI manages the
-plugin payload on disk; the installer does not copy or overlay files into the host's plugin tree.
+[agent_cli.py](../installer/agent_cli.py), which `install.py` and `update.py` both import). How the
+whole family gets installed depends on what the host supports:
 
-Cursor remains on the local file-copy install model.
+| Host | Install unit | How every plugin arrives |
+|---|---|---|
+| Claude Code | `creatio-ai-app-development-toolkit@creatio` | a meta-plugin whose `dependencies` are the four plugins |
+| GitHub Copilot CLI | `creatio-ai-app-development-toolkit@creatio` | one plugin whose `.github/plugin/plugin.json` lists every plugin's `skills/` and the core MCP declaration |
+| Codex CLI | each of the four plugins | the installer materializes each plugin into the Codex cache |
+| Cursor | one local plugin | a copy whose `.cursor-plugin/plugin.json` lists every plugin's `skills/`, the app-builder rules and the core MCP declaration |
+
+Copilot and Cursor have no dependency mechanism, which is why they install the family through one
+manifest. Every plugin is also installable on its own from the same catalogs (for example
+`claude plugin install creatio-ui@creatio`, which brings `creatio-core` as its dependency); do not
+combine the Copilot install of `creatio-ai-app-development-toolkit` with individual plugins, or each
+skill loads twice.
 
 Targets are auto-detected by the presence of their agent home directory (`~/.codex`, `~/.claude`,
 `~/.cursor`, `~/.copilot`). Because every CLI-driven target needs its agent binary on PATH, a
@@ -43,7 +56,8 @@ only exits non-zero when nothing installed. A target requested explicitly via `-
 hard, since the user asked for exactly that agent.
 
 - **Claude Code** (`~/.claude/`) — preflights `claude` in PATH, then runs
-  `claude plugin marketplace add <url>` and `claude plugin install creatio-ai-app-development-toolkit@creatio`.
+  `claude plugin marketplace add <url>` and `claude plugin install creatio-ai-app-development-toolkit@creatio`,
+  which also installs the four plugins the meta-plugin depends on.
   Patches `~/.claude/settings.json` to set `extraKnownMarketplaces.creatio.autoUpdate = true` so the
   marketplace and plugin auto-update on Claude Code startup (third-party marketplaces are otherwise
   off by default). Skills ship inside the plugin payload, so the CLI-managed install exposes them
@@ -56,21 +70,24 @@ hard, since the user asked for exactly that agent.
   override out of `~/.codex/config.toml`, then runs `codex plugin marketplace remove creatio`
   (tolerating "not found") and `codex plugin marketplace add <url>`. Codex CLI has no
   non-interactive plugin-install command (the interactive `/plugins` browser is the only documented
-  path), so the installer performs the two steps that browser does: it copies the plugin runtime
-  surface into `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/` and
-  writes `[plugins."creatio-ai-app-development-toolkit@creatio"] enabled = true` into
-  `~/.codex/config.toml` — Codex loads plugin skills only when both exist. Supported Codex CLI: 0.130 or
+  path), so the installer performs the two steps that browser does for every plugin of the Codex
+  catalog: it copies `plugins/<plugin>/` into `~/.codex/plugins/cache/creatio/<plugin>/<version>/` and
+  writes `[plugins."<plugin>@creatio"] enabled = true` into `~/.codex/config.toml` — Codex loads
+  plugin skills only when both exist. Supported Codex CLI: 0.130 or
   newer (verified on 0.130.0 and 0.153.4); Codex exposes no non-interactive install API the installer
   could call instead. Finally re-merges the `clio` MCP server block into `~/.codex/config.toml` — Codex CLI
   does not auto-promote plugin-bundled `.mcp.json` entries to user-level `[mcp_servers.*]`, so the
   installer keeps that registration.
-- **Cursor** (`~/.cursor/`) — copies the plugin into
-  `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into
-  `~/.cursor/mcp.json` (merging with any existing servers), and writes a
-  `creatio-app-orchestrator.mdc` rule into `~/.cursor/rules/`.
+- **Cursor** (`~/.cursor/`) — copies the release surface into
+  `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, whose root `.cursor-plugin/plugin.json`
+  lists every plugin's skills; installs the `clio` MCP server into `~/.cursor/mcp.json` (merging with
+  any existing servers); writes the `creatio-app-orchestrator.mdc` and `creatio-telemetry.mdc` rules
+  into `~/.cursor/rules/`; and registers the telemetry hook in `~/.cursor/hooks.json`, replacing the
+  entry that pointed at the same directory's root `hooks/` folder.
 - **GitHub Copilot CLI** (`~/.copilot/`) — preflights `copilot` in PATH, then runs
   `copilot plugin marketplace add <url>` and `copilot plugin install creatio-ai-app-development-toolkit@creatio`.
-  Copilot manages the plugin on disk under `~/.copilot/installed-plugins/`. If a `creatio`
+  Copilot manages the plugin on disk under `~/.copilot/installed-plugins/` and loads the skills of
+  every plugin through that plugin's `.github/plugin/plugin.json`. If a `creatio`
   marketplace already exists (e.g. from a prior local-install run), the installer runs
   `copilot plugin marketplace remove creatio --force` first so the source can switch to the public marketplace URL.
 
@@ -143,13 +160,13 @@ Claude Code marketplace auto-update is enabled separately through Claude's own m
 
 ## Release-pinned plugin source
 
-The Claude, Copilot, and Codex marketplace manifests (`.claude-plugin/marketplace.json`,
-`.github/plugin/marketplace.json`, `.agents/plugins/marketplace.json`) pin the plugin payload to
-the `release` branch via `source.ref: "release"`. The `release` branch is a moving pointer that
-the release workflow force-updates to the latest released SHA after `gh release create` succeeds.
-Effect: `claude plugin install creatio-ai-app-development-toolkit@creatio`, the Codex `/plugins`
-install, and the Copilot equivalent always fetch the most-recent published release, never an
-unreleased commit on `main`.
+Every entry of the Claude, Copilot, and Codex catalogs (`.claude-plugin/marketplace.json`,
+`.github/plugin/marketplace.json`, `.agents/plugins/marketplace.json`) pins its payload to the
+`release` branch via `source.ref: "release"`. The hosts read a catalog from the repository's default
+branch, so an entry that resolved against the catalog's own checkout would install unreleased `main`
+content. The `release` branch is a moving pointer that the release workflow force-updates to the
+latest released SHA after `gh release create` succeeds. Effect: a Claude, Codex, or Copilot install
+of any CAADT plugin always fetches the most-recent published release.
 
 The plugin `source.source: "url"` discriminator is the documented form for git-URL-backed
 sources — see [Claude Code's plugin marketplaces docs](https://code.claude.com/docs/en/plugin-marketplaces.md)
@@ -157,29 +174,37 @@ and the production example in
 [obra/superpowers-marketplace](https://github.com/obra/superpowers-marketplace/blob/main/.claude-plugin/marketplace.json)
 (the `superpowers-dev` entry uses the same shape with `ref` to pin to a branch).
 
-Three manifests, one schema: the repo ships the same `marketplace.json` content at
-`.claude-plugin/marketplace.json`, `.github/plugin/marketplace.json`, and
-`.agents/plugins/marketplace.json`. This is because each CLI scans a different conventional path
-inside a registered marketplace repo — `.claude-plugin/marketplace.json` is Claude Code's
-canonical path, `.github/plugin/marketplace.json` is Copilot CLI's canonical path
+Each CLI scans a different conventional path inside a registered marketplace repo —
+`.claude-plugin/marketplace.json` is Claude Code's canonical path, `.github/plugin/marketplace.json`
+is Copilot CLI's canonical path
 ([Copilot docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-marketplace),
 matching the official [github/awesome-copilot](https://github.com/github/awesome-copilot/blob/main/.github/plugin/marketplace.json)
-reference marketplace), and `.agents/plugins/marketplace.json` is Codex CLI's canonical path.
-Copilot CLI also falls back to `.claude-plugin/marketplace.json`, but shipping the canonical path
-explicitly avoids depending on fallback behavior. The schema is identical across the three CLIs,
-so the `plugins[0]` block is the same in each — `scripts/bump-version.js` keeps the
-`plugins[0].version` field in sync via `.version-bump.json`, and
-`tests/test_release_structure.py` asserts all three manifests carry the same `source` block.
+reference marketplace), and `.agents/plugins/marketplace.json` is Codex CLI's canonical path. The
+source forms differ per host:
 
-Cursor stays on the local file-copy install model and is not affected by the `release` branch pin.
+| Catalog | `creatio-ai-app-development-toolkit` | each of the four plugins |
+|---|---|---|
+| Claude | `url` + `ref: release` (the repository root: the meta-plugin) | `git-subdir` + `path: plugins/<plugin>` + `ref: release` |
+| Copilot | `url` + `ref: release` (the repository root: the bundle manifest) | `github` + `path: plugins/<plugin>` + `ref: release` |
+| Codex | — | `git-subdir` + `path: ./plugins/<plugin>` + `ref: release` |
+
+`scripts/bump-version.js` keeps every `version` field in sync via `.version-bump.json`, and
+`tests/test_release_structure.py` asserts these source blocks.
+
+Cursor stays on the local file-copy install model and installs from the release zip it runs from.
 
 ### Testing unreleased changes through a marketplace agent
 
-When you need to validate work-in-progress changes through Claude, Codex, or Copilot (not via the
-Cursor file-copy path), the path is per-CLI native:
+Every catalog entry fetches its payload from `release`, whichever branch the marketplace itself is
+registered from, so a branch's unreleased plugin files reach an agent only from a local checkout or a
+branch catalog whose entries name that branch in `ref`. The path is per-CLI native:
 
-- **Claude Code** — register a second, dev-scoped marketplace pinned to your branch via the URL
-  fragment, then install the plugin from it:
+- **Claude Code** — load the plugins straight from your checkout for one session:
+  ```bash
+  claude --plugin-dir plugins/creatio-core --plugin-dir plugins/creatio-app-builder
+  ```
+  Or register a second, dev-scoped marketplace from your branch via the URL fragment after setting
+  the `ref` of its catalog entries to that branch:
   ```bash
   claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git#<your-branch>
   claude plugin install creatio-ai-app-development-toolkit@<marketplace-name-chosen-by-claude>
@@ -196,10 +221,11 @@ Cursor file-copy path), the path is per-CLI native:
   `marketplace.json`. For local edits without a commit, run `python installer/install.py --target codex`
   from the branch checkout: it materializes the plugin cache from the local files, the same way the
   Cursor file-copy install does.
-- **GitHub Copilot CLI** — there is no native escape hatch (see
-  [github/copilot-cli#1296](https://github.com/github/copilot-cli/issues/1296)). To test unreleased
-  changes, fall back to the Cursor file-copy install from a local checkout of the working branch
-  via `python installer/install.py --target cursor`.
+- **GitHub Copilot CLI** — mount the checkout for one session with the global `--plugin-dir`
+  option (the repository root carries the bundle manifest):
+  ```bash
+  copilot --plugin-dir .
+  ```
 
 Never push work-in-progress to the `release` branch — that branch is owned by the release workflow
 and is the production install target for every Claude, Codex, and Copilot user.
@@ -211,12 +237,15 @@ self-updates the plugin on each session start. If you have flipped this to `fals
 `~/.claude/settings.json`, run
 
 ```bash
-claude plugin update creatio-ai-app-development-toolkit@creatio
+python installer/update.py --target claude
 ```
 
-manually to pick up new releases. The unified `installer/update.py` also runs this same
-`claude plugin update` for you (in addition to Claude's own autoUpdate), so Claude is refreshed
-whether or not autoUpdate is enabled.
+to pick up new releases. `claude plugin update creatio-ai-app-development-toolkit@creatio` on its own
+updates the meta-plugin and nothing else: the four plugins stay at their old version, and a plugin a
+new release adds to the meta-plugin's `dependencies` stays uninstalled, which keeps the meta-plugin
+disabled. `update.py` runs that update, then updates every other installed `creatio` plugin and
+installs each dependency Claude reports as missing (`claude plugin list --json`). Claude's own
+auto-update installs missing dependencies too.
 
 ## Product telemetry: the floor hook per host
 
@@ -227,7 +256,7 @@ deterministically records one `workflow_started` per session (attributed to
 is the denominator: without it there is no way to tell "few runs happened" from "runs happened
 and went unreported".
 
-The hook is `hooks/telemetry-routing.mjs`. It emits the floor through clio's own MCP tool, so it
+The hook is `plugins/creatio-core/hooks/telemetry-routing.mjs`. It emits the floor through clio's own MCP tool, so it
 needs `clio` on `PATH` and stored consent of `granted` — an `unknown` or `denied` decision makes
 it silent, and it never prompts. `CAADT_TELEMETRY_HOOK_HOST` selects how the routing text is
 handed back; the floor event itself is identical on every host.

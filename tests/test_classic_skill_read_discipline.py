@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL_DIR = ROOT / "skills/classic-to-freedom-migration"
+SKILL_DIR = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration"
 SKILL = SKILL_DIR / "SKILL.md"
 REFERENCES = SKILL_DIR / "references"
 
@@ -286,7 +286,7 @@ class UiGuidelinesPointerTests(unittest.TestCase):
     """creatio-ui-guidelines is shared with app creation, so its pointers carry the rule too."""
 
     def setUp(self):
-        self.text = flat(read(ROOT / "skills/creatio-ui-guidelines/SKILL.md"))
+        self.text = flat(read(ROOT / "plugins/creatio-core/skills/creatio-ui-guidelines/SKILL.md"))
 
     def test_pointers_read_a_section_not_the_file(self):
         for unqualified in (

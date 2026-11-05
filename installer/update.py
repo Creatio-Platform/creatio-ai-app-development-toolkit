@@ -12,6 +12,9 @@ How it works:
     *cached* catalog and no-ops if it looks current:
         claude  — `claude plugin marketplace update`  + `claude plugin update`
         copilot — `copilot plugin marketplace update`  + `copilot plugin update`
+    Claude then updates every other installed plugin of the marketplace and installs
+    each dependency an updated plugin declares that is not installed yet, because
+    `claude plugin update` does neither for the plugin it updates.
   - Cursor and Codex have no native, non-interactive update command, so they fall
     back to install.py: each is reinstalled from the latest release, which this
     command downloads on demand (Cursor as a file copy; Codex by re-registering
@@ -36,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -50,7 +54,20 @@ from pathlib import Path
 # (shared with install.py); the runtime dir holds version_check.
 _INSTALLER_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _INSTALLER_DIR.parent
-_RUNTIME_DIR = _REPO_ROOT / "runtime"
+
+
+def runtime_dir(repo_root: Path) -> Path:
+    """The directory that holds version_check in the tree rooted at *repo_root*.
+
+    The plugin layout ships it in the app-builder plugin's `runtime/`; a single-plugin tree
+    (one cached plugin version) carries `runtime/` at its root. The plugin layout wins when a
+    tree has both, and is the answer when it has neither, so a missing runtime names that path.
+    """
+    candidates = (repo_root / "plugins" / "creatio-app-builder" / "runtime", repo_root / "runtime")
+    return next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
+
+
+_RUNTIME_DIR = runtime_dir(_REPO_ROOT)
 
 for _dir in (_INSTALLER_DIR, _RUNTIME_DIR):
     if str(_dir) not in sys.path:
@@ -82,6 +99,11 @@ _STEP_TIMEOUT_SECONDS = 600
 
 # The installer script delegated to for Cursor/Codex, and the anchor for locating the release root.
 _INSTALL_SCRIPT_NAME = "install.py"
+
+# Upper bound on dependency install rounds. A round installs every dependency Claude reports
+# missing; a dependency that declares dependencies of its own needs one more round, and the
+# marketplace's dependency chains are shorter than this.
+_DEPENDENCY_ROUNDS = 5
 
 
 # -------------------------------------------------------------------------
@@ -143,8 +165,8 @@ _MARKETPLACE_REMOVE_FLAGS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _run_step(command: list[str]) -> None:
-    """Run one update step, raising RuntimeError on a non-zero exit.
+def _run_step(command: list[str]) -> str:
+    """Run one update step and return its stdout, raising RuntimeError on a non-zero exit.
 
     stdin=DEVNULL so a step can never block on an interactive prompt; timeout so
     a network stall can't hang forever (propagates as TimeoutExpired).
@@ -159,6 +181,74 @@ def _run_step(command: list[str]) -> None:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"{' '.join(command)} failed: {detail}")
+    return result.stdout or ""
+
+
+def claude_marketplace_plugins(cli: list[str]) -> list[dict]:
+    """The installed plugins of the CAADT marketplace, as `claude plugin list --json` reports them.
+
+    The listing is a JSON array with one object per installed plugin; an unmet dependency shows up
+    in that object's `errorDetails` as a `dependency-unsatisfied` item naming `<plugin>@<marketplace>`.
+    An empty listing is read as no plugins. Anything else fails the update rather than reading as
+    "nothing to do": the dependency check below would otherwise pass without having looked.
+    """
+    output = _run_step([*cli, "plugin", "list", "--json"]).strip()
+    if not output:
+        return []
+    try:
+        entries = json.loads(output)
+    except ValueError as error:
+        raise RuntimeError(f"`claude plugin list --json` did not print JSON: {error}") from error
+    if not isinstance(entries, list):
+        raise RuntimeError(
+            f"`claude plugin list --json` printed a {type(entries).__name__}, not the list of installed plugins"
+        )
+    suffix = f"@{agent_cli.MARKETPLACE_NAME}"
+    return [
+        entry for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"].endswith(suffix)
+    ]
+
+
+def missing_claude_dependencies(entries: list[dict]) -> list[str]:
+    """`<plugin>@<marketplace>` of every CAADT dependency Claude reports as not installed.
+
+    Only dependencies served by the CAADT marketplace are returned: a plugin of another
+    marketplace is never installed on this updater's initiative.
+    """
+    suffix = f"@{agent_cli.MARKETPLACE_NAME}"
+    missing: list[str] = []
+    for entry in entries:
+        for detail in entry.get("errorDetails") or []:
+            if not isinstance(detail, dict) or detail.get("type") != "dependency-unsatisfied":
+                continue
+            dependency = detail.get("dependency")
+            if isinstance(dependency, str) and dependency.endswith(suffix) and dependency not in missing:
+                missing.append(dependency)
+    return missing
+
+
+def update_claude_family(cli: list[str]) -> None:
+    """Bring every installed CAADT plugin current and install the dependencies they declare.
+
+    `claude plugin update` updates the plugin it names and nothing else: the meta-plugin's
+    dependencies stay at their old version, and a dependency the new version adds is not
+    installed, which leaves the meta-plugin disabled until it is.
+    """
+    for entry in claude_marketplace_plugins(cli):
+        if entry["id"] != agent_cli.PLUGIN_SOURCE:
+            _run_step([*cli, "plugin", "update", entry["id"]])
+    # Every install round is followed by a fresh listing, so the last round is judged by what
+    # Claude reports after it rather than by what it set out to install.
+    missing = missing_claude_dependencies(claude_marketplace_plugins(cli))
+    for _ in range(_DEPENDENCY_ROUNDS):
+        if not missing:
+            return
+        for dependency in missing:
+            _run_step([*cli, "plugin", "install", dependency])
+        missing = missing_claude_dependencies(claude_marketplace_plugins(cli))
+    if missing:
+        raise RuntimeError(f"Claude Code still reports these dependencies as not installed: {', '.join(missing)}")
 
 
 def _version_sort_key(name: str) -> tuple[int, ...]:
@@ -167,27 +257,22 @@ def _version_sort_key(name: str) -> tuple[int, ...]:
 
 
 def latest_plugin_cache_root(home: Path | None = None) -> Path | None:
-    """Newest installed plugin version dir, or None when nothing is cached.
+    """Newest cached version dir of the plugin that ships the workflow scripts, or None.
 
     Claude keeps each installed plugin version at
     ``~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`` and several
-    versions coexist, so the highest one is what the CLI just updated to.
+    versions coexist, so the highest one is what the CLI just updated to. The
+    scripts ship in the migration plugin; a single-plugin install carries them in
+    PLUGIN_NAME itself, which is only read when no migration plugin is cached.
     """
     home = home or Path.home()
-    base = (
-        home
-        / ".claude"
-        / "plugins"
-        / "cache"
-        / agent_cli.MARKETPLACE_NAME
-        / agent_cli.PLUGIN_NAME
-    )
-    if not base.is_dir():
-        return None
-    versions = [entry for entry in base.iterdir() if entry.is_dir()]
-    if not versions:
-        return None
-    return max(versions, key=lambda entry: _version_sort_key(entry.name))
+    cache = home / ".claude" / "plugins" / "cache" / agent_cli.MARKETPLACE_NAME
+    for plugin in (agent_cli.WORKFLOW_PLUGIN_NAME, agent_cli.PLUGIN_NAME):
+        base = cache / plugin
+        versions = [entry for entry in base.iterdir() if entry.is_dir()] if base.is_dir() else []
+        if versions:
+            return max(versions, key=lambda entry: _version_sort_key(entry.name))
+    return None
 
 
 def refresh_claude_named_workflows(home: Path | None = None) -> list[str]:
@@ -240,6 +325,7 @@ def _update_native(target_id: str, home: Path | None = None) -> None:
     for command in native_update_commands(target_id):
         _run_step(command)
     if target_id == "claude":
+        update_claude_family(native_cli_command(target_id))
         refresh_claude_named_workflows(home)
 
 

@@ -9,9 +9,9 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { runMigration, checklistOpts, repairRoundLines } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderFinalReport } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
@@ -25,17 +25,17 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
-  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
-import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
-import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
+  RECONCILE_MODE_DEFAULT } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/fsatomic.mjs";
+import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/split.mjs";
+import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
-import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import * as TASKS_MODULE from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { approvePlan } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
+const ENGINE_DIR = path.join(DIR, "..", "..", "plugins", "creatio-migration", "skills", "classic-to-freedom-migration", "engine");
 const MIGRATE = path.join(ENGINE_DIR, "migrate.mjs");
 
 let pass = 0, fail = 0;

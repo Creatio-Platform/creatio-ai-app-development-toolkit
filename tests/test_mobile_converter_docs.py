@@ -26,12 +26,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SKILL = ROOT / "skills/creatio-mobile-page-conversion/SKILL.md"
-PLAYBOOK = ROOT / "skills/creatio-mobile-page-conversion/references/page-to-mobile-conversion.md"
-TELEMETRY = ROOT / "context/product-telemetry.md"
+SKILL = ROOT / "plugins/creatio-ui/skills/creatio-mobile-page-conversion/SKILL.md"
+PLAYBOOK = ROOT / "plugins/creatio-ui/skills/creatio-mobile-page-conversion/references/page-to-mobile-conversion.md"
+TELEMETRY = ROOT / "plugins/creatio-core/context/product-telemetry.md"
 
 # Every surface an agent or an operator reads as instruction. RELEASE-NOTES.md is not here.
-INSTRUCTION_DIRS = ("skills", "runbooks", "context", "rules")
+INSTRUCTION_DIRS = ("plugins",)
 
 FEATURE_KEY = "mobile-page-converter"
 TOOL_NAME = "get-mobile-page-conversion-guide"

@@ -14,6 +14,8 @@ from pathlib import Path
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 PLUGIN_SOURCE = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
+# The plugin of the family that ships the bundled `*.workflow.js` scripts and their manifest.
+WORKFLOW_PLUGIN_NAME = "creatio-migration"
 # Git source every agent registers the CAADT marketplace from.
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 # Flags for `copilot plugin marketplace remove`: --force detaches the plugins

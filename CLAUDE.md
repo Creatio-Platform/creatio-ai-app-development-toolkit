@@ -1,6 +1,6 @@
 # Claude Code Instructions
 
-Use the repo-local shared skills under `skills/` when the task matches them.
+Use the repo-local shared skills under `plugins/*/skills/` when the task matches them.
 
 <!-- BEGIN MANAGED SECTION: company-agent-policy v1.2.0 -->
 <!-- Maintained by Toolkit maintainers; update both policy blocks together and run tests/test_attribution_policy.py. -->
@@ -18,8 +18,8 @@ The agent must:
 
 ## Comments Describe the Code, Not Its Review History
 
-When you write or edit a comment, a test's check title or a doc under `skills/`, `runbooks/`,
-`context/` or `engine-tests/`, state the rule that holds now — never the story of how the code got
+When you write or edit a comment, a test's check title or a doc under `plugins/` or
+`engine-tests/`, state the rule that holds now — never the story of how the code got
 here. You have the ticket and the review thread in context, and it is tempting to record what you
 were asked to change; do not. The reader of the comment does not have that context and does not
 need it, and the tracker keeps it already.

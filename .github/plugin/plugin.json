@@ -1,7 +1,12 @@
 {
   "name": "creatio-ai-app-development-toolkit",
   "version": "1.16.0",
-  "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation: every plugin below in one install. Install either this or the individual plugins, not both.",
+  "skills": [
+    "./plugins/creatio-core/skills/",
+    "./plugins/creatio-app-builder/skills/",
+    "./plugins/creatio-ui/skills/",
+    "./plugins/creatio-migration/skills/"
+  ],
+  "mcpServers": "./plugins/creatio-core/.mcp.json"
 }

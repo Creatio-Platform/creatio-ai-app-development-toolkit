@@ -38,7 +38,7 @@ def shipped_instruction_paths(root=ROOT):
 
 
 def shipped_skill_names(root=ROOT):
-    return {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
+    return {path.parent.name for path in root.glob("plugins/*/skills/*/SKILL.md")}
 
 
 def find_unavailable_skill_violations(root=ROOT):
@@ -66,16 +66,16 @@ class AttributionPolicyTests(unittest.TestCase):
             root = Path(directory)
             (root / "CLAUDE.md").write_text("Host instructions\n", encoding="utf-8")
             (root / ".release-manifest.json").write_text(
-                json.dumps({"plugin_runtime": ["rules", "skills", "hooks", ".mcp.json"]}), encoding="utf-8",
+                json.dumps({"plugin_runtime": ["plugins"]}), encoding="utf-8",
             )
-            (root / "skills/example/SKILL.md").parent.mkdir(parents=True)
-            (root / "skills/example/SKILL.md").write_text("Use $example-shipped.\n", encoding="utf-8")
-            (root / "skills/example-shipped/SKILL.md").parent.mkdir(parents=True)
-            (root / "skills/example-shipped/SKILL.md").write_text("Shipped skill\n", encoding="utf-8")
+            (root / "plugins/p/skills/example/SKILL.md").parent.mkdir(parents=True)
+            (root / "plugins/p/skills/example/SKILL.md").write_text("Use $example-shipped.\n", encoding="utf-8")
+            (root / "plugins/p/skills/example-shipped/SKILL.md").parent.mkdir(parents=True)
+            (root / "plugins/p/skills/example-shipped/SKILL.md").write_text("Shipped skill\n", encoding="utf-8")
             instruction_paths = (
-                "rules/policy.md", "rules/UPPER.MD", "rules/policy.mdc",
-                "skills/example/agents/openai.yaml", "skills/example/agents/other.yml",
-                ".mcp.json", "hooks/guard.mjs", "hooks/guard.js",
+                "plugins/p/rules/policy.md", "plugins/p/rules/UPPER.MD", "plugins/p/rules/policy.mdc",
+                "plugins/p/skills/example/agents/openai.yaml", "plugins/p/skills/example/agents/other.yml",
+                "plugins/p/.mcp.json", "plugins/p/hooks/guard.mjs", "plugins/p/hooks/guard.js",
             )
             for relative in instruction_paths:
                 path = root / relative

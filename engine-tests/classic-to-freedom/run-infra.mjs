@@ -7,16 +7,16 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSy
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readTarEntry, integrityOk, assertTarballIntegrity, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
-import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
-import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { readTarEntry, integrityOk, assertTarballIntegrity, sha256Lf } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { checkVendorIntegrity } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
+import { parseSchema } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_DECISION_KINDS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { MAPPING_ROWS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { vendoredIndex } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { stripImports, buildManifest } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
-import * as diag from "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs";
+import * as diag from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/diagnostics.mjs";
 
 // git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
 // could otherwise shadow it (Sonar S4036). These are the stock install locations on the CI
@@ -125,7 +125,7 @@ console.log("\n===== vendor runtime integrity gate (offline) =====");
 // Fix A: parseSchema feeds UNTRUSTED bodies to the vendored acorn parser; it now verifies vendor/ integrity at
 // RUNTIME (not only in CI) via the PURE checkVendorIntegrity export. These goldens exercise that pure check
 // offline against copied/tampered fixtures under the OS temp dir — never touching the real vendor files.
-const VENDOR = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/vendor/", import.meta.url));
+const VENDOR = fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/vendor/", import.meta.url));
 check("vendor-gate: importing verify-vendor.mjs did NOT exit the process (CLI run is guarded by import.meta.url) — the pure export is a function",
   typeof checkVendorIntegrity === "function");
 check("vendor-gate: the REAL vendor dir passes (positive control — the check is not vacuously failing)",
@@ -160,9 +160,9 @@ console.log("\n===== engine + classic-behaviour-analysis: source pins (offline) 
 // thing it exists to guarantee did not happen. They read the shipped source because the guarantee is a call site or
 // a construction, which no behavioural test of the pure helpers can see.
 const bhSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-  "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
+  "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
 const mgSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-  "skills/classic-to-freedom-migration/engine/migrate.mjs"), "utf8");
+  "plugins/creatio-migration/skills/classic-to-freedom-migration/engine/migrate.mjs"), "utf8");
 
 check("plan version: EVERY file-backed manifest input contributes its CONTENT, not its path — a `section` / `detailSchemas` / `profileSchemas` file could be rewritten with the version unchanged, so an old approval authorised a plan the user never saw",
   /typeof value\.file === "string" \|\| typeof value\.body === "string"/.test(mgSrc)
@@ -203,7 +203,7 @@ check("behaviour analysis: a BLANK card is not coverage — the schema sets no m
    "a kind absent from a run's plan means the run had nothing to ask, never that the question went unasked" — which a
    reader ACTS on: a kind the engine raises while the doc names a smaller set reads as spurious rather than as a
    question they must answer. That makes the list load-bearing prose, so it is pinned here. --- */
-const specDoc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/page-design-spec.md", import.meta.url)), "utf8");
+const specDoc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/references/page-design-spec.md", import.meta.url)), "utf8");
 const docKinds = [...new Set([...specDoc.matchAll(/\*\*\[(list-[a-z-]+)\]\*\*/g)].map((m) => m[1]))].sort((a, b) => a.localeCompare(b));
 const engineKinds = [...LIST_DECISION_KINDS].sort((a, b) => a.localeCompare(b));
 check("page-design-spec.md: documents EVERY `list-*` decision kind the engine can raise, and no kind it cannot — the doc calls the set closed, so a reader treats an undocumented item as spurious instead of answering it",
@@ -212,7 +212,7 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
     notEmittedByEngine: docKinds.filter((k) => !engineKinds.includes(k)) }));
 // …and the registry has to BE the source. A push site that inlines the string would grow the emitted set without
 // growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
-const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
+const mapperSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
   // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 10 and the check stays
   // green. Naming the kinds is what makes the assertion say which set it pins, so
@@ -225,7 +225,7 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
 // …and the same rule for the ⚠ Confirm worklist. It is RENDERED from `needsDecision`, and a row appended to the
 // rendered list reaches plan.md and no other channel: `confirmWorklistRows`, the one feed for `--checklist`,
 // `--verify` and the build tasks, maps the record alone.
-const designspecSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url)), "utf8");
+const designspecSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url)), "utf8");
 // BOTH producers of a Confirm line, not the renderer alone: a row pushed inside `foldedConfirmRows` reaches
 // plan.md by the same path and would leave a renderer-only pin green.
 const NL = "\n";
@@ -281,7 +281,7 @@ check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a 
 // Base-field overrides are APPLIED ONTO the template's existing fields, so they build after the fields are laid
 // out and before coverage counts them. Pinned on the phase table itself: the ordering is the whole reason the
 // group has a phase of its own, and nothing else fails if it drifts.
-const tasksSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/tasks.mjs", import.meta.url)), "utf8");
+const tasksSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/tasks.mjs", import.meta.url)), "utf8");
 const phaseOfGroup = (title) => {
   const line = tasksSrc.split(NL).find((l) => l.includes(title) && l.includes("],"));
   // Sliced, not matched: a `\\d+` followed by a literal that can fail backtracks at every start offset.
@@ -310,14 +310,17 @@ check("tasks.mjs: base-field overrides build between the layout that creates the
    ================================================================================================== */
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const skillsDir = path.join(repoRoot, "skills");
   const wfFiles = [];
-  for (const d of readdirSync(skillsDir)) {
-    const dir = path.join(skillsDir, d);
-    if (!statSync(dir).isDirectory()) continue;
-    for (const f of readdirSync(dir)) if (f.endsWith(".workflow.js")) wfFiles.push(path.join(dir, f));
+  for (const plugin of readdirSync(path.join(repoRoot, "plugins"))) {
+    const skillsDir = path.join(repoRoot, "plugins", plugin, "skills");
+    if (!existsSync(skillsDir) || !statSync(skillsDir).isDirectory()) continue;
+    for (const d of readdirSync(skillsDir)) {
+      const dir = path.join(skillsDir, d);
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) if (f.endsWith(".workflow.js")) wfFiles.push(path.join(dir, f));
+    }
   }
-  check("workflow scripts: at least one `*.workflow.js` ships under skills/ (else the checks below are vacuous)",
+  check("workflow scripts: at least one `*.workflow.js` ships under plugins/*/skills/ (else the checks below are vacuous)",
     wfFiles.length >= 1, () => ({ found: wfFiles.map((f) => path.basename(f)) }));
 
   /* LINE ENDINGS. A CR in one of these files does not break the script — it stops the host from ever running it.
@@ -429,7 +432,7 @@ check("tasks.mjs: base-field overrides build between the layout that creates the
 // ---------------------------------------------------------------------------
 const BEGIN = "// ---8<--- PURE DECISION HELPERS ---8<---";
 const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
-const CBA = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js", import.meta.url));
+const CBA = fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js", import.meta.url));
 const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
@@ -585,7 +588,7 @@ check("cba workflow: a return that is present but NOT a critique gets its own lo
     && /treating the pass as dead/.test(cbaSrc));
 /* ---- the Critique retry, EXECUTED — MOVED --------------------------------------------------------------
    `retryOnDeath`, `critiqueDeathLine` and `isCritiqueShape` now live in the host-neutral core
-   (skills/_workflow-core/behaviour-analysis/helpers.mjs), and the retry is a DELEGATING GENERATOR: it asks the
+   (plugins/creatio-migration/skills/_workflow-core/behaviour-analysis/helpers.mjs), and the retry is a DELEGATING GENERATOR: it asks the
    driver for one more attempt instead of calling `agent()` itself. Their executable goldens moved with them, to
    `engine-tests/classic-to-freedom/run-workflow-core.mjs` — driven there against the real generator, plus the
    same checks through the real core (a rejecting Critique retried once, `critiqueRan:false`, the CAUSE in the
@@ -624,9 +627,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 // thread was blocked, where no script could ever have answered. The rule and the order are what the file is for,
 // so the doc lint holds it to both, and SKILL.md must actually send a builder there.
 {
-  const p = "skills/classic-to-freedom-migration/references/freedom-ui-browser-check.md";
+  const p = "plugins/creatio-migration/skills/classic-to-freedom-migration/references/freedom-ui-browser-check.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + p, import.meta.url)), "utf8");
-  const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
+  const skill = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
   check("browser-check doc: it states the ORDER — console, then the error boundary, then structure — because a component census tells you the page is absent while the console tells you why, which is the only actionable half",
     () => /READ THE CONSOLE FIRST/.test(doc) && /error boundary/i.test(doc) && /STRUCTURE, LAST/.test(doc),
     () => doc.slice(0, 400));
@@ -642,7 +645,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
   // A builder is handed exactly the files its 7.3 row names, so a SKILL.md mention alone never reaches it: the
   // page-build row itself must hand the reference, in the look-up column and not as a brief to read whole.
-  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
   const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
   const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
   const pageBuildRows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
@@ -657,7 +660,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => pageBuildRows);
 }
 
-  const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
+  const docPath = "plugins/creatio-migration/skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
   // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect in its
@@ -714,7 +717,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // measured on a live stand as a type no platform builds. The engine never EMITS it, and the golden suite asserts
   // that separately (a rich tabbed page emits `crt.TabContainer`).
   const engineSrc = ["mapper.mjs", "designspec.mjs", "migrate.mjs", "mapping-table.mjs", "mapping-registry.mjs"]
-    .map((f) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/" + f, import.meta.url)), "utf8")).join("\n");
+    .map((f) => readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/" + f, import.meta.url)), "utf8")).join("\n");
   const ACCEPTANCE_ONLY = new Set(["crt.Tab"]);
   // The same counter-example rule the doc lint applies: a note saying "NOT `crt.X`" is a WARNING that the type does
   // not exist, and the engine's own notes carry one (`crt.ContactCommunication` — the `ContactCommunication` ENTITY
@@ -756,9 +759,9 @@ check("doc lint: the sync note names the shared mapping table, not the catalogs 
 // could not see it because it compares two outputs of the same broken transform.
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const coreDir = path.join(repoRoot, "skills/_workflow-core");
+  const coreDir = path.join(repoRoot, "plugins/creatio-migration/skills/_workflow-core");
   const generated = readFileSync(
-    path.join(repoRoot, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
+    path.join(repoRoot, "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
   const declRe = /^export\s+(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
   // The module list is read out of the build script itself, so this check follows the target's
   // declared dependency order rather than every file under _workflow-core (the CLI-only adapters
@@ -832,7 +835,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
 {
   const cliSrc = readFileSync(path.join(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-    "skills/_workflow-core/cli.mjs"), "utf8");
+    "plugins/creatio-migration/skills/_workflow-core/cli.mjs"), "utf8");
   const advanceCalls = [...cliSrc.matchAll(/await advance\(\{[\s\S]{0,400}?\}\)/g)].map((m) => m[0]);
   const withoutRequires = advanceCalls.filter((c) => !/requires:/.test(c));
   check("cli.mjs: every `advance(...)` replay carries the workflow's WORKFLOW_REQUIRES — a run-level gate enforced on one command and not the others is a guarantee in name only",
@@ -844,12 +847,12 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
    `installer/install.py` must not recover each workflow's name by lexing the generated JavaScript with a
    hand-written JS sub-lexer in Python - that is the consumer parsing the producer's output language, while
    `TARGETS` holds `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
-   now emits `skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
+   now emits `plugins/creatio-migration/skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
    Asserted here as well as in the drift gate, because the consequence of a stale row is not a red test:
    `provision_named_workflows` refuses a script the manifest does not carry, so it is a failed INSTALL. */
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const manifestPath = path.join(repoRoot, "skills/_workflow-core/workflows.json");
+  const manifestPath = path.join(repoRoot, "plugins/creatio-migration/skills/_workflow-core/workflows.json");
   const shipped = existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null;
   check("build-workflows: the shipped workflow manifest is exactly what TARGETS generates — a stale mapping fails an install, not a test, so it is pinned on both sides",
     shipped === buildManifest(), () => {
@@ -860,11 +863,15 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   check("build-workflows: every manifest row names a script that EXISTS, and every shipped `*.workflow.js` has a row — a row without a file provisions nothing, a file without a row refuses to install",
     () => {
       const rows = manifest.workflows.map((w) => w.script);
-      const onDisk = readdirSync(path.join(repoRoot, "skills"))
-        .flatMap((skill) => {
-          const dir = path.join(repoRoot, "skills", skill);
-          if (!statSync(dir).isDirectory()) return [];
-          return readdirSync(dir).filter((f) => f.endsWith(".workflow.js")).map((f) => `skills/${skill}/${f}`);
+      const onDisk = readdirSync(path.join(repoRoot, "plugins"))
+        .flatMap((plugin) => {
+          const skillsDir = path.join(repoRoot, "plugins", plugin, "skills");
+          if (!existsSync(skillsDir) || !statSync(skillsDir).isDirectory()) return [];
+          return readdirSync(skillsDir).flatMap((skill) => {
+            const dir = path.join(skillsDir, skill);
+            if (!statSync(dir).isDirectory()) return [];
+            return readdirSync(dir).filter((f) => f.endsWith(".workflow.js")).map((f) => `plugins/${plugin}/skills/${skill}/${f}`);
+          });
         });
       return rows.every((r) => existsSync(path.join(repoRoot, r)))
         && onDisk.every((f) => rows.includes(f)) && rows.length === onDisk.length;
@@ -886,7 +893,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
    the guarantee is this assertion instead: the two lists must name the same runners, in the same order. */
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const enginePkg = JSON.parse(readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/engine/package.json"), "utf8"));
+  const enginePkg = JSON.parse(readFileSync(path.join(repoRoot, "plugins/creatio-migration/skills/classic-to-freedom-migration/engine/package.json"), "utf8"));
   // CRLF folded to LF: a Windows checkout (autocrlf) carries CRLF, and the job-boundary and step scans below are line-based.
   const prYml = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8").replaceAll("\r\n", "\n");
   // The engine-goldens job only — the file carries other jobs whose `run:` lines are none of this contract's
@@ -916,7 +923,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   // folder for `scripts.test`, which npm runs from there.
   // Tokenised rather than matched with one unanchored regex (super-linear on a long file, S8786): every test
   // below looks at one short whitespace-free token.
-  const ENGINE_REL = "skills/classic-to-freedom-migration/engine";
+  const ENGINE_REL = "plugins/creatio-migration/skills/classic-to-freedom-migration/engine";
   const SAFE_PATH = /^[\w./-]+$/;
   const runnersOfCommand = (command, cwd) => {
     const tokens = command.trim().split(/\s+/);
@@ -1050,11 +1057,11 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
       && swappedParity.mismatches.length === 1 && swappedParity.mismatches[0].includes("run-mapper.mjs")
       && swappedParity.mismatches[0].includes("engine-tests/build-workflows/run-mapper.mjs"),
     () => ({ mapperStep, wdLine, mismatches: swappedParity.mismatches }));
-  const pkgSwapped = scriptsTest.replace("../../../engine-tests/classic-to-freedom/run-mapper.mjs", "../../engine-tests/classic-to-freedom/run-mapper.mjs");
+  const pkgSwapped = scriptsTest.replace("../../../../../engine-tests/classic-to-freedom/run-mapper.mjs", "../../../../engine-tests/classic-to-freedom/run-mapper.mjs");
   const pkgSwappedParity = parityOf(jobSrc, pkgSwapped);
   check("(negative) a `scripts.test` runner path with one `../` too few fails the parity check, and the mismatch names the file it resolves to",
     pkgSwapped !== scriptsTest && !parityHolds(pkgSwappedParity) && pkgSwappedParity.mismatches.length === 1
-      && pkgSwappedParity.mismatches[0].includes("skills/engine-tests/classic-to-freedom/run-mapper.mjs"),
+      && pkgSwappedParity.mismatches[0].includes("plugins/engine-tests/classic-to-freedom/run-mapper.mjs"),
     () => pkgSwappedParity.mismatches);
   check("(negative) a runner path that points at no file is reported missing, and only that one",
     JSON.stringify(missingRunners(["engine-tests/classic-to-freedom/no-such-runner.mjs", "scripts/build-workflows.mjs --check"]))
@@ -1152,7 +1159,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   // linted in the file that carries it, and each slice has its own anti-vacuity guard. Both are whitespace-flattened:
   // these docs hard-wrap, and a phrase straddling a line break is still the same sentence.
   const flatten = (t) => t.replace(/\s+/g, " ");
-  const read = (rel) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/" + rel, import.meta.url)), "utf8");
+  const read = (rel) => readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/" + rel, import.meta.url)), "utf8");
   const skill = read("SKILL.md");
   const orchestrate = read("references/orchestrate-build.md");
   const engineReadme = read("engine/README.md");
@@ -1243,6 +1250,27 @@ console.log("\n===== run diagnostics (offline, injected runner) =====");
   check("diagnostics: a git checkout adds its branch and short commit", () => withGit.includes("`1.12.0` · branch `feature/x` · commit `abc1234`"), () => withGit);
   const detached = diag.render(diag.collect({ environment: "demo", root, run: runner({ "git -C rev-parse --abbrev-ref HEAD": { ok: true, out: "HEAD\n" } }) }));
   check("diagnostics: a detached checkout says so instead of printing the literal `HEAD` as a branch", () => detached.includes("branch detached · commit `abc1234`"), () => detached);
+  {
+    // A checkout of the toolkit keeps the plugin at `<repo>/plugins/<plugin>` and the `.git` at the repository root.
+    const repo = mkdtempSync(path.join(os.tmpdir(), "diag-repo-"));
+    const plugin = path.join(repo, "plugins", "creatio-migration");
+    mkdirSync(plugin, { recursive: true });
+    const gitDirs = [];
+    const recording = (cmd, args) => { gitDirs.push(args[1]); return runner()(cmd, args); };
+    check("diagnostics: a plugin folder with no `.git` here or at the repository root is not a checkout",
+      () => diag.readGitRef(plugin, recording) === null && gitDirs.length === 0, () => gitDirs);
+    mkdirSync(path.join(repo, ".git"));
+    const fromRepo = diag.readGitRef(plugin, recording);
+    check("diagnostics: a plugin under `plugins/` of a checkout reads the branch and commit of the repository root",
+      () => fromRepo?.branch === "feature/x" && fromRepo?.commit === "abc1234"
+        && gitDirs.length === 2 && gitDirs.every((dir) => dir === path.resolve(repo)), () => ({ fromRepo, gitDirs }));
+    const other = mkdtempSync(path.join(os.tmpdir(), "diag-other-"));
+    const cached = path.join(other, "cache", "creatio-migration");
+    mkdirSync(cached, { recursive: true });
+    mkdirSync(path.join(other, ".git"));
+    check("diagnostics: a `.git` two levels up counts only for a plugin that sits in a `plugins/` folder",
+      () => diag.readGitRef(cached, runner()) === null, () => diag.readGitRef(cached, runner()));
+  }
   const down = diag.render(diag.collect({ environment: "demo", root, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - Could not connect to the Creatio application at 'https://demo.example'." } }) }));
   check("diagnostics: an unreachable stand is `unknown (<clio's reason>)`, and the other lines are still filled",
     () => down.includes("- **Stand:** unknown (Could not connect to the Creatio application at 'https://demo.example'.)") && down.includes("`8.1.0.134`"), () => down);
@@ -1300,14 +1328,14 @@ console.log("\n===== run diagnostics (offline, injected runner) =====");
   const checkoutWins = diag.render(diag.collect({ root: cached, run: runner() }));
   check("diagnostics: a git checkout is read from git even when a registry record exists — git names the commit that is on disk",
     () => checkoutWins.includes("branch `feature/x` · commit `abc1234`"), () => checkoutWins);
-  const json = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs"), "--json"],
+  const json = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/diagnostics.mjs"), "--json"],
     { encoding: "utf8", env: { PATH: "" } });
   check("diagnostics: `--json` prints the same values as one object, the shape `manifest.runDiagnostics` takes",
     () => { const d = JSON.parse(json.stdout); return json.status === 0 && typeof d.skillVersion === "string" && d.clioVersion === "unknown (clio not found on PATH)"; },
     () => json.stdout);
   check("diagnostics: the CLI entry point exits 0 and prints the block even when nothing can be read",
     () => {
-      const r = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs")],
+      const r = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/diagnostics.mjs")],
         { encoding: "utf8", env: { PATH: "" } });
       return r.status === 0 && r.stdout.startsWith("### Run diagnostics") && r.stdout.includes("unknown (clio not found on PATH)");
     });

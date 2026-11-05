@@ -25,7 +25,7 @@ Pull requests are welcome. Before opening one:
 1. Open an issue describing the change so it can be discussed before implementation.
 2. Keep changes focused — one logical change per pull request.
 3. Update or add tests under `tests/` for any behavior change. Run the existing test suite locally before pushing.
-4. Update relevant documentation (`README.md`, `docs/`, `AGENTS.md`, `runbooks/`, `context/`) when your change affects them.
+4. Update relevant documentation (`README.md`, `docs/`, `AGENTS.md`, the plugin `references/` and `context/` under `plugins/`) when your change affects them.
 5. Follow the repository's existing style and the agent-orchestration contract documented in `AGENTS.md`.
 
 By submitting a pull request you agree that your contribution is licensed under the same MIT License as the rest of the repository (see [LICENSE](LICENSE)).
@@ -45,7 +45,7 @@ automatically. Verify the same rules against the assembled release before publis
 
 ## Dependencies
 
-Code the release ships (`skills/`, `hooks/` and `runtime/` from `plugin_runtime`, plus `installer/` from
+Code the release ships (`plugins/` from `plugin_runtime`, plus `installer/` from
 `release_extras` in `.release-manifest.json`) imports only the standard library and files shipped next to
 it: it runs on the developer's machine with no install step. The other shipped entries, `.github/plugin`
 included, carry data only. CI, test and maintenance code (`.github/workflows/`, `scripts/`,
@@ -60,7 +60,7 @@ right now. Who found a defect, in which ticket, pull request or review round, ho
 called and how the code behaved before the fix belong to the issue tracker and the pull request
 thread, which keep that history already and keep it searchable.
 
-So, in any comment, check title or doc under `skills/`, `runbooks/`, `context/` or `engine-tests/`:
+So, in any comment, check title or doc under `plugins/` or `engine-tests/`:
 
 - No ticket key (`ENG-12345`), pull request number, review round, severity label or person's handle.
 - No `before the fix`, `previously`, `used to`, `no longer` or `regression` narrative.

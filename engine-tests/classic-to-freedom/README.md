@@ -1,7 +1,7 @@
 # Classic→Freedom engine goldens
 
 Regression gate for the deterministic merge engine + mapper that ship in
-`skills/classic-to-freedom-migration/engine/`. Kept **outside** the skill so the
+`plugins/creatio-migration/skills/classic-to-freedom-migration/engine/`. Kept **outside** the skill so the
 shipped skill directory carries runtime code only (no test harness or fixtures).
 
 - `run.mjs` — merge-engine goldens (`mergeLayers`): layer order (F1), base-template seed (F2), tombstones, provenance.
@@ -9,14 +9,14 @@ shipped skill directory carries runtime code only (no test harness or fixtures).
 - `_testkit.mjs` — tiny layer/op builders shared by both runners.
 - `fixtures/` — synthetic Classic-schema layer bodies used as deterministic inputs.
 
-The runners import the engine from `../../skills/classic-to-freedom-migration/engine/` by relative path.
+The runners import the engine from `../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/` by relative path.
 
 ## Run
 
 ONE command, and it is the module's own declaration of what verifying it means:
 
 ```
-cd ../../skills/classic-to-freedom-migration/engine && npm test
+cd ../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine && npm test
 ```
 
 `scripts.test` in that `package.json` is the single source of truth for the sequence — the vendored-parser
@@ -55,7 +55,7 @@ directory, so the gate is measured without changing how any runner is invoked. F
 ```
 rm -rf coverage
 export NODE_V8_COVERAGE="$PWD/coverage/tmp"
-(cd skills/classic-to-freedom-migration/engine && npm test)
+(cd plugins/creatio-migration/skills/classic-to-freedom-migration/engine && npm test)
 unset NODE_V8_COVERAGE
 npm run coverage:report
 ```
@@ -74,10 +74,10 @@ artifact; the windows leg runs without coverage, and a failing report step never
 | Scope | Statements / lines | Branches | Functions |
 |---|---|---|---|
 | All files | 98.61% | 88.16% | 98.87% |
-| `skills/classic-to-freedom-migration/engine` | 98.58% | 88.53% | 98.85% |
-| `skills/_workflow-core` | 98.54% | 80.14% | 100% |
-| `skills/_workflow-core/adapters` | 100% | 80.64% | 100% |
-| `skills/_workflow-core/behaviour-analysis` | 98.97% | 84.50% | 98.11% |
+| `plugins/creatio-migration/skills/classic-to-freedom-migration/engine` | 98.58% | 88.53% | 98.85% |
+| `plugins/creatio-migration/skills/_workflow-core` | 98.54% | 80.14% | 100% |
+| `plugins/creatio-migration/skills/_workflow-core/adapters` | 100% | 80.64% | 100% |
+| `plugins/creatio-migration/skills/_workflow-core/behaviour-analysis` | 98.97% | 84.50% | 98.11% |
 
 Per engine module (lines / branches): `tasks.mjs` 99.40 / 87.37, `assemble.mjs` 100 / 95.21, `report.mjs`
 99.28 / 82.83, `split.mjs` 100 / 90.47, `designspec.mjs` 98.56 / 90.26, `engine.mjs` 98.72 / 87.51, `mapper.mjs`

@@ -3,12 +3,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SKILL = ROOT / "skills/creatio-branding-orchestrator/SKILL.md"
-ASSETS = ROOT / "skills/creatio-branding-orchestrator/references/branding-assets.md"
+
+# The orchestration contract is read as one union of its three files; see tests/_contract_docs.py.
+from _contract_docs import AGENTS_CONTRACT_FILES, agents_contract_text  # noqa: E402,F401
+
+SKILL = ROOT / "plugins/creatio-ui/skills/creatio-branding-orchestrator/SKILL.md"
+ASSETS = ROOT / "plugins/creatio-ui/skills/creatio-branding-orchestrator/references/branding-assets.md"
 AGENTS = ROOT / "AGENTS.md"
 
 
-def read_text(path):
+def read_text(path: Path) -> str:
+    if path.name == "AGENTS.md":
+        return agents_contract_text()
     return path.read_text(encoding="utf-8")
 
 

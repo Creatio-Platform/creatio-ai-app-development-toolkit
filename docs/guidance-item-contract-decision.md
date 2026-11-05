@@ -1,7 +1,7 @@
 # Decision: CAADT holds the guidance-item ID, clio-knowledge owns the values
 
-**Status:** accepted · **Scope:** `skills/classic-to-freedom-migration/engine/mapping-table.mjs`,
-`skills/classic-to-freedom-migration/engine/designspec.mjs` ·
+**Status:** accepted · **Scope:** `plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-table.mjs`,
+`plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs` ·
 **Raised in review of** ENG-94756 (PR #182)
 
 ## The contract

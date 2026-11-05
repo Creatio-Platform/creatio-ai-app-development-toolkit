@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCES = ROOT / "skills/classic-to-freedom-migration/references"
+REFERENCES = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/references"
 EXECUTION = REFERENCES / "build-task-execution.md"
 BUILD_PAGE = REFERENCES / "build-page.md"
 BROWSER_CHECK = REFERENCES / "freedom-ui-browser-check.md"
