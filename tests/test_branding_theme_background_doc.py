@@ -16,11 +16,8 @@ CLIO_OWNED = (
     "set-background-image",
     "set-background-color",
     "remove-background",
-    "background-image-file",
     "background-image-id",
     "background-color",
-    "themeBackgroundSupported",
-    "panelIconBackground",
     "CrtBackgroundConfig",
     "DisableThemeBackground",
     "UseAccessibleDesktopColor",
@@ -99,8 +96,7 @@ class BrandingThemeBackgroundApplyTests(unittest.TestCase):
 
     def test_the_gate_takes_its_side_effect_from_the_theming_guidance(self):
         self.assertIn(
-            "the `theming` guidance names an environment-wide side effect of setting one "
-            "and how the access check shows whether it applies",
+            "the `theming` guidance names an environment-wide side effect of setting one.",
             prose(SKILL),
         )
 
@@ -111,9 +107,9 @@ class BrandingThemeBackgroundApplyTests(unittest.TestCase):
             prose(SKILL),
         )
 
-    def test_the_gate_moves_before_the_theme_write_when_the_side_effect_applies(self):
+    def test_the_gate_moves_before_the_theme_write_when_the_theme_gets_a_background(self):
         self.assertIn(
-            "When the side effect applies, that first write is the theme write, so ask before creating "
+            "When the theme gets a background, that first write is the theme write, so ask before creating "
             "the theme; the one question covers the logos, the favicon and a site background too.",
             prose(SKILL),
         )

@@ -280,11 +280,11 @@ create it without a background or with another file.
 Unlike the theme (a per-user change), the logos, the favicon and a site background are
 **environment-wide** — they change the look for every user, including pre-login surfaces such as the
 login page. A theme background is not, but the `theming` guidance names an environment-wide side
-effect of setting one and how the access check shows whether it applies. So before the first write
+effect of setting one. So before the first write
 that makes any environment-wide change, take a distinct, explicit confirmation separate from the
 summary confirmation: state plainly that this will change branding for everyone on the environment,
 name what will change — the logos with their favicon, the favicon on its own, the site background,
-and/or that side effect — and proceed only on an explicit yes. When the side effect applies, that
+and/or that side effect — and proceed only on an explicit yes. When the theme gets a background, that
 first write is the theme write, so ask before creating the theme; the one question covers the logos,
 the favicon and a site background too. Removing a theme background needs no such confirmation. This
 gate is per apply, not the in-flow "include logos/background?" choice collected earlier. If the user
@@ -298,8 +298,8 @@ site background. Skipped logos or a declined background mean the corresponding a
 happen.
 
 Close the flow by telling the user which package the branding data was added to — the package the
-recap named, since the same one goes to the theme, the logos, and the background. The applies that
-bind data name it in their own results; relay that and their warnings. Say who sees the background,
+recap named, since the same one goes to the theme, the logos, and the background. Relay the warnings
+of each apply. Say who sees the background,
 per the targets in the Background step.
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
