@@ -42,11 +42,12 @@ theme name:
 - Logos only (add or change): resolve the environment, then go straight to the logo step and
   apply the logos. No palette conversation; offer the background only if the user brings it up. A
   favicon-only request takes the same path — the logo step, its favicon rules alone, no logo file.
-- Background only: ask which theme gets it, unless the user asked for the whole site (see the
-  targets in the Background step). Then collect the source (see the sources there). Only a
+- Background only: ask which theme gets it, unless the user named one or asked for the whole site
+  (see the targets in the Background step). Then collect the source (see the sources there). Only a
   generated picture needs brand intake and the palette conversation first, because it is recolored
   from palette stops.
-- Removing the background from a theme: ask which theme. Nothing else is collected.
+- Removing the background from a theme: ask which theme, unless the user named it. Nothing else is
+  collected.
 - Everything else still holds: the single final summary and confirmation before applying, and
   the environment-wide visibility warning in Build and apply.
 
@@ -132,7 +133,8 @@ the hex.
 
 ## Logos and favicon — after the palette conversation — follow clio's branding guidance
 
-Logos are optional but always offered, right after the palette is settled. Fetch
+Logos are optional but always offered, right after the palette is settled, unless the request
+already declined them. Fetch
 the `branding` guidance with `get-guidance` from clio MCP and follow it — it owns the logo slots and where
 each one shows, the variant routing, the splash-screen handling, and the apply mechanics. Your
 job is the conversation: name the slots the way that guidance describes them, so the user knows
@@ -180,7 +182,8 @@ sanitized per the logo rules above before it is uploaded, whatever its source.
 
 Once the logo step is done (applied or skipped), tell the user you can also generate a background
 picture recolored to match the chosen palette, for a more consistent look, and ask whether to
-include it. The user can refuse; record the choice for the final summary.
+include it, unless the request already settled the background. The user can refuse; record the
+choice for the final summary.
 
 | Target | Who sees it | When |
 | --- | --- | --- |
@@ -280,7 +283,8 @@ the background itself was refused, ask whether to go on without a background or 
 
 The logos, the favicon and a site background are **environment-wide**, and the `theming` and
 `branding` guidance name an environment-wide side effect of setting any background. Before the first write that
-makes such a change — the theme write, when the theme gets a background — take one explicit
+makes such a change — the theme write when the theme gets a background, otherwise the first asset
+write — take one explicit
 confirmation, separate from the summary: name what changes for everyone — the logos with their
 favicon, the favicon on its own, the site background, and/or that side effect — and proceed only on
 a yes. Removing a theme background needs none. If the user declines, leave those assets unchanged

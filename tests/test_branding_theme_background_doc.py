@@ -32,9 +32,9 @@ SKILL_RULES = (
     "Only when the user asks for the whole site",
     "| A solid color | Only when the user asks for one, and only for a theme |",
     "| The user's own image | The user supplies a file. Sanitize an SVG per the Logos step |",
-    "Background only: ask which theme gets it, unless the user asked for the whole site",
+    "Background only: ask which theme gets it, unless the user named one or asked for the whole site",
     "Only a generated picture needs brand intake and the palette conversation first",
-    "Removing the background from a theme: ask which theme. Nothing else is collected.",
+    "Removing the background from a theme: ask which theme, unless the user named it. Nothing else is collected.",
     "By the end of this step the background is ready: the user's file, the color, or the generated "
     "picture in its temporary file.",
     "the background: its source and target, the theme it is removed from, or none",
@@ -48,8 +48,9 @@ SKILL_RULES = (
     "background or with another file.",
     "The logos, the favicon and a site background are **environment-wide**, and the `theming` and "
     "`branding` guidance name an environment-wide side effect of setting any background.",
-    "Before the first write that makes such a change — the theme write, when the theme gets a "
-    "background — take one explicit confirmation, separate from the summary",
+    "Before the first write that makes such a change — the theme write when the theme gets a "
+    "background, otherwise the first asset write — take one explicit confirmation, separate from the summary",
+    "include it, unless the request already settled the background.",
     "Removing a theme background needs none.",
     "a declined side effect is handled per that guidance.",
     "saying who sees the background (see the targets in the Background step)",
