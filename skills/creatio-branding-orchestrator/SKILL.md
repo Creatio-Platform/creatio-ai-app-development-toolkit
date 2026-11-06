@@ -7,8 +7,9 @@ description: Use when the user wants to brand or theme a Creatio app — match a
 
 Entrypoint for branding and theming requests. You collect the brand inputs, run the guided
 palette conversation using clio's theming guidance and color tool, gather the customer's logos,
-offer a palette-matched background, then build and apply everything — colors, fonts and the theme's
-background through clio's theming guidance, logos and a site background through clio's branding guidance. You never
+offer a palette-matched background, then build and apply everything — colors and fonts through clio's
+theming guidance, the theme's background through its theme-background guidance, logos and a site
+background through clio's branding guidance. You never
 compute color math or judge a color by eye — clio makes every color decision and hands you a
 verdict; you put it in plain words and talk to the user. Defer routing and approval policy to
 `../../AGENTS.md`.
@@ -36,18 +37,20 @@ are not accessible from this session, and do not run the branding flow from memo
 
 The flow below reads as one script — intake, palette, logos, background, fonts, name, build —
 but only a full branding request (one that builds a theme) runs all of it. When the user asks
-only for assets, run just the steps that request needs, and do not build a theme or ask for a
-theme name:
+only for assets, run just the steps that request needs, and do not create a new theme or ask for a
+new theme's name:
 
 - Logos only (add or change): resolve the environment, then go straight to the logo step and
-  apply the logos. No palette conversation; offer the background only if the user brings it up. A
+  apply the logos. No palette conversation; offer the background only if the user brings it up, and
+  then take it as Background only below. A
   favicon-only request takes the same path — the logo step, its favicon rules alone, no logo file.
 - Background only: ask which theme gets it, unless the user named one or asked for the whole site
   (see the targets in the Background step). Then collect the source (see the sources there). Only a
   generated picture needs brand intake and the palette conversation first, because it is recolored
   from palette stops.
-- Removing the background from a theme: ask which theme, unless the user named it. Nothing else is
-  collected.
+- Removing a background: ask which theme, unless the user named it or means the whole site. A site
+  background cannot be removed, only replaced (the `branding` guidance): say so and offer to replace
+  it. Nothing else is collected.
 - Everything else still holds: the single final summary and confirmation before applying, and
   the environment-wide visibility warning in Build and apply.
 
@@ -80,8 +83,8 @@ Before collecting brand inputs, make sure there is a Creatio environment to appl
 to, and that it can accept the change. Resolve the environment the same way the app workflow
 does — follow `../../runbooks/01-environment-setup.md` (the DataForge availability check there
 is not needed for branding) — then confirm branding is available on it with clio's access check,
-as described in the relevant guidance (the `theming` guidance for the theme and its background, the
-`branding` guidance for logos and a site background — both fetched with `get-guidance`; resolve its
+as described in the relevant guidance (the `theming` guidance for the theme, `theme-background` for its
+background, the `branding` guidance for logos and a site background — both fetched with `get-guidance`; resolve its
 argument shape via `get-tool-contract` rather than assuming one). Doing this first avoids running
 the whole brand conversation against an environment that cannot apply it.
 
@@ -248,8 +251,10 @@ hard limit and returns a clear error if the name is too long, which you relay.
   affected step through the color tool and continue; don't force a fixed script.
 - Intake, palette, logo, background, and font steps are not approval gates. The logo-extraction
   and background questions are in-flow choices like any color choice; there is one confirmation
-  before building the theme (see below). That build confirmation covers the theme, which is a
-  per-user change — it does **not** stand in for the environment-wide apply gate below.
+  before building the theme (see below). It covers a theme without a background, which is a per-user
+  change; it does **not** stand in for the environment-wide confirmation in Build and apply, which
+  comes before any write that changes something for everyone — the theme write too, when the theme
+  gets a background.
 - Out of scope — advanced design tokens (borders, icons, states) and typography
   beyond font-family (font-weight, letter-spacing, font-size, line-height).
 
@@ -261,36 +266,40 @@ swatch, not bare hex — any non-default font(s), and the theme name, plus a bri
 color the user chose to keep despite a low-contrast warning. The recap must also state plainly
 whether the logos will be changed (and from which files) or left as they are — naming the favicon that
 goes with them, or the favicon by itself when it is the whole request — and the background: its source
-and target, the theme it is removed from, or none. Name the package the new branding data will be added to —
+and target, the theme it is removed from, or none, and who sees it: the accounts on that theme — every
+account without a personal theme when it is the environment's default theme, which the `theming`
+guidance reads — or, for the whole site, every account whose theme has no background. Name the package the new branding data will be added to —
 choosing that package, checking it can take the data, and passing it to every apply is owned by clio's
 `branding` guidance (via `get-guidance`); follow it before presenting the recap and state the name it
 settles on. A background for an existing theme goes to that theme's own package instead, as the
-`theming` guidance says; name it.
+`theme-background` guidance says; name it.
 Show full stops or other detail only if asked. If the user wants to change something,
 return to the relevant block (primary / secondary / accent / success / error / logo / background /
 font / name / package) and re-present the summary.
 
-After the single final confirmation, follow clio's theming guidance to build the theme CSS from
-the collected inputs and create the theme on the environment. The build, the exact tool
-sequence, the license preconditions, and how a theme is applied live in that guidance. The
-theme's background goes into that same write; for an existing theme it is an update that changes
-only the background.
+The logos, the favicon and a site background are **environment-wide**, and the `theme-background`
+and `branding` guidance name an environment-wide side effect of setting any background. Before the
+first write that makes such a change — the theme write when the theme gets a background, otherwise
+the first asset write — take one explicit confirmation, separate from the summary: name what changes
+for everyone — the logos with their favicon, the favicon on its own, the site background, and/or that
+side effect — and proceed only on a yes. Removing a theme background needs none. If the user declines,
+leave the logos, the favicon and a site background unchanged and say so; a theme confirmed in the
+summary is still written, and a declined side effect is handled per that guidance.
+
+After the single final confirmation, and the environment-wide one when it applies, follow clio's
+theming guidance to build the theme CSS from the collected inputs and create the theme on the
+environment. The build, the exact tool sequence, the license preconditions, and how a theme is
+applied live in that guidance. The theme's background goes into that same write; for an existing
+theme it is an update that changes only the background.
 
 Then, when this run created a theme, apply it to you (see below); then the logos and the favicon,
-then a site background; clio's `branding` guidance has the mechanics of the last two. If the theme write fails, it changes
-nothing, but an image uploaded for it stays: relay the reason and reuse that image on a retry. When
-the background itself was refused, ask whether to go on without a background or with another file.
+then a site background; clio's `branding` guidance has the mechanics of the last two. If the theme
+write fails or its background is refused, relay the reason in plain words and follow the
+`theme-background` guidance's recovery, asking any choice it leaves to the user as one question; an
+image uploaded for the failed write stays, so reuse it on a retry. When the background's source
+itself was refused, offer one of the same kind: another file, another color, or a regenerated picture.
 
-The logos, the favicon and a site background are **environment-wide**, and the `theming` and
-`branding` guidance name an environment-wide side effect of setting any background. Before the first write that
-makes such a change — the theme write when the theme gets a background, otherwise the first asset
-write — take one explicit
-confirmation, separate from the summary: name what changes for everyone — the logos with their
-favicon, the favicon on its own, the site background, and/or that side effect — and proceed only on
-a yes. Removing a theme background needs none. If the user declines, leave those assets unchanged
-and say so; a declined side effect is handled per that guidance.
-
-Close by naming the package the recap named, relaying each apply's warnings, and saying who sees the
+Close by naming the package or packages the recap named, relaying each apply's warnings, and saying who sees the
 background (see the targets in the Background step).
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
