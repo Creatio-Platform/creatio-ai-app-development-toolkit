@@ -276,8 +276,8 @@ sequence, the license preconditions, and how a theme is applied live in that gui
 theme's background goes into that same write; for an existing theme it is an update that changes
 only the background.
 
-Then apply the theme to you (see below), then the logos and the favicon, then a site background;
-clio's `branding` guidance has the mechanics of the last two. If the theme write fails, it changes
+Then, when this run created a theme, apply it to you (see below); then the logos and the favicon,
+then a site background; clio's `branding` guidance has the mechanics of the last two. If the theme write fails, it changes
 nothing, but an image uploaded for it stays: relay the reason and reuse that image on a retry. When
 the background itself was refused, ask whether to go on without a background or with another file.
 
