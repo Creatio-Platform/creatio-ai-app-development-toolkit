@@ -283,7 +283,7 @@ the first asset write — take one explicit confirmation, separate from the summ
 for everyone — the logos with their favicon, the favicon on its own, the site background, and/or that
 side effect — and proceed only on a yes. Removing a theme background needs none. If the user declines,
 leave the logos, the favicon and a site background unchanged and say so; a theme confirmed in the
-summary is still written, and a declined side effect is handled per that guidance.
+summary is still written, and a declined side effect is handled per clio's `theming` guidance.
 
 After the single final confirmation, and the environment-wide one when it applies, follow clio's
 theming guidance to build the theme CSS from the collected inputs and create the theme on the

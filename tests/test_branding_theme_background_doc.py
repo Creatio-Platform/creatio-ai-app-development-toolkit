@@ -64,7 +64,7 @@ SKILL_RULES = (
     "The logos, the favicon and a site background are **environment-wide**, and clio's guidance names an "
     "environment-wide side effect of setting any background.",
     "If the user declines, leave the logos, the favicon and a site background unchanged and say so; a theme confirmed "
-    "in the summary is still written, and a declined side effect is handled per that guidance.",
+    "in the summary is still written, and a declined side effect is handled per clio's `theming` guidance.",
     "After the single final confirmation, and the environment-wide one when it applies, follow clio's theming "
     "guidance",
     "It covers a theme without a background, which is a per-user change;",
