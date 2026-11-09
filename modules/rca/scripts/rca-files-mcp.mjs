@@ -327,7 +327,7 @@ if (problem) {
       if (!TOOLS.includes(name)) throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });
       const r = await client.callTool(name, args);
       if (r?.error) throw Object.assign(new Error(r.error.message), { rpcCode: r.error.code, rpcData: r.error.data });
-      if (!r || r.result === undefined) throw new Error('RcaAgentMcp tools/call failed: the answer has no result');
+      if (r?.result === undefined) throw new Error('RcaAgentMcp tools/call failed: the answer has no result');
       return r.result;
     },
   });
