@@ -22,7 +22,7 @@ ROUTING_PHRASES = {
 
 CLIO_OWNED = (
     "set-background-image",
-    "remove-background",
+    "theme-background",
     "background-image-id",
     "background-color",
     "CrtBackgroundConfig",
@@ -51,18 +51,18 @@ SKILL_RULES = (
     "the background: its source and target, the theme it is removed from, or none, and who sees it: the accounts on that "
     "theme — every account without a personal theme when it is the environment's default theme, which the `theming` "
     "guidance reads — or, for the whole site, every account whose theme has no background.",
-    "A background for an existing theme goes to that theme's own package instead, as the `theme-background` guidance says; name it.",
+    "A background for an existing theme goes to that theme's own package instead, as the `branding` guidance says; name it.",
     "The theme's background goes into that same write; for an existing theme it is an update that "
     "changes only the background.",
     "Then, when this run created a theme, apply it to you (see below); then the logos and the favicon, "
     "then a site background; clio's `branding` guidance has the mechanics of the last two.",
     "If the theme write fails or its background is refused, relay the reason in plain words and follow the "
-    "`theme-background` guidance's recovery, asking any choice it leaves to the user as one question; an image "
+    "recovery in clio's theming guidance, asking any choice it leaves to the user as one question; an image "
     "uploaded for the failed write stays, so reuse it on a retry.",
     "When the background's source itself was refused, offer one of the same kind: another file, another color, or "
     "a regenerated picture.",
-    "The logos, the favicon and a site background are **environment-wide**, and the `theme-background` and "
-    "`branding` guidance name an environment-wide side effect of setting any background.",
+    "The logos, the favicon and a site background are **environment-wide**, and clio's guidance names an "
+    "environment-wide side effect of setting any background.",
     "If the user declines, leave the logos, the favicon and a site background unchanged and say so; a theme confirmed "
     "in the summary is still written, and a declined side effect is handled per that guidance.",
     "After the single final confirmation, and the environment-wide one when it applies, follow clio's theming "

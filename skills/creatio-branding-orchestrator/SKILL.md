@@ -7,9 +7,8 @@ description: Use when the user wants to brand or theme a Creatio app — match a
 
 Entrypoint for branding and theming requests. You collect the brand inputs, run the guided
 palette conversation using clio's theming guidance and color tool, gather the customer's logos,
-offer a palette-matched background, then build and apply everything — colors and fonts through clio's
-theming guidance, the theme's background through its theme-background guidance, logos and a site
-background through clio's branding guidance. You never
+offer a palette-matched background, then build and apply everything — colors and fonts through
+clio's theming guidance, logos and the background through clio's branding guidance. You never
 compute color math or judge a color by eye — clio makes every color decision and hands you a
 verdict; you put it in plain words and talk to the user. Defer routing and approval policy to
 `../../AGENTS.md`.
@@ -83,8 +82,8 @@ Before collecting brand inputs, make sure there is a Creatio environment to appl
 to, and that it can accept the change. Resolve the environment the same way the app workflow
 does — follow `../../runbooks/01-environment-setup.md` (the DataForge availability check there
 is not needed for branding) — then confirm branding is available on it with clio's access check,
-as described in the relevant guidance (the `theming` guidance for the theme, `theme-background` for its
-background, the `branding` guidance for logos and a site background — both fetched with `get-guidance`; resolve its
+as described in the relevant guidance (the `theming` guidance for the theme, the
+`branding` guidance for logos and the background — both fetched with `get-guidance`; resolve its
 argument shape via `get-tool-contract` rather than assuming one). Doing this first avoids running
 the whole brand conversation against an environment that cannot apply it.
 
@@ -272,13 +271,13 @@ guidance reads — or, for the whole site, every account whose theme has no back
 choosing that package, checking it can take the data, and passing it to every apply is owned by clio's
 `branding` guidance (via `get-guidance`); follow it before presenting the recap and state the name it
 settles on. A background for an existing theme goes to that theme's own package instead, as the
-`theme-background` guidance says; name it.
+`branding` guidance says; name it.
 Show full stops or other detail only if asked. If the user wants to change something,
 return to the relevant block (primary / secondary / accent / success / error / logo / background /
 font / name / package) and re-present the summary.
 
-The logos, the favicon and a site background are **environment-wide**, and the `theme-background`
-and `branding` guidance name an environment-wide side effect of setting any background. Before the
+The logos, the favicon and a site background are **environment-wide**, and clio's guidance names
+an environment-wide side effect of setting any background. Before the
 first write that makes such a change — the theme write when the theme gets a background, otherwise
 the first asset write — take one explicit confirmation, separate from the summary: name what changes
 for everyone — the logos with their favicon, the favicon on its own, the site background, and/or that
@@ -294,8 +293,8 @@ theme it is an update that changes only the background.
 
 Then, when this run created a theme, apply it to you (see below); then the logos and the favicon,
 then a site background; clio's `branding` guidance has the mechanics of the last two. If the theme
-write fails or its background is refused, relay the reason in plain words and follow the
-`theme-background` guidance's recovery, asking any choice it leaves to the user as one question; an
+write fails or its background is refused, relay the reason in plain words and follow the recovery in
+clio's theming guidance, asking any choice it leaves to the user as one question; an
 image uploaded for the failed write stays, so reuse it on a retry. When the background's source
 itself was refused, offer one of the same kind: another file, another color, or a regenerated picture.
 

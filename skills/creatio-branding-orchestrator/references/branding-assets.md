@@ -3,7 +3,7 @@
 Toolkit-owned knowledge for the `creatio-branding-orchestrator` skill. Everything mechanical
 about applying branding — the logo slots, the favicon settings, the background upload and apply,
 licenses, size and file-security limits — is owned by clio and resolved at runtime from
-the `branding` guidance and, for a theme's background, the `theme-background` guidance, both fetched with `get-guidance` (resolve the argument shape via `get-tool-contract`). This file holds only what clio does not ship: the background
+the `branding` guidance, fetched with `get-guidance` (resolve its argument shape via `get-tool-contract`). This file holds only what clio does not ship: the background
 templates bundled with the toolkit.
 
 ## Background templates and tokens
