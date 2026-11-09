@@ -551,11 +551,26 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
             shutil.copyfile(source, target)
 
 
+def is_rca_server(server_name: str) -> bool:
+    """The RCA agent's servers (``rca-*``) are read-only only through the per-host tool lists and the
+    Claude Code hook. Cursor gets neither, so it gets none of these servers."""
+    return server_name.startswith("rca-")
+
+
+def drop_rca_servers(mcp_path: Path) -> None:
+    """Remove the RCA agent's servers from the copied plugin's MCP file, which Cursor's plugin manifest loads."""
+    if not mcp_path.exists():
+        return
+    config = json.loads(mcp_path.read_text(encoding="utf-8"))
+    servers = config.get("mcpServers", {}) or {}
+    config["mcpServers"] = {name: server for name, server in servers.items() if not is_rca_server(name)}
+    write_json(mcp_path, config)
+
+
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
     """Merge mcpServers from the plugin's .mcp.json into a shared MCP config file.
 
-    The RCA agent's servers (``rca-*``) are left out: they are read-only only through the per-host tool
-    lists and the Claude Code hook, and the shared file gets neither.
+    The RCA agent's servers are left out (see ``is_rca_server``).
     """
     source = repo_root / ".mcp.json"
     if not source.exists():
@@ -571,7 +586,7 @@ def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
 
     existing_servers = existing.get("mcpServers", {}) or {}
     for server_name, server_config in incoming_servers.items():
-        if server_name.startswith("rca-"):
+        if is_rca_server(server_name):
             continue
         if server_name in existing_servers:
             print(f"Skipped existing MCP server '{server_name}' in {target_path}")
@@ -1054,6 +1069,7 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
     remove_tree_if_exists(local_plugin_dir, "Cursor")
     copy_plugin_runtime_surface(repo_root, local_plugin_dir)
+    drop_rca_servers(local_plugin_dir / ".mcp.json")
     mcp_config_path = cursor_home / "mcp.json"
     merge_mcp_config(repo_root, mcp_config_path)
     rules_dir = cursor_home / "rules"

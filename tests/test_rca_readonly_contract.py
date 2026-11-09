@@ -232,15 +232,24 @@ class GuardBehaviourTests(unittest.TestCase):
 @unittest.skipUnless(IN_TOOLKIT and INSTALLER.is_file(), "the toolkit's installer is not here")
 class CursorInstallTests(unittest.TestCase):
     def test_the_installer_gives_cursor_no_rca_server(self):
+        # Cursor has no allow-list or guard for the RCA servers, so neither file it reads servers from gets them:
+        # its own mcp.json and the MCP file the installed plugin's Cursor manifest names.
         spec = importlib.util.spec_from_file_location("caadt_installer_for_rca", INSTALLER)
         installer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(installer)
         with tempfile.TemporaryDirectory() as temp:
-            target = Path(temp) / "mcp.json"
-            installer.merge_mcp_config(ROOT, target)
-            merged = _servers(target)
-        self.assertIn("clio", merged)
-        self.assertEqual(_rca(merged), {}, "Cursor has no allow-list or guard for the RCA servers")
+            home = Path(temp)
+            installer.install_cursor(ROOT, home)
+            plugin = home / ".cursor" / "plugins" / "local" / installer.PLUGIN_NAME
+            manifest = json.loads((plugin / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
+            files = {
+                "~/.cursor/mcp.json": _servers(home / ".cursor" / "mcp.json"),
+                "the installed plugin's MCP file": _servers(plugin / manifest["mcpServers"]),
+            }
+        for name, servers in files.items():
+            with self.subTest(name):
+                self.assertIn("clio", servers)
+                self.assertEqual(_rca(servers), {})
 
 
 if __name__ == "__main__":
