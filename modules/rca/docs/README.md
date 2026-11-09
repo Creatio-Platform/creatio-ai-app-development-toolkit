@@ -26,6 +26,11 @@ The agent is **read-only**: it never changes the environment. It reads Creatio's
 activity log, the installer logs attached to it, packages, schemas, settings — through two MCP servers: Creatio's
 hosted MCP server, signed in as you, and a small local server for the files attached to the log.
 
+The plugin enforces that for those two servers on every host: Codex and Copilot CLI get only their read tools, and on
+Claude Code a hook of the plugin denies every other tool of the two. The host's own tools (a shell, a web fetch) and
+other MCP servers are not covered by it; there the agent's instructions and the host's permission prompts apply. A
+read-only Creatio user, as the sections below ask for, is what keeps the site itself from any change.
+
 Its skills (`skills/rca-*`) come with the toolkit, for **Claude Code**, **Codex** and **GitHub Copilot CLI**. What
 it needs from you is a connection to your site, set up in the sections below.
 

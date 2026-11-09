@@ -12,7 +12,9 @@ import { readFileSync } from 'node:fs';
 
 const GUARDED = ['rca-creatio-http', 'rca-files'];
 // `mcp__<server>__<tool>`, or `mcp__plugin_<plugin>_<server>__<tool>` for a server a plugin declares.
-const TOOL_NAME = new RegExp(`^mcp__(?:plugin_[^_]+_)?(${GUARDED.join('|')})__(.+)$`);
+const TOOL_NAME = new RegExp(`^mcp__(?:plugin_.+_)?(${GUARDED.join('|')})__(.+)$`);
+// Any name that mentions a guarded server's tool: one of these that TOOL_NAME cannot read is denied, never let through.
+const MENTIONS_GUARDED = new RegExp(`(?:${GUARDED.join('|')})__`);
 
 // The server's list of read tools: an array of names, or an error.
 const readAllowList = (server) => {
@@ -26,7 +28,10 @@ const readAllowList = (server) => {
 const denyReason = (toolName) => {
   if (typeof toolName !== 'string') return 'the RCA read-only guard could not read which tool is called, so the call is denied';
   const m = TOOL_NAME.exec(toolName);
-  if (!m) return null; // another server's tool: not this guard's call
+  if (!m) {
+    if (MENTIONS_GUARDED.test(toolName)) return `"${toolName}" names an RCA server's tool in a form the RCA read-only guard cannot read, so the call is denied`;
+    return null; // another server's tool: not this guard's call
+  }
   const [, server, tool] = m;
   let allowed;
   try {

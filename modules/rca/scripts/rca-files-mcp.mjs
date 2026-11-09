@@ -22,10 +22,14 @@ const log = (m) => process.stderr.write(`[rca-files] ${m}\n`);
 const isUnset = (v) => v === undefined || v === null || String(v).trim() === '' || /^\$\{[^}]*\}$/.test(String(v).trim());
 const value = (v) => (isUnset(v) ? '' : String(v).trim());
 
-// Git Bash (MSYS) rewrites an environment value that starts with `/` into a Windows path for every program it starts;
-// such a value is turned back into the path it was.
+// A full URL, as the MCP server card's "Full URL" field shows it, gives its path. Git Bash (MSYS) rewrites an
+// environment value that starts with `/` into a Windows path for every program it starts; such a value is turned back
+// into the path it was.
 function urlPath(v) {
   const s = value(v);
+  if (/^https?:\/\//i.test(s)) {
+    try { return new URL(s).pathname; } catch { return s; }
+  }
   const m = /^[A-Za-z]:[\\/].*?([\\/](?:0[\\/])?rest[\\/].*)$/.exec(s);
   return m ? m[1].replaceAll('\\', '/') : s;
 }
@@ -195,6 +199,7 @@ class RcaAgentMcpClient {
     await this.initialize();
     const r = await this.request('tools/list', {});
     if (!r || r.error) throw new Error(`RcaAgentMcp tools/list failed: ${r?.error?.message || 'no answer'}`);
+    if (!Array.isArray(r.result?.tools)) throw new Error('RcaAgentMcp tools/list failed: the answer has no list of tools');
     return r.result.tools;
   }
 
@@ -286,27 +291,44 @@ while (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 const conn = {
   baseUrl,
   login: value(env.CREATIO_LOGIN),
-  password: value(env.CREATIO_PASSWORD),
+  // The password goes to the site as it was set: a space at either end can be part of it.
+  password: isUnset(env.CREATIO_PASSWORD) ? '' : String(env.CREATIO_PASSWORD),
 };
-if (!conn.baseUrl || !conn.login || !conn.password) {
-  log('missing base url / login / password: set CREATIO_BASE_URL, CREATIO_LOGIN and CREATIO_PASSWORD before starting the session');
-  process.exit(1);
-}
-// The login and password go to the site in the request body, so only an encrypted connection is accepted; plain http
-// only to this machine.
-if (!/^https:\/\//i.test(conn.baseUrl) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(conn.baseUrl)) {
-  log(`CREATIO_BASE_URL must start with https:// (got ${conn.baseUrl}): the login and password would travel unencrypted`);
-  process.exit(1);
+
+// Why the server cannot read files, or '' when it can. The server runs either way: a session without the RCA
+// variables (the toolkit used for something else) gets no tools from it, not a server that fails to start.
+function setupProblem() {
+  const missing = Object.entries({ CREATIO_BASE_URL: conn.baseUrl, CREATIO_LOGIN: conn.login, CREATIO_PASSWORD: conn.password })
+    .filter(([, v]) => !v).map(([name]) => name);
+  if (missing.length) return `set ${missing.join(', ')}, then restart the agent`;
+  // The login and password go to the site in the request body, so only an encrypted connection is accepted; plain
+  // http only to this machine.
+  if (!/^https:\/\//i.test(conn.baseUrl) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(conn.baseUrl)) {
+    return `CREATIO_BASE_URL must start with https:// (got ${conn.baseUrl}): the login and password would travel unencrypted`;
+  }
+  return '';
 }
 
-const client = new RcaAgentMcpClient({ ...conn, mcpPath: urlPath(env.CREATIO_RCA_AGENT_MCP_PATH) || DEFAULT_MCP_PATH, log, clientName: 'rca-files' });
-
-serve({
-  listTools: async () => (await client.listTools()).filter((t) => TOOLS.includes(t.name)),
-  callTool: async (name, args) => {
-    if (!TOOLS.includes(name)) throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });
-    const r = await client.callTool(name, args);
-    if (r?.error) throw Object.assign(new Error(r.error.message), { rpcCode: r.error.code, rpcData: r.error.data });
-    return r.result;
-  },
-});
+const problem = setupProblem();
+if (problem) {
+  log(`attached files cannot be read: ${problem}`);
+  serve({
+    listTools: async () => [],
+    callTool: async (name) => {
+      if (!TOOLS.includes(name)) throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });
+      throw Object.assign(new Error(`rca-files is not set up: ${problem}`), { rpcCode: -32002 });
+    },
+  });
+} else {
+  const client = new RcaAgentMcpClient({ ...conn, mcpPath: urlPath(env.CREATIO_RCA_AGENT_MCP_PATH) || DEFAULT_MCP_PATH, log, clientName: 'rca-files' });
+  serve({
+    listTools: async () => (await client.listTools()).filter((t) => TOOLS.includes(t.name)),
+    callTool: async (name, args) => {
+      if (!TOOLS.includes(name)) throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });
+      const r = await client.callTool(name, args);
+      if (r?.error) throw Object.assign(new Error(r.error.message), { rpcCode: r.error.code, rpcData: r.error.data });
+      if (!r || r.result === undefined) throw new Error('RcaAgentMcp tools/call failed: the answer has no result');
+      return r.result;
+    },
+  });
+}

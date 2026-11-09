@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/modules/rca/hooks/rca-readonly-guard.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/modules/rca/hooks/rca-readonly-guard.mjs\" || exit 2"
           }
         ]
       }

@@ -552,7 +552,11 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
 
 
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
-    """Merge mcpServers from the plugin's .mcp.json into a shared MCP config file."""
+    """Merge mcpServers from the plugin's .mcp.json into a shared MCP config file.
+
+    The RCA agent's servers (``rca-*``) are left out: they are read-only only through the per-host tool
+    lists and the Claude Code hook, and the shared file gets neither.
+    """
     source = repo_root / ".mcp.json"
     if not source.exists():
         raise RuntimeError(f"MCP config not found: {source}")
@@ -567,6 +571,8 @@ def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
 
     existing_servers = existing.get("mcpServers", {}) or {}
     for server_name, server_config in incoming_servers.items():
+        if server_name.startswith("rca-"):
+            continue
         if server_name in existing_servers:
             print(f"Skipped existing MCP server '{server_name}' in {target_path}")
             continue
