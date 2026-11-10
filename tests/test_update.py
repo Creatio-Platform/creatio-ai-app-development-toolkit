@@ -521,6 +521,21 @@ class ClaudeFamilyUpdateTests(unittest.TestCase):
         ])
         self.assertEqual(self._installs(), [])
 
+    def test_only_this_marketplaces_plugins_are_updated(self):
+        # The listing carries every plugin the user has installed, from any marketplace, and
+        # each entry is whatever the CLI prints: updating a plugin that is not ours, or
+        # reading an entry that names none, is never this updater's business.
+        self._run([
+            [
+                self._entry("creatio-core"),
+                {"id": "vault@elsewhere", "version": "1.0.0", "enabled": True},
+                {"id": None, "version": "1.0.0"},
+                {"version": "1.0.0"},
+            ],
+            [self._entry("creatio-core")],
+        ])
+        self.assertEqual(self._updates(), [["claude", "plugin", "update", "creatio-core@creatio"]])
+
     def test_a_dependency_of_another_marketplace_is_never_installed(self):
         self._run([[self._entry("creatio-ui")], [self._entry("creatio-ui", missing=["vault@elsewhere"])]])
         self.assertEqual(self._installs(), [])
