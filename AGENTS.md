@@ -4,6 +4,11 @@ This repository is a **marketplace of Creatio plugins** for coding agents (Claud
 Cursor). Every plugin lives under `plugins/<name>/` with one flat `skills/` directory and its own host manifests;
 the root `.claude-plugin/plugin.json` is a meta-plugin that installs the whole family.
 
+The install unit differs per host. Claude Code reaches the family through the meta-plugin's `dependencies`, and Codex
+CLI installs each plugin from the catalog. GitHub Copilot CLI and Cursor have neither a dependency mechanism nor a
+per-plugin install, so their root manifests (`.github/plugin/plugin.json`, `.cursor-plugin/plugin.json`) carry the
+meta-plugin's name and list every plugin's `skills/` — on those two hosts the whole family is one plugin.
+
 ## Repository layout
 
 | Plugin | Holds |
