@@ -243,9 +243,15 @@ python installer/update.py --target claude
 to pick up new releases. `claude plugin update creatio-ai-app-development-toolkit@creatio` on its own
 updates the meta-plugin and nothing else: the four plugins stay at their old version, and a plugin a
 new release adds to the meta-plugin's `dependencies` stays uninstalled, which keeps the meta-plugin
-disabled. `update.py` runs that update, then updates every other installed `creatio` plugin and
-installs each dependency Claude reports as missing (`claude plugin list --json`). Claude's own
-auto-update installs missing dependencies too.
+disabled. `update.py` therefore refreshes the marketplace catalog, then updates every installed
+`creatio` plugin the listing names (`claude plugin list --json`) — the meta-plugin included, and only
+when it is installed, so an individual install such as `claude plugin install creatio-ui@creatio`
+updates too — and installs each dependency Claude reports as missing. Claude's own auto-update
+installs missing dependencies too.
+
+For GitHub Copilot CLI, `update.py` updates the single `creatio-ai-app-development-toolkit` plugin
+that host installs the family as; individual Copilot plugins are updated with `copilot plugin update`
+directly.
 
 ## Product telemetry: the floor hook per host
 

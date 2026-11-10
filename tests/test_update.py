@@ -227,16 +227,19 @@ class NativeUpdateCommandsTests(unittest.TestCase):
             patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]),
         )
 
-    def test_two_step_sequences_per_agent(self):
+    def test_claude_refreshes_the_catalog_and_names_no_plugin(self):
+        # Which plugins to update is the listing's answer (update_claude_family), because a
+        # user who installed one plugin on its own has no meta-plugin to update.
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3:
             self.assertEqual(
                 self.upd.native_update_commands("claude"),
-                [
-                    ["claude", "plugin", "marketplace", "update", "creatio"],
-                    ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
-                ],
+                [["claude", "plugin", "marketplace", "update", "creatio"]],
             )
+
+    def test_copilot_refreshes_the_catalog_and_updates_the_one_plugin_it_installs(self):
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3:
             self.assertEqual(
                 self.upd.native_update_commands("copilot"),
                 [
@@ -289,7 +292,7 @@ class UpdateAgentsTests(unittest.TestCase):
             patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]),
         )
 
-    def test_native_agent_runs_both_steps_in_order(self):
+    def test_claude_refreshes_the_catalog_then_the_family(self):
         calls = []
 
         def record(cmd, **kw):
@@ -301,13 +304,12 @@ class UpdateAgentsTests(unittest.TestCase):
             updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
 
         self.assertEqual((updated, list(failed)), (["claude"], []))
-        # The two steps, then the family listing: once to update the other installed plugins and
+        # The catalog refresh, then the family listing: once to update every installed plugin and
         # once to find a dependency that is not installed (an empty listing has neither).
         self.assertEqual(
             calls,
             [
                 ["claude", "plugin", "marketplace", "update", "creatio"],
-                ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
                 ["claude", "plugin", "list", "--json"],
                 ["claude", "plugin", "list", "--json"],
             ],
@@ -484,6 +486,9 @@ class ClaudeFamilyUpdateTests(unittest.TestCase):
     def _installs(self):
         return [cmd for cmd in self.calls if cmd[:3] == ["claude", "plugin", "install"]]
 
+    def _updates(self):
+        return [cmd for cmd in self.calls if cmd[:3] == ["claude", "plugin", "update"]]
+
     def test_a_declared_dependency_that_is_not_installed_is_installed(self):
         meta = "creatio-ai-app-development-toolkit"
         self._run([
@@ -494,13 +499,27 @@ class ClaudeFamilyUpdateTests(unittest.TestCase):
             ],
             [self._entry(name) for name in (meta, "creatio-core", "creatio-ui", "creatio-migration")],
         ])
-        self.assertIn(["claude", "plugin", "update", "creatio-core@creatio"], self.calls)
-        # The meta-plugin itself is updated by the step before this one.
-        self.assertNotIn(["claude", "plugin", "update", f"{meta}@creatio"], self.calls)
+        self.assertEqual(self._updates(), [
+            ["claude", "plugin", "update", f"{meta}@creatio"],
+            ["claude", "plugin", "update", "creatio-core@creatio"],
+        ])
         self.assertEqual(self._installs(), [
             ["claude", "plugin", "install", "creatio-ui@creatio"],
             ["claude", "plugin", "install", "creatio-migration@creatio"],
         ])
+
+    def test_plugins_installed_without_the_meta_plugin_are_updated(self):
+        # `claude plugin install creatio-ui@creatio` is a documented install, and it brings no
+        # meta-plugin: naming one would fail the update of everything that IS installed.
+        self._run([
+            [self._entry("creatio-core"), self._entry("creatio-ui")],
+            [self._entry("creatio-core"), self._entry("creatio-ui")],
+        ])
+        self.assertEqual(self._updates(), [
+            ["claude", "plugin", "update", "creatio-core@creatio"],
+            ["claude", "plugin", "update", "creatio-ui@creatio"],
+        ])
+        self.assertEqual(self._installs(), [])
 
     def test_a_dependency_of_another_marketplace_is_never_installed(self):
         self._run([[self._entry("creatio-ui")], [self._entry("creatio-ui", missing=["vault@elsewhere"])]])
@@ -780,16 +799,13 @@ class UpdateMainTests(unittest.TestCase):
         acquire.assert_called_once()
         # The named-workflow mirror is refreshed as part of the Claude update.
         refresh.assert_called_once()
-        # Claude two-step + two family listings + Cursor install.py reinstall = 5 subprocess calls.
-        self.assertEqual(len(calls), 5)
+        # Claude catalog refresh + two family listings + Cursor install.py reinstall = 4 subprocess
+        # calls; the empty listing names no plugin to update.
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[0], ["claude", "plugin", "marketplace", "update", "creatio"])
-        self.assertEqual(
-            calls[1],
-            ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
-        )
-        self.assertEqual(calls[2:4], [["claude", "plugin", "list", "--json"]] * 2)
+        self.assertEqual(calls[1:3], [["claude", "plugin", "list", "--json"]] * 2)
         install_script = str(fresh_root / "installer" / "install.py")
-        self.assertEqual(calls[4][1:], [install_script, "--target", "cursor"])
+        self.assertEqual(calls[3][1:], [install_script, "--target", "cursor"])
         printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
         self.assertIn("Updated 2 agent(s) to v0.2.0", printed)
         self.assertIn("claude", printed)
@@ -1161,12 +1177,15 @@ class FailureHintTests(unittest.TestCase):
         self.assertNotIn("A running agent can lock", err)
 
     def test_deleted_branch_on_the_plugin_update_step_prints_branch_hint_not_lock_hint(self):
+        listing = json.dumps([{"id": "creatio-ai-app-development-toolkit@creatio", "version": "2.0.0"}])
+
         def side(cmd, **kw):
             if cmd[1:3] == ["plugin", "update"]:
                 return subprocess.CompletedProcess(
                     args=cmd, returncode=1, stdout="", stderr=DELETED_BRANCH_PLUGIN_UPDATE_OUTPUT
                 )
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            stdout = listing if cmd[-2:] == ["list", "--json"] else ""
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
 
         stdout, stderr = io.StringIO(), io.StringIO()
         with (
@@ -1185,6 +1204,7 @@ class FailureHintTests(unittest.TestCase):
             [call.args[0][1:] for call in run.call_args_list],
             [
                 ["plugin", "marketplace", "update", "creatio"],
+                ["plugin", "list", "--json"],
                 ["plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
             ],
         )

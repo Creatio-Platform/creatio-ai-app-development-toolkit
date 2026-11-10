@@ -7,14 +7,14 @@ plugins, it does not install or configure them.
 
 How it works:
   - Agents with a native plugin-update command are updated in place via that
-    command. Each is a two-step sequence — refresh the local marketplace catalog,
-    then update/reinstall the plugin — because a bare update compares against the
-    *cached* catalog and no-ops if it looks current:
-        claude  — `claude plugin marketplace update`  + `claude plugin update`
-        copilot — `copilot plugin marketplace update`  + `copilot plugin update`
-    Claude then updates every other installed plugin of the marketplace and installs
-    each dependency an updated plugin declares that is not installed yet, because
-    `claude plugin update` does neither for the plugin it updates.
+    command. The local marketplace catalog is refreshed first, because a bare update
+    compares against the *cached* catalog and no-ops if it looks current:
+        claude  — `claude plugin marketplace update`, then one `claude plugin update`
+                  per installed plugin of the marketplace, plus every dependency an
+                  updated plugin declares and Claude reports as not installed
+        copilot — `copilot plugin marketplace update` + `copilot plugin update`, which
+                  updates the single plugin Copilot installs the family as. An update
+                  of individual Copilot plugins is not supported.
   - Cursor and Codex have no native, non-interactive update command, so they fall
     back to install.py: each is reinstalled from the latest release, which this
     command downloads on demand (Cursor as a file copy; Codex by re-registering
@@ -129,18 +129,23 @@ def detect_installed_target_ids(home: Path | None = None) -> list[str]:
 def native_update_commands(target_id: str) -> list[list[str]]:
     """Return the ordered argv command-lists for a native agent's update.
 
-    Step 1 refreshes the local marketplace catalog from its git source; step 2
-    updates the plugin (Claude/Copilot). The refresh is required: a bare update
-    resolves the version from the *cached* catalog and skips if it already
-    matches, so without it a moved `release` branch would never be picked up.
+    The first step refreshes the local marketplace catalog from its git source, and is
+    required: a bare update resolves the version from the *cached* catalog and skips if
+    it already matches, so without it a moved `release` branch would never be picked up.
+    Copilot installs the whole family as one plugin, so the second step updates that
+    plugin by name. Claude installs each plugin of the family separately — the
+    meta-plugin only declares them as dependencies, and every plugin is installable on
+    its own — so which plugins to update is read from the listing by
+    update_claude_family() rather than named here: `claude plugin update` fails on a
+    plugin that is not installed, which would abort the update of everything that is.
     Codex is not a native target: its CLI has no plugin-update or plugin-install
     subcommand, so it is reinstalled through install.py (see COPY_TARGETS).
     """
     cli = native_cli_command(target_id)
-    return [
-        [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
-        [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
-    ]
+    commands = [[*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME]]
+    if target_id != "claude":
+        commands.append([*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE])
+    return commands
 
 
 def native_cli_command(target_id: str) -> list[str]:
@@ -231,13 +236,15 @@ def missing_claude_dependencies(entries: list[dict]) -> list[str]:
 def update_claude_family(cli: list[str]) -> None:
     """Bring every installed CAADT plugin current and install the dependencies they declare.
 
-    `claude plugin update` updates the plugin it names and nothing else: the meta-plugin's
-    dependencies stay at their old version, and a dependency the new version adds is not
-    installed, which leaves the meta-plugin disabled until it is.
+    `claude plugin update` updates the plugin it names and nothing else, and fails outright
+    on a plugin that is not installed. Both make the listing the only sound input: every
+    installed plugin of the marketplace is updated — the meta-plugin among them, and only
+    when it is installed at all, since each plugin is also installable on its own — and a
+    dependency a new version adds is installed afterwards, because an unmet dependency
+    leaves the plugin that declares it disabled.
     """
     for entry in claude_marketplace_plugins(cli):
-        if entry["id"] != agent_cli.PLUGIN_SOURCE:
-            _run_step([*cli, "plugin", "update", entry["id"]])
+        _run_step([*cli, "plugin", "update", entry["id"]])
     # Every install round is followed by a fresh listing, so the last round is judged by what
     # Claude reports after it rather than by what it set out to install.
     missing = missing_claude_dependencies(claude_marketplace_plugins(cli))
