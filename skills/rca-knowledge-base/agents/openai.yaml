@@ -1,0 +1,5 @@
+---
+display_name: "RCA Knowledge Base"
+short_description: "Classify a Creatio incident and route it to a domain playbook"
+default_prompt: "Use $rca-knowledge-base to classify this incident with NAVIGATION.md and open the matching domain file."
+---

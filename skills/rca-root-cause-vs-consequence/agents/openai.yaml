@@ -1,0 +1,5 @@
+---
+display_name: "RCA Root Cause vs Consequence"
+short_description: "Separate the triggering change from its downstream errors"
+default_prompt: "Use $rca-root-cause-vs-consequence to tell which of these failures caused the others."
+---

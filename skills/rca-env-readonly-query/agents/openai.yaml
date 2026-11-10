@@ -1,0 +1,5 @@
+---
+display_name: "RCA Environment Query"
+short_description: "Run supporting read-only queries against the Creatio environment"
+default_prompt: "Use $rca-env-readonly-query to read the records, settings and packages that corroborate this hypothesis."
+---

@@ -3,5 +3,5 @@
   "version": "1.16.0",
   "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./modules/rca/mcp/codex.json"
 }
