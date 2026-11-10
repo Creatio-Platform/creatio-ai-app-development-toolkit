@@ -223,8 +223,9 @@ when that is the target.
 
 ## Fonts — after the background
 
-Optional. Ask whether to change the font (default is Montserrat), then whether to use one
-family for everything or separate families for headings and body. Fonts come from Google Fonts.
+Optional. Unless the request already names the font, ask whether to change it (default is
+Montserrat), then whether to use one family for everything or separate families for headings and
+body; one font named in the request is used for everything. Fonts come from Google Fonts.
 Confirm the chosen font actually exists in Google Fonts before using it; if it does not, suggest
 a similar Google font or ask the user for another. (If you cannot verify existence, a wrong name
 is not fatal — the app falls back to a plain system font and the theme still works — but prefer

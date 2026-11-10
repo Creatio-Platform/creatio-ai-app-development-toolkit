@@ -72,6 +72,8 @@ SKILL_RULES = (
     "Before the first write that makes such a change — the theme write when the theme gets a "
     "background, otherwise the first asset write — take one explicit confirmation, separate from the summary",
     "include it, unless the request already settled the background.",
+    "Unless the request already names the font, ask whether to change it",
+    "one font named in the request is used for everything.",
     "Removing a theme background needs none.",
     "saying who sees the background (see the targets in the Background step)",
     "a theme write that carries a background also sends `background` — after `theme` for a new theme, "
