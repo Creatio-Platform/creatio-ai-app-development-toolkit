@@ -1,0 +1,5 @@
+---
+display_name: "RCA Diagnosis Report"
+short_description: "Write the root cause, evidence and recommendations as a report"
+default_prompt: "Use $rca-diagnosis-report to present the outcome of this investigation as a diagnosis."
+---

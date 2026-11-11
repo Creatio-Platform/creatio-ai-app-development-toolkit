@@ -15,7 +15,8 @@
     "rules",
     "runbooks",
     "runtime",
-    "skills"
+    "skills",
+    "modules/rca"
   ],
   "release_extras": [
     "installer"

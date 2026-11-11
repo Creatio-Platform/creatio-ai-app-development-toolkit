@@ -45,7 +45,7 @@ automatically. Verify the same rules against the assembled release before publis
 
 ## Dependencies
 
-Code the release ships (`skills/`, `hooks/` and `runtime/` from `plugin_runtime`, plus `installer/` from
+Code the release ships (`skills/`, `hooks/`, `modules/` and `runtime/` from `plugin_runtime`, plus `installer/` from
 `release_extras` in `.release-manifest.json`) imports only the standard library and files shipped next to
 it: it runs on the developer's machine with no install step. The other shipped entries, `.github/plugin`
 included, carry data only. CI, test and maintenance code (`.github/workflows/`, `scripts/`,

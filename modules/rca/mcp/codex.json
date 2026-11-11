@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "clio": {
+      "command": "clio",
+      "args": [
+        "mcp-server"
+      ]
+    },
+    "rca-creatio-http": {
+      "url": "https://your-region-mcp.creatio.com/mcp",
+      "env_http_headers": {
+        "X-Creatio-Base-Url": "CREATIO_BASE_URL",
+        "X-Creatio-Client-Id": "CREATIO_CLIENT_ID"
+      },
+      "enabled_tools": [
+        "creatio_describe_object",
+        "creatio_search_objects",
+        "creatio_list_records",
+        "creatio_get_record",
+        "creatio_get_current_user",
+        "creatio_build_record_url",
+        "creatio_search_records"
+      ]
+    },
+    "rca-files": {
+      "command": "node",
+      "args": [
+        "./modules/rca/scripts/rca-files-mcp.mjs"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "CREATIO_BASE_URL",
+        "CREATIO_LOGIN",
+        "CREATIO_PASSWORD",
+        "CREATIO_RCA_AGENT_MCP_PATH"
+      ],
+      "enabled_tools": [
+        "get_text_file_content"
+      ]
+    }
+  }
+}
