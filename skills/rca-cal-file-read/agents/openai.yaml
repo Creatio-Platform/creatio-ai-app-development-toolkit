@@ -1,0 +1,5 @@
+---
+display_name: "RCA Activity Log Files"
+short_description: "Read files attached to a Configuration Activity Log entry"
+default_prompt: "Use $rca-cal-file-read to list and read the attachments of this Configuration Activity Log entry."
+---

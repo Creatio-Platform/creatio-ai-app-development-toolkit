@@ -1,0 +1,5 @@
+---
+display_name: "RCA Academy Lookup"
+short_description: "Consult Creatio product documentation once the investigation found nothing"
+default_prompt: "Use $rca-academy-lookup to look this up in the Creatio Academy documentation after the activity log and catalogs gave no match."
+---

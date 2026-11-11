@@ -1,0 +1,5 @@
+---
+display_name: "RCA Orchestration"
+short_description: "Find the root cause of a Creatio configuration incident"
+default_prompt: "Use $rca-orchestration to investigate this Creatio incident read-only and report the root cause with evidence and a recommendation."
+---

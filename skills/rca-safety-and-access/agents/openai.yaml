@@ -1,0 +1,5 @@
+---
+display_name: "RCA Safety and Access"
+short_description: "The read-only guardrail for every Creatio call"
+default_prompt: "Use $rca-safety-and-access to check whether this Creatio call is allowed during an investigation."
+---

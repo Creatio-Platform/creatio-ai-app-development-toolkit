@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "rca-creatio-http": {
+      "type": "http",
+      "url": "https://your-region-mcp.creatio.com/mcp",
+      "headers": {
+        "X-Creatio-Base-Url": "${CREATIO_BASE_URL}",
+        "X-Creatio-Client-Id": "${CREATIO_CLIENT_ID}"
+      },
+      "tools": [
+        "creatio_describe_object",
+        "creatio_search_objects",
+        "creatio_list_records",
+        "creatio_get_record",
+        "creatio_get_current_user",
+        "creatio_build_record_url",
+        "creatio_search_records"
+      ]
+    },
+    "rca-files": {
+      "type": "local",
+      "command": "node",
+      "args": ["./modules/rca/scripts/rca-files-mcp.mjs"],
+      "tools": ["get_text_file_content"]
+    }
+  }
+}
