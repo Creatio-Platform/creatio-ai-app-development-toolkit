@@ -300,9 +300,9 @@ copy deletion downstream, Codex install via cache materialization, Copilot catal
 | 2026-09-07 | Spike concluded GO with four adjustments (meta-plugin placement, duplicate handling, Codex cache materialization, Copilot catalog pinning) | | Recorded |
 | 2026-09-08 | ADR recorded; Codex installer fix (PR #168) and plugin layout (PR #169) in review | | Approved |
 | 2026-11-05 | Install unit per host: Claude installs the dependencies-only meta-plugin; Copilot and Cursor, which have no dependency mechanism, install every plugin's skills under the same name through the root `.github/plugin/plugin.json` and `.cursor-plugin/plugin.json`, which stay as bundle manifests; Codex gets one materialized install per plugin | | Approved |
-| 2026-11-05 | Every entry of the three catalogs pins its payload to the `release` branch: `url` + `ref` for the repository root, `git-subdir` + `path` + `ref` for each plugin on Claude and Codex, `github` + `path` + `ref` on Copilot | | Proposed |
-| 2026-11-05 | `update.py` reconciles the Claude family: it updates every installed `creatio` plugin and installs each dependency that `claude plugin list --json` reports as `dependency-unsatisfied`, because `claude plugin update` installs no dependency | | Proposed |
-| 2026-11-05 | A file reference inside a skill's `references/` is relative to the file that carries it: `./` for that folder, `../../../` for the plugin root; a `plugins/...` repository path is rejected by the structure test | | Proposed |
+| 2026-11-05 | Every entry of the three catalogs pins its payload to the `release` branch: `url` + `ref` for the repository root, `git-subdir` + `path` + `ref` for each plugin on Claude and Codex, `github` + `path` + `ref` on Copilot | | Approved |
+| 2026-11-05 | `update.py` reconciles the Claude family: it updates every installed `creatio` plugin and installs each dependency that `claude plugin list --json` reports as `dependency-unsatisfied`, because `claude plugin update` installs no dependency | | Approved |
+| 2026-11-05 | A file reference inside a skill's `references/` is relative to the file that carries it: `./` for that folder, `../../../` for the plugin root; a `plugins/...` repository path is rejected by the structure test | | Approved |
 | open | Telemetry hook stays in `creatio-core` for every consumer, or `creatio-core` is split from `creatio-telemetry` | | Pending |
 | open | One skill-description canon for the plugin family | | Pending |
 
