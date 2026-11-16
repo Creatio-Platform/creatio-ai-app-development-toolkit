@@ -75,7 +75,7 @@ allow-list does not recognise.
 | `classic-to-freedom-migration` | the engine-written `plan.md`, presented verbatim | explicit approval, before the first Freedom artifact | per migrated page (`variant=page`) | `plan_blocked` with `variant=engine-gate` on each `⛔` run |
 | `mobile-page-conversion` | the plain-language conversion plan | **Gate M** | per built mobile page; also on **Gate S** registration (`variant=section`) | `plan_blocked` with `variant=converter-unavailable` when clio does not ship `get-mobile-page-conversion-guide` |
 | `mobile-business-logic` | the plain-language logic plan | **Gate L** | on the delivered module after **Gate D** (`variant=module`); per wired page (`variant=page`) | `plan_blocked` with `variant=toolchain-unavailable` when a preflight check fails |
-| `branding` | the single final summary | confirmation of that summary | per applied asset (`variant=theme` / `logo`) | palette confirmation is a `user_input_received` |
+| `branding` | the single final summary | confirmation of that summary | per applied asset (`variant=theme` / `logo` / `background`) | palette confirmation is a `user_input_received` |
 | `app-maintenance` | — (skips planning) | — | per applied change | `plan_skipped` at the start makes the skip explicit |
 
 Two rules that decide *when*, and that this table depends on:
