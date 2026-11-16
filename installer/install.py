@@ -905,8 +905,8 @@ When a Creatio workflow runs through clio MCP, emit product telemetry with `send
 This applies to EVERY workflow, not just app creation.
 
 Event names are flow-agnostic stages, and WHICH flow it was goes in the `workflow` field:
-`app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or
-`app-maintenance`.
+`app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `mobile-business-logic`,
+`branding`, or `app-maintenance`.
 
 Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.
 Do not spell a stage from memory, and do not invent a per-flow name such as

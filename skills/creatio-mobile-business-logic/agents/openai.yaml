@@ -1,0 +1,5 @@
+---
+display_name: "Creatio Mobile Business Logic"
+short_description: "Write, build and deploy custom Creatio Mobile business logic as a remote module through the gated flow."
+default_prompt: "Use $creatio-mobile-business-logic to add custom business logic to a Creatio Mobile Freedom UI page as a TypeScript remote module (request handlers, custom requests, virtual data sources), following the gated flow (Gate L before any code is generated, Gate D before anything is written to Creatio)."
+---

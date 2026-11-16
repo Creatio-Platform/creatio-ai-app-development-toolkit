@@ -38,6 +38,7 @@ WORKFLOW_VALUES = [
     "app-creation",
     "classic-to-freedom-migration",
     "mobile-page-conversion",
+    "mobile-business-logic",
     "branding",
     "app-maintenance",
 ]
@@ -110,6 +111,7 @@ ALLOWED_NON_STAGE_IDENTIFIERS = {
 SKILL_WORKFLOWS = {
     "classic-to-freedom-migration": "classic-to-freedom-migration",
     "creatio-mobile-page-conversion": "mobile-page-conversion",
+    "creatio-mobile-business-logic": "mobile-business-logic",
     "creatio-branding-orchestrator": "branding",
 }
 

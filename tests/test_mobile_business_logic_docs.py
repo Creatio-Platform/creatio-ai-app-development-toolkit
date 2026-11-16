@@ -1,0 +1,218 @@
+"""The mobile business-logic skill must stay usable by a developer who has only the public surface.
+
+A partner has clio, the clio MCP server, this toolkit and the ``@creatio/mobile-common`` npm package.
+The rules below are pinned because breaking any of them is silent for CI and fatal on the device:
+
+1. The preflight reads tool availability from ``get-tool-contract`` and stops with a remedy the user
+   can act on, for clio and for the local Node.js toolchain alike.
+
+2. Nothing is generated before Gate L and nothing is written to Creatio before Gate D.
+
+3. The project layout keeps the settings the Mobile app's script runtime requires. A module that
+   bundles the SDK, minifies class names or ships a second script loads wrongly or not at all, and
+   the build stays green.
+
+4. The references never send the agent to sources a partner cannot read, and never offer the web
+   SDK as an import.
+
+5. The surfaces that describe mobile pages route a request for code to this skill.
+
+6. The module is exercised before it is delivered. A compile and a build pass without one line of
+   the module running, and the developer checks by hand on a phone with no debugger, so a logic
+   error that reaches the device costs a blind redelivery.
+
+7. The delivery plan tells the developer what cannot be taken back, and the script is staged
+   before that plan is shown, so the plan describes the file that is pushed.
+"""
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+SKILL_DIR = ROOT / "skills/creatio-mobile-business-logic"
+SKILL = SKILL_DIR / "SKILL.md"
+PLAYBOOK = SKILL_DIR / "references/remote-module-playbook.md"
+LAYOUT = SKILL_DIR / "references/project-layout.md"
+SDK_GUIDE = SKILL_DIR / "references/sdk-guide.md"
+BEHAVIOUR_CHECK = SKILL_DIR / "references/local-behaviour-check.md"
+REFERENCES = (PLAYBOOK, LAYOUT, SDK_GUIDE, BEHAVIOUR_CHECK)
+
+# Paths and tools that exist only next to the Mobile app's own sources or need its debug build.
+INTERNAL_ONLY_MARKERS = (
+    "flutter_creatio",
+    "ts_sdk_template_module",
+    "creatio-mobile-config.json",
+    "inject-on-device",
+    "update-source-code",
+    "chrome://inspect",
+    "excluded-modules",
+)
+
+
+def read(path):
+    return path.read_text(encoding="utf-8")
+
+
+def fenced_blocks(text, language):
+    return re.findall(r"```%s\n(.*?)```" % language, text, re.DOTALL)
+
+
+class MobileBusinessLogicDocsTests(unittest.TestCase):
+
+    def test_preflight_decides_availability_from_the_tool_contract_not_tools_list(self):
+        preflight = read(SKILL).split("## Load order", 1)[0]
+        self.assertIn("get-tool-contract", preflight)
+        self.assertRegex(
+            preflight, r"NOT the\s+server's `tools/list`",
+            "the workspace and package-file tools are long-tail tools: a preflight that reads the "
+            "server's tool list reports every clio as missing them")
+        for tool in ("push-workspace", "get-package-file", "update-page", "get-request-info"):
+            self.assertIn(tool, preflight, "the preflight must check for `%s`" % tool)
+
+    def test_each_failed_preflight_check_stops_with_a_remedy(self):
+        preflight = read(SKILL).split("## Load order", 1)[0]
+        self.assertIn(
+            "dotnet tool update clio -g", preflight,
+            "a clio without the delivery tools must be answered with the command that updates it")
+        self.assertIn(
+            "Node.js 20 or newer", preflight,
+            "the build toolchain requirement must be stated with its version floor")
+        self.assertIn(
+            "Never install or upgrade Node.js yourself", preflight,
+            "the toolkit never changes the developer's machine toolchain on its own")
+
+    def test_both_gates_are_declared_with_what_they_forbid(self):
+        skill = read(SKILL)
+        playbook = read(PLAYBOOK)
+        for gate in ("Gate L", "Gate D"):
+            self.assertIn(gate, skill)
+            self.assertIn("## %s" % gate, playbook, "the playbook owns the rules of %s" % gate)
+        gate_l = playbook.split("## Gate L", 1)[1].split("\n## ", 1)[0]
+        gate_d = playbook.split("## Gate D", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Forbidden until approved", gate_l)
+        self.assertIn("writing module code", gate_l)
+        self.assertIn("Forbidden until approved", gate_d)
+        for write in ("push-workspace", "update-page"):
+            self.assertIn(
+                write, gate_d, "`%s` writes to the environment and must wait for Gate D" % write)
+        self.assertIn("The initial request is NOT approval", skill)
+
+    def test_the_run_is_not_reported_as_working_without_a_device_check(self):
+        self.assertIn("not yet confirmed on a device", read(PLAYBOOK))
+        self.assertIn("A green build is not a working feature", read(SKILL))
+
+    def test_project_layout_keeps_what_the_script_runtime_requires(self):
+        layout = read(LAYOUT)
+        webpack = "\n".join(fenced_blocks(layout, "js"))
+        self.assertIn(
+            "'@creatio/mobile-common': 'crtSdk'", webpack,
+            "the SDK is provided by the app as the global crtSdk and must stay external")
+        self.assertIn("iife: true", webpack)
+        self.assertIn("filename: 'main.js'", webpack)
+        self.assertIn(
+            "mode: 'development'", webpack,
+            "the SDK keys modules by class name, so the bundle must not be minified")
+        tsconfig = "\n".join(fenced_blocks(layout, "json"))
+        self.assertIn('"experimentalDecorators": true', tsconfig)
+        self.assertIn('"emitDecoratorMetadata": true', tsconfig)
+        self.assertNotIn('"dom"', tsconfig, "the script runtime has no DOM")
+        self.assertNotIn(
+            '"@creatio/mobile-common": "latest"', layout,
+            "the SDK dependency must be pinned: the running SDK is the one inside the app")
+
+    def test_only_one_script_is_delivered(self):
+        playbook = read(PLAYBOOK)
+        self.assertIn("Files/src/mobile/<ModuleName>/main.js", playbook)
+        self.assertIn(
+            "Copy that one file only", playbook,
+            "the device evaluates every script in the module folder")
+
+    def test_references_do_not_point_at_sources_a_partner_cannot_reach(self):
+        for path in (SKILL, *REFERENCES):
+            text = read(path)
+            for marker in INTERNAL_ONLY_MARKERS:
+                self.assertNotIn(
+                    marker, text,
+                    "%s mentions `%s`, which needs the Mobile app's sources or its debug build"
+                    % (path.name, marker))
+
+    def test_code_examples_import_the_mobile_sdk_only(self):
+        for path in (LAYOUT, SDK_GUIDE):
+            for block in fenced_blocks(read(path), "ts"):
+                for source in re.findall(r"from '([^']+)'", block):
+                    self.assertTrue(
+                        source == "@creatio/mobile-common" or source.startswith("./"),
+                        "%s: a module example imports from `%s`" % (path.name, source))
+
+    def test_unsupported_mechanisms_are_named_with_their_alternative(self):
+        skill = read(SKILL)
+        for mechanism in ("custom validator", "custom converter", "UI component", "HTTP"):
+            self.assertIn(
+                mechanism, skill,
+                "the skill must say that the SDK has no API for a %s" % mechanism)
+        self.assertIn("Out of reach for a module", read(PLAYBOOK))
+
+    def test_the_built_module_is_exercised_before_delivery(self):
+        playbook = read(PLAYBOOK)
+        verify = playbook.split("### 7. Verify locally", 1)[1].split("\n### 8.", 1)[0]
+        self.assertIn("Behaviour check", verify)
+        self.assertIn(
+            "./local-behaviour-check.md", verify,
+            "the verification step must point at the way to run the built module")
+        harness = "\n".join(fenced_blocks(read(BEHAVIOUR_CHECK), "js"))
+        self.assertIn(
+            "crtSdk", harness,
+            "the check must load the bundle against a stub of the global the app provides")
+        self.assertIn(
+            "process.argv[2]", harness,
+            "the check must run the built file that is delivered, not the sources")
+        self.assertNotIn(
+            "require('@", harness,
+            "the check must need no npm package beyond Node itself")
+
+    def test_the_script_is_staged_before_the_delivery_plan(self):
+        playbook = read(PLAYBOOK)
+        self.assertLess(
+            playbook.index("Copy that one file only"), playbook.index("### 8. Present the delivery plan"),
+            "the delivery plan must describe a file that already sits in the package folder")
+
+    def test_delivery_plan_states_what_cannot_be_taken_back(self):
+        playbook = read(PLAYBOOK)
+        plan = playbook.split("## Delivery plan format (Gate D)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Taking it back", plan)
+        self.assertIn(
+            "stays on devices", plan,
+            "the developer approves a write that deleting the package does not undo")
+        self.assertIn("CreatioPackages", plan)
+
+    def test_versions_default_to_the_newest(self):
+        self.assertIn("assume the users run the latest", read(PLAYBOOK))
+        self.assertIn("newest published", read(LAYOUT))
+
+    def test_device_check_needs_no_cable_and_no_debugger(self):
+        check = read(PLAYBOOK).split("## Device check", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("by hand", check)
+        self.assertIn("Send log", check)
+        self.assertIn(
+            "behaviour-check table", check,
+            "the steps the developer performs come from the inputs already run locally")
+
+    def test_mobile_page_surfaces_route_code_requests_to_the_skill(self):
+        for relative in (
+            "context/essentials.md",
+            "runbooks/02-requirements-gathering.md",
+            "context/business-checklist.md",
+            "AGENTS.md",
+            "skills/creatio-mobile-page-conversion/references/page-to-mobile-conversion.md",
+        ):
+            self.assertIn(
+                "creatio-mobile-business-logic", read(ROOT / relative),
+                "%s must name the skill that delivers mobile logic in code" % relative)
+        self.assertNotIn(
+            "out-of-scope for AI generation", read(ROOT / "runbooks/02-requirements-gathering.md"))
+
+
+if __name__ == "__main__":
+    unittest.main()

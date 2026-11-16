@@ -21,7 +21,7 @@ export function reminder(sessionId) {
 		'    pair, so each flow keeps its own start and its own elapsed-time measurements. A stage sent',
 		'    without a start of its own is recorded as a build with no beginning, which no funnel can read;',
 		'  - send your real `workflow` on each stage you emit from now on:',
-		'    app-creation | classic-to-freedom-migration | mobile-page-conversion | branding | app-maintenance',
+		'    app-creation | classic-to-freedom-migration | mobile-page-conversion | mobile-business-logic | branding | app-maintenance',
 		'  - one run is one request. If you already reported a run in this session and the developer has',
 		'    since asked for something else, that is a NEW run: close the previous one with its terminal',
 		'    stage first, then open this one. A measured session let a second request close the first one,',
