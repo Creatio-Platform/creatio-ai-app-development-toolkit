@@ -44,7 +44,8 @@ Anything the declarations do not export does not exist for a module, whatever a 
   its `bootstrap()`. Nothing in the bundle calls it, and nothing should.
 - **Names are global.** Every handler `type`, request `type`, data source name and module class name
   shares one namespace with all other modules on the device. A duplicate silently replaces the earlier
-  registration. Prefix them and make them specific: `usr.UsrOrderSaveGuard`, not `usr.SaveHandler`.
+  registration. Make each one specific — the feature and the purpose: `usr.OrderSaveGuard`, not
+  `usr.SaveHandler`. The playbook's naming rule says which names take the environment's schema prefix.
 
 ## Handlers
 
@@ -61,7 +62,7 @@ import {
 
 @CrtRequestHandler({
 	requestType: 'crt.HandleViewModelAttributeChangeRequest',
-	type: 'usr.UsrOrderStatusChangeHandler',
+	type: 'usr.OrderStatusChangeHandler',
 	scopes: ['UsrOrder_MobileFormPage'],
 })
 export class UsrOrderStatusChangeHandler extends BaseRequestHandler<HandleViewModelAttributeChangeRequest> {
@@ -130,14 +131,14 @@ A custom request is a named action with parameters.
 ```ts
 import { BaseRequest, BaseRequestHandler, CrtRequest, CrtRequestHandler, ExecutionContext } from '@creatio/mobile-common';
 
-@CrtRequest({ type: 'usr.UsrApplyDiscountRequest' })
+@CrtRequest({ type: 'usr.ApplyDiscountRequest' })
 export class UsrApplyDiscountRequest extends BaseRequest {
 	public percent?: number;
 }
 
 @CrtRequestHandler({
-	requestType: 'usr.UsrApplyDiscountRequest',
-	type: 'usr.UsrApplyDiscountHandler',
+	requestType: 'usr.ApplyDiscountRequest',
+	type: 'usr.ApplyDiscountHandler',
 })
 export class UsrApplyDiscountHandler extends BaseRequestHandler<UsrApplyDiscountRequest> {
 	public async handle(request: UsrApplyDiscountRequest): Promise<unknown> {
@@ -156,7 +157,7 @@ From a page, a component names the request and passes parameters:
   "type": "crt.Button",
   "caption": "#ResourceString(UsrApplyDiscountButton_caption)#",
   "clicked": {
-    "request": "usr.UsrApplyDiscountRequest",
+    "request": "usr.ApplyDiscountRequest",
     "params": { "percent": 10 }
   }
 }
@@ -171,7 +172,7 @@ From code, send any request — custom or built-in — through the chain:
 import { HandlerChainService } from '@creatio/mobile-common';
 
 await HandlerChainService.instance.process({
-	type: 'usr.UsrApplyDiscountRequest',
+	type: 'usr.ApplyDiscountRequest',
 	$context: request.$context,
 	scopes: request.scopes,
 	percent: 10,
@@ -262,7 +263,7 @@ const ERROR_PREFIX = 'UsrOrderLogic.UsrOrderSaveGuard';
 
 @CrtRequestHandler({
 	requestType: 'crt.SaveRecordRequest',
-	type: 'usr.UsrOrderSaveGuard',
+	type: 'usr.OrderSaveGuard',
 	scopes: ['UsrOrder_MobileFormPage'],
 })
 export class UsrOrderSaveGuard extends BaseRequestHandler<SaveRecordRequest> {

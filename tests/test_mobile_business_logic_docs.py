@@ -23,9 +23,18 @@ The rules below are pinned because breaking any of them is silent for CI and fat
 
 7. The delivery plan tells the developer what cannot be taken back, and the script is staged
    before that plan is shown, so the plan describes the file that is pushed.
+
+8. The sample behaviour check is a program an agent copies and adapts, so it must run as printed:
+   pass on a module that follows its table and fail on one that does not.
+
+9. A step the flow tells the agent to run before a gate is not on that gate's forbidden list, and
+   every example names a handler the way the naming rule says.
 """
 
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -38,6 +47,17 @@ LAYOUT = SKILL_DIR / "references/project-layout.md"
 SDK_GUIDE = SKILL_DIR / "references/sdk-guide.md"
 BEHAVIOUR_CHECK = SKILL_DIR / "references/local-behaviour-check.md"
 REFERENCES = (PLAYBOOK, LAYOUT, SDK_GUIDE, BEHAVIOUR_CHECK)
+
+MODULE_BUNDLE = ROOT / "tests/fixtures/mobile_remote_module_bundle.js"
+# The same handler registration with the rule removed: every save is passed on unchanged.
+PASS_THROUGH_BUNDLE = """(() => {
+	class Guard extends crtSdk.BaseRequestHandler {
+		async handle(request) { return this.next?.handle(request); }
+	}
+	crtSdk.CrtRequestHandler({ requestType: 'crt.SaveRecordRequest', type: 'usr.CarVinSaveGuard' })(Guard);
+})();
+"""
+NODE = shutil.which("node")
 
 # Paths and tools that exist only next to the Mobile app's own sources or need its debug build.
 INTERNAL_ONLY_MARKERS = (
@@ -98,6 +118,29 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             self.assertIn(
                 write, gate_d, "`%s` writes to the environment and must wait for Gate D" % write)
         self.assertIn("The initial request is NOT approval", skill)
+
+    def test_a_step_that_precedes_gate_d_is_not_forbidden_by_it(self):
+        playbook = read(PLAYBOOK)
+        before_gate_d = playbook.split("### 5.", 1)[1].split("### 8. Present the delivery plan", 1)[0]
+        self.assertIn(
+            "restore-workspace", before_gate_d,
+            "an existing package is brought into the workspace before the script is staged")
+        forbidden = playbook.split("## Gate D", 1)[1].split("**Forbidden until approved:**", 1)[1]
+        forbidden = forbidden.split(".", 1)[0]
+        self.assertNotIn(
+            "restore-workspace", forbidden,
+            "the flow runs `restore-workspace` before Gate D, so Gate D cannot forbid it: the agent "
+            "would have to break the gate or push a stale copy of the package")
+
+    def test_examples_name_handlers_and_requests_as_the_naming_rule_says(self):
+        self.assertRegex(
+            read(PLAYBOOK), r"literal `usr\.` followed by a\s+PascalCase name",
+            "the playbook owns the naming rule for handler and request types")
+        for path in (SKILL, *REFERENCES):
+            self.assertNotRegex(
+                read(path), r"usr\.Usr[A-Z]",
+                "%s names a type with the schema prefix after `usr.`; the rule is `usr.` plus a "
+                "PascalCase name" % path.name)
 
     def test_the_run_is_not_reported_as_working_without_a_device_check(self):
         self.assertIn("not yet confirmed on a device", read(PLAYBOOK))
@@ -171,6 +214,33 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
         self.assertNotIn(
             "require('@", harness,
             "the check must need no npm package beyond Node itself")
+
+    def run_sample_check(self, bundle_text):
+        harness = fenced_blocks(read(BEHAVIOUR_CHECK), "js")
+        self.assertEqual(len(harness), 1, "the reference carries one sample check")
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "check-behaviour.cjs"
+            script.write_text(harness[0], encoding="utf-8")
+            bundle = Path(folder) / "main.js"
+            bundle.write_text(bundle_text, encoding="utf-8")
+            return subprocess.run(
+                [NODE, str(script), str(bundle)],
+                capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    @unittest.skipIf(NODE is None, "Node.js is not installed")
+    def test_the_sample_check_passes_on_a_module_that_follows_its_table(self):
+        result = self.run_sample_check(read(MODULE_BUNDLE))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("5 cases, 0 failed", result.stdout)
+
+    @unittest.skipIf(NODE is None, "Node.js is not installed")
+    def test_the_sample_check_fails_on_a_module_that_breaks_its_table(self):
+        result = self.run_sample_check(PASS_THROUGH_BUNDLE)
+        self.assertEqual(
+            result.returncode, 1,
+            "a module that blocks nothing and normalizes nothing must fail the check\n"
+            + result.stdout + result.stderr)
+        self.assertIn("5 cases, 3 failed", result.stdout)
 
     def test_the_script_is_staged_before_the_delivery_plan(self):
         playbook = read(PLAYBOOK)

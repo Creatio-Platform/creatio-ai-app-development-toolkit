@@ -151,9 +151,10 @@ After Gate L:
 **Do not put the module into a package that the designers edit unless the developer asks for it.**
 `push-workspace` installs the workspace copy of every package it holds, so a stale local copy of an
 application package replaces whatever was changed on the environment since it was restored. When the
-developer does want the module inside an existing package, run `restore-workspace` immediately before
-adding the script and push straight after, and say in the Gate D plan that the whole package is
-re-installed.
+developer does want the module inside an existing package, bring the package into the workspace with
+`restore-workspace` before staging the script, and say in the Gate D plan that the whole package is
+re-installed and when it was restored. `restore-workspace` downloads from the environment and writes
+only the local workspace, so it needs Gate L and not Gate D.
 
 ### 6. Write the module
 
@@ -206,7 +207,9 @@ Present the plan in the "Delivery plan format" below and wait. See "Gate D".
 
 ### 9. Deliver
 
-After Gate D:
+After Gate D. For a module inside an existing package, when the package may have changed on the
+environment since it was restored — the developer says so, or the approval did not follow the plan at
+once — first run `restore-workspace` again and stage the script again (step 7, item 5).
 
 1. `push-workspace` for the workspace. It takes one to three minutes and ends with the installer's log.
    Treat a non-zero exit code or an installation error as a failed delivery. In a good log:
@@ -247,8 +250,9 @@ opens the gate; the original request does not.
 
 ## Gate D — approve the delivery
 
-**Forbidden until approved:** `push-workspace`, `update-page`, `restore-workspace`, any `odata-update`,
-and any change of a feature state.
+**Forbidden until approved:** `push-workspace`, `update-page`, any `odata-update`, and any change of a
+feature state. Reading the environment stays allowed, including `restore-workspace`, which writes only
+the local workspace.
 
 Present the delivery plan in the format below, then offer **Adjust** or **Approve**. Approval of Gate L
 is not approval of Gate D.
@@ -328,7 +332,7 @@ After the delivery
 
 How the package will arrive: the `push-workspace` contract describes a package new to the environment
 as locked. A package whose `Maintainer` in `descriptor.json` equals the environment's `Maintainer`
-system setting has been observed to arrive editable. Compare the two and state the one that applies;
+system setting can arrive editable instead. Compare the two and state the one that applies;
 either suits a code package, which changes only through the next push.
 
 ## Report format
@@ -386,10 +390,10 @@ the same output with `adb logcat`.
 
 - **Change:** edit, rebuild, run the behaviour check, stage, push, confirm, synchronize the device. The
   same two gates apply.
-- **Retire:** deleting a delivered script does not withdraw it. Observed on a live environment: the
-  device kept receiving a script after its application was deleted, after the package was pushed
-  without the script, and after a push that regenerated file content with the script absent from the
-  package. A push does replace a script's content. So, to switch a module off:
+- **Retire:** deleting a delivered script is not a reliable way to withdraw it. A device can keep
+  receiving a script after its application is deleted, after the package is pushed without the script,
+  and after a push that regenerates file content with the script absent from the package. A push that
+  carries the script does replace its content. So, to switch a module off:
   1. replace `main.js` in the package with an inert script that registers nothing — `(() => {})();` —
      and push;
   2. confirm on a device, after synchronization, that the behaviour is gone;
