@@ -8,6 +8,37 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.17.0 (2026-11-16)
+
+![An app plan with a portal section, roles and users; a Classic radio group and "Connected to" detail rebuilt as crt.RadioGroup and crt.Connections; and the read-only root-cause analysis agent](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.17.0-banner.png)
+
+**Plan portal access, roles and users together with the app, find the root cause of a configuration incident with the new RCA agent, and migrate Classic radio groups and "Connected to" details to their Freedom components.** The app orchestrator now decides external access in the plan and applies it in the build. A read-only Root-Cause Analysis agent ships inside the plugin. The Classic → Freedom migration builds radio groups and record connections as the Freedom components made for them, and branding writes a background as part of the theme.
+
+### 🏗️ App building
+
+- **Portal access, roles and users are planned, then built** ([#208](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/208)). When the app serves customers, partners or other external users, the agent asks about it in the first discovery batch, and the plan gets a `## 8. Portal section`: the external surface per section, the operations granted to `All external users` and the record scope. `## 2. Roles and Permissions` lists the roles to create and, only on request, the user accounts. The build creates the roles and users first, then opens the sections to external users through clio's `portal-sections` guide, which still previews and confirms each write. A password is never part of the plan.
+- **Step-by-step pages** ([#281](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/281)). `creatio-ui-guidelines` says when a stepper fits and how to lay it out: one `crt.StepperIndicator` and one set of navigation buttons for the whole stepper, the indicator in its own island under the page header, a step header that says what to do and what comes next, and short step captions.
+- **Record connections are one `crt.Connections`** ([#271](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/271)). The agent no longer adds a `crt.ComboBox` per link: it places one Connections element in a "Connections" panel in the side column and changes which lookups it shows on the object, with clio's `get-entity-connections` / `update-entity-connections` (clio 8.1.0.142 or later).
+
+### 🔎 Root-Cause Analysis agent
+
+- **A new agent investigates Creatio configuration incidents** ([#278](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/278)). Start from a Configuration Activity Log record or a pasted error: `rca-orchestration` classifies the incident against the domain playbooks in `rca-knowledge-base`, reads the evidence, separates the root cause from its consequences and writes a diagnosis with recommendations. It works read-only: `rca-safety-and-access` allows reads and forbids any write, delete or execution. The setup guide (MCP servers, sign-in, troubleshooting) is linked from the README's "RCA Agent" section.
+
+### 🔄 Classic → Freedom migration
+
+- **Radio groups become `crt.RadioGroup`** ([#274](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/274), [#276](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/276), [#277](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/277)). A Classic `RADIO_GROUP` keeps its choices, captions and stored values, bound to the original column or attribute. Groups that share one attribute show nothing selected when the value belongs to another group, an option enabled by a Boolean column or page attribute stays bound to it, and a field on a Classic page attribute becomes an editable control instead of a read-only value.
+- **"Connected to" becomes `crt.Connections`** ([#270](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/270), [#273](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/273)). The Classic detail is rebuilt as one Connections element in its tab, instead of a list of the object's connection settings. It is built only when the target is known to carry the component; otherwise the plan asks, and the block keeps its row in the plan's Layout so a decision to build it anyway is carried through.
+
+### 🎨 Branding and 📱 mobile
+
+- **A theme carries its own background** ([#280](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/280)). The branding skill asks whether a background is for the whole site or for a theme, puts a generated background into the theme the run builds, and can give an existing theme a background or remove it. A theme the run creates is applied to you unless you ask otherwise. It needs clio 8.1.0.153 and Creatio 10.2.96 or later; on an older Creatio the theme is created without a background and the agent says so.
+- **The tablet is a supported canvas** ([#266](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/266)). The mobile page conversion plan names Mobile and Tablet as supported and states the one tablet limit: rows in neighbouring columns do not line up on the device. It needs clio 8.1.0.141 or later.
+
+### 🐛 Fixes
+
+- **Copilot CLI loads the app orchestrator again** ([#263](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/263)). Invalid YAML in the `creatio-app-orchestrator` frontmatter made Copilot CLI skip the entry-point skill; Cursor's rule had the same text and is fixed too.
+- **Guide lookups use `get-guidance name=list`** ([#264](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/264)). The mobile conversion skill and the build runbook follow clio's guide catalog instead of the removed `availableGuides` field, and still work with older clio.
+
 ## 1.16.0 (2026-10-12)
 
 ![A customized Classic section reconciled onto its existing Freedom page in two ways, overlay and Classic layout, next to a build that starts only on an approved plan version](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.16.0-banner.png)
