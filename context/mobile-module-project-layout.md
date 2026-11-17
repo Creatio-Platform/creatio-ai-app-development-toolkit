@@ -53,7 +53,9 @@ folder, so a mismatch leaves the module unregistered.
   (`npm view @creatio/mobile-common version`), not as the `latest` tag, so the build is repeatable.
   The package is type declarations only; the running SDK is the one inside the Mobile app, and the
   flow assumes the users run the latest app. Take an older version only when the developer names an
-  older app.
+  older app: the newest one whose `CHANGELOG.md` heading names a Creatio Mobile version that is not
+  newer than that app, or, when the app is older than every version the changelog names, the newest
+  one that precedes the oldest such heading.
 - Add a third-party library with `npm install <name>` only when the logic needs it. Its code is bundled
   into `main.js`, so it must run without a DOM and without Node.js built-ins.
 

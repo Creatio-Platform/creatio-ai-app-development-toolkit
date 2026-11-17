@@ -42,6 +42,28 @@ The rules below are pinned because breaking any of them is silent for CI and fat
 
 13. The flow has one entry point. The app orchestrator's description attracts a request for mobile
     logic, its load order and core rules name the runbook, and no second skill claims the flow.
+
+14. A module is planned for an app version, not only compiled against a package version: the SDK
+    inside the installed app decides what exists at run time, and a member the declarations mark as
+    deprecated can be the only one an older app has.
+
+15. The plan is written knowing what already acts on the page and what the request left open. Every
+    module on a device shares the page's requests and no tool lists them across packages, so a
+    handler nobody looked for is found on a phone.
+
+16. A page change is tried against the environment before the developer is asked to approve it. A
+    dry run saves nothing, so the delivery gate allows it; a plan that cannot say whether the page
+    accepts the change asks for approval of an unknown.
+
+17. The sample behaviour check reaches the handlers a real feature has: one that asks a question,
+    one that sends a request of its own, one that must not mark the record as changed.
+
+18. The device steps can be performed on the page as it is, and an agent runs them only on a device
+    the developer offered.
+
+19. Scopes, empty values and dates are described as a Freedom UI page hands them to a handler. A
+    handler scoped to a name the page never reports, or a rule that waits for a date the device
+    never sends, fails without an error.
 """
 
 import json
@@ -349,6 +371,149 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
     def test_versions_default_to_the_newest(self):
         self.assertIn("assume the users run the latest", read(RUNBOOK))
         self.assertIn("newest published", read(LAYOUT))
+
+    def test_the_plan_names_the_app_version_the_module_needs(self):
+        runbook = read(RUNBOOK)
+        guide = read(SDK_GUIDE)
+        self.assertNotIn(
+            "do not try to derive an app version", runbook,
+            "the package changelog names the app version each SDK version requires")
+        self.assertIn("CHANGELOG.md", runbook.split("**Versions.**", 1)[1].split("\n\n", 1)[0])
+        plan = runbook.split("## Plan format (Gate L)", 1)[1].split("\n## ", 1)[0]
+        needs = plan.split("Needs on the device", 1)[1]
+        self.assertIn("or later", needs, "the plan names a minimum app version when one is known")
+        self.assertIn(
+            "names the Creatio Mobile version", guide,
+            "the guide says where the app version of an API is written")
+        self.assertRegex(
+            guide, r"`@deprecated`[^.]*still the only one\s+an older app has",
+            "a deprecated member can be the only one an older app has; replacing it on sight "
+            "breaks the module on that app")
+        harness = "\n".join(fenced_blocks(read(BEHAVIOUR_CHECK), "js"))
+        for accessor in ("getAttribute:", "setAttribute:", "get:", "set:"):
+            self.assertIn(
+                accessor, harness,
+                "the check's page context answers both generations of attribute accessors")
+
+    def test_the_plan_is_written_knowing_what_already_acts_on_the_page(self):
+        runbook = read(RUNBOOK)
+        inspect = runbook.split("### 2. Inspect the target", 1)[1].split("\n### 3.", 1)[0]
+        self.assertIn(
+            "already act on the page", inspect,
+            "the modules other packages delivered are looked for before the plan")
+        for tool in ("list-packages", "list-package-files", "get-package-file"):
+            self.assertIn("`%s`" % tool, inspect, "finding a delivered module needs `%s`" % tool)
+        self.assertIn(
+            "no `scopes`", inspect,
+            "an unscoped handler of another module runs on this page too")
+        plan = runbook.split("## Plan format (Gate L)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Already on the page", plan)
+        self.assertIn(
+            "Choices made", plan,
+            "the cases the request left open are decided in the plan, where they can be adjusted")
+
+    def test_a_page_change_is_tried_before_the_delivery_plan(self):
+        runbook = read(RUNBOOK)
+        verify = runbook.split("### 7. Verify locally", 1)[1].split("\n### 8.", 1)[0]
+        self.assertIn(
+            "`dry-run: true`", verify,
+            "the delivery plan states whether the page accepts the change")
+        gate_d = runbook.split("## Gate D", 1)[1].split("\n## ", 1)[0]
+        forbidden = gate_d.split("**Forbidden until approved:**", 1)[1].split(".", 1)[0]
+        self.assertIn(
+            "`update-page` that saves", forbidden,
+            "only the saving call waits for the gate")
+        self.assertRegex(
+            gate_d, r"`update-page` with `dry-run: true`, which[^.]*saves nothing",
+            "a dry run before the gate must be allowed in so many words, or the agent skips it")
+        delivery = runbook.split("## Delivery plan format (Gate D)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("dry run:", delivery)
+
+    def test_long_tail_tools_are_called_with_their_own_arguments(self):
+        contract = read(RUNBOOK).split("## Executable contract", 1)[1].split("\n## ", 1)[0]
+        self.assertIn('{"command": "<tool>", "args": { … }}', contract)
+        self.assertRegex(
+            contract, r"second `args` object nested inside is rejected",
+            "a tool's own argument wrapper is not repeated inside `clio-run`")
+        self.assertIn(
+            "sync-pages", contract,
+            "the page tool's contract points elsewhere; the runbook says why this flow stays")
+
+    def test_the_package_cleanup_does_not_depend_on_one_scaffold(self):
+        create = read(RUNBOOK).split("### 5. Create the workspace and the project", 1)[1]
+        create = create.split("\n### 6.", 1)[0]
+        self.assertIn(
+            "List the folder", create,
+            "what `add-package` scaffolds differs between clio versions")
+        self.assertIn("Keep the\n     `DependsOn` entries as generated", create)
+
+    def test_the_sample_check_reaches_questions_sent_requests_and_write_options(self):
+        reference = read(BEHAVIOUR_CHECK)
+        harness = "\n".join(fenced_blocks(reference, "js"))
+        for part in ("dialogAnswer", "HandlerChainService", "writes.push", "options.request"):
+            self.assertIn(part, harness, "the sample check must carry `%s`" % part)
+        rules = reference.split("## Rules for the table", 1)[1].split("\n## ", 1)[0]
+        for word in ("dialogAnswer", "`sent`", "`writes`", "`TZ`"):
+            self.assertIn(word, rules, "the table rules must say how to use %s" % word)
+
+    def test_a_computed_text_is_shown_in_full(self):
+        guide = read(SDK_GUIDE)
+        section = guide.split("## A text computed by the module", 1)[1].split("\n## ", 1)[0]
+        for part in ('{ "value": "" }', '"crt.Label"', "crt.LoadDataRequest",
+                     "crt.HandleViewModelAttributeChangeRequest"):
+            self.assertIn(part, section, "the computed text example must carry %s" % part)
+        self.assertIn(
+            "does not mark the record as changed", section,
+            "an attribute no data source feeds is written without making the page look edited")
+        code = "\n".join(fenced_blocks(section, "ts"))
+        self.assertNotIn(
+            ".set(", code,
+            "the example runs on an app older than the one that brought `set`")
+        self.assertIn("A text computed by the module", read(RUNBOOK))
+
+    def test_scopes_are_described_as_a_freedom_ui_page_reports_them(self):
+        guide = read(SDK_GUIDE)
+        scopes = guide.split("### Scopes", 1)[1].split("\n### ", 1)[0]
+        self.assertNotIn(
+            "every nested view model", scopes,
+            "a row of a list or a detail carries no scopes, so a page-scoped handler never runs for it")
+        self.assertIn("carries no scopes", scopes)
+        self.assertRegex(
+            scopes, r"scoped to `<PageSchemaName>_Root` never runs",
+            "a `_Root` scope belongs to classic wizard pages; on a Freedom UI page it matches nothing")
+        order = guide.split("### The order of handlers", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("built-in behaviour last", order)
+        self.assertIn("no defined order", order)
+        self.assertRegex(
+            order, r"runs before the handlers of the packages it depends on",
+            "between packages the order follows the package hierarchy, as on a web page")
+        self.assertRegex(
+            guide, r"A request without `scopes` takes the scopes of its context",
+            "a request sent from code still reaches the scoped handlers of the page")
+
+    def test_empty_values_and_dates_are_described_as_a_handler_receives_them(self):
+        guide = read(SDK_GUIDE)
+        context = guide.split("## The page context", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(
+            "reads as `undefined`", context,
+            "a rule that waits for null or for a placeholder date never sees an empty value")
+        self.assertIn("2026-01-15T10:00:00.000Z", context)
+        self.assertIn(
+            "2026-01-15T00:00:00.000`", context,
+            "a date the user just picked has no zone and is local time")
+        for option in ("preventStateChange", "preventRunBusinessRules", "preventAttributeChangeRequest"):
+            self.assertIn("`%s` —" % option, context, "the guide says what `%s` does" % option)
+
+    def test_device_steps_can_be_performed_and_an_agent_runs_them_only_when_asked(self):
+        check = read(RUNBOOK).split("## Device check", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(
+            "only while the\n   condition holds", check,
+            "a step on a field the page hides cannot be performed")
+        offered = check.split("### When the developer offers an emulator or a connected device", 1)[1]
+        self.assertIn("unless they ask you to run it", offered)
+        self.assertIn(
+            "put them back", offered,
+            "a record the check changed is restored and reported")
 
     def test_device_check_needs_no_cable_and_no_debugger(self):
         check = read(RUNBOOK).split("## Device check", 1)[1].split("\n## ", 1)[0]

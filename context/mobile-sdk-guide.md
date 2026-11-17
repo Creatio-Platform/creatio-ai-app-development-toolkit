@@ -8,14 +8,12 @@ own type declarations.
 The complete public API is in two files of the npm package:
 
 - `index.d.ts` — everything a module imports, with doc comments;
-- `CHANGELOG.md` — what recent versions added. It is not a complete history.
+- `CHANGELOG.md` — what recent versions added and which app each of them needs. It is not a complete
+  history.
 
 Before a project exists, read them from a packed archive: `npm pack @creatio/mobile-common@<version>`
 into a scratch folder, unpack, and open `package/index.d.ts`. In a project they are under
 `node_modules/@creatio/mobile-common/`.
-
-The `README.md` inside the package describes build, inject and deploy scripts of the SDK's own
-repository. They are not part of the published package: ignore them and follow `context/mobile-module-project-layout.md`.
 
 Before using a class, a request or a service, search the declaration file for it and read its
 signature. Do not write a call from memory of this guide or of the web SDK: the web package
@@ -24,6 +22,15 @@ on mobile. Types the declarations re-export from `@creatio/base` (filters, expre
 `BaseRequest`) are documented in `node_modules/@creatio/base/index.d.ts`.
 
 Anything the declarations do not export does not exist for a module, whatever a web example shows.
+
+**An API exists on a device only from the app version that brought it.** Each version heading in
+`CHANGELOG.md` names the Creatio Mobile version that package version requires —
+`# 0.1014.0 (Creatio Mobile 10.1.4)` — and the entries under it are the API that arrived with it.
+Headings older than 0.1014.0 name no app version. Before using a class, a request or a service, find
+the entry that added it: the newest such entry sets the app version the module needs, and the plan
+states it. A member the declarations mark `@deprecated` in favour of a newer one is still the only one
+an older app has, so keep using it unless the plan already requires the app version of its
+replacement.
 
 ## Runtime rules the declarations do not show
 
@@ -92,18 +99,46 @@ export class UsrOrderStatusChangeHandler extends BaseRequestHandler<HandleViewMo
 
 | `scopes` | The handler runs for |
 | --- | --- |
-| `['<PageSchemaName>']` | the page and every nested view model on it (details, list items) |
-| `['<PageSchemaName>_Root']` | the page's root view model only |
-| `['<PageSchemaName>_Root_<DetailAttributeName>']` | one detail on the page |
-| omitted or `[]` | every page of the app |
+| `['<PageSchemaName>']` | requests of that page |
+| `['<TemplateSchemaName>']` | requests of every page built on that template |
+| omitted or `[]` | every page of the app, and every row of a list or a detail |
 
-Use the schema name exactly as `get-page` returns it. A request carries the page's schema name
-together with the names of the schemas it inherits from — a home page reports
-`["BaseMobileHomePage", "FieldSalesMobileHomePage"]` — so a handler scoped to a parent schema runs on
-every page derived from it. Scope to the most specific name unless the wider reach is the intent.
-Inside a detail scope, `request.$context` is the
-detail item: `request.$context['Id']` is the item's id, not the page record's. To reach the page from
-there, use `request.$context.parent`.
+Use the schema name exactly as `get-page` returns it. A request of a Freedom UI page carries the
+names of the templates the page is built on, followed by the page's own schema name — a home page
+reports `["BaseMobileHomePage", "FieldSalesMobileHomePage"]` — and a handler runs when one of its
+scopes is in that list. A handler scoped to a template therefore runs on every page derived from
+it. Scope to the page's own name unless the wider reach is the intent.
+
+A row of a list or a detail is a view model of its own, and it carries no scopes. A request that is
+processed on a row — a change of one of its attributes — reaches only handlers declared without
+`scopes`. Such a handler runs on every page of the app, so it first tells whether the request is
+its own, by the attributes it finds. There `request.$context` is the row:
+`request.$context['Id']` is the row's id, not the page record's, and `request.$context.parent`
+is the page.
+
+The suffixes `_Root` and `_Root_<DetailAttributeName>` belong to pages of the classic mobile wizard.
+A Freedom UI page never reports them, so a handler scoped to `<PageSchemaName>_Root` never runs
+there.
+
+Scopes work on a mobile Freedom UI page as they do on a web one. A handler written in a web page's
+own `handlers` section runs for that page only; when porting it, scope the mobile handler to the
+mobile page's schema name.
+
+### The order of handlers
+
+Handlers of one request run from the most specific to the least: those scoped to the page, then
+those scoped to a template, then the unscoped ones, and the app's built-in behaviour last.
+
+Among handlers with the same scope the order follows the package hierarchy, as it does on a web
+page: the handler of a package runs before the handlers of the packages it depends on.
+
+- A handler that must run before another package's handler belongs to a package that depends on
+  that package. Add the dependency to the package's `descriptor.json` and name it in the plan.
+- Packages that do not depend on one another, directly or through other packages, give no order to
+  rely on, and two modules of one package have no defined order. Make such handlers correct
+  whichever of them runs first.
+- A handler cannot change the request for the handlers after it: each receives the request as it was
+  sent. To pass something on, write a page attribute.
 
 ### Which request to intercept
 
@@ -171,7 +206,8 @@ From a page, a component names the request and passes parameters:
 ```
 
 Parameter values may be attribute bindings (`"$UsrDiscountPercent"`); the app resolves them before the
-handler runs. Do not put `type` or `scopes` into `params`.
+handler runs. Do not put `type` or `scopes` into `params`: the request arrives with the scopes of the
+page the component is on, so its handler may be scoped to that page.
 
 From code, send any request — custom or built-in — through the chain:
 
@@ -186,7 +222,14 @@ await HandlerChainService.instance.process({
 } as UsrApplyDiscountRequest);
 ```
 
-Always pass the current `$context`; pass `scopes` when the target handler is scoped.
+Always pass the current `$context`. A request sent this way goes through the same chain as one the
+app sends: every handler of that type whose scope matches, another module's included, then the
+built-in behaviour.
+
+- A request without `scopes` takes the scopes of its context, so the scoped handlers of the page
+  still run. An explicit empty list limits it to the unscoped handlers.
+- A handler that sends the request type it handles is called again by that request. Send a
+  different type, or keep a flag that tells the second call apart.
 
 ## The page context
 
@@ -205,8 +248,10 @@ await context.setAttribute('Name', 'New value');
 const type = (await context.getAttribute('Type')) as LookupValue | null;
 await context.setAttribute('Type', { value: '<guid>', displayValue: 'Customer' } as LookupValue);
 
-// Date values arrive as ISO 8601 strings; a Date or an ISO string may be written.
-const dueDate = new Date(await context.getAttribute('DueDate'));
+// Date values arrive as ISO 8601 strings, and an empty one as undefined. Write the UTC form.
+const dueValue = await context.getAttribute('DueDate');
+const dueDate = dueValue ? new Date(dueValue) : null;
+await context.setAttribute('DueDate', new Date().toISOString());
 
 // Attribute properties: 'visible' | 'readonly' | 'required' | 'filter'.
 await context.setAttributePropertyValue('UsrCloseReason', 'visible', true);
@@ -218,6 +263,27 @@ const message = (await context.getResourceString('UsrAmountRequired_message')) ?
 
 - A value written with `setAttribute` in a `crt.SaveRecordRequest` handler, before the next handler is
   called, is part of that same save.
+- **An attribute with no value reads as `undefined`** — an empty date, an empty lookup, a field that
+  was never filled. Test for `undefined` and `null` together.
+- **Dates.** A date arrives as an ISO 8601 string in one of two shapes: in UTC with a `Z`
+  (`2026-01-15T10:00:00.000Z`), or without a zone (`2026-01-15T00:00:00.000`) — the shape of a value
+  the user has just picked in a date-only field. `new Date(value)` reads both correctly — the first
+  as UTC, the second as the device's local time — so compare calendar days through the local getters
+  (`getFullYear`, `getMonth`, `getDate`), which is the day the user sees on the page. Write a date
+  as `toISOString()` produces it.
+- From SDK 0.1014.0 (Creatio Mobile 10.1.4) the context also has `get(name)` and
+  `set(name, value, options?)`, and the declarations mark `getAttribute` / `setAttribute` as
+  deprecated aliases of them. An app older than 10.1.4 has only `getAttribute` / `setAttribute`, so a
+  module that must run there uses those, as the examples in this guide do. Use `set` when the logic
+  needs its options, and state Creatio Mobile 10.1.4 in the plan:
+  - `preventStateChange` — the value is saved with the next save, but writing it does not mark the
+    record as changed;
+  - `preventRunBusinessRules` — the page's business rules do not run for this write;
+  - `preventAttributeChangeRequest` — no `crt.HandleViewModelAttributeChangeRequest` is sent for
+    this write.
+
+  A write without options does all three: it marks the record as changed when the attribute is bound
+  to a data source, runs the business rules and sends the change request.
 - The short forms `await request.$context['Name']` and `request.$context['Name'] = value` also work,
   but the assignment cannot be awaited and neither form is type-checked. Prefer the methods.
 - Attribute names are the page's view model attributes (`viewModelConfigDiff`), not entity column
@@ -251,6 +317,101 @@ The numbers are the serialized values of the `FilterType`, `ComparisonType`, `Ex
 A detail (embedded list) is filtered through a filter attribute: declare `filterAttributes` on the
 detail's attribute in the page, then assign the filter object to that attribute in a
 `crt.LoadDataRequest` handler before calling the next handler.
+
+## A text computed by the module
+
+A line the page shows and no column holds — a count of days, a total, a hint — is a page attribute
+of its own that a label reads and the module writes.
+
+The page declares the attribute with a start value and no `modelConfig`, so no data source feeds it
+and no save sends it:
+
+```json
+"viewModelConfigDiff": [
+  {
+    "operation": "merge",
+    "path": ["attributes"],
+    "values": {
+      "UsrDaysInStockCaption": { "value": "" }
+    }
+  }
+]
+```
+
+A label binds its caption to it; add the `layoutConfig` the parent container requires:
+
+```json
+{
+  "operation": "insert",
+  "name": "UsrDaysInStockLabel",
+  "parentName": "<container on the page>",
+  "propertyName": "items",
+  "values": {
+    "type": "crt.Label",
+    "caption": "$UsrDaysInStockCaption",
+    "labelType": "body"
+  }
+}
+```
+
+The module writes the text after the page loads its data, and again when a value it depends on
+changes:
+
+```ts
+import {
+	BaseRequestHandler,
+	CrtRequestHandler,
+	ExecutionContext,
+	HandleViewModelAttributeChangeRequest,
+	LoadDataRequest,
+} from '@creatio/mobile-common';
+
+import { formatDaysInStock } from './days-in-stock';
+
+async function refreshDaysInStock(context: ExecutionContext): Promise<void> {
+	// An empty date reads as undefined; the function returns an empty text for it.
+	const arrival = await context.getAttribute('UsrArrivalDate');
+	await context.setAttribute('UsrDaysInStockCaption', formatDaysInStock(arrival, new Date()));
+}
+
+@CrtRequestHandler({
+	requestType: 'crt.LoadDataRequest',
+	type: 'usr.OrderDaysInStockLoad',
+	scopes: ['UsrOrder_MobileFormPage'],
+})
+export class UsrOrderDaysInStockLoad extends BaseRequestHandler<LoadDataRequest> {
+	public async handle(request: LoadDataRequest): Promise<unknown> {
+		const result = await this.next?.handle(request);
+		await refreshDaysInStock(request.$context as ExecutionContext);
+		return result;
+	}
+}
+
+@CrtRequestHandler({
+	requestType: 'crt.HandleViewModelAttributeChangeRequest',
+	type: 'usr.OrderDaysInStockChange',
+	scopes: ['UsrOrder_MobileFormPage'],
+})
+export class UsrOrderDaysInStockChange extends BaseRequestHandler<HandleViewModelAttributeChangeRequest> {
+	public async handle(request: HandleViewModelAttributeChangeRequest): Promise<unknown> {
+		const result = await this.next?.handle(request);
+		if (request.attributeName === 'UsrArrivalDate') {
+			await refreshDaysInStock(request.$context as ExecutionContext);
+		}
+		return result;
+	}
+}
+```
+
+- The text follows the field while the user edits it, before any save: the change handler runs on
+  every change of a page attribute.
+- Writing the text does not mark the record as changed. Only an attribute bound to a data source
+  does that, and this one has no `modelConfig`.
+- The write does send a change request for the text attribute itself, which is why the change handler
+  tests `attributeName` before it recalculates. On Creatio Mobile 10.1.4 and later,
+  `set(name, value, { preventAttributeChangeRequest: true })` keeps that request from being sent.
+- The calculation is a plain function in a file of its own, so the local behaviour check can run it,
+  and it takes today's date as a value.
 
 ## Blocking a save
 
@@ -306,6 +467,7 @@ export class UsrOrderSaveGuard extends BaseRequestHandler<SaveRecordRequest> {
 
 - Returning without calling the next handler is what blocks the save; return `undefined`.
 - The dialog's `title` is optional. A dialog with a message and one button is enough for a refusal.
+- The recommended values of an action's `color` are `primary`, `accent`, `warn` and `default`.
 - The app log records a thrown error without its origin, so the handler's own part is wrapped and
   rethrown with the module and handler name in front. The call to the next handler stays outside the
   wrapper, so an error of the built-in save is not relabelled.
@@ -647,7 +809,10 @@ passed to `bootstrapCrtModule` equals the project folder name and the class name
 - [ ] Every custom request extends `BaseRequest` and carries `@CrtRequest`.
 - [ ] Every handler and data source is listed in `@CrtModule`.
 - [ ] `this.next?.handle(request)` is called and returned, except where stopping is the intent.
-- [ ] Scopes are the mobile page schema names read from the environment.
+- [ ] Scopes are the mobile page schema names read from the environment, with no `_Root` suffix.
+- [ ] A handler that must run before another package's handler sits in a package that depends on
+      that package; no other order between modules is relied on.
+- [ ] Empty values are handled as `undefined`, and dates are compared by the device's calendar day.
 - [ ] Every attribute and component name the code addresses exists on the page.
 - [ ] No `window`, `document`, `console.info`, `console.debug`, `fetch`-based server call or web SDK
       import.
@@ -655,6 +820,8 @@ passed to `bootstrapCrtModule` equals the project folder name and the class name
 - [ ] State kept at module level is keyed by what it belongs to, and nothing depends on a page closing
       to clear it.
 - [ ] Dates and numbers are formatted without `Intl`.
+- [ ] Every class, request and service the module uses arrived no later than the app version the plan
+      names; `CHANGELOG.md` says which version added it.
 - [ ] Attribute reads and writes go through a typed `ExecutionContext` and every write is awaited.
 - [ ] Every thrown error message starts with the module and handler name.
 - [ ] The rule itself is a plain function the local behaviour check can run.
