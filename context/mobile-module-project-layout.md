@@ -170,7 +170,7 @@ Suggested source folders for a module with more than a couple of classes: `src/h
 | `npm install` | install the SDK declarations and the build tools |
 | `npx tsc --noEmit` | type-check against the SDK declarations |
 | `npm run build` | produce `out/mobile/<ModuleName>/main.js` |
-| `node check-behaviour.cjs out/mobile/<ModuleName>/main.js` | run the built module on a table of inputs; see `./local-behaviour-check.md` |
+| `node check-behaviour.cjs out/mobile/<ModuleName>/main.js` | run the built module on a table of inputs; see `context/mobile-module-behaviour-check.md` |
 
 `npm install` ends with an audit summary that may list vulnerabilities in the SDK package's own
 dependencies. None of that code is in `main.js` — the SDK is an external. Never run

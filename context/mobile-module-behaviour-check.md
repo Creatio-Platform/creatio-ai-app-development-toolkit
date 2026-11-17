@@ -102,7 +102,7 @@ const cases = [
 
 It replaces the SDK, so it cannot tell whether the app calls the handler, whether an attribute name
 exists on the page, or how a dialog looks. Those belong to the device check. A handler that reads
-attributes through `getAttribute` / `setAttribute`, as `./sdk-guide.md` recommends, runs here with the
+attributes through `getAttribute` / `setAttribute`, as `context/mobile-sdk-guide.md` recommends, runs here with the
 plain context above; one that indexes the context directly needs a context that answers property reads.
 
 Extend the stub with the SDK members the module uses — a service is a class with the methods called, a

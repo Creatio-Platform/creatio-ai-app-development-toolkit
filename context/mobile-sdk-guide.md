@@ -15,7 +15,7 @@ into a scratch folder, unpack, and open `package/index.d.ts`. In a project they 
 `node_modules/@creatio/mobile-common/`.
 
 The `README.md` inside the package describes build, inject and deploy scripts of the SDK's own
-repository. They are not part of the published package: ignore them and follow `./project-layout.md`.
+repository. They are not part of the published package: ignore them and follow `context/mobile-module-project-layout.md`.
 
 Before using a class, a request or a service, search the declaration file for it and read its
 signature. Do not write a call from memory of this guide or of the web SDK: the web package
@@ -49,7 +49,7 @@ Anything the declarations do not export does not exist for a module, whatever a 
 - **Names are global.** Every handler `type`, request `type`, data source name and module class name
   shares one namespace with all other modules on the device. A duplicate silently replaces the earlier
   registration. Make each one specific — the feature and the purpose: `usr.OrderSaveGuard`, not
-  `usr.SaveHandler`. The playbook's naming rule says which names take the environment's schema prefix.
+  `usr.SaveHandler`. The naming rule in `runbooks/04-mobile-business-logic.md` says which names take the environment's schema prefix.
 
 ## Handlers
 
@@ -638,7 +638,7 @@ await HandlerChainService.instance.process({
 
 ## The module class
 
-One class per project ties everything together; see `./project-layout.md` for the entry file. The name
+One class per project ties everything together; see `context/mobile-module-project-layout.md` for the entry file. The name
 passed to `bootstrapCrtModule` equals the project folder name and the class name.
 
 ## Before the build

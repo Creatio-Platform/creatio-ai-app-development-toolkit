@@ -1,4 +1,4 @@
-"""The mobile business-logic skill must stay usable by a developer who has only the public surface.
+"""The mobile business-logic flow must stay usable by a developer who has only the public surface.
 
 A partner has clio, the clio MCP server, this toolkit and the ``@creatio/mobile-common`` npm package.
 The rules below are pinned because breaking any of them is silent for CI and fatal on the device:
@@ -15,7 +15,7 @@ The rules below are pinned because breaking any of them is silent for CI and fat
 4. The references never send the agent to sources a partner cannot read, and never offer the web
    SDK as an import.
 
-5. The surfaces that describe mobile pages route a request for code to this skill.
+5. The surfaces that describe mobile pages route a request for code to the flow's runbook.
 
 6. The module is exercised before it is delivered. A compile and a build pass without one line of
    the module running, and the developer checks by hand on a phone with no debugger, so a logic
@@ -39,6 +39,9 @@ The rules below are pinned because breaking any of them is silent for CI and fat
     and a compilation that fails after the installation is not a failed delivery.
 
 12. The plan that names what the user sees is written with the UI rules already loaded.
+
+13. The flow has one entry point. The app orchestrator's description attracts a request for mobile
+    logic, its load order and core rules name the runbook, and no second skill claims the flow.
 """
 
 import json
@@ -51,13 +54,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SKILL_DIR = ROOT / "skills/creatio-mobile-business-logic"
-SKILL = SKILL_DIR / "SKILL.md"
-PLAYBOOK = SKILL_DIR / "references/remote-module-playbook.md"
-LAYOUT = SKILL_DIR / "references/project-layout.md"
-SDK_GUIDE = SKILL_DIR / "references/sdk-guide.md"
-BEHAVIOUR_CHECK = SKILL_DIR / "references/local-behaviour-check.md"
-REFERENCES = (PLAYBOOK, LAYOUT, SDK_GUIDE, BEHAVIOUR_CHECK)
+# The flow belongs to the app orchestrator: one runbook owns the process, three context files the
+# reference material.
+ORCHESTRATOR = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
+RUNBOOK_PATH = "runbooks/04-mobile-business-logic.md"
+RUNBOOK = ROOT / RUNBOOK_PATH
+LAYOUT = ROOT / "context/mobile-module-project-layout.md"
+SDK_GUIDE = ROOT / "context/mobile-sdk-guide.md"
+BEHAVIOUR_CHECK = ROOT / "context/mobile-module-behaviour-check.md"
+DOCUMENTS = (RUNBOOK, LAYOUT, SDK_GUIDE, BEHAVIOUR_CHECK)
 
 MODULE_BUNDLE = ROOT / "tests/fixtures/mobile_remote_module_bundle.js"
 # The same handler registration with the rule removed: every save is passed on unchanged.
@@ -93,7 +98,7 @@ def fenced_blocks(text, language):
 class MobileBusinessLogicDocsTests(unittest.TestCase):
 
     def test_preflight_decides_availability_from_the_tool_contract_not_tools_list(self):
-        preflight = read(SKILL).split("## Load order", 1)[0]
+        preflight = read(RUNBOOK).split("## Load order", 1)[0]
         self.assertIn("get-tool-contract", preflight)
         self.assertRegex(
             preflight, r"NOT the\s+server's `tools/list`",
@@ -103,7 +108,7 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             self.assertIn(tool, preflight, "the preflight must check for `%s`" % tool)
 
     def test_each_failed_preflight_check_stops_with_a_remedy(self):
-        preflight = read(SKILL).split("## Load order", 1)[0]
+        preflight = read(RUNBOOK).split("## Load order", 1)[0]
         self.assertIn(
             "dotnet tool update clio -g", preflight,
             "a clio without the delivery tools must be answered with the command that updates it")
@@ -115,11 +120,11 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             "the toolkit never changes the developer's machine toolchain on its own")
 
     def test_both_gates_are_declared_with_what_they_forbid(self):
-        skill = read(SKILL)
-        playbook = read(PLAYBOOK)
+        orchestrator = read(ORCHESTRATOR)
+        playbook = read(RUNBOOK)
         for gate in ("Gate L", "Gate D"):
-            self.assertIn(gate, skill)
-            self.assertIn("## %s" % gate, playbook, "the playbook owns the rules of %s" % gate)
+            self.assertIn(gate, orchestrator, "the entry point names %s" % gate)
+            self.assertIn("## %s" % gate, playbook, "the runbook owns the rules of %s" % gate)
         gate_l = playbook.split("## Gate L", 1)[1].split("\n## ", 1)[0]
         gate_d = playbook.split("## Gate D", 1)[1].split("\n## ", 1)[0]
         self.assertIn("Forbidden until approved", gate_l)
@@ -128,10 +133,10 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
         for write in ("push-workspace", "update-page"):
             self.assertIn(
                 write, gate_d, "`%s` writes to the environment and must wait for Gate D" % write)
-        self.assertIn("The initial request is NOT approval", skill)
+        self.assertIn("The initial request is NOT approval", playbook)
 
     def test_a_step_that_precedes_gate_d_is_not_forbidden_by_it(self):
-        playbook = read(PLAYBOOK)
+        playbook = read(RUNBOOK)
         before_gate_d = playbook.split("### 5.", 1)[1].split("### 8. Present the delivery plan", 1)[0]
         self.assertIn(
             "restore-workspace", before_gate_d,
@@ -145,17 +150,17 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
 
     def test_examples_name_handlers_and_requests_as_the_naming_rule_says(self):
         self.assertRegex(
-            read(PLAYBOOK), r"literal `usr\.` followed by a\s+PascalCase name",
+            read(RUNBOOK), r"literal `usr\.` followed by a\s+PascalCase name",
             "the playbook owns the naming rule for handler and request types")
-        for path in (SKILL, *REFERENCES):
+        for path in DOCUMENTS:
             self.assertNotRegex(
                 read(path), r"usr\.Usr[A-Z]",
                 "%s names a type with the schema prefix after `usr.`; the rule is `usr.` plus a "
                 "PascalCase name" % path.name)
 
     def test_the_run_is_not_reported_as_working_without_a_device_check(self):
-        self.assertIn("not yet confirmed on a device", read(PLAYBOOK))
-        self.assertIn("A green build is not a working feature", read(SKILL))
+        self.assertIn("not yet confirmed on a device", read(RUNBOOK))
+        self.assertIn("A green build is not a working feature", read(RUNBOOK))
 
     def test_project_layout_keeps_what_the_script_runtime_requires(self):
         layout = read(LAYOUT)
@@ -177,14 +182,14 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             "the SDK dependency must be pinned: the running SDK is the one inside the app")
 
     def test_only_one_script_is_delivered(self):
-        playbook = read(PLAYBOOK)
+        playbook = read(RUNBOOK)
         self.assertIn("Files/src/mobile/<ModuleName>/main.js", playbook)
         self.assertIn(
             "Copy that one file only", playbook,
             "the device evaluates every script in the module folder")
 
     def test_references_do_not_point_at_sources_a_partner_cannot_reach(self):
-        for path in (SKILL, *REFERENCES):
+        for path in DOCUMENTS:
             text = read(path)
             for marker in INTERNAL_ONLY_MARKERS:
                 self.assertNotIn(
@@ -201,19 +206,19 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
                         "%s: a module example imports from `%s`" % (path.name, source))
 
     def test_unsupported_mechanisms_are_named_with_their_alternative(self):
-        skill = read(SKILL)
+        skill = read(RUNBOOK)
         for mechanism in ("custom validator", "custom converter", "UI component", "HTTP"):
             self.assertIn(
                 mechanism, skill,
-                "the skill must say that the SDK has no API for a %s" % mechanism)
-        self.assertIn("Out of reach for a module", read(PLAYBOOK))
+                "the runbook must say that the SDK has no API for a %s" % mechanism)
+        self.assertIn("Out of reach for a module", read(RUNBOOK))
 
     def test_the_built_module_is_exercised_before_delivery(self):
-        playbook = read(PLAYBOOK)
+        playbook = read(RUNBOOK)
         verify = playbook.split("### 7. Verify locally", 1)[1].split("\n### 8.", 1)[0]
         self.assertIn("Behaviour check", verify)
         self.assertIn(
-            "./local-behaviour-check.md", verify,
+            "context/mobile-module-behaviour-check.md", verify,
             "the verification step must point at the way to run the built module")
         harness = "\n".join(fenced_blocks(read(BEHAVIOUR_CHECK), "js"))
         self.assertIn(
@@ -267,7 +272,7 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             "not told which page or record", guide,
             "a virtual data source returns the same rows on every record unless the module "
             "arranges otherwise")
-        plan = read(PLAYBOOK).split("## Plan format (Gate L)", 1)[1].split("\n## ", 1)[0]
+        plan = read(RUNBOOK).split("## Plan format (Gate L)", 1)[1].split("\n## ", 1)[0]
         self.assertIn(
             "Data kept by the module", plan,
             "the developer approves whether the data is shared by every record")
@@ -295,7 +300,7 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
                     self.fail("%s: a json example does not parse: %s\n%s" % (path.name, error, block))
 
     def test_an_existing_package_delivery_states_what_differs(self):
-        playbook = read(PLAYBOOK)
+        playbook = read(RUNBOOK)
         section = playbook.split("## A module inside an existing package", 1)[1].split("\n## ", 1)[0]
         self.assertIn(
             "Every restore removes the staged script", section,
@@ -315,25 +320,25 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
         self.assertIn("C# project", plan)
 
     def test_visible_page_changes_are_designed_before_the_plan(self):
-        load_order = read(SKILL).split("## Load order", 1)[1].split("\n## ", 1)[0]
+        load_order = read(RUNBOOK).split("## Load order", 1)[1].split("\n## ", 1)[0]
         self.assertRegex(
             load_order, r"before\s+presenting the plan",
             "a plan that names a button or a list is written with the UI rules loaded")
 
     def test_the_gate_probe_is_not_decided_by_one_package(self):
-        preflight = read(SKILL).split("## Load order", 1)[0]
+        preflight = read(RUNBOOK).split("## Load order", 1)[0]
         self.assertRegex(
             preflight, r"repeat it on a second package",
             "a package without files fails the probe the same way a missing gate does")
 
     def test_the_script_is_staged_before_the_delivery_plan(self):
-        playbook = read(PLAYBOOK)
+        playbook = read(RUNBOOK)
         self.assertLess(
             playbook.index("Copy that one file only"), playbook.index("### 8. Present the delivery plan"),
             "the delivery plan must describe a file that already sits in the package folder")
 
     def test_delivery_plan_states_what_cannot_be_taken_back(self):
-        playbook = read(PLAYBOOK)
+        playbook = read(RUNBOOK)
         plan = playbook.split("## Delivery plan format (Gate D)", 1)[1].split("\n## ", 1)[0]
         self.assertIn("Taking it back", plan)
         self.assertIn(
@@ -342,18 +347,47 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
         self.assertIn("CreatioPackages", plan)
 
     def test_versions_default_to_the_newest(self):
-        self.assertIn("assume the users run the latest", read(PLAYBOOK))
+        self.assertIn("assume the users run the latest", read(RUNBOOK))
         self.assertIn("newest published", read(LAYOUT))
 
     def test_device_check_needs_no_cable_and_no_debugger(self):
-        check = read(PLAYBOOK).split("## Device check", 1)[1].split("\n## ", 1)[0]
+        check = read(RUNBOOK).split("## Device check", 1)[1].split("\n## ", 1)[0]
         self.assertIn("by hand", check)
         self.assertIn("Send log", check)
         self.assertIn(
             "behaviour-check table", check,
             "the steps the developer performs come from the inputs already run locally")
 
-    def test_mobile_page_surfaces_route_code_requests_to_the_skill(self):
+    def test_the_app_orchestrator_is_the_only_entry_point(self):
+        orchestrator = read(ORCHESTRATOR)
+        frontmatter, body = orchestrator.split("\n---\n", 1)
+        for trigger in ("Creatio Mobile app", "mobile page", "virtual data source", "remote module"):
+            self.assertIn(
+                trigger, frontmatter,
+                "the orchestrator's description is what attracts a request for mobile logic; it "
+                "must name `%s`" % trigger)
+        load_order = body.split("## Load Order", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("../../" + RUNBOOK_PATH, load_order)
+        core_rules = body.split("## Core Rules", 1)[1]
+        self.assertIn("../../" + RUNBOOK_PATH, core_rules)
+        self.assertIn('`workflow: "mobile-business-logic"`', body)
+        self.assertIn(
+            "../" + RUNBOOK_PATH, read(ROOT / "rules/creatio-app-orchestrator.mdc"),
+            "the Cursor rule is the same entry point for another host")
+        self.assertFalse(
+            (ROOT / "skills/creatio-mobile-business-logic").exists(),
+            "a second skill for the same flow splits the entry point")
+
+    def test_the_runbook_maps_the_telemetry_stages_to_its_gates(self):
+        telemetry = read(RUNBOOK).split("## Product telemetry", 1)[1].split("\n## ", 1)[0]
+        self.assertIn('`workflow: "mobile-business-logic"`', telemetry)
+        for stage in ("workflow_started", "plan_presented", "plan_approved", "build_started",
+                      "work_item_completed", "workflow_completed"):
+            self.assertIn("`%s`" % stage, telemetry)
+        self.assertIn("send-telemetry", telemetry)
+        self.assertIn("clio rejects them", telemetry)
+
+    def test_mobile_page_surfaces_route_code_requests_to_the_runbook(self):
         for relative in (
             "context/essentials.md",
             "runbooks/02-requirements-gathering.md",
@@ -362,8 +396,8 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             "skills/creatio-mobile-page-conversion/references/page-to-mobile-conversion.md",
         ):
             self.assertIn(
-                "creatio-mobile-business-logic", read(ROOT / relative),
-                "%s must name the skill that delivers mobile logic in code" % relative)
+                RUNBOOK_PATH, read(ROOT / relative),
+                "%s must name the runbook that delivers mobile logic in code" % relative)
         self.assertNotIn(
             "out-of-scope for AI generation", read(ROOT / "runbooks/02-requirements-gathering.md"))
 

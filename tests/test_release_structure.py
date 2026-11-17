@@ -363,7 +363,6 @@ class ReleaseStructureTests(unittest.TestCase):
     # expected to be wired into the orchestrator.
     ORCHESTRATOR_HANDOFF_SKILLS = (
         "creatio-ui-guidelines", "creatio-schema-naming", "creatio-mobile-page-conversion",
-        "creatio-mobile-business-logic",
     )
 
     def test_orchestrator_wires_its_handoff_skills(self):

@@ -63,9 +63,13 @@ REQUIRED_REFERENCE_PATHS = (
     "context/naming-conventions.md",
     "context/clio-cli-reference.md",
     "context/model-discovery-evidence.md",
+    "context/mobile-sdk-guide.md",
+    "context/mobile-module-project-layout.md",
+    "context/mobile-module-behaviour-check.md",
     "runbooks/01-environment-setup.md",
     "runbooks/02-requirements-gathering.md",
     "runbooks/03-app-implementation.md",
+    "runbooks/04-mobile-business-logic.md",
     "runtime/scripts/mcp_client.py",
     "runtime/scripts/workflow_validators.py",
 )
@@ -846,7 +850,9 @@ def render_load_order(repo_root: Path) -> str:
         f"5. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
         f"6. For post-Gate-R implementation and scaffolding (including the transient section-creation "
         f"failure playbook), read `{repo_file(repo_root, 'runbooks/03-app-implementation.md')}`.\n"
-        f"7. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
+        f"7. For custom business logic in the Creatio Mobile app, read "
+        f"`{repo_file(repo_root, 'runbooks/04-mobile-business-logic.md')}` and follow it end to end.\n"
+        f"8. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
 

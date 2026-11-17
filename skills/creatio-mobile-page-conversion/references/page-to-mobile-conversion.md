@@ -408,8 +408,9 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   into `values` (`guide.requestConversions`); a `crt.Button` whose request the mobile app does not support is
   DROPPED (a `guide.droppedElements` entry) while any OTHER component type survives and only loses or keeps
   its binding — list both, they are different reports. Web page `handlers` and the actions dropped with
-  them can be re-created for the Mobile app as a remote module: name the `creatio-mobile-business-logic`
-  skill as the follow-up for each, as a separate request after this conversion. Plus mobile manifest /
+  them can be re-created for the Mobile app as a remote module: name the mobile business-logic flow
+  (`../../runbooks/04-mobile-business-logic.md`) as the follow-up for each, as a separate request
+  after this conversion. Plus mobile manifest /
   wizard registration. (The default mobile edit page is now automated via `create-related-page-addon` with `schema-type=mobile`.)
 
 Keep it skimmable. **On request (View details / Adjust)** — only if the developer asks to see more or
@@ -477,8 +478,9 @@ one followed by a later summary):
   request the mobile app does not support is removed from the page entirely — a `droppedElements` entry,
   not a "flagged" component that stayed on the page), mobile manifest / wizard registration, and any
   `requiresManualDecision` items still open. For page `handlers` that were not transferred, dropped action
-  buttons and attributes a web handler computed, offer the `creatio-mobile-business-logic` skill as a
-  separate follow-up request — it has its own gates and is never started inside this flow.
+  buttons and attributes a web handler computed, offer the mobile business-logic flow
+  (`../../runbooks/04-mobile-business-logic.md`) as a separate follow-up request — it has its own
+  gates and is never started inside this flow.
 - **Hand off** to Freedom UI Mobile Designer (step 9) for final layout review and manual refinement.
 
 ## Mobile constraints (carry into every step)
@@ -488,8 +490,8 @@ live in the `freedom-page-web-to-mobile-conversion` guidance article — do not 
 
 - Mobile body is plain JSON: `viewConfigDiff` / `viewModelConfigDiff` / `modelConfigDiff` only — no
   `handlers`, no `validators`, no custom `converters`. Page `handlers` (web-only AMD) are NEVER transferred
-  by this flow; their mobile counterpart is a remote module, owned by the `creatio-mobile-business-logic`
-  skill.
+  by this flow; their mobile counterpart is a remote module, delivered by the mobile business-logic
+  flow (`../../runbooks/04-mobile-business-logic.md`).
 - **Page-level business rules ARE converted** in `guide.pageBusinessRules`; recreate each
   `convertedRules[].rule` verbatim with `create-page-business-rule` on the mobile page (step 7c).
   **Object-/entity-level business rules are shared** across web and mobile — do NOT touch them.

@@ -1,6 +1,6 @@
 // A hand-written stand-in for a built remote module: one self-running script that takes the SDK from
 // the global `crtSdk` and registers one save handler. It implements the rule that the sample table in
-// skills/creatio-mobile-business-logic/references/local-behaviour-check.md describes, so the sample
+// context/mobile-module-behaviour-check.md describes, so the sample
 // harness can be run against it.
 (() => {
 	const sdk = crtSdk;

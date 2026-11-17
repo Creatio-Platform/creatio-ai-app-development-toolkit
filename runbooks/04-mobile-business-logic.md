@@ -1,13 +1,136 @@
-# Mobile remote module playbook
+# Mobile business logic (remote module)
 
 The process for adding custom business logic to the Creatio Mobile app: from the developer's request to
-a module that the device loads. `../SKILL.md` owns the preflight, the load order and the telemetry
-table; this file owns the flow, the gates, and the plan and report formats.
+a module that the device loads. This runbook owns the whole flow — the preflight, the load order, the
+telemetry points, the gates, and the plan and report formats. Paths in it are relative to the toolkit
+root, the directory that holds `AGENTS.md`.
+
+Use it whenever a **Freedom UI MOBILE page** needs behaviour that lives in code: reacting to a save, a
+data load or an attribute change, running an action from a button, or feeding a page from data that no
+entity holds. In the Creatio Mobile app that code is a **remote module** — a TypeScript project built on
+the `@creatio/mobile-common` SDK into one script that a Creatio package carries to the device.
+
+This is a **targeted, implementation-ready change**: it produces no BA-style Business Plan, and Gate P
+and Gate R do not apply to it.
+
+## What this flow can and cannot deliver
+
+A remote module registers **request handlers** and **virtual data sources**, and calls the SDK services.
+That covers extending a built-in request, a custom request behind a button, computed attributes, lookup
+and detail filters, navigation, dialogs, device services and data access through the model API.
+
+The SDK has no API for a custom validator, a custom converter, a UI component or an authenticated HTTP
+call. When the request needs one of those, do not invent it: offer the route step 3, "Choose the
+mechanism", gives — a business rule, a built-in converter, a save handler that blocks with a
+dialog, or a business process started from the handler — and say plainly what stays out of reach.
+
+## Preflight (check first)
+
+Run every check before the Load order. Each failed check is a **STOP** with its own message. The
+orchestrator's clio MCP availability preflight comes first; these checks add what this flow needs.
+
+1. **clio tool surface.** Call **`get-tool-contract`** and confirm the index lists `get-page`,
+   `update-page`, `validate-page`, `get-request-info`, `create-workspace`, `add-package`,
+   `push-workspace`, `list-package-files` and `get-package-file`. Use `get-tool-contract`, NOT the
+   server's `tools/list`: the workspace and package-file tools are long-tail tools, reachable through
+   `clio-run` and absent from `tools/list` even when they work. If any is missing, tell the user
+   verbatim:
+
+   > Your clio does not ship the tools this flow needs to deliver a mobile remote module. Update it with:
+   > `dotnet tool update clio -g`
+   > then re-run this request.
+
+2. **Local toolchain.** Run `node --version` and `npm --version`. The build needs Node.js 20 or newer
+   with npm. If either is missing or older, tell the user verbatim:
+
+   > Building a mobile remote module needs Node.js 20 or newer with npm on this machine. Install it from
+   > https://nodejs.org, then re-run this request.
+
+   Never install or upgrade Node.js yourself.
+
+3. **Environment.** Call `list-environments` and confirm the target environment is registered. Then
+   call `list-package-files` for a package on it that carries files: the workspace and package-file
+   tools need cliogate, and this call is the probe. One failed call is not the verdict — a package
+   with no `Files` folder fails with the same gate message — so repeat it on a second package. Only
+   when both fail, ask the developer to run `clio install-gate -e <environment>` and retry — do not
+   run it unasked.
+
+## Load order
+
+0. Read clio `get-guidance` with name `core-rules` and name `routing`, as the clio server requires
+   before any operation. `routing` has no entry for this flow; this runbook is the route.
+1. Read this runbook to the end. It defines the flow, the approval gates (Gate L, Gate D), the tool
+   sequence, the plan and report formats and the device check. Follow it exactly.
+2. Read `context/mobile-sdk-guide.md` before writing any module code,
+   `context/mobile-module-project-layout.md` before creating the project, and
+   `context/mobile-module-behaviour-check.md` before verifying the build. The installed SDK type
+   declarations are the source of truth for the API; the guide says where they are and how to read
+   them, and it wins only on the runtime rules the declarations cannot express.
+3. Read `context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics.
+4. **Before editing a mobile page body** (wiring a button to a request, adding a data source): call clio
+   `get-guidance` with name `mobile-page-modification`, then **invoke the `creatio-ui-guidelines`
+   skill** and apply its mobile-relevant rules to anything visible you add. When the logic plan
+   itself adds something the user sees on a page — a button, a list, a caption — do both **before
+   presenting the plan**, so the plan names components and texts that already follow those rules. A
+   module that only shows its own dialogs changes no page body and does not trigger this step; the
+   text rule in step 6 covers what such a dialog says.
+5. Call clio `get-guidance` with name `list`. When the catalog carries `mobile-remote-module`, read it:
+   it owns the Creatio-side mechanics (package placement, page wiring) and wins over this runbook
+   on those. When it is absent, this runbook's own mechanics apply — that is not a blocker.
+6. Resolve every clio MCP tool contract through `get-tool-contract`; do not hardcode payloads.
+
+## Product telemetry — emit the shared stages with `workflow: "mobile-business-logic"`
+
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow, and
+`context/product-telemetry.md` for this flow's emission points. Emit with clio MCP
+`send-telemetry`. Event names are **flow-agnostic stages**; this flow is identified by the `workflow`
+field, so do not invent per-flow event names — clio rejects them.
+
+| Send | With | At the point where you |
+| --- | --- | --- |
+| `workflow_started` | — | take the first request for mobile logic |
+| `clarification_requested` / `user_input_received` | — | ask the developer something the flow waits on / receive their answer |
+| `plan_blocked` | `variant=toolchain-unavailable` | fail a Preflight check — emit before the STOP message |
+| `plan_presented` | — | present the plain-language logic plan |
+| `plan_changes_requested` | — | the developer asks to adjust the plan at **Gate L** |
+| `plan_approved` | — | get approval at **Gate L** — before any file is generated |
+| `build_started` | — | begin creating the project |
+| `work_item_completed` | `variant=module` | confirm the built module on the environment after **Gate D** |
+| `work_item_completed` | `variant=page` | finish and validate a page that triggers or consumes the module, once per page |
+| `workflow_completed` / `workflow_failed` | — | reach the end of the run |
+| `changes_requested` | — | the developer asks for further changes AFTER the run completed. Emit before starting that follow-up work |
+| `changes_applied` | — | the follow-up changes are deployed and confirmed |
+
+Telemetry is non-blocking and must never interfere with Gate L or Gate D. If clio rejects an event name
+(older clio), stop emitting for the rest of the run and carry on.
+
+- **Gate D emits nothing.** No stage marks the delivery plan or its approval.
+- `workflow_completed` means the module is delivered and confirmed on the environment. The device check
+  is the developer's and may happen after the run ends.
+- When consent is unknown and there is no developer to ask, emit nothing.
+- Send `coding_agent` and `plugin_version` only when the installation supplies them; never invent one.
+
+## Gates are MANDATORY
+
+Logic is **plan-first**: inspecting the page and the SDK writes nothing, and both generating code and
+delivering it require explicit developer approval **after** you present a plain-language plan.
+
+- **Gate L** — before creating the project or writing any module code. The developer approves *what the
+  logic does*, on which pages, and what it cannot do.
+- **Gate D** — before ANY write to the Creatio environment (`push-workspace`, `update-page`). The
+  developer approves *where it goes*: the environment, the package and the pages that change.
+- **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
+  and END THE TURN without writing — never self-approve.
+- **A green build is not a working feature.** Nothing in clio runs the Mobile app, so the run ends with
+  the device check listed below, reported as *not yet confirmed* until the developer confirms it.
+
+What each plan must contain and the FORBIDDEN-until-approved tool lists are in the "Gate L" and
+"Gate D" sections below.
 
 ## How the pieces fit
 
 - **The module** is a TypeScript project built on `@creatio/mobile-common` into a single script,
-  `main.js`. See `./project-layout.md`.
+  `main.js`. See `context/mobile-module-project-layout.md`.
 - **The package** carries it: the script sits at `Files/src/mobile/<ModuleName>/main.js` inside a
   Creatio package. The server collects every script under `Files/src/mobile` of every package; no
   manifest entry or schema registers a module.
@@ -81,7 +204,7 @@ Everything in this step is read-only and happens before Gate L, because the plan
 3. `get-entity-schema-properties` when the logic reads or writes records.
 4. Read the SDK declarations without creating a project: `npm view @creatio/mobile-common version` for
    the newest version, then `npm pack @creatio/mobile-common@<version>` into a scratch folder, unpack
-   the archive and read `package/index.d.ts`. `./sdk-guide.md` says how to read it. Plan only with
+   the archive and read `package/index.d.ts`. `context/mobile-sdk-guide.md` says how to read it. Plan only with
    classes and methods you found there.
 5. Names and facts the plan states:
    - `get-schema-name-prefix` — the environment's prefix, which may be empty;
@@ -129,7 +252,7 @@ Present the plan in the format below and wait. See "Gate L". Two things the plan
 implicit:
 
 - **Whose data it is.** Anything the module keeps in memory is one value for the whole app (see
-  "Runtime rules" in `./sdk-guide.md`), and a virtual data source is not told which record's page it
+  "Runtime rules" in `context/mobile-sdk-guide.md`), and a virtual data source is not told which record's page it
   serves. Say whether the data is shared by every record or kept per record, and how long it lasts.
 - **What it assumes.** When the logic depends on a built-in request the module does not send itself,
   name that request as an assumption. Whether the app sends it at that moment shows only on a device.
@@ -140,7 +263,7 @@ After Gate L:
 
 1. Create a clio workspace with `create-workspace`, or reuse the one the developer names. The workspace
    arrives with its own `AGENTS.md` and solution files that describe C# and Angular work; for the
-   mobile module follow `./project-layout.md` and this playbook, not that file. This flow covers an
+   mobile module follow `context/mobile-module-project-layout.md` and this runbook, not that file. This flow covers an
    environment with file system mode off: when `get-fsm-mode` reports it on, say in the delivery plan
    that the delivery is not established for that mode.
 2. Add a **code package** to it with `add-package`; pass the package name and the workspace path only,
@@ -156,7 +279,7 @@ After Gate L:
    - in the workspace's `MainSolution.slnx`, remove the `<Project …>` line that points at the deleted
      `.csproj`.
    Leave the rest of the package folder as generated.
-3. Create the project per `./project-layout.md` in the workspace, outside `packages/`:
+3. Create the project per `context/mobile-module-project-layout.md` in the workspace, outside `packages/`:
    `<workspace>/mobile-modules/<ModuleName>/`.
 4. Run `npm install` in the project.
 
@@ -170,7 +293,7 @@ Gate L and not Gate D.
 
 ### 6. Write the module
 
-Follow `./sdk-guide.md`. Rules that hold for every module:
+Follow `context/mobile-sdk-guide.md`. Rules that hold for every module:
 
 - One module per feature area; one `@CrtModule` class per project, named exactly as the project folder.
 - **Names.** A handler `type` and a request `type` always start with the literal `usr.` followed by a
@@ -204,7 +327,7 @@ All of it must pass before Gate D. A failed check is fixed and re-run, not repor
    - the name passed to `bootstrapCrtModule` equals the folder name.
 4. **Behaviour check.** The three checks above pass without one line of the module running, so a wrong
    condition or a save that is never blocked gets through them. Run the built bundle under Node with a
-   stub SDK, as `./local-behaviour-check.md` shows, on a table of inputs with the expected outcome of
+   stub SDK, as `context/mobile-module-behaviour-check.md` shows, on a table of inputs with the expected outcome of
    each: at least one input per branch of the plan's "How" section, including the one that must change
    nothing. When the logic ports a web handler, run that handler on the same inputs and compare.
    Keep the table: the same inputs become the developer's steps in the device check.
@@ -248,7 +371,7 @@ once — first run `restore-workspace` again and stage the script again (step 7,
    only on the device.
    - A button that runs a custom request: `"clicked": { "request": "usr.<Name>Request", "params": { … } }`.
      Parameter values may be bindings (`$AttributeName`). Never put `type` or `scopes` inside `params`.
-   - A virtual data source: see "Virtual data source on a page" in `./sdk-guide.md`.
+   - A virtual data source: see "Virtual data source on a page" in `context/mobile-sdk-guide.md`.
 
 ### 10. Device check and report
 
