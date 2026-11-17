@@ -40,6 +40,8 @@ dispatched by name through `clio-run`.
 | Read the entity behind a page | `get-entity-schema-properties` |
 | Read the schema prefix, the maintainer and the taken package names | `get-schema-name-prefix`, `get-sys-setting`, `list-packages` |
 | Read a feature state | `odata-read` |
+| Read the file system mode | `get-fsm-mode` |
+| Bring an existing package into the workspace | `restore-workspace` |
 | Create the local workspace and its code package | `create-workspace`, `add-package` |
 | Deliver the workspace to the environment | `push-workspace` |
 | Confirm the script on the environment | `list-package-files`, `get-package-file` |
@@ -87,12 +89,13 @@ Everything in this step is read-only and happens before Gate L, because the plan
    - `get-sys-setting` for `Maintainer` — needed to tell the developer how the package will arrive
      (see step 9);
    - `odata-read` on the `Feature` entity filtered by `Code` = `EnableMobileSDK`, and its state rows in
-     `AdminUnitFeatureState`. No record or no state row means the default, which is enabled.
+     `AdminUnitFeatureState`. The tool takes a structured `filters` object, not a filter string. No
+     record or no state row means the default, which is enabled.
 6. Confirm the page can be opened in the Mobile app at all, or the delivery cannot be checked: a list
    page is the mobile page of a section placed in a mobile workplace (`odata-read` on `SysModule`,
    column `MobileSectionSchemaUId`); a record page is the object's mobile page
-   (`get-related-page-addon` with `schema-type: "mobile"`). When neither shows the page, ask the
-   developer how users reach it before going further.
+   (`get-related-page-addon` with `schema-type: "mobile"` and the `package-name` of the object's
+   package). When neither shows the page, ask the developer how users reach it before going further.
 
 Never guess an attribute or component name: a handler that addresses a name the page does not declare
 fails silently on the device.
@@ -122,7 +125,14 @@ Out of reach for a module, to be stated in the plan rather than worked around:
 
 ### 4. Present the logic plan — Gate L
 
-Present the plan in the format below and wait. See "Gate L".
+Present the plan in the format below and wait. See "Gate L". Two things the plan must not leave
+implicit:
+
+- **Whose data it is.** Anything the module keeps in memory is one value for the whole app (see
+  "Runtime rules" in `./sdk-guide.md`), and a virtual data source is not told which record's page it
+  serves. Say whether the data is shared by every record or kept per record, and how long it lasts.
+- **What it assumes.** When the logic depends on a built-in request the module does not send itself,
+  name that request as an assumption. Whether the app sends it at that moment shows only on a device.
 
 ### 5. Create the workspace and the project
 
@@ -130,7 +140,9 @@ After Gate L:
 
 1. Create a clio workspace with `create-workspace`, or reuse the one the developer names. The workspace
    arrives with its own `AGENTS.md` and solution files that describe C# and Angular work; for the
-   mobile module follow `./project-layout.md`, not that file.
+   mobile module follow `./project-layout.md` and this playbook, not that file. This flow covers an
+   environment with file system mode off: when `get-fsm-mode` reports it on, say in the delivery plan
+   that the delivery is not established for that mode.
 2. Add a **code package** to it with `add-package`; pass the package name and the workspace path only,
    no environment. A package that holds only module scripts keeps deliveries small and never
    overwrites pages or objects that people edit in the designers.
@@ -151,10 +163,10 @@ After Gate L:
 **Do not put the module into a package that the designers edit unless the developer asks for it.**
 `push-workspace` installs the workspace copy of every package it holds, so a stale local copy of an
 application package replaces whatever was changed on the environment since it was restored. When the
-developer does want the module inside an existing package, bring the package into the workspace with
-`restore-workspace` before staging the script, and say in the Gate D plan that the whole package is
-re-installed and when it was restored. `restore-workspace` downloads from the environment and writes
-only the local workspace, so it needs Gate L and not Gate D.
+developer does want the module inside an existing package, skip `add-package`, bring the package into
+the workspace with `restore-workspace`, and follow "A module inside an existing package" from here on.
+`restore-workspace` downloads from the environment and writes only the local workspace, so it needs
+Gate L and not Gate D.
 
 ### 6. Write the module
 
@@ -212,7 +224,10 @@ environment since it was restored — the developer says so, or the approval did
 once — first run `restore-workspace` again and stage the script again (step 7, item 5).
 
 1. `push-workspace` for the workspace. It takes one to three minutes and ends with the installer's log.
-   Treat a non-zero exit code or an installation error as a failed delivery. In a good log:
+   Treat an installation error, or a non-zero exit code with no `Application installed successfully`
+   line, as a failed delivery. A package that carries a C# project is also compiled by the push; a
+   failure of that compilation after a successful installation is read as "A module inside an existing
+   package" says. In a good log:
    - `Files saved in package "<Package>"` and `Application installed successfully` prove the delivery;
    - `Package "<other name>" loaded` lines name packages the workspace does not hold. They are part of
      a normal log; only a package with a `saved` line was written;
@@ -227,7 +242,10 @@ once — first run `restore-workspace` again and stage the script again (step 7,
      expected and needs no action.
 3. Wire the pages the plan names. For each page: `get-page`, apply the change, `update-page` with a dry
    run, then for real, then `validate-page`. The page mechanics — diff shape, target schema, resource
-   strings — are owned by `get-guidance mobile-page-modification`.
+   strings — are owned by `get-guidance mobile-page-modification`. `validate-page` checks the shape of
+   the body; it does not check that a data source binding resolves or that a request name has a
+   handler. `update-page` is the only tool that checks the bindings, and a custom request is proven
+   only on the device.
    - A button that runs a custom request: `"clicked": { "request": "usr.<Name>Request", "params": { … } }`.
      Parameter values may be bindings (`$AttributeName`). Never put `type` or `scopes` inside `params`.
    - A virtual data source: see "Virtual data source on a page" in `./sdk-guide.md`.
@@ -237,6 +255,32 @@ once — first run `restore-workspace` again and stage the script again (step 7,
 clio cannot run the Mobile app, so the last step belongs to the developer. Hand over the checklist from
 "Device check" and present the report in the format below. Report the run as **delivered, not yet
 confirmed on a device** until the developer says the behaviour works.
+
+## A module inside an existing package
+
+The default is a separate code package. A module that the developer wants inside a package the
+environment already has is delivered differently in four ways. State each of them in the delivery
+plan.
+
+1. **Every restore removes the staged script.** `restore-workspace` replaces the local package folder
+   with the environment's copy. Stage the script after each restore, and confirm the file is in the
+   package folder before the push; a push without it delivers no script.
+2. **The whole package is re-installed** from the workspace copy. Restore again when the package may
+   have changed on the environment since the last restore.
+3. **A package with a C# project is compiled.** When its `descriptor.json` has `Type` 1 or a
+   `ProjectPath`, the push compiles the package after installing it and adds the project files that
+   `restore-workspace` generated — `<Package>.csproj`, `Directory.Build.props`,
+   `Directory.Build.targets` and build output under `obj/` — to the package. That compilation can fail for a reason outside the
+   module, such as another compilation already running, and the push then ends with a non-zero exit
+   code although the installation succeeded. When the log has `Application installed successfully`
+   and `Files saved in package "<Package>"`, confirm the script as step 9 says and report the
+   compilation as an open item. Starting a compilation is the developer's decision, never yours.
+4. **Pages are wired after the push, and the package is restored once more after that.**
+   `update-page` writes to the environment, so the workspace copy does not hold the new page body and
+   a later push would put the old one back. Push first, run `update-page`, then `restore-workspace`:
+   the workspace copy then holds the delivered script and the new page body.
+
+An existing package stays in the application it belongs to; the push does not move it.
 
 ## Gate L — approve the logic
 
@@ -281,6 +325,13 @@ How
 Page changes
   - <Page>: <button added | data source added | none>
 
+Data kept by the module
+  <none | what is kept in memory, whether every record shares it or each record has its own, and
+  that it is gone when the app restarts>
+
+Assumes
+  <each built-in request the logic depends on and does not send itself; "nothing" when none>
+
 Works offline
   <yes | no — which step needs the server and what the user sees without a connection>
 
@@ -310,7 +361,8 @@ Package
 What the push also does
   Registers an installed application named "CreatioPackages" on the environment (the workspace has no
   application descriptor); later pushes of this workspace update it.
-  Takes one to three minutes. No compilation and no restart.
+  Takes one to three minutes. <No compilation and no restart. | EXISTING package with a C# project:
+  the package is compiled, and its project files are added to it.>
 
 Script
   Files/src/mobile/<ModuleName>/main.js — <size> bytes, staged in the workspace

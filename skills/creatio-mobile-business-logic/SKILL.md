@@ -59,9 +59,11 @@ Run every check before the Load order. Each failed check is a **STOP** with its 
    Never install or upgrade Node.js yourself.
 
 3. **Environment.** Call `list-environments` and confirm the target environment is registered. Then
-   call `list-package-files` for any package that exists on it: the workspace and package-file tools
-   need cliogate, and this call is the probe. When it answers that cliogate is missing or too old, ask
-   the developer to run `clio install-gate -e <environment>` and retry — do not run it unasked.
+   call `list-package-files` for a package on it that carries files: the workspace and package-file
+   tools need cliogate, and this call is the probe. One failed call is not the verdict — a package
+   with no `Files` folder fails with the same gate message — so repeat it on a second package. Only
+   when both fail, ask the developer to run `clio install-gate -e <environment>` and retry — do not
+   run it unasked.
 
 ## Load order
 
@@ -77,9 +79,11 @@ Run every check before the Load order. Each failed check is a **STOP** with its 
 3. Read `../../context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics.
 4. **Before editing a mobile page body** (wiring a button to a request, adding a data source): call clio
    `get-guidance` with name `mobile-page-modification`, then **invoke the `creatio-ui-guidelines`
-   skill** and apply its mobile-relevant rules to anything visible you add. A module that only shows
-   its own dialogs changes no page body and does not trigger this step; the playbook's text rule
-   covers what such a dialog says.
+   skill** and apply its mobile-relevant rules to anything visible you add. When the logic plan
+   itself adds something the user sees on a page — a button, a list, a caption — do both **before
+   presenting the plan**, so the plan names components and texts that already follow those rules. A
+   module that only shows its own dialogs changes no page body and does not trigger this step; the
+   playbook's text rule covers what such a dialog says.
 5. Call clio `get-guidance` with name `list`. When the catalog carries `mobile-remote-module`, read it:
    it owns the Creatio-side mechanics (package placement, page wiring) and wins over the playbook on
    those. When it is absent, the playbook's own mechanics apply — that is not a blocker.

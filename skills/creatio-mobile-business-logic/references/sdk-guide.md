@@ -34,8 +34,12 @@ Anything the declarations do not export does not exist for a module, whatever a 
 - **Every SDK call is asynchronous.** Reading an attribute, opening a dialog, loading data — each
   crosses into the native app. Always `await` them.
 - **A handler instance lives for one call.** Fields set in `handle()` are gone by the next request.
-  State that must outlive a call lives in a module-level variable, and is cleared when the page it
-  belongs to closes.
+  State that must outlive a call lives in a module-level variable.
+- **Module state is one value for the whole app.** Every page and every record sees the same
+  module-level variable, and it lasts until the app restarts — closing a page does not clear it. Key
+  it by record when it belongs to a record, and plan for it being empty after a restart.
+- **No `Intl`.** The engine on Android has no `Intl` object, and `toLocaleString` is not locale-aware
+  there. Format dates and numbers by hand.
 - **No network client.** The SDK offers no authenticated HTTP call. Reach the server through the data
   model, or through a business process started with `RunBusinessProcessRequest`.
 - **A thrown error is logged without its origin.** The app log records the message and a line number,
@@ -112,7 +116,7 @@ most often:
 | An attribute changes | `crt.HandleViewModelAttributeChangeRequest` (`attributeName`, `value`, `oldValue`) |
 | The record is saved | `crt.SaveRecordRequest` |
 | Unsaved changes are cancelled | `crt.CancelRecordChangesRequest` |
-| The page closes | `crt.ClosePageRequest` |
+| The page closes after a save, a cancelled edit or a delete | `crt.ClosePageRequest` |
 | A record is created, opened, copied, deleted | `crt.CreateRecordRequest`, `crt.UpdateRecordRequest`, `crt.CopyRecordRequest`, `crt.DeleteRecordRequest` |
 | A detail item is created, changed, deleted | `crt.CreateListItemRequest`, `crt.UpdateListItemRequest`, `crt.DeleteListItemRequest` |
 | The app synchronizes | `crt.AppSyncRequest` |
@@ -123,6 +127,9 @@ handler with `BaseRequest`. Its parameters arrive as plain properties of the req
 Set values that depend on loaded data **after** the load: call `this.next?.handle(request)` first in a
 `crt.LoadDataRequest` handler, then read and write attributes. Set filter attributes that shape the
 load **before** it.
+
+Leaving a page with the back arrow sends no request. A handler on `crt.ClosePageRequest` therefore
+does not learn that the user went back, and nothing tells a module that a page is gone.
 
 ## Custom requests
 
@@ -206,7 +213,7 @@ await context.setAttributePropertyValue('UsrCloseReason', 'visible', true);
 const isRequired = await context.getAttributePropertyValue('UsrCloseReason', 'required');
 
 // Localized text from the page's resources; null when the key is not declared on that page.
-const message = (await context.getResourceString('UsrAmountRequired_message')) ?? 'Enter the amount.';
+const message = (await context.getResourceString('UsrAmountRequired_message')) ?? 'Enter the amount';
 ```
 
 - A value written with `setAttribute` in a `crt.SaveRecordRequest` handler, before the next handler is
@@ -288,7 +295,7 @@ export class UsrOrderSaveGuard extends BaseRequestHandler<SaveRecordRequest> {
 			return true;
 		}
 		const config: BaseDialogConfig = {
-			message: 'Amount must be greater than zero.',
+			message: 'Amount must be greater than zero',
 			actions: [{ key: 'ok', config: { caption: 'OK', color: 'primary' } }],
 		};
 		await new DialogService(context).open(config);
@@ -481,6 +488,9 @@ export class UsrOrderHintsDataSource extends BaseVirtualDataSource {
   field as optional and honour paging when the list can be long.
 - Every returned record carries the primary attribute, and the display attribute when the page shows
   it.
+- **The source is not told which page or record it serves.** `operation` describes the read, not the
+  page. Unless the module arranges otherwise, the source returns the same rows on every page that
+  uses it, on every record.
 
 ### Virtual data source on a page
 
@@ -520,6 +530,112 @@ The page declares a data source of type `crt.VirtualDataSource` and names the cl
 Read `get-guidance mobile-page-modification` for the exact diff shape the target page uses before
 editing it.
 
+### A list fed by a virtual data source
+
+A source that feeds a list is declared with `"scope": "viewElement"`, next to the page's own data
+source:
+
+```json
+"modelConfigDiff": [
+  {
+    "operation": "merge",
+    "path": ["dataSources"],
+    "values": {
+      "UsrOrderHintsDS": {
+        "type": "crt.VirtualDataSource",
+        "scope": "viewElement",
+        "config": {
+          "virtualDataSourceType": "UsrOrderHintsDataSource",
+          "primaryAttributeName": "Id",
+          "primaryDisplayAttributeName": "Name",
+          "parameters": {
+            "Id": { "caption": "Id", "dataValueTypeName": "Guid" },
+            "Name": { "caption": "Hint", "dataValueTypeName": "Text" },
+            "Details": { "caption": "Details", "dataValueTypeName": "Text" }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+The list reads a collection attribute, and the attributes of one row are declared **inside** that
+collection, not next to it:
+
+```json
+"viewModelConfigDiff": [
+  {
+    "operation": "merge",
+    "path": ["attributes"],
+    "values": {
+      "UsrOrderHintsItems": {
+        "isCollection": true,
+        "modelConfig": { "path": "UsrOrderHintsDS" },
+        "viewModelConfig": {
+          "attributes": {
+            "UsrOrderHintsDS_Id": { "modelConfig": { "path": "UsrOrderHintsDS.Id" } },
+            "UsrOrderHintsDS_Name": { "modelConfig": { "path": "UsrOrderHintsDS.Name" } },
+            "UsrOrderHintsDS_Details": { "modelConfig": { "path": "UsrOrderHintsDS.Details" } }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+The component names the collection and lays out one row from the row attributes:
+
+```json
+{
+  "operation": "insert",
+  "name": "UsrOrderHintsList",
+  "parentName": "<container on the page>",
+  "propertyName": "items",
+  "index": 0,
+  "values": {
+    "type": "crt.List",
+    "items": "$UsrOrderHintsItems",
+    "scrollable": false,
+    "blankSlateText": "#ResourceString(UsrOrderHintsList_blankSlateText)#",
+    "itemLayout": {
+      "type": "crt.ListItem",
+      "name": "UsrOrderHintsListItem",
+      "title": "$UsrOrderHintsDS_Name",
+      "body": [],
+      "subtitles": [
+        { "name": "UsrOrderHintsDetails", "value": "$UsrOrderHintsDS_Details", "label": { "isVisible": true } }
+      ],
+      "showEmptyValues": false
+    }
+  }
+}
+```
+
+A subtitle whose label is visible shows the `caption` of the source parameter it is bound to.
+
+### Reloading the list from code
+
+A source serves data when the page asks for it. After a handler changes what the source would return,
+it asks the page to read that one source again:
+
+```ts
+import { HandlerChainService, LoadDataRequest, RefreshMode } from '@creatio/mobile-common';
+
+await HandlerChainService.instance.process({
+	type: 'crt.LoadDataRequest',
+	$context: request.$context,
+	scopes: request.scopes,
+	refreshDataConfig: {
+		mode: RefreshMode.RefreshSpecific,
+		targetDataSourceNames: ['UsrOrderHintsDS'],
+	},
+} as LoadDataRequest);
+```
+
+`targetDataSourceNames` takes the data source names the page declares, not the registered class name.
+
 ## The module class
 
 One class per project ties everything together; see `./project-layout.md` for the entry file. The name
@@ -536,6 +652,9 @@ passed to `bootstrapCrtModule` equals the project folder name and the class name
 - [ ] No `window`, `document`, `console.info`, `console.debug`, `fetch`-based server call or web SDK
       import.
 - [ ] Device services and server calls handle refusal, cancellation and a missing connection.
+- [ ] State kept at module level is keyed by what it belongs to, and nothing depends on a page closing
+      to clear it.
+- [ ] Dates and numbers are formatted without `Intl`.
 - [ ] Attribute reads and writes go through a typed `ExecutionContext` and every write is awaited.
 - [ ] Every thrown error message starts with the module and handler name.
 - [ ] The rule itself is a plain function the local behaviour check can run.

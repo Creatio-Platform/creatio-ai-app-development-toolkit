@@ -29,8 +29,19 @@ The rules below are pinned because breaking any of them is silent for CI and fat
 
 9. A step the flow tells the agent to run before a gate is not on that gate's forbidden list, and
    every example names a handler the way the naming rule says.
+
+10. What a module keeps in memory is described as it behaves on a device: one value for the whole
+    app, alive until the app restarts, and unknown to a virtual data source's page. A module built
+    on the opposite belief shows one record's data on another record.
+
+11. A module delivered into a package the environment already has is not described as a script-only
+    delivery: the staged script does not survive a restore, a package with a C# project is compiled,
+    and a compilation that fails after the installation is not a failed delivery.
+
+12. The plan that names what the user sees is written with the UI rules already loaded.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -241,6 +252,79 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             "a module that blocks nothing and normalizes nothing must fail the check\n"
             + result.stdout + result.stderr)
         self.assertIn("5 cases, 3 failed", result.stdout)
+
+    def test_module_state_is_described_as_it_behaves_on_a_device(self):
+        guide = read(SDK_GUIDE)
+        self.assertIn("one value for the whole app", guide)
+        self.assertIn("closing a page does not clear it", guide)
+        self.assertNotIn(
+            "cleared when the page", guide,
+            "module-level state outlives the page: it lasts until the app restarts")
+        self.assertRegex(
+            guide, r"back arrow sends no request",
+            "a handler cannot rely on a close request to learn that the user left a page")
+        self.assertIn(
+            "not told which page or record", guide,
+            "a virtual data source returns the same rows on every record unless the module "
+            "arranges otherwise")
+        plan = read(PLAYBOOK).split("## Plan format (Gate L)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(
+            "Data kept by the module", plan,
+            "the developer approves whether the data is shared by every record")
+        self.assertIn("Assumes", plan)
+
+    def test_a_list_on_a_virtual_data_source_is_shown_in_full(self):
+        guide = read(SDK_GUIDE)
+        section = guide.split("### A list fed by a virtual data source", 1)[1].split("\n## ", 1)[0]
+        for part in ('"scope": "viewElement"', '"isCollection": true', '"viewModelConfig"', '"crt.List"'):
+            self.assertIn(part, section, "the list example must carry %s" % part)
+        self.assertIn("RefreshMode.RefreshSpecific", section)
+        self.assertIn(
+            "targetDataSourceNames", section,
+            "a handler that changed the data has to make the page read the source again")
+
+    def test_json_examples_are_well_formed(self):
+        for path in (LAYOUT, SDK_GUIDE):
+            for block in fenced_blocks(read(path), "json"):
+                text = block.strip()
+                if not text.startswith(("{", "[")):
+                    text = "{%s}" % text
+                try:
+                    json.loads(text)
+                except ValueError as error:
+                    self.fail("%s: a json example does not parse: %s\n%s" % (path.name, error, block))
+
+    def test_an_existing_package_delivery_states_what_differs(self):
+        playbook = read(PLAYBOOK)
+        section = playbook.split("## A module inside an existing package", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(
+            "Every restore removes the staged script", section,
+            "a push after a restore without staging again delivers no script")
+        self.assertIn("is compiled", section)
+        self.assertIn(
+            "Starting a compilation is the developer's decision", section,
+            "the agent never compiles an environment on its own")
+        self.assertRegex(
+            section, r"Pages are wired after the push",
+            "a push after `update-page` from a stale workspace copy puts the old page back")
+        deliver = playbook.split("### 9. Deliver", 1)[1].split("\n### 10.", 1)[0]
+        self.assertRegex(
+            deliver, r"non-zero exit code with no `Application installed successfully`",
+            "a compilation that fails after the installation is not a failed delivery")
+        plan = playbook.split("## Delivery plan format (Gate D)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("C# project", plan)
+
+    def test_visible_page_changes_are_designed_before_the_plan(self):
+        load_order = read(SKILL).split("## Load order", 1)[1].split("\n## ", 1)[0]
+        self.assertRegex(
+            load_order, r"before\s+presenting the plan",
+            "a plan that names a button or a list is written with the UI rules loaded")
+
+    def test_the_gate_probe_is_not_decided_by_one_package(self):
+        preflight = read(SKILL).split("## Load order", 1)[0]
+        self.assertRegex(
+            preflight, r"repeat it on a second package",
+            "a package without files fails the probe the same way a missing gate does")
 
     def test_the_script_is_staged_before_the_delivery_plan(self):
         playbook = read(PLAYBOOK)
