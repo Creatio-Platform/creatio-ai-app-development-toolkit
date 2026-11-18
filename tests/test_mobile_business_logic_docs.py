@@ -179,14 +179,12 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
 
     def test_json_examples_are_well_formed(self):
         for path in (LAYOUT, SDK_GUIDE):
-            for block in fenced_blocks(read(path), "json"):
+            for index, block in enumerate(fenced_blocks(read(path), "json")):
                 text = block.strip()
                 if not text.startswith(("{", "[")):
                     text = "{%s}" % text
-                try:
+                with self.subTest(document=path.name, json_block=index):
                     json.loads(text)
-                except ValueError as error:
-                    self.fail("%s: a json example does not parse: %s\n%s" % (path.name, error, block))
 
     def test_code_examples_import_the_mobile_sdk_only(self):
         for path in (LAYOUT, SDK_GUIDE):
