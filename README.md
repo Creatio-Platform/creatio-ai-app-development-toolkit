@@ -15,6 +15,7 @@ Prerequisites:
 - An AI coding agent supported by the installer, or another MCP-capable coding agent for manual use.
 - [clio](https://github.com/Advance-Technologies-Foundation/clio) installed and available in `PATH`.
 - Access to a running Creatio instance for implementation after Business Plan approval.
+- For custom business logic in the Creatio Mobile app: Node.js 22 or newer with npm, to build the remote module.
 
 There are three ways to install — pick one.
 

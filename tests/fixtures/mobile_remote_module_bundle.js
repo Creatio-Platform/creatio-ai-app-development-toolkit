@@ -40,7 +40,7 @@
 				return this.next?.handle(request);
 			}
 			if (!isValidVin(vin)) {
-				await new sdk.DialogService().open({
+				await new sdk.DialogService(context).open({
 					message: 'Check the VIN: it has 17 characters and a check digit.',
 					actions: [{ key: 'ok', config: { caption: 'OK' } }],
 				});

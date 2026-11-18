@@ -144,6 +144,8 @@ Use the mobile business-logic flow when a mobile Freedom UI page needs behaviour
 
 The `creatio-app-orchestrator` skill owns this flow end to end: follow `runbooks/04-mobile-business-logic.md`, which runs its own preflight and its own gates (Gate L, Gate D). It produces no Business Plan, so Gate P and Gate R do not apply. A condition a business rule can express is not such a request — keep it on the standard rule path.
 
+Precedence for logic on web and mobile pages: a request for the same behaviour on a web page and its mobile page is one run of this flow, with one Gate L and one Gate D; `runbooks/04-web-and-mobile-logic.md` adds the web part and splits the work between helper subagents. When the request also creates or changes an app or a section, the app workflow owns it and Gate P and Gate R apply: the logic is a Business Plan item, and `runbooks/03-app-implementation.md` hands it to runbook 04 after the pages exist, where Gate R stands in for Gate L and Gate D still applies. Logic on a web page only is not this flow.
+
 Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, favicon, background) with no business-logic component; when in doubt, treat it as app work, not branding.
 
 ## Support Mode (Troubleshooting)

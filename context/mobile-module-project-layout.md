@@ -19,8 +19,9 @@ what the Mobile app's script runtime requires, not a matter of taste.
         └── out/mobile/<ModuleName>/main.js                ← build output
 ```
 
-`<ModuleName>` is one PascalCase word that starts with the environment's schema prefix — `UsrOrderLogic`
-on an environment whose prefix is `Usr`, `OrderLogic` on one with an empty prefix. The same string names the project folder, the delivered folder, the module class and
+`<ModuleName>` is one PascalCase word that starts with the customer prefix — `UsrOrderLogic` on an
+environment whose prefix is `Usr`; the runbook's naming rule says which prefix applies when the
+environment has none. The same string names the project folder, the delivered folder, the module class and
 the first argument of `bootstrapCrtModule`. The device derives the module name from the delivered
 folder, so a mismatch leaves the module unregistered.
 
@@ -36,26 +37,33 @@ folder, so a mismatch leaves the module unregistered.
     "typecheck": "tsc --noEmit",
     "build": "webpack"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@creatio/mobile-common": "<version>"
   },
   "devDependencies": {
-    "ts-loader": "^9.5.1",
-    "typescript": "^5.4.5",
-    "webpack": "^5.91.0",
-    "webpack-cli": "^5.1.4"
+    "ts-loader": "^9.6.2",
+    "typescript": "^6.0.3",
+    "webpack": "^5.112.2",
+    "webpack-cli": "^7.3.1"
   }
 }
 ```
 
 - `name` is the module name in kebab-case.
-- **Use the newest published `@creatio/mobile-common`, written as its exact version number**
-  (`npm view @creatio/mobile-common version`), not as the `latest` tag, so the build is repeatable.
+- **Use the newest published `@creatio/mobile-common`, written as its exact version number** — the
+  version whose declarations were read before the plan — not as the `latest` tag, so the build is
+  repeatable and the report names the version the module was built against.
   The package is type declarations only; the running SDK is the one inside the Mobile app, and the
   flow assumes the users run the latest app. Take an older version only when the developer names an
   older app: the newest one whose `CHANGELOG.md` heading names a Creatio Mobile version that is not
   newer than that app, or, when the app is older than every version the changelog names, the newest
   one that precedes the oldest such heading.
+- The build tools are the newest releases that build this layout: TypeScript 6 (`ts-loader` does not
+  run TypeScript 7 yet), webpack 5 and webpack-cli 7, on Node.js 22 or newer. Write them as above;
+  `npm install` takes the newest release within each range.
 - Add a third-party library with `npm install <name>` only when the logic needs it. Its code is bundled
   into `main.js`, so it must run without a DOM and without Node.js built-ins.
 
@@ -65,7 +73,7 @@ folder, so a mismatch leaves the module unregistered.
 {
   "compilerOptions": {
     "module": "ES2020",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "target": "es2019",
     "lib": ["es2020"],
     "strict": true,
@@ -81,6 +89,8 @@ folder, so a mismatch leaves the module unregistered.
 
 - `experimentalDecorators` and `emitDecoratorMetadata` are required: the SDK registers handlers,
   requests, data sources and modules through decorators.
+- `moduleResolution: "bundler"` matches how webpack resolves imports; the older `"node"` value is
+  deprecated in TypeScript 6.
 - `target` stays `es2019`. The script runs in the app's embedded JavaScript engine, not in a browser.
 - `lib` has no `dom` entry on purpose: the engine has no DOM, and leaving it out makes the compiler
   reject `window`, `document` and similar at build time.

@@ -11,8 +11,8 @@ hand on a phone.
 ## How it works
 
 The bundle expects a global named `crtSdk` and nothing else. The script below provides one whose
-decorators record what the module registers, loads the bundle into an empty context (no DOM, no
-`console`, as on a device), and calls a handler the way the app does: with a request that carries a
+decorators record what the module registers, loads the bundle into a context that holds only what a
+device gives a script (no DOM, and a `console` with `log`, `warn` and `error` only), and calls a handler the way the app does: with a request that carries a
 page context, and a next handler that stands for the app's built-in behaviour.
 
 Save it next to the project as `check-behaviour.cjs` and adapt the three marked places.
@@ -40,6 +40,7 @@ const crtSdk = {
 	CrtModule: () => () => {},
 	bootstrapCrtModule: () => {},
 	DialogService: class {
+		constructor(context) { this.context = context; }
 		async open(config) {
 			dialogs.push(config.message);
 			return dialogAnswer === undefined ? config.actions[0].key : dialogAnswer;
@@ -49,7 +50,10 @@ const crtSdk = {
 	HandlerChainService: { instance: { process: async (request) => { sent.push(request.type); return true; } } },
 };
 
-vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), vm.createContext({ crtSdk }), { filename: 'main.js' });
+// As on a device: console.info and console.debug are undefined, so a call to them fails here too.
+const deviceConsole = { log: console.log, warn: console.warn, error: console.error };
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), vm.createContext({ crtSdk, console: deviceConsole }),
+	{ filename: 'main.js' });
 
 // options.request — the request's own fields, such as attributeName for an attribute change;
 // options.dialogAnswer — the action key the user picks, or null for a dismissed dialog.

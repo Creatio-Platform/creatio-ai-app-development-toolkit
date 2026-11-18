@@ -36,7 +36,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Agent 1 | `runbooks/01-environment-setup.md`, `context/essentials.md` | `docs://mcp/guides/agent-execution` | environment setup, local runtime rules, DataForge availability check |
 | Agent 2 | `runbooks/02-requirements-gathering.md`, `context/business-checklist.md`, `context/model-discovery-evidence.md` | — | BA discovery, pre-analysis, Gate R approval, Technical Implementation Handoff |
 | Agent 3 | `runbooks/03-app-implementation.md`, `context/essentials.md` | `docs://mcp/guides/app-modeling` | post-Gate-R scaffolding, transient section-creation failure playbook, entity/page/data modeling |
-| Mobile business logic | `runbooks/04-mobile-business-logic.md`, `context/mobile-sdk-guide.md`, `context/mobile-module-project-layout.md`, `context/mobile-module-behaviour-check.md` | `mobile-remote-module` (via `get-guidance`) | custom business logic for the Creatio Mobile app as a remote module: preflight, Gate L, build and local behaviour check, Gate D, delivery through clio, device check |
+| Mobile business logic | `runbooks/04-mobile-business-logic.md` (with `runbooks/04-web-and-mobile-logic.md` when the web page needs the same behaviour), `context/mobile-sdk-guide.md` (and the parts under `context/mobile-sdk/` it names), `context/mobile-module-project-layout.md`, `context/mobile-module-behaviour-check.md` | `mobile-remote-module` (via `get-guidance`) | custom business logic for the Creatio Mobile app as a remote module: preflight, Gate L, build and local behaviour check, Gate D, delivery through clio, device check |
 | Support run | `AGENTS.md` (Support Mode sections) | `docs://mcp/guides/support-mode` | diagnostic-first behavior, severity routing, fail-fast evidence |
 
 Reading rules:
@@ -52,6 +52,10 @@ Reading rules:
 | BA checklist | `context/business-checklist.md` | required business plan shape and completeness |
 | Platform basics and canonical flows | `context/essentials.md` | high-level workflow only |
 | `Usr` prefixes, casing, GUIDs, binding naming | `context/naming-conventions.md` | naming policy |
+| Mobile SDK as the API reference, runtime rules, handlers, page context | `context/mobile-sdk-guide.md` | read before writing remote module code |
+| One mobile SDK mechanism with its worked example | `context/mobile-sdk/custom-requests.md`, `context/mobile-sdk/computed-text.md`, `context/mobile-sdk/blocking-save.md`, `context/mobile-sdk/data-and-server.md`, `context/mobile-sdk/virtual-data-sources.md` | read the parts the plan's mechanisms need |
+| Remote module project and build settings | `context/mobile-module-project-layout.md` | read before creating the module project |
+| Running the built module under Node with a stub SDK | `context/mobile-module-behaviour-check.md` | read before verifying the build; its table becomes the device check |
 | Local clio CLI commands | `context/clio-cli-reference.md` | environment setup, package management, dev tools |
 | DataForge tool parameter contract and response fields | `context/model-discovery-evidence.md` | DataForge tool reference for Agent 1 availability check |
 | Product telemetry consent, events, and payload | `context/product-telemetry.md` | consent flow, the payload fields, the flow-agnostic stage vocabulary, and the `workflow` values that identify each flow (app-creation, classic-to-freedom-migration, mobile-page-conversion, mobile-business-logic, branding, app-maintenance) |

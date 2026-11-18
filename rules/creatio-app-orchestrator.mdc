@@ -1,5 +1,5 @@
 ---
-description: 'Use when the user asks to create, generate, scaffold, build, add, or plan a Creatio app or a new section — for example "create a Todo app" or "add an Orders section" — or needs custom business logic in the Creatio Mobile app: a handler on a mobile page (save, load, attribute change), a button action, a virtual data source, or a web page handler that must work on mobile. Apply proactively for any new-app, new-section or mobile-logic request, even when not explicitly selected: this rule is the entrypoint that produces the Creatio app Business Plan and technical implementation handoff and then applies the approved plan through clio MCP, and that plans, builds and delivers mobile logic as a remote module behind its own approval gates. Keywords: mobile business logic, mobile handler, remote module, mobile SDK, mobile-common, CrtRequestHandler, custom request, virtual data source, validation on save in mobile, button action in mobile.'
+description: 'Use when the user asks to create, generate, scaffold, build, add, or plan a Creatio app or a new section — for example "create a Todo app" or "add an Orders section" — or needs custom business logic in the Creatio Mobile app: a handler on a mobile page (save, load, attribute change), a button action, a virtual data source, a web page handler that must work on mobile, or the same logic on a web and a mobile page. Apply proactively for any new-app, new-section or mobile-logic request, even when not explicitly selected: this rule is the entrypoint that produces the Creatio app Business Plan and technical implementation handoff and then applies the approved plan through clio MCP, and that plans, builds and delivers mobile logic as a remote module behind its own approval gates. Keywords: mobile business logic, mobile handler, remote module, mobile SDK, mobile-common, CrtRequestHandler, custom request, virtual data source, validation on save in mobile, button action in mobile.'
 alwaysApply: false
 ---
 
@@ -14,10 +14,20 @@ directory that contains AGENTS.md, which is the parent of the `rules/` folder
 this file lives in (`../` from this file). Resolve every path below against that
 toolkit root, not your current working directory.
 
-If you cannot read `../AGENTS.md`, STOP: tell the user the CAADT toolkit files
-are not accessible from this session, and do not produce a plan from memory.
+If you cannot read the first file your route needs — `../AGENTS.md`, or
+`../runbooks/04-mobile-business-logic.md` on the mobile-logic route below — STOP: tell the
+user the CAADT toolkit files are not accessible from this session, and do not produce a plan from
+memory.
 
 ## Load Order
+
+**Custom mobile business logic takes a short route.** When the request is only business logic for
+the Creatio Mobile app — a handler on a mobile page, a button action, a virtual data source, also
+when the same behaviour is wanted on the web page — read
+`../runbooks/04-mobile-business-logic.md` and follow it end to end. It runs its own preflight and
+names every other file it needs, telemetry included; the steps below belong to app creation and app
+changes, so do not read them for that request. A request that also creates or changes an app, a
+section or a web page takes the full order.
 
 1. Read `../AGENTS.md` for the active orchestration contract.
 2. Read `../context/product-telemetry.md` for telemetry consent, event checkpoints, and payload shape.
@@ -85,7 +95,7 @@ Telemetry is non-blocking: never let it gate or delay the user's task, and if cl
 
 - Pages are separate for web and mobile: before any page edit, read `../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
 - **Lookup/enum values are package data, never a runtime write.** Seed them inline via `sync-schemas`'s row-seeding parameter (name resolved via `get-tool-contract`) when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside that batch — both are DB-first and install immediately, no compile step involved. Never seed lookup values through runtime OData/DataService calls or raw SQL: those bypass the platform, so the row lands in the table but the value doesn't surface as real package data. Details: `../context/essentials.md`, "Data Binding And Schema Inspection".
-- **Custom mobile business logic is a gated flow of this rule.** Whenever a mobile Freedom UI page needs behaviour that business rules and built-in converters cannot express (reacting to save / load / attribute change, a button action, data no entity holds, a web page handler that has to work on mobile), read `../runbooks/04-mobile-business-logic.md` and follow it end to end: Gate L before any code is generated, Gate D before any write to Creatio. Do not author handler code inside a mobile page body, and do not write a remote module from memory.
+- **Custom mobile business logic is a gated flow of this rule.** Whenever a mobile Freedom UI page needs behaviour that business rules and built-in converters cannot express (reacting to save / load / attribute change, a button action, data no entity holds, a web page handler that has to work on mobile), read `../runbooks/04-mobile-business-logic.md` and follow it end to end: Gate L before any code is generated, Gate D before any write to Creatio. When the same behaviour is also needed on a web page, the run has a web part: `../runbooks/04-web-and-mobile-logic.md`. Do not author handler code inside a mobile page body, and do not write a remote module from memory.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../AGENTS.md`.
 - Follow `../context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio telemetry tools.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.

@@ -35,8 +35,8 @@ export function reminder(sessionId) {
 		'Do not spell a stage from memory and do not invent a per-flow name such as migration_plan_approved:',
 		'clio validates event_name against a closed allow-list and rejects anything else.',
 		'',
-		'The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT exempt',
-		'them from telemetry - their emission points are their own gates, listed in',
+		'The migration, mobile-conversion, mobile-business-logic and branding flows are exempt from Gate P/R.',
+		'That does NOT exempt them from telemetry - their emission points are their own gates, listed in',
 		'context/product-telemetry.md.',
 		'',
 		'Then continue the task. Never let telemetry gate, delay, or alter the work.'

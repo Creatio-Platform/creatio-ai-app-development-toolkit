@@ -11,7 +11,11 @@ entity holds. In the Creatio Mobile app that code is a **remote module** — a T
 the `@creatio/mobile-common` SDK into one script that a Creatio package carries to the device.
 
 This is a **targeted, implementation-ready change**: it produces no BA-style Business Plan, and Gate P
-and Gate R do not apply to it.
+and Gate R do not apply to it. When the logic is an item of a Business Plan that app creation is
+applying, "Entered from app creation" below says what changes.
+
+When the same behaviour is also needed on a Freedom UI **web** page, this runbook still owns the run,
+and `runbooks/04-web-and-mobile-logic.md` adds the web part and splits the work between helpers.
 
 ## What this flow can and cannot deliver
 
@@ -40,10 +44,10 @@ orchestrator's clio MCP availability preflight comes first; these checks add wha
    > `dotnet tool update clio -g`
    > then re-run this request.
 
-2. **Local toolchain.** Run `node --version` and `npm --version`. The build needs Node.js 20 or newer
+2. **Local toolchain.** Run `node --version` and `npm --version`. The build needs Node.js 22 or newer
    with npm. If either is missing or older, tell the user verbatim:
 
-   > Building a mobile remote module needs Node.js 20 or newer with npm on this machine. Install it from
+   > Building a mobile remote module needs Node.js 22 or newer with npm on this machine. Install it from
    > https://nodejs.org, then re-run this request.
 
    Never install or upgrade Node.js yourself.
@@ -58,10 +62,12 @@ orchestrator's clio MCP availability preflight comes first; these checks add wha
 ## Load order
 
 0. Read clio `get-guidance` with name `core-rules` and name `routing`, as the clio server requires
-   before any operation. `routing` has no entry for this flow; this runbook is the route.
+   before any operation. Whether `routing` names `mobile-remote-module` or not, step 5 decides
+   which guide owns the Creatio-side mechanics.
 1. Read this runbook to the end. It defines the flow, the approval gates (Gate L, Gate D), the tool
    sequence, the plan and report formats and the device check. Follow it exactly.
-2. Read `context/mobile-sdk-guide.md` before writing any module code,
+2. Read `context/mobile-sdk-guide.md` before writing any module code, and the parts under
+   `context/mobile-sdk/` that its table names for the mechanisms the plan uses;
    `context/mobile-module-project-layout.md` before creating the project, and
    `context/mobile-module-behaviour-check.md` before verifying the build. The installed SDK type
    declarations are the source of truth for the API; the guide says where they are and how to read
@@ -79,9 +85,13 @@ orchestrator's clio MCP availability preflight comes first; these checks add wha
    inputs exist on a mobile page; a guideline that needs one the catalog does not have — a tooltip
    on a label, a web action-button container — does not apply, and the plan need not mention it.
 5. Call clio `get-guidance` with name `list`. When the catalog carries `mobile-remote-module`, read it:
-   it owns the Creatio-side mechanics (package placement, page wiring) and wins over this runbook
-   on those. When it is absent, this runbook's own mechanics apply — that is not a blocker.
+   it owns the Creatio-side mechanics (the script contract, delivery, page wiring) and wins over this
+   runbook on those. Which package the module goes into is this runbook's rule (step 5) whatever the
+   installed guide says. When the guide is absent, this runbook's own mechanics apply — that is not a
+   blocker.
 6. Resolve every clio MCP tool contract through `get-tool-contract`; do not hardcode payloads.
+7. When the request also needs the behaviour on a web page, read `runbooks/04-web-and-mobile-logic.md`
+   before step 2 of the flow. The web mechanics it routes to are read by its helpers, not here.
 
 ## Product telemetry — emit the shared stages with `workflow: "mobile-business-logic"`
 
@@ -181,7 +191,7 @@ into `args`, and a second `args` object nested inside is rejected as an unsuppor
 | Read a feature state | `odata-read` |
 | Read the file system mode | `get-fsm-mode` |
 | Bring an existing package into the workspace | `restore-workspace` |
-| Create the local workspace and its code package | `create-workspace`, `add-package` |
+| Create the local workspace and bring in the page's package (or add a code package) | `create-workspace`, `restore-workspace`, `add-package` |
 | Deliver the workspace to the environment | `push-workspace` |
 | Confirm the script on the environment | `list-package-files`, `get-package-file` |
 | Check a page change without saving it | `validate-page`, `update-page` with `dry-run: true` |
@@ -202,7 +212,8 @@ copy. `adb` is run only when the developer asks for the check on an emulator or 
 
 Restate the behaviour in one or two sentences and name the page it applies to. If the request does not
 say which page, or names a web page only, ask — web and mobile pages are separate schemas, and a module
-attaches to mobile page schema names.
+attaches to mobile page schema names. When the answer is "both", the run has a web part: follow
+`runbooks/04-web-and-mobile-logic.md` from here on.
 
 When the request points at behaviour a web page already has — "make it work like the web page", a page
 conversion report listing a handler that was not transferred, a button removed because its request is
@@ -217,6 +228,7 @@ Everything in this step is read-only and happens before Gate L, because the plan
 1. `get-page` for each mobile page involved. Pass `output-directory` (a scratch folder): the tool writes
    the page files to disk and the workspace does not exist yet. Record:
    - the **schema name** — it becomes the handler scope;
+   - the **package** that holds the page, `page.packageName` — the module goes into it (step 5);
    - the **attribute names** the logic reads or writes, as declared in `viewModelConfigDiff`;
    - the **data source names** in `modelConfigDiff`;
    - the **component names** the logic shows, hides or locks.
@@ -230,8 +242,10 @@ Everything in this step is read-only and happens before Gate L, because the plan
    says how to read them. Plan only with classes and methods you found there, and note the app version
    each of them needs.
 5. Names and facts the plan states:
-   - `get-schema-name-prefix` — the environment's prefix, which may be empty;
-   - `list-packages` — the package name you are about to propose is not taken;
+   - `get-schema-name-prefix` — the environment's prefix; when it is empty, the plan proposes one
+     (see "Names" in step 6);
+   - `list-packages` — the `maintainer` of the page's package, which decides where the module goes
+     (step 5); for a separate code package, that the name you propose is not taken;
    - `get-sys-setting` for `Maintainer` — needed to tell the developer how the package will arrive
      (see step 9);
    - `odata-read` on the `Feature` entity filtered by `Code` = `EnableMobileSDK`, and its state rows in
@@ -244,18 +258,20 @@ Everything in this step is read-only and happens before Gate L, because the plan
    (`get-related-page-addon` with `schema-type: "mobile"` and the `package-name` of the object's
    package). When neither shows the page, ask the developer how users reach it before going further.
 7. Find the modules that already act on the page. Every module on the device shares the page's
-   requests, so the new logic runs next to them, and no tool lists them across packages. Look in:
-   - the packages of the application the page belongs to (`get-app-info`);
-   - the packages whose `maintainer` in `list-packages` equals the environment's `Maintainer`
-     setting — the customer's own packages, where earlier deliveries of this flow sit. Read every
-     page of the list while `truncated` is true.
-
-   For each, `list-package-files`: a path `src/mobile/<ModuleName>/main.js` is a module, and a
-   package without files fails the call and is skipped. Read each script with `get-package-file` and
-   search it for the page's schema name and for the request types the new logic handles. Record
-   every handler found — its `type`, its `requestType` and its `scopes`; a handler with no `scopes`
-   runs on every page, this one included. A script of a few bytes that registers nothing is a
-   retired module.
+   requests, so the new logic runs next to them, and no tool lists them across packages.
+   - **Read** the modules in the packages of the application the page belongs to (`get-app-info`),
+     the page's own package included — that is where modules for this page are delivered. For each
+     package, `list-package-files`: a path `src/mobile/<ModuleName>/main.js` is a module, and a
+     package without files fails the call and is skipped. Read each script with `get-package-file`
+     and record every handler it registers — its `type`, its `requestType` and its `scopes`; a
+     handler with no `scopes` runs on every page, this one included. A script of a few bytes that
+     registers nothing is a retired module.
+   - **List, do not read,** the modules in the customer's other packages — those whose `maintainer`
+     in `list-packages` equals the environment's `Maintainer` setting; read every page of the list
+     while `truncated` is true. `list-package-files` names their modules without loading the
+     scripts. They serve other pages; a handler among them without `scopes` would still run here,
+     so the plan names them under "Already on the page" as not read. Read one only when the
+     developer asks or when the device check shows behaviour the plan does not explain.
 
 Never guess an attribute or component name: a handler that addresses a name the page does not declare
 fails silently on the device.
@@ -271,7 +287,7 @@ Prefer the simplest thing that runs offline and needs no code.
 | React to save, load, attribute change, open, close, synchronization | A **handler on the built-in request**, scoped to the page |
 | Run an action from a button or a menu item | A **custom request** plus its handler; the page names the request |
 | Block a save when a value is invalid | A handler on `crt.SaveRecordRequest` that shows a dialog and does not call the next handler |
-| Compute an attribute that drives visibility or a caption | A handler on `crt.LoadDataRequest` and on `crt.HandleViewModelAttributeChangeRequest` that sets the attribute — see "A text computed by the module" in `context/mobile-sdk-guide.md` |
+| Compute an attribute that drives visibility or a caption | A handler on `crt.LoadDataRequest` and on `crt.HandleViewModelAttributeChangeRequest` that sets the attribute — see `context/mobile-sdk/computed-text.md` |
 | Show data that no entity holds, or that is assembled from several entities | A **virtual data source** |
 | Call the server or an external system | A **business process** started with `crt.RunBusinessProcessRequest`; the process makes the call |
 
@@ -317,9 +333,20 @@ After Gate L:
    mobile module follow `context/mobile-module-project-layout.md` and this runbook, not that file. This flow covers an
    environment with file system mode off: when `get-fsm-mode` reports it on, say in the delivery plan
    that the delivery is not established for that mode.
-2. Add a **code package** to it with `add-package`; pass the package name and the workspace path only,
-   no environment. A package that holds only module scripts keeps deliveries small and never
-   overwrites pages or objects that people edit in the designers.
+2. **The module goes into the package that holds the page** — `page.packageName` from step 2. The
+   module then travels with the page: when its application is exported or installed on another
+   environment, the handlers arrive with the buttons and data sources that need them. List the
+   package under `Packages` in the workspace's `.clio/workspaceSettings.json`, run
+   `restore-workspace`, and follow "A module inside an existing package" from here on.
+   `restore-workspace` downloads from the environment and writes only the local workspace, so it needs
+   Gate L and not Gate D. When the logic spans pages in different packages, use the package of the
+   page the logic belongs to most and name the others in the plan.
+
+   Use a **separate code package** instead only when the page's package is not the customer's — its
+   `maintainer` differs from the environment's `Maintainer` setting, as for a package shipped by
+   Creatio or installed from the Marketplace, which a later update replaces — or when the developer
+   asks for one. Say in the plan that the module then does not travel with the page's application.
+   Add it with `add-package`; pass the package name and the workspace path only, no environment.
    `add-package` scaffolds a C# project into the new package: an assembly-type descriptor and, under
    `Files/`, a `.csproj` with build files and — depending on the clio version — library and source
    folders. A script-only package must not carry them — they would be compiled on the environment at
@@ -338,23 +365,21 @@ After Gate L:
    `<workspace>/mobile-modules/<ModuleName>/`.
 4. Run `npm install` in the project.
 
-**Do not put the module into a package that the designers edit unless the developer asks for it.**
-`push-workspace` installs the workspace copy of every package it holds, so a stale local copy of an
-application package replaces whatever was changed on the environment since it was restored. When the
-developer does want the module inside an existing package, skip `add-package`, bring the package into
-the workspace with `restore-workspace`, and follow "A module inside an existing package" from here on.
-`restore-workspace` downloads from the environment and writes only the local workspace, so it needs
-Gate L and not Gate D.
+`push-workspace` installs the workspace copy of every package it holds, so a stale local copy of the
+page's package replaces whatever was changed on the environment since it was restored. "A module
+inside an existing package" says when to restore again.
 
 ### 6. Write the module
 
 Follow `context/mobile-sdk-guide.md`. Rules that hold for every module:
 
 - One module per feature area; one `@CrtModule` class per project, named exactly as the project folder.
-- **Names.** A handler `type` and a request `type` always start with the literal `usr.` followed by a
-  PascalCase name (`usr.CarVinSaveGuard`). The module, the package and a data source name take the
-  environment's schema prefix from `get-schema-name-prefix`, and no prefix when it is empty
-  (`UsrOrderLogic` on a `Usr` environment, `CarVinCheck` on one without a prefix).
+- **Names carry a customer prefix.** It is the environment's schema prefix from
+  `get-schema-name-prefix`. The module, the package and a data source name start with it
+  (`UsrOrderLogic`); a handler `type` and a request `type` start with it in lower case and a dot,
+  followed by a PascalCase name without the prefix (`usr.OrderSaveGuard`). When the environment's
+  prefix is empty, a prefix is still required: propose one under "Choices made" — the developer's
+  company prefix, `Usr` when they have none — and use it for every name.
 - Names share one namespace across every module on a device, and clio has no tool that lists the types
   already delivered. Make each name specific — the feature and the purpose — instead of generic.
 - A handler that extends a built-in request calls `this.next?.handle(request)` unless stopping the chain
@@ -426,8 +451,10 @@ once — first run `restore-workspace` again and stage the script again (step 7,
 2. Confirm arrival:
    - `list-package-files` for the package lists the script relative to the package's `Files` folder —
      `src/mobile/<ModuleName>/main.js` — next to an `app-descriptor.json` the installer adds;
-   - `get-package-file` with that path returns the script. Its `content-length` equals the size of the
-     staged file, and the first line, the last line and the handler registration read the same. The
+   - `get-package-file` with that path returns the script; its content equals the staged file. Compare
+     the content itself — save it and compare the files, or compare the first line, the last line and
+     the handler registration. `content-length` counts characters, not bytes, so it is shorter than
+     the file whenever the script holds non-ASCII text. The
      `project-error` it also returns for a script-only package — the `.csproj` is unavailable — is
      expected and needs no action.
 3. Wire the pages the plan names. For each page: `get-page`, apply the change, `update-page` with a dry
@@ -446,7 +473,8 @@ once — first run `restore-workspace` again and stage the script again (step 7,
      page's own package, "A module inside an existing package" says what to do.
    - A button that runs a custom request: `"clicked": { "request": "usr.<Name>Request", "params": { … } }`.
      Parameter values may be bindings (`$AttributeName`). Never put `type` or `scopes` inside `params`.
-   - A virtual data source: see "Virtual data source on a page" in `context/mobile-sdk-guide.md`.
+   - A virtual data source: see "Virtual data source on a page" in
+     `context/mobile-sdk/virtual-data-sources.md`.
 
 ### 10. Device check and report
 
@@ -458,9 +486,8 @@ which device.
 
 ## A module inside an existing package
 
-The default is a separate code package. A module that the developer wants inside a package the
-environment already has is delivered differently in four ways. State each of them in the delivery
-plan.
+The module goes into the package that holds the page by default (step 5). Next to a new code package,
+such a delivery differs in four ways. State each of them in the delivery plan.
 
 1. **Every restore removes the staged script.** `restore-workspace` replaces the local package folder
    with the environment's copy. Stage the script after each restore, and confirm the file is in the
@@ -481,6 +508,19 @@ plan.
    the workspace copy then holds the delivered script and the new page body.
 
 An existing package stays in the application it belongs to; the push does not move it.
+
+## Entered from app creation
+
+When `runbooks/03-app-implementation.md` hands over a Business Plan item, the developer has already
+approved the behaviour at Gate R, so **Gate R stands in for Gate L**. Start at step 2. When the
+inspection confirms the item as written — the same pages, a mechanism for every behaviour, nothing
+that falls under "Not covered" — build without presenting Gate L, and show the logic plan, filled in
+from the inspection, at the top of the delivery plan for information. When it does not, present Gate L
+for the difference only, and wait.
+
+Gate D applies unchanged. The run reports under the app's `workflow: "app-creation"`: no
+`workflow_started` or `plan_approved` of its own, and `work_item_completed` with `variant=module` and
+`variant=page` as this runbook's telemetry table places them.
 
 ## Gate L — approve the logic
 
@@ -516,7 +556,8 @@ What it does
 
 Where
   Pages: <mobile page schema names>
-  Module: <ModuleName>   Package: <PackageName> (new code package | existing)
+  Web pages: <web page schema names, when the run has a web part>
+  Module: <ModuleName>   Package: <PackageName> (the page's package | new code package — <why>)
 
 How
   - <moment or action> → <what happens>            [handler on crt.<X>Request, scope <Page>]
@@ -533,6 +574,7 @@ Choices made
 Already on the page
   <each handler another module has on the same requests, with its package, and how the new logic
   lives with it; "nothing" when step 2 found none>
+  Not read: <modules in the customer's other packages, with their packages; "none">
 
 Data kept by the module
   <none | what is kept in memory, whether every record shares it or each record has its own, and
@@ -548,9 +590,9 @@ Not covered
   <each requested behaviour the SDK cannot deliver, with the offered alternative; "nothing" when none>
 
 Needs on the device
-  Creatio Mobile <version> or later — the version the SDK changelog names for the newest API the
-  module uses (built against SDK <newest version>). When the changelog names none for that API: the
-  latest Creatio Mobile app.
+  The latest Creatio Mobile app from the App Store or Google Play, version <version> or later — the
+  version the SDK changelog names for the newest API the module uses. When the changelog names none
+  for that API: the latest Creatio Mobile app from the store.
 ```
 
 Keep the bracketed technical column: the developer approves behaviour, and whoever maintains the module
@@ -565,8 +607,8 @@ Environment
   <name> — <URL>
 
 Package
-  <PackageName> — <NEW code package: only the module script | EXISTING package: re-installed in full
-  from the workspace copy restored at <time>>
+  <PackageName> — <the page's package: re-installed in full from the workspace copy restored at
+  <time> | NEW code package: only the module script — <why not the page's package>>
   It will arrive <editable | locked>.
 
 What the push also does
@@ -604,6 +646,8 @@ either suits a code package, which changes only through the next push.
 Mobile logic — <feature name>: delivered, not yet confirmed on a device
 
 Module    <ModuleName>, <n> handlers, <n> custom requests, <n> virtual data sources
+SDK       @creatio/mobile-common <version the project was built against>
+Device    the latest Creatio Mobile app from the store, <version> or later
 Package   <PackageName> on <environment>
 Script    Files/src/mobile/<ModuleName>/main.js — confirmed on the environment
 Project   <local path to the project>
@@ -626,7 +670,9 @@ To change the logic later
 The developer checks by hand, on an ordinary phone with no cable and no debugger. Give steps that need
 nothing else, adapted to the feature:
 
-1. Open the Mobile app, go to **Settings**, tap **Synchronize**, and wait for it to finish. The app
+1. Update the Creatio Mobile app from the App Store or Google Play to the latest version; it must be
+   at least the version the plan named. Open it, go to **Settings**, tap **Synchronize**, and wait
+   for it to finish. The app
    reloads with the new scripts. If the synchronization reports an error, repeat it — a failed one
    delivers nothing.
 2. Say where to go and what to do, in the app's own words: the section, the record, the tab and the
@@ -658,6 +704,9 @@ the same output with `adb logcat`.
 The check stays the developer's unless they ask you to run it and name the device. Then perform the
 same steps yourself through `adb`, on that device only:
 
+- First open **Settings** and read the environment address at the top. When it is not the
+  environment the module was delivered to, stop and ask the developer to sign the app in to it; never
+  sign in yourself, and never discard or save anything open in the app on another environment.
 - Synchronize first, as step 1 says, and take a screenshot after every step: what the screen shows is
   the evidence. A system log with no error proves little — it holds nothing of a module that does
   not call `Logger.console`.
@@ -682,6 +731,6 @@ same steps yourself through `adb`, on that device only:
   2. confirm on a device, after synchronization, that the behaviour is gone;
   3. remove every page reference to the module's requests and data sources, because a button whose
      request has no handler does nothing when tapped.
-  Deleting the package afterwards is optional. The script then left the served content at a later
-  package installation on the environment, not at the deletion; tell the developer to expect the inert
-  script on devices until then. Retiring is a Gate D write.
+  The page's own package stays. A separate code package may be deleted afterwards; the script then
+  left the served content at a later package installation on the environment, not at the deletion;
+  tell the developer to expect the inert script on devices until then. Retiring is a Gate D write.

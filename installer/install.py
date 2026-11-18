@@ -64,12 +64,18 @@ REQUIRED_REFERENCE_PATHS = (
     "context/clio-cli-reference.md",
     "context/model-discovery-evidence.md",
     "context/mobile-sdk-guide.md",
+    "context/mobile-sdk/custom-requests.md",
+    "context/mobile-sdk/computed-text.md",
+    "context/mobile-sdk/blocking-save.md",
+    "context/mobile-sdk/data-and-server.md",
+    "context/mobile-sdk/virtual-data-sources.md",
     "context/mobile-module-project-layout.md",
     "context/mobile-module-behaviour-check.md",
     "runbooks/01-environment-setup.md",
     "runbooks/02-requirements-gathering.md",
     "runbooks/03-app-implementation.md",
     "runbooks/04-mobile-business-logic.md",
+    "runbooks/04-web-and-mobile-logic.md",
     "runtime/scripts/mcp_client.py",
     "runtime/scripts/workflow_validators.py",
 )
@@ -843,6 +849,9 @@ def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
 
 def render_load_order(repo_root: Path) -> str:
     return (
+        f"A request that is only custom business logic for the Creatio Mobile app reads "
+        f"`{repo_file(repo_root, 'runbooks/04-mobile-business-logic.md')}` alone and follows it end "
+        f"to end; the steps below belong to app creation and app changes.\n\n"
         f"1. Read `{repo_file(repo_root, 'AGENTS.md')}` for the active orchestration contract.\n"
         f"2. Read `{repo_file(repo_root, 'context/product-telemetry.md')}` for telemetry consent, event checkpoints, and payload shape.\n"
         f"3. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
@@ -851,7 +860,9 @@ def render_load_order(repo_root: Path) -> str:
         f"6. For post-Gate-R implementation and scaffolding (including the transient section-creation "
         f"failure playbook), read `{repo_file(repo_root, 'runbooks/03-app-implementation.md')}`.\n"
         f"7. For custom business logic in the Creatio Mobile app, read "
-        f"`{repo_file(repo_root, 'runbooks/04-mobile-business-logic.md')}` and follow it end to end.\n"
+        f"`{repo_file(repo_root, 'runbooks/04-mobile-business-logic.md')}` and follow it end to end; "
+        f"when the same behaviour is also needed on a web page, it adds "
+        f"`{repo_file(repo_root, 'runbooks/04-web-and-mobile-logic.md')}`.\n"
         f"8. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
@@ -862,7 +873,10 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     return (
         "---\n"
         "description: Use when creating Creatio app Business Plans, "
-        "technical implementation handoffs, or applying the approved plan through clio MCP.\n"
+        "technical implementation handoffs, or applying the approved plan through clio MCP, "
+        "and when a Creatio Mobile page needs custom business logic: a handler on save, load or "
+        "attribute change, a button action, or a virtual data source, built and delivered as a "
+        "remote module.\n"
         "alwaysApply: false\n"
         "---\n"
         "\n"
@@ -881,6 +895,9 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         "\n"
         "- Pages are separate for web and mobile: before any page edit, read `context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
         "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
+        "- Custom mobile business logic follows `runbooks/04-mobile-business-logic.md` end to end: Gate L "
+        "before any code is generated, Gate D before any write to Creatio. Never put handler code in a "
+        "mobile page body, and never write a remote module from memory.\n"
         "- Follow `context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
@@ -919,7 +936,7 @@ Do not spell a stage from memory, and do not invent a per-flow name such as
 `migration_plan_approved`: clio validates `event_name` against a closed allow-list and rejects
 anything else.
 
-The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT
+The migration, mobile-conversion, mobile-business-logic and branding flows are exempt from Gate P/R. That does NOT
 exempt them from telemetry: their emission points are their own gates instead, listed in
 `{contract}`.
 

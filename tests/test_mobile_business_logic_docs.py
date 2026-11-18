@@ -21,6 +21,7 @@ These tests pin the structure of the flow and the code its documents carry, not 
    runbook maps the telemetry stages to its gates.
 """
 
+import importlib.util
 import json
 import re
 import shutil
@@ -36,10 +37,16 @@ ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
 RUNBOOK_PATH = "runbooks/04-mobile-business-logic.md"
 RUNBOOK = ROOT / RUNBOOK_PATH
+# The web part of a request that needs the same behaviour on a web page and its mobile page.
+WEB_RUNBOOK_PATH = "runbooks/04-web-and-mobile-logic.md"
+WEB_RUNBOOK = ROOT / WEB_RUNBOOK_PATH
 LAYOUT = ROOT / "context/mobile-module-project-layout.md"
 SDK_GUIDE = ROOT / "context/mobile-sdk-guide.md"
+# The guide holds what every module needs; each mechanism has a part read only when the plan uses it.
+SDK_PARTS = tuple(sorted((ROOT / "context/mobile-sdk").glob("*.md")))
+SDK_DOCUMENTS = (SDK_GUIDE, *SDK_PARTS)
 BEHAVIOUR_CHECK = ROOT / "context/mobile-module-behaviour-check.md"
-DOCUMENTS = (RUNBOOK, LAYOUT, SDK_GUIDE, BEHAVIOUR_CHECK)
+DOCUMENTS = (RUNBOOK, WEB_RUNBOOK, LAYOUT, *SDK_DOCUMENTS, BEHAVIOUR_CHECK)
 
 MODULE_BUNDLE = ROOT / "tests/fixtures/mobile_remote_module_bundle.js"
 # The same handler registration with the rule removed: every save is passed on unchanged.
@@ -177,8 +184,15 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
         self.assertIn('"emitDecoratorMetadata": true', tsconfig)
         self.assertNotIn('"dom"', tsconfig, "the script runtime has no DOM")
 
+    def test_the_guide_names_every_part_and_each_part_exists(self):
+        self.assertTrue(SDK_PARTS, "the mechanisms have parts of their own")
+        table = section(read(SDK_GUIDE), "## Parts read for the mechanism")
+        named = set(re.findall(r"`(context/mobile-sdk/[a-z-]+\.md)`", table))
+        on_disk = {path.relative_to(ROOT).as_posix() for path in SDK_PARTS}
+        self.assertEqual(named, on_disk, "the guide's table and the parts on disk must agree")
+
     def test_json_examples_are_well_formed(self):
-        for path in (LAYOUT, SDK_GUIDE):
+        for path in (LAYOUT, *SDK_DOCUMENTS):
             for index, block in enumerate(fenced_blocks(read(path), "json")):
                 text = block.strip()
                 if not text.startswith(("{", "[")):
@@ -187,19 +201,19 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
                     json.loads(text)
 
     def test_code_examples_import_the_mobile_sdk_only(self):
-        for path in (LAYOUT, SDK_GUIDE):
+        for path in (LAYOUT, *SDK_DOCUMENTS):
             for block in fenced_blocks(read(path), "ts"):
                 for source in re.findall(r"from '([^']+)'", block):
                     self.assertTrue(
                         source == "@creatio/mobile-common" or source.startswith("./"),
                         "%s: a module example imports from `%s`" % (path.name, source))
 
-    def test_no_example_puts_the_schema_prefix_after_usr(self):
+    def test_no_example_repeats_the_prefix_after_the_dot(self):
         for path in DOCUMENTS:
             self.assertNotRegex(
                 read(path), r"usr\.Usr[A-Z]",
-                "%s names a type with the schema prefix after `usr.`; the rule is `usr.` plus a "
-                "PascalCase name" % path.name)
+                "%s names a type with the prefix twice; the rule is the lower-case prefix, a dot and "
+                "a PascalCase name" % path.name)
 
     def test_references_do_not_point_at_sources_a_partner_cannot_reach(self):
         for path in DOCUMENTS:
@@ -211,12 +225,12 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
                     % (path.name, marker))
 
     def test_a_list_on_a_virtual_data_source_is_shown_in_full(self):
-        example = section(read(SDK_GUIDE), "### A list fed by a virtual data source")
+        example = section(read(ROOT / "context/mobile-sdk/virtual-data-sources.md"), "### A list fed by a virtual data source")
         for part in ('"scope": "viewElement"', '"isCollection": true', '"viewModelConfig"', '"crt.List"'):
             self.assertIn(part, example, "the list example must carry %s" % part)
 
     def test_a_computed_text_is_shown_in_full(self):
-        example = section(read(SDK_GUIDE), "## A text computed by the module")
+        example = section(read(ROOT / "context/mobile-sdk/computed-text.md"), "## A text computed by the module")
         for part in ('{ "value": "" }', '"crt.Label"', "crt.LoadDataRequest",
                      "crt.HandleViewModelAttributeChangeRequest"):
             self.assertIn(part, example, "the computed text example must carry %s" % part)
@@ -265,6 +279,18 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             + result.stdout + result.stderr)
         self.assertIn("5 cases, 3 failed", result.stdout)
 
+    @unittest.skipIf(NODE is None, "Node.js is not installed")
+    def test_the_sample_check_gives_the_bundle_the_console_a_device_has(self):
+        logging = MODULE_BUNDLE.read_text(encoding="utf-8").replace(
+            "const sdk = crtSdk;", "const sdk = crtSdk;\n\tconsole.log('loaded');", 1)
+        self.assertEqual(self.run_sample_check(logging).returncode, 0,
+                         "console.log exists on a device, so a module that logs must pass")
+        debugging = PASS_THROUGH_BUNDLE.replace("(() => {", "(() => {\n\tconsole.debug('loaded');", 1)
+        result = self.run_sample_check(debugging)
+        self.assertNotEqual(result.returncode, 0,
+                            "console.debug is undefined on a device, so the check must fail on it")
+        self.assertIn("console.debug is not a function", result.stderr)
+
     def test_the_runbook_maps_the_telemetry_stages_to_its_gates(self):
         telemetry = section(read(RUNBOOK), "## Product telemetry")
         self.assertIn('`workflow: "mobile-business-logic"`', telemetry)
@@ -284,6 +310,59 @@ class MobileBusinessLogicDocsTests(unittest.TestCase):
             self.assertIn(
                 RUNBOOK_PATH, read(ROOT / relative),
                 "%s must name the runbook that delivers mobile logic in code" % relative)
+
+    def test_a_web_part_keeps_writes_and_gates_with_the_lead(self):
+        web = read(WEB_RUNBOOK)
+        roles = section(web, "## Who does what")
+        self.assertIn("both gates", roles)
+        self.assertIn("every write to the environment", roles)
+        self.assertIn("never writes to the environment", roles,
+                      "a helper subagent must leave every write to the lead, behind Gate D")
+        self.assertIn("`dry-run: true`", roles)
+        self.assertIn("never asks the developer", roles)
+        self.assertIn("cannot start subagents", roles,
+                      "a host without subagents needs the sequential route")
+        results = fenced_blocks(web, "")
+        for phase in ("Inspection —", "Build —"):
+            self.assertTrue(any(block.startswith(phase) for block in results),
+                            "the helpers' %s result has a fixed format" % phase)
+        self.assertIn("One Gate L and one Gate D", web)
+
+    def test_the_web_part_is_entered_from_the_runbook_and_the_routing(self):
+        runbook = read(RUNBOOK)
+        self.assertIn(WEB_RUNBOOK_PATH, section(runbook, "## Load order"))
+        self.assertIn(WEB_RUNBOOK_PATH, section(runbook, "### 1. Understand the request"))
+        self.assertIn("Web pages:", section(runbook, "## Plan format (Gate L)"))
+        for relative in ("AGENTS.md", "skills/creatio-app-orchestrator/SKILL.md",
+                         "rules/creatio-app-orchestrator.mdc", "context/INDEX.md"):
+            self.assertIn(WEB_RUNBOOK_PATH.split("/", 1)[1], read(ROOT / relative),
+                          "%s must route a web-and-mobile request to the web part" % relative)
+
+    def test_app_creation_hands_logic_items_over_with_gate_r_for_gate_l(self):
+        entry = section(read(RUNBOOK), "## Entered from app creation")
+        self.assertIn("Gate R stands in for Gate L", entry)
+        self.assertIn("Gate D applies unchanged", entry)
+        implementation = read(ROOT / "runbooks/03-app-implementation.md")
+        self.assertIn(RUNBOOK_PATH, implementation)
+        self.assertIn("Entered from app creation", implementation)
+
+    def test_installed_surfaces_carry_the_flow(self):
+        spec = importlib.util.spec_from_file_location("caadt_installer", ROOT / "installer/install.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        for path in DOCUMENTS:
+            relative = path.relative_to(ROOT).as_posix()
+            self.assertIn(relative, installer.REQUIRED_REFERENCE_PATHS,
+                          "the installer must copy %s" % relative)
+        cursor_rule = installer.render_cursor_rule(ROOT, ROOT / ".mcp.json")
+        frontmatter, body = cursor_rule.split("\n---\n", 1)
+        self.assertIn("remote module", frontmatter,
+                      "the rendered Cursor rule's description must attract a mobile-logic request")
+        self.assertIn(RUNBOOK_PATH, body.split("## Core Rules", 1)[1])
+        self.assertIn("mobile-business-logic", installer.render_cursor_telemetry_rule(ROOT))
+        index = read(ROOT / "context/INDEX.md")
+        for path in DOCUMENTS:
+            self.assertIn(path.relative_to(ROOT).as_posix(), index)
 
 
 if __name__ == "__main__":
