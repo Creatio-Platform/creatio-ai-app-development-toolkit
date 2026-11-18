@@ -23,12 +23,11 @@ on mobile. Types the declarations re-export from `@creatio/base` (filters, expre
 
 Anything the declarations do not export does not exist for a module, whatever a web example shows.
 
-**An API exists on a device only from the app version that brought it.** Each version heading in
-`CHANGELOG.md` names the Creatio Mobile version that package version requires —
-`# 0.1014.0 (Creatio Mobile 10.1.4)` — and the entries under it are the API that arrived with it.
-Headings older than 0.1014.0 name no app version. Before using a class, a request or a service, find
-the entry that added it: the newest such entry sets the app version the module needs, and the plan
-states it. A member the declarations mark `@deprecated` in favour of a newer one is still the only one
+**An API exists on a device only from the app version that brought it.** `CHANGELOG.md` has one
+heading per package release, the entries under it are the API that arrived with it, and a heading
+names the Creatio Mobile version that release requires when it has one. Before using a class, a
+request or a service, find the entry that added it: the newest such entry sets the app version the
+module needs, and the plan states it. A member the declarations mark `@deprecated` in favour of a newer one is still the only one
 an older app has, so keep using it unless the plan already requires the app version of its
 replacement.
 
@@ -271,11 +270,11 @@ const message = (await context.getResourceString('UsrAmountRequired_message')) ?
   as UTC, the second as the device's local time — so compare calendar days through the local getters
   (`getFullYear`, `getMonth`, `getDate`), which is the day the user sees on the page. Write a date
   as `toISOString()` produces it.
-- From SDK 0.1014.0 (Creatio Mobile 10.1.4) the context also has `get(name)` and
-  `set(name, value, options?)`, and the declarations mark `getAttribute` / `setAttribute` as
-  deprecated aliases of them. An app older than 10.1.4 has only `getAttribute` / `setAttribute`, so a
-  module that must run there uses those, as the examples in this guide do. Use `set` when the logic
-  needs its options, and state Creatio Mobile 10.1.4 in the plan:
+- The context also has `get(name)` and `set(name, value, options?)`, and the declarations mark
+  `getAttribute` / `setAttribute` as deprecated aliases of them. An app older than the release that
+  added `get` / `set` has only `getAttribute` / `setAttribute`, so a module that must run there uses
+  those, as the examples in this guide do. Use `set` when the logic needs its options, and state in the
+  plan the app version that the `CHANGELOG.md` entry for `get` / `set` names:
   - `preventStateChange` — the value is saved with the next save, but writing it does not mark the
     record as changed;
   - `preventRunBusinessRules` — the page's business rules do not run for this write;
@@ -408,7 +407,7 @@ export class UsrOrderDaysInStockChange extends BaseRequestHandler<HandleViewMode
 - Writing the text does not mark the record as changed. Only an attribute bound to a data source
   does that, and this one has no `modelConfig`.
 - The write does send a change request for the text attribute itself, which is why the change handler
-  tests `attributeName` before it recalculates. On Creatio Mobile 10.1.4 and later,
+  tests `attributeName` before it recalculates. On an app that has `set`,
   `set(name, value, { preventAttributeChangeRequest: true })` keeps that request from being sent.
 - The calculation is a plain function in a file of its own, so the local behaviour check can run it,
   and it takes today's date as a value.
