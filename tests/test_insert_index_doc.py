@@ -9,6 +9,11 @@ GUIDELINES = ROOT / "skills/creatio-ui-guidelines/references"
 LAYOUT = GUIDELINES / "page-layout-and-controls.md"
 CHECKLISTS = GUIDELINES / "review-checklists.md"
 
+SKILL_RULE = "- **An insert's `index` counts the children the parent already has"
+LAYOUT_RULE = "- **An insert's `index` counts the parent's existing children"
+LAYOUT_SEVERAL = "- **Several inserts into one parent"
+CHECKLIST_RULE = "- [ ] Every insert's `index` counts the parent's existing children"
+
 
 def paragraph(path, opening):
     """The bullet or paragraph that starts with `opening`, up to the next bullet or heading,
@@ -32,39 +37,26 @@ class InsertIndexRuleTests(unittest.TestCase):
 
     def assert_states_the_rule(self, rule):
         self.assertIn("`index`", rule)
-        self.assertRegex(rule, r"(?i)template")
+        self.assertIn("template", rule)
         self.assertIn("get-page", rule)
-        self.assertRegex(rule, r"(?i)row, then column")
+        self.assertIn("row, then column", rule)
 
     def test_skill_states_the_rule(self):
-        self.assert_states_the_rule(
-            paragraph(SKILL, "- **An insert's `index` counts the children the parent already has")
-        )
-
-    def test_reference_states_the_rule(self):
-        self.assert_states_the_rule(
-            paragraph(LAYOUT, "- **An insert's `index` counts the parent's existing children")
-        )
+        self.assert_states_the_rule(paragraph(SKILL, SKILL_RULE))
 
     def test_checklist_states_the_rule(self):
-        self.assert_states_the_rule(
-            paragraph(CHECKLISTS, "- [ ] Every insert's `index` counts the parent's existing children")
-        )
+        self.assert_states_the_rule(paragraph(CHECKLISTS, CHECKLIST_RULE))
 
-    def test_reference_shows_the_template_child_example(self):
-        rule = paragraph(LAYOUT, "- **An insert's `index` counts the parent's existing children")
+    def test_reference_states_the_rule_with_the_template_child_example(self):
+        rule = paragraph(LAYOUT, LAYOUT_RULE)
+        self.assert_states_the_rule(rule)
         self.assertIn("CardContentWrapper", rule)
         self.assertIn("TopAreaProfileContainer", rule)
         self.assertIn("`index: 1`", rule)
+        self.assertIn("page-modification-components", rule)
 
     def test_reference_covers_several_inserts_into_one_parent(self):
-        rule = paragraph(LAYOUT, "- **Several inserts into one parent")
-        self.assertRegex(rule, r"(?i)template")
-        self.assertRegex(rule, r"(?i)earlier insert")
-
-    def test_skill_names_the_clio_guide_that_owns_the_diff_rules(self):
-        rule = paragraph(SKILL, "- **An insert's `index` counts the children the parent already has")
-        self.assertIn("page-modification-components", rule)
+        self.assertIn("earlier insert", paragraph(LAYOUT, LAYOUT_SEVERAL))
 
 
 if __name__ == "__main__":
