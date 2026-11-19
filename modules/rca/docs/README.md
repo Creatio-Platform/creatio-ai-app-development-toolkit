@@ -187,6 +187,13 @@ Describe the incident the way it was reported to you, for example:
 - `/rca-orchestration Here is the error the customer sent: <the error text or stack trace>` — a pasted error is
   first-class evidence; many incidents never produce a log record.
 
+**Ask the next questions in the same conversation, without naming the skill again.** A follow-up about the answer
+("explain that error", "how do I fix it") is answered from what was already read; a new problem ("and the list page
+shows extra records — why?") gets an investigation of its own. In Claude Code a hook of the plugin,
+`modules/rca/hooks/rca-follow-up.mjs`, sends every message after the first back to `rca-orchestration` once the
+conversation has used it; on Codex and Copilot CLI the skill's description and the `rca-files` server's instructions
+carry the same request. To investigate another Creatio site, start a new conversation.
+
 ## Troubleshooting the sign-in
 
 **"Tenant registration expired; reconnect to retry"** on the sign-in page. Creatio's MCP server did not get your

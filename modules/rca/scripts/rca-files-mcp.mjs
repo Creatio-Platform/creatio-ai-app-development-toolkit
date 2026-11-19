@@ -13,6 +13,12 @@ const TOOLS = Object.freeze(['get_text_file_content']);
 const DEFAULT_MCP_PATH = '/0/rest/ToolServiceMcp/RcaAgentMcp/v1/mcp';
 const LOGIN_PATH = '/ServiceModel/AuthService.svc/Login';
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+// What every host shows the model about this server. It names the RCA agent's entry skill for every message, not only
+// the first, because a host may describe only some skills per message and the model treats a skill it already ran as
+// loaded.
+const INSTRUCTIONS = 'Reads the text of files attached to Creatio configuration activity log records for the RCA agent. '
+  + 'Use the `rca-orchestration` skill for every message about a Creatio incident or the connected environment, '
+  + 'follow-ups included.';
 
 const log = (m) => process.stderr.write(`[rca-files] ${m}\n`);
 
@@ -224,6 +230,7 @@ function serve({ listTools, callTool }) {
       protocolVersion: PROTOCOL_VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
       capabilities: { tools: {} },
       serverInfo: { name: 'rca-files', version: '0' },
+      instructions: INSTRUCTIONS,
     }),
     ping: (id, params, isRequest) => {
       if (isRequest) reply(id, {});

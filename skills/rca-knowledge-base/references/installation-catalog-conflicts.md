@@ -5,6 +5,8 @@ delivery reached and its outcome — never before, and never as a way to look fo
 the error text first. The stages that route here are the **schema-install stage**, the **DB-structure
 stage**, and the half of the shared **SQL-scripts stage** where the object the script needs exists but the
 target's structure or data does not match what it assumes (the spine sets that discriminator; follow it).
+**Not here:** a script that found nothing because a binding of the **same** delivery was skipped — that is
+`installation-catalog-data-bindings.md` IB12, and the spine rules it out before routing here.
 
 Recognizing an entry below is not evidence that it is the blocking cause. An installer log carries earlier
 non-fatal noise and keeps going after a fatal error, so the signature you match must be one the spine

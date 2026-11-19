@@ -124,6 +124,14 @@ class RcaFilesMcpTests(unittest.TestCase):
         _, answers = _run([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}])
         self.assertEqual(answers[1]["result"]["serverInfo"]["name"], "rca-files")
 
+    def test_initialize_names_the_entry_skill_for_every_message(self):
+        # A host shows the server's instructions to the model; they are the toolkit's only text, besides the skill
+        # itself, that sends a follow-up message back to the entry skill.
+        _, answers = _run([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}])
+        instructions = answers[1]["result"]["instructions"]
+        self.assertIn("`rca-orchestration`", instructions)
+        self.assertIn("follow-ups included", instructions)
+
     def test_a_tool_other_than_get_text_file_content_is_refused_before_any_request(self):
         _, answers = _run([_call(7, "creatio_create_record")])
         self.assertEqual(answers[7]["error"]["code"], -32602)

@@ -1,6 +1,6 @@
 ---
 name: rca-root-cause-vs-consequence
-description: Separate the true root cause of a Creatio incident from its downstream consequences, so a Root-Cause Analysis reports the triggering change rather than the loudest symptom. Use during any RCA when there are many errors, a cascade of failures, or when it is unclear which failure caused the others (e.g. one broken source file producing dozens of compiler errors across dependent schemas).
+description: Separate the true root cause of a Creatio incident from its downstream consequences, so a Root-Cause Analysis reports the triggering change rather than the loudest symptom. Use during any RCA when there are many errors, a cascade of failures, or when it is unclear which failure caused the others (e.g. one broken source file producing dozens of compiler errors across dependent schemas), and whenever an element failed because something it expected was not there (no rows, not found, missing value) — the cause is then usually an earlier step that skipped or failed.
 supported_modes: [Builder, SDK]
 ---
 
@@ -36,6 +36,38 @@ do not promote a consequence to a cause.
    files that all point back to one changed type ⇒ that one type is the root.)
 4. **Prefer the most specific error.** A concrete error on a named element/line beats a generic
    "operation failed" message.
+5. **When the failing element did not find something, look for what should have provided it** — next
+   section. This is the step most often skipped, because the failing element's error is specific and
+   quotable, and it is still only the immediate failure.
+
+## The failing element did not find something — the trigger is upstream
+
+An element can fail while its own definition is sound: it expected something to be there, and it was not.
+"No rows", "not found", "does not exist", a required value that is null — a script whose query returned
+nothing, a column default that reads a setting nobody created, a page that opens a record that is not
+there. In that shape the failing element is the **immediate failure**, and the **root trigger** is the step
+that should have provided what it looked for. Before you report the failing element as the cause:
+
+1. **Name what it expected to find**, as precisely as the error and the element allow — an object, a
+   record, a column value, a setting, a file.
+2. **List the steps that should have provided it** — first the earlier steps of the **same operation**
+   (the same delivery, the same process run), then earlier operations. A delivery that brings both a
+   consumer (a script, a schema) and the data it consumes is the commonest case: the provider is in the
+   same log, a few lines above the error.
+3. **Read each provider's own outcome — its log line and its stored state — and count it as done only
+   when it says it applied.** A line that reports the step as **skipped, ignored or not needed** is not a
+   success, even when its wording ends in "installed", "saved" or "completed": products wrap a skip in
+   the success message. Quote such a line in full; never shorten it with "…", because the shortened form
+   is exactly the one that reads as success.
+4. **Read whether the expected thing is present now.** It is absent and a provider skipped or failed →
+   that provider is the root trigger, and the failing element is its consequence. Every provider applied
+   and the thing is still absent → the element's own expectation is wrong, and the element is the
+   trigger.
+
+**"Make the failing element tolerate the absence" is not a fix for an upstream trigger.** Rewriting a
+script to accept zero rows, or a page to skip a missing record, makes the error disappear and leaves the
+data that should have arrived missing for good. When a provider skipped or failed, the recommendation
+fixes the provider; the consumer stays as it is.
 
 ## Current or already recovered? (place the incident in time)
 
@@ -133,6 +165,9 @@ blocked, and it explicitly leaves the underlying defect in place.
 ## Test your conclusion
 
 - Would fixing the proposed root trigger plausibly clear the downstream errors? If not, keep looking.
+- Did the element you name fail because something it expected was not there? Then have you read the
+  outcome of every step that should have provided it, in the same operation first? If not, the element is
+  still only the immediate failure.
 - Is the trigger backed by a specific record/field you actually read? If not, mark it as a hypothesis, not a
   conclusion, and lower the confidence in `rca-diagnosis-report`.
 - Avoid claiming a product defect unless the evidence directly supports it; prefer "the evidence indicates" /

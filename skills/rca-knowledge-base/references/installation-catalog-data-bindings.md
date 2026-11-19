@@ -16,7 +16,7 @@ Which stages lead here, so an agent arriving with one can see itself in this lis
 |---|---|
 | **Data** | §1 (IB1, IB2), §2 (IB3, IB5, IB6), §3 (IB4), §6 (IB11) |
 | **Source generation** | §4's IB8 — a column default reading a system setting that does not exist yet |
-| **SQL scripts** and **DB structure** | §5 (IB9, IB10) |
+| **SQL scripts** and **DB structure** | §5 (IB12, IB9, IB10) |
 | **no stage at all** | IB4, IB5 and IB7 produce no installer-log error — IB7 is a post-delivery symptom and IB5 a refusal on the source. The spine's §5 routes these by **outcome evidence** rather than by stage |
 
 Every entry carries an evidence tier, and **the tiers were assigned
@@ -628,9 +628,66 @@ in `installation-catalog-data-bindings-reference.md` §A.
 
 ## 5. Target structure and environment
 
-Two data-binding cases whose failure surfaces later in the delivery — at the SQL-scripts and DB-structure
+Data-binding cases whose failure surfaces later in the delivery — at the SQL-scripts and DB-structure
 stages — because the binding or structure work they depend on was never completed. The spine's stage table
 routes here from both rows.
+
+**IB12 — A SQL script fails on data a binding of the same delivery skipped** `[Tier A]`
+- *Signature:* the SQL-scripts stage fails with "found nothing" — `P0002: query returned no rows` on
+  PostgreSQL, or a not-found the script raises itself — and the **same delivery's** data-install block,
+  above the error, carries a skipped binding:
+
+  ```
+  Installing data
+  Data "<binding> Skipped, InstallType = FirstInstall" from package "<package>" installed
+  Data "<binding>" from package "<package>" installed
+  Installing SQL scripts
+  Error occurred while installing SQL script "<script>" in package "<package>". UId <uid>: P0002: query returned no rows
+  ```
+
+  Typical history: an earlier version of the package installed fine; the new version changed the binding
+  to first-install-only (or carried it so already), added records or a column to it, and added a script
+  that reads them. On this second install the binding is skipped, the new data never arrives, and the
+  script finds nothing. **Both data lines end in `installed`, and neither wrote anything** — that is the
+  trap. Read as "the binding was applied", this case turns into "fix the script", which is wrong.
+- *Verify:* four reads, and the report names the result of each.
+
+  1. **The skip itself** — in the installer log, the data-install block of this delivery: the binding
+     whose quoted name carries `Skipped, InstallType = …` (the spine's §2.5). This is the direct evidence.
+  2. **Why it skipped** — `SysPackageSchemaData` for the delivery's package
+     (`rca-env-readonly-query`, "Binding state on the target", which decodes the values): `InstallType = 1`
+     (FirstInstall) on a package that was already on the environment, or `3` (InstallIfNotExists) on a
+     binding that already existed. Confirm the package was there before: an earlier successful install of
+     the same application or package (the spine's §2.4b), or the package's `CreatedOn` earlier than this
+     delivery. `NeedInstall = false` and an empty `LastError` on that row are what a skip looks like, not
+     evidence it applied.
+  3. **What should have arrived** — the binding's delivered rows on its `Create` / `Update` child (the
+     spine's §2.4a: `descriptor.json` for the columns, `data.json` for the values).
+  4. **That it did not arrive** — `creatio_get_record` on the bound object by the `Id` from `data.json`,
+     projecting the columns from the descriptor. Values that differ from the payload (typically empty in a
+     column the new version added) are the data the script needed and did not get.
+
+  Then `SysPackageSqlScript` for the script (`NeedInstall = true`, `LastError` = the engine's message)
+  confirms the script's side. **The script's text is not readable from the environment**, so the link
+  "the script reads exactly this data" is an inference from four facts — the same package, the script's
+  place after the data install, the found-nothing error, and delivered values that are missing on the
+  target. State it as that, with the four facts; it is Tier A on the skip and on the missing data, an
+  inference on the query itself, and the user can settle the last part by checking the script against
+  the delivered values.
+- *Recommendation:* fix the **binding**, not the script.
+  - **Proper fix, on the source:** set the binding's installation type to **Install** (`0`) so later
+    installs of the package apply it, and enable **Force Update** on the columns whose values the new
+    version changes — under Install an existing row gets only the columns that carry the flag
+    (`installation-catalog-data-bindings-reference.md` §A), and here the row already exists from the first
+    install. Then re-export the application and install it again. `[unverified here]` that the script
+    runs again on that install and this exact sequence then succeeds — a re-export with both settings,
+    installed over the failed state, would settle it.
+  - **Unblock now (temporary), on the target:** bring the missing values in by hand — the record and
+    columns from read 4, with the values from `data.json` — then repeat the install so the script runs.
+    It is a hand edit the next delivery may overwrite, so the proper fix still follows.
+  - **Do not recommend making the script tolerate "no rows".** The error goes away and the data that
+    should have arrived stays missing (`rca-root-cause-vs-consequence`, "The failing element did not find
+    something").
 
 **IB9 — A repeated install does not heal a failed structure update** `[Tier A]`
 - *Signature:* on the **second** attempt, a SQL script fails with `Invalid column name '…'` (MSSQL) or
@@ -735,7 +792,8 @@ routes here from both rows.
 
 **Covered:** the cases of the **`Installation — data bindings`**
 category — a missing referenced record (§1), uniqueness and duplicated bindings (§2), binding column
-settings (§3), system settings the delivery depends on (§4), target structure and environment (§5). The
+settings (§3), system settings the delivery depends on (§4), target structure and environment and the
+later stages that fail on a binding's skipped data (§5), the delivered data itself (§6). The
 category is the boundary: a case belongs here because of its mechanism, not because of the stage its error
 appeared at.
 
@@ -746,8 +804,13 @@ appeared at.
 - Locking, local edits, name/UId clashes and environment drift — `installation-catalog-conflicts.md`.
 - Anything before the data stage in the delivery, and the restore decision — the spine owns both.
 
-**Evidence status of IB3, IB9 and IB10** — each is reproduced or settled on a live environment, and its entry
+**Evidence status of IB3, IB9, IB10 and IB12** — each is reproduced or settled on a live environment, and its entry
 states what was found:
+
+- **IB12** — reproduced on PostgreSQL: two versions of one application installed in turn, the second
+  switching its binding to FirstInstall and adding a script that reads the new data. The skip line, the
+  binding's `InstallType = 1`, the script's `NeedInstall = true` with `P0002` in `LastError` were all read.
+  The recommended fix has not been installed back.
 
 - **IB3** — reproduced. Tier A **when the installer log is available**: the failing `INSERT` is printed in
   full and supplies the table, column and value. The `DETAIL` line is redacted by default, so do not ask

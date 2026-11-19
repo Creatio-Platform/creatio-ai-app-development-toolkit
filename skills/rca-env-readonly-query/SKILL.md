@@ -72,12 +72,14 @@ its heading is run without them.
   "Packages and their dependencies"; "Walking the dependency graph — finding a cycle"; "Schema state on
   the target".
 - **`./references/delivery-reads.md`** — an installation's record tree and attachments, whether a record
-  named in an error exists, section bindings, and the state of data bindings on the target — including
-  which bindings hold a schema a delivery tried to remove.
+  named in an error exists, section bindings, the state of data bindings on the target — including what
+  each `InstallType` skips, and which bindings hold a schema a delivery tried to remove — and the state of
+  a package's SQL scripts.
   Headings: "Delivery reads — packages, schemas, bindings and attachments"; "The delivery record and its
   children"; "Attachments of a log record"; "Does the record named in an error actually exist?"; "Section
   bindings — `SysModule` / `SysModuleEntity` / `SysModuleInWorkplace` / `SysWorkplace`"; "Binding state on
-  the target — `SysPackageSchemaData`"; "Binding column settings — `SysPackageSchemaDataColumn`".
+  the target — `SysPackageSchemaData`"; "SQL script state on the target — `SysPackageSqlScript`"; "Binding
+  column settings — `SysPackageSchemaDataColumn`".
 - **`./references/localization-reads.md`** — localized values on the target, the localization changes a
   delivery made, change-log state, and cultures.
   Headings: "Localization and change-log reads"; "Localized resources — `SysLocalizableValue`";

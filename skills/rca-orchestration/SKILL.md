@@ -1,6 +1,6 @@
 ---
 name: rca-orchestration
-description: Orchestrate a Root-Cause Analysis of a Creatio configuration incident end to end — plan the investigation, gather evidence through mcp-creatio, form and verify a hypothesis, and produce a diagnosis with recommendations. This is the entry point for the RCA agent. Use whenever a user reports a Creatio configuration problem (compilation failure, package/app install error, schema conflict, localization, App Hub, "why did this fail / what is the root cause / how do I fix it"). It reads the rca-knowledge-base skill's references/NAVIGATION.md to classify the incident and routes to the right domain file.
+description: Orchestrate a Root-Cause Analysis of a Creatio configuration incident end to end — plan the investigation, gather evidence through mcp-creatio, form and verify a hypothesis, and produce a diagnosis with recommendations. This is the entry point for the RCA agent. Use whenever a user reports a Creatio configuration problem (compilation failure, package/app install error, schema conflict, localization, App Hub, "why did this fail / what is the root cause / how do I fix it"). Invoke it again for every later message in the same conversation that asks about the connected environment or an incident, even though it was invoked earlier; its "Follow-up turns" section decides how much of the investigation that message needs. It reads the rca-knowledge-base skill's references/NAVIGATION.md to classify the incident and routes to the right domain file.
 ---
 
 # rca-orchestration — how to run an investigation
@@ -12,6 +12,9 @@ Work **read-only** at all times (see `rca-safety-and-access`).
 ## The investigation loop
 
 **Plan → Evidence → Hypothesis → Verify → Diagnosis.**
+
+**On a follow-up message** — any message after the first in a conversation that has already investigated something
+here — start at "Follow-up turns" below, not at step 1: it says at which step of this loop that message enters.
 
 1. **Plan / classify.** Load the `rca-knowledge-base` skill and read `../rca-knowledge-base/references/NAVIGATION.md` in full. From the user's problem statement — a
    `ConfActivityLog` record Id/Number **and/or a pasted error signature** (a server-log excerpt, a stack
@@ -71,6 +74,10 @@ Work **read-only** at all times (see `rca-safety-and-access`).
    Use `rca-root-cause-vs-consequence` to make sure you have the *trigger*, not a downstream effect, and to
    **place the incident in time** — is the failure current, or did a later success / recovery / log
    cleanup run after it? If the evidence contradicts the hypothesis, return to step 2.
+   **When the failing element failed because something it expected was not there** — no rows, not found,
+   a missing value — it is not yet the cause: read the outcome of every earlier step that should have
+   provided that thing, in the same operation first, and treat a step logged as skipped as not done
+   (`rca-root-cause-vs-consequence`, "The failing element did not find something").
 5. **Diagnosis (mandatory: `rca-diagnosis-report`).** Invoke the `rca-diagnosis-report` skill before you write
    the answer — in every report, even when the format feels familiar: what may never reach the user, and
    how the recommendation is built, are there and not here. Then read
@@ -85,7 +92,7 @@ Work **read-only** at all times (see `rca-safety-and-access`).
 Every read goes to the connected Creatio environment, as it is at the moment of the read. A question that needs
 no read from the environment (a consultation the knowledge base answers on its own) needs none: answer it.
 
-## Follow-up turns: re-check currency, then notify
+## Follow-up turns: re-check currency, notify, then enter the loop where the message needs it
 
 The environment is **shared, and it changes between your turns.** While the user is talking to you,
 someone else can compile, **install an application — which runs a compilation of its own** — or clear the
@@ -116,11 +123,22 @@ theirs. State how many newer runs there were, when, each one's status, and **who
 read `CreatedBy`/`StartedBy` and the record's `Parent`, and say explicitly when a `Parent` of
 `Install application` means an app installation ran the compile rather than a person.
 
-**Then answer the question they actually asked**, and be explicit about which record your answer describes:
-- a follow-up about **the incident already under discussion** ("explain that error", "how do I fix it") →
-  answer about **that** record; do not silently re-target to the newer one. Offer to look at the newer run.
-- a follow-up about **current state** ("is it fixed now?", "what's the status?") → the newer record *is*
-  the answer; investigate it and place the earlier one behind it in the timeline.
+**Then decide what the message is, and enter the loop there.** Having this skill's text in the conversation
+from an earlier message is not a reason to skip this: what was classified, opened and read for the earlier
+question covers that question only.
+
+| The message | Recognise it by | Where it enters the loop |
+|---|---|---|
+| **A. About the answer already given** | it refers to your finding — "explain that error", "how do I fix it", "rewrite it for the customer", "why did you conclude that" — and everything it needs is in the evidence already read | no step: answer from that evidence, about **that** record — do not silently re-target to a newer one; offer to look at the newer run |
+| **B. The same incident, new evidence** | the same incident, but the answer needs a read you have not made — "show what changed in that record's files", "what do its child records say", "and the run before it?" | **step 2**, with the classification you already have: reopen the same domain file and catalog entry, make the missing reads, then Verify and Diagnosis |
+| **C. A new incident or symptom** | it names something the investigation so far did not cover — another page, list, section, schema, package, operation, record, time or error; "another problem", "and also…" | **step 1**: read `../rca-knowledge-base/references/NAVIGATION.md` again in full, even if it was read earlier in this conversation — that read classified the earlier question, not this one, and a copy from an earlier message may already be cut short — and classify this message on its own — the earlier incident is context, not the hypothesis — then run the whole loop |
+| **D. Current state** | "is it fixed now?", "what's the status?" | the newer record *is* the answer: investigate it from step 2 and place the earlier one behind it in the timeline |
+
+**When it could be A or C, it is C; when it could be A or B, it is B.** An extra step costs a few reads; a
+skipped one produces an answer built from memory instead of from this environment. A message that brings a
+new symptom and also asks about the earlier finding is C for the symptom and A for the rest. In C the
+re-check above still filters by the earlier investigation's operation; the new message's own operation comes
+from its classification in step 1.
 
 **Never describe state in the present tense on the strength of a previous turn's read** — without a fresh
 re-check, say "as of my check at <time>", never "currently". The same applies to advice: before telling the

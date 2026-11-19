@@ -92,6 +92,25 @@ filtered by `Name` or `SysPackage.Name` and report `IsChanged` / `IsLocked` (the
 protected against overwrite) and `LastError` (a stored message for that binding, independent of any log).
 Report the values; the reset scripts are a manual step for a human.
 
+**`InstallType` decides whether the binding was installed at all — decode it, never just quote it.** On
+this table it is an integer with four values (on `SysPackage` the same column name is an unrelated enum):
+
+| `InstallType` | Installs the binding's records when |
+|---|---|
+| `0` — Install | always; on a row that already exists it overwrites only the columns with `IsForceUpdate` |
+| `1` — FirstInstall | **only when the package is new on this environment** — on any later install of the package the whole binding is skipped |
+| `2` — Update | always, like `0` |
+| `3` — InstallIfNotExists | **only when the binding does not already exist in the target package** |
+
+So `1` on a package that was installed before, or `3` on a binding that was already there, means **this
+delivery wrote none of the binding's records**. The skipped binding still reads `NeedInstall = false` and an
+empty `LastError` — exactly like one that applied — so neither column can tell the two apart; `InstallType`
+and the log's `Data "X Skipped, InstallType = …"` line can. The value read is the type of the binding as
+last delivered. Read it for every binding of the delivery's package in one call
+(`{ "objectCode": "SysPackageSchemaData", "columns": ["Name","InstallType","NeedInstall","LastError"], "filters": { "all": [ { "field": "SysPackage.Name", "op": "eq", "value": "<package>" } ] } }`)
+and name every row whose type skipped it. `[observed]` on an application's second install: one binding of
+the package read `InstallType = 1`, the others `0`, and the log skipped exactly that one.
+
 **`NeedInstall` and `LastError` are one pair, written together, and they describe the *last attempt* — not
 history.** *Read from the installer implementation, not from a live environment.* A binding's data install
 ends in one of two writes, both in the same statement: on success `NeedInstall = false` with
@@ -145,6 +164,30 @@ A delivery that removes or replaces an old schema can fail on
 `SysPackage.Name`, `IsChanged` and `LastError`; that list is the diagnosis. State one limit with it: an
 active process instance also holds a schema and is **not** part of this read, so the result is what you
 could see holding it, not necessarily everything.
+
+### SQL script state on the target — `SysPackageSqlScript`
+
+Verified columns (confirmed via `creatio_describe_object` on a live environment): `Name`, `UId`,
+`SysPackage` (Lookup → `SysPackage`, bare), `DBEngineType`, `InstallType`, `IsChanged`, `IsLocked`,
+`NeedInstall`, `LastError`, `BackwardCompatibilityConfirmed`, plus `Body` (**Binary** — the script's text;
+not readable through these reads) and the audit columns.
+
+The script-level counterpart of `SysPackageSchemaData`. `NeedInstall = true` with a `LastError` is the
+platform's own record that the script's last run failed, and `LastError` carries the engine's message —
+`[observed]`: `P0002: query returned no rows` on a script whose install failed with that error, beside
+`NeedInstall = true`. Read it as the state of the last run, not as history: `[unverified here]` that a
+later successful run clears it the way it clears the binding pair — a failed script re-run successfully,
+then read again, would settle it.
+
+`InstallType` places the script in the install sequence. `[observed]` a script with `InstallType = 2` ran
+after the data install; the other values have not been read against a log here, so for them take the
+place from the log's markers rather than from the number.
+
+**The script's text is not available from the environment** — `Body` is binary, and the activity-log row
+that created the script carried no attachment `[observed]`. So the table a failing script queried is
+known only from its error and its context; say so, and do not present the query as read. What the target
+can still answer is whether the data the script would have needed is there — the delivery's own
+bindings, their `InstallType`, and the records they carried.
 
 ### Binding column settings — `SysPackageSchemaDataColumn`
 
