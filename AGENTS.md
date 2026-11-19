@@ -108,11 +108,11 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 
 For CAADT product telemetry, read and follow `context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-telemetry` payload shape.
 
-**One stage vocabulary, plus a `workflow` field — and no skill is exempt.** Telemetry applies to every workflow, not only app creation. Event names are flow-agnostic stages and **which** flow it was travels in the `workflow` field: `app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or `app-maintenance`. Do not invent per-flow event names — clio rejects them, and they would encode the flow dimension into the enum instead of the field, multiplying names by flows.
+**One stage vocabulary, plus a `workflow` field — and no skill is exempt.** Telemetry applies to every workflow, not only app creation. Event names are flow-agnostic stages and **which** flow it was travels in the `workflow` field: `app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `mobile-business-logic`, `branding`, or `app-maintenance`. Do not invent per-flow event names — clio rejects them, and they would encode the flow dimension into the enum instead of the field, multiplying names by flows.
 
 Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow; it is owned by clio, which also owns the allow-list that validates it. `context/product-telemetry.md` owns only the other half: which gate of which CAADT flow emits which stage. Do not spell a stage from memory — a near-miss is rejected at runtime.
 
-This rule is stated here, outside the gate flow below, because that is exactly where it used to fail: the app-creation event checkpoints in the UX Contract hang off Gate P and Gate R, and this document exempts the `classic-to-freedom-migration` skill, the `creatio-mobile-page-conversion` skill, and branding runs from those gates — so those flows reported nothing at all, no matter how the instructions were worded. Being exempt from Gate P/R does **not** mean being exempt from telemetry; it means the same stages land on that flow's own gates instead (the engine gates and the verbatim migration plan, Gate M / Gate S, the single branding confirmation). The rule applies to targeted changes, autonomous runs, and pre-approved runs exactly as it applies to full app generation.
+This rule is stated here, outside the gate flow below, because that is exactly where it used to fail: the app-creation event checkpoints in the UX Contract hang off Gate P and Gate R, and this document exempts the `classic-to-freedom-migration` skill, the `creatio-mobile-page-conversion` skill, the mobile business-logic flow, and branding runs from those gates — so those flows reported nothing at all, no matter how the instructions were worded. Being exempt from Gate P/R does **not** mean being exempt from telemetry; it means the same stages land on that flow's own gates instead (the engine gates and the verbatim migration plan, Gate M / Gate S, Gate L / Gate D, the single branding confirmation). The rule applies to targeted changes, autonomous runs, and pre-approved runs exactly as it applies to full app generation.
 
 Telemetry stays non-blocking everywhere: it must never gate or delay the developer's task, and a clio too old to accept the stage names is a stop-emitting-and-continue, never a blocker.
 
@@ -134,6 +134,17 @@ Use the branding flow when the request is about visual branding rather than busi
 - adding or changing the app's logos and browser-tab favicon, or setting or removing an app background
 
 Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
+
+Use the mobile business-logic flow when a mobile Freedom UI page needs behaviour that lives in code:
+
+- reacting to a save, a data load or an attribute change on a mobile page
+- running an action from a button on a mobile page
+- making a web page handler, or a button the page conversion removed, work in the Mobile app
+- showing data on a mobile page that no entity holds
+
+The `creatio-app-orchestrator` skill owns this flow end to end: follow `runbooks/04-mobile-business-logic.md`, which runs its own preflight and its own gates (Gate L, Gate D). It produces no Business Plan, so Gate P and Gate R do not apply. A condition a business rule can express is not such a request — keep it on the standard rule path.
+
+Precedence for logic on web and mobile pages: a request for the same behaviour on a web page and its mobile page is one run of this flow, with one Gate L and one Gate D; `runbooks/04-web-and-mobile-logic.md` adds the web part and splits the work between helper subagents. When the request also creates or changes an app or a section, the app workflow owns it and Gate P and Gate R apply: the logic is a Business Plan item, and `runbooks/03-app-implementation.md` hands it to runbook 04 after the pages exist, where Gate R stands in for Gate L and Gate D still applies. Logic on a web page only is not this flow.
 
 Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, favicon, background) with no business-logic component; when in doubt, treat it as app work, not branding.
 

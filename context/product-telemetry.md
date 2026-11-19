@@ -42,6 +42,7 @@ actually running.
 | App creation or business-shaped feature work | `app-creation` | Yes |
 | Classic→Freedom UI migration | `classic-to-freedom-migration` | No — that skill has its own plan and approval |
 | Freedom UI web→mobile page conversion | `mobile-page-conversion` | No — Gate M / Gate S instead |
+| Custom business logic for the Mobile app (remote module) | `mobile-business-logic` | No — Gate L / Gate D instead |
 | Branding / theming | `branding` | No — single final confirmation instead |
 | A targeted, implementation-ready edit to an existing app | `app-maintenance` | No |
 
@@ -70,9 +71,10 @@ allow-list does not recognise.
 
 | Flow | `plan_presented` | `plan_approved` | `work_item_completed` | Notes |
 | --- | --- | --- | --- | --- |
-| `app-creation` | the BA-style Business Plan is shown in full | Gate R confirmation | per created section/page | `build_started` after Gate R, once runtime context is available |
+| `app-creation` | the BA-style Business Plan is shown in full | Gate R confirmation | per created section/page; per delivered mobile module (`variant=module`) when a plan item is delivered through `runbooks/04-mobile-business-logic.md` | `build_started` after Gate R, once runtime context is available |
 | `classic-to-freedom-migration` | the engine-written `plan.md`, presented verbatim | explicit approval, before the first Freedom artifact | per migrated page (`variant=page`) | `plan_blocked` with `variant=engine-gate` on each `⛔` run |
 | `mobile-page-conversion` | the plain-language conversion plan | **Gate M** | per built mobile page; also on **Gate S** registration (`variant=section`) | `plan_blocked` with `variant=converter-unavailable` when clio does not ship `get-mobile-page-conversion-guide` |
+| `mobile-business-logic` | the plain-language logic plan | **Gate L** | on the delivered module after **Gate D** (`variant=module`); per wired page, web pages included (`variant=page`) | `plan_blocked` with `variant=toolchain-unavailable` when a preflight check fails |
 | `branding` | the single final summary | confirmation of that summary | per applied asset (`variant=theme` / `logo` / `background`) | palette confirmation is a `user_input_received` |
 | `app-maintenance` | — (skips planning) | — | per applied change | `plan_skipped` at the start makes the skip explicit |
 
