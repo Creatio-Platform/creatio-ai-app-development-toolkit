@@ -55,8 +55,27 @@ class InsertIndexRuleTests(unittest.TestCase):
         self.assertIn("`index: 1`", rule)
         self.assertIn("page-modification-components", rule)
 
-    def test_reference_covers_several_inserts_into_one_parent(self):
-        self.assertIn("earlier insert", paragraph(LAYOUT, LAYOUT_SEVERAL))
+    def test_reference_orders_several_inserts_by_layout_not_by_emission(self):
+        rule = paragraph(LAYOUT, LAYOUT_SEVERAL)
+        self.assertIn("row then column", rule)
+        self.assertIn("not necessarily the end of `items`", rule)
+        self.assertNotIn("next free position", rule)
+
+
+class RowNumberingCountsExistingChildrenTests(unittest.TestCase):
+    """Rows of a container continue after the rows its existing children, the template's
+    included, already take; only a container the agent creates starts at row 1."""
+
+    def test_skill_row_rule_counts_existing_children(self):
+        rule = paragraph(SKILL, "- **No empty layout gaps")
+        self.assertIn("existing children", rule)
+        self.assertIn("template", rule)
+        self.assertNotIn("must restart at 1", rule)
+
+    def test_reference_gap_rule_counts_existing_children(self):
+        rule = paragraph(LAYOUT, "- **Why a gap appears:**")
+        self.assertIn("already has children", rule)
+        self.assertIn("template", rule)
 
 
 if __name__ == "__main__":
