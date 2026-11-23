@@ -63,8 +63,9 @@ class InsertIndexRuleTests(unittest.TestCase):
 
 
 class RowNumberingCountsExistingChildrenTests(unittest.TestCase):
-    """Rows of a container continue after the rows its existing children, the template's
-    included, already take; only a container the agent creates starts at row 1."""
+    """The existing children of a container, the template's included, keep the rows they
+    declare; a new child takes a free row between them or the next row after them, as its place
+    in the layout needs. Only a container the agent creates starts at row 1."""
 
     def test_skill_row_rule_counts_existing_children(self):
         rule = paragraph(SKILL, "- **No empty layout gaps")
@@ -76,6 +77,8 @@ class RowNumberingCountsExistingChildrenTests(unittest.TestCase):
         rule = paragraph(LAYOUT, "- **Why a gap appears:**")
         self.assertIn("already has children", rule)
         self.assertIn("template", rule)
+        self.assertIn("a free row between them", rule)
+        self.assertNotIn("continue after", rule)
 
 
 if __name__ == "__main__":
