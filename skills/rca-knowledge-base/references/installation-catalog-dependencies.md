@@ -49,7 +49,9 @@ From the spine's stage table:
   out an inactive package of the environment.
 - **SQL scripts** — shared with the conflicts catalog. The spine's discriminator: the object the script
   needs **was supposed to arrive with another package** → here. The object exists but the target's
-  structure or data does not match what the script assumes → `installation-catalog-conflicts.md`.
+  structure or data does not match what the script assumes → `installation-catalog-conflicts.md`. The
+  script found nothing because a binding of the **same** delivery was skipped →
+  `installation-catalog-data-bindings.md` (IB12), and the spine checks that first.
 - **Source generation** — shared. Generation failed because **a schema from another package is missing**
   → here. Missing data a column default reads → `installation-catalog-data-bindings.md`. Missing
   localized resource → `installation-catalog-localization.md`.
@@ -579,7 +581,8 @@ symptom with four causes; ID10 owns exactly one of them, and the spine's §4 evi
 Also out of scope:
 - A SQL script failing because the object exists but its structure or data differs from what the script
   assumes → `installation-catalog-conflicts.md`. A *repeated* install failing on a column the object
-  visibly has → `installation-catalog-data-bindings.md` §5.
+  visibly has, or a script that found nothing because the same delivery skipped a binding →
+  `installation-catalog-data-bindings.md` §5.
 - Source generation failing on missing **data** or a missing **localized resource** →
   `installation-catalog-data-bindings.md` / `installation-catalog-localization.md`.
 - Whether to restore after a failed delivery → the spine's restore gate. Never answered here.

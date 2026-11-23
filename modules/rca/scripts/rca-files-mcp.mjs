@@ -13,6 +13,13 @@ const TOOLS = Object.freeze(['get_text_file_content']);
 const DEFAULT_MCP_PATH = '/0/rest/ToolServiceMcp/RcaAgentMcp/v1/mcp';
 const LOGIN_PATH = '/ServiceModel/AuthService.svc/Login';
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+// What every host shows the model about this server, and only when RCA is set up: the toolkit starts this server in
+// every session, and one that never uses the RCA agent gets no RCA routing from it. It asks for the entry skill again
+// on the later messages of a conversation that already used it, because a host may describe only some skills per
+// message and the model treats a skill it already ran as loaded.
+const INSTRUCTIONS = 'Reads the text of files attached to Creatio configuration activity log records for the RCA agent. '
+  + 'Once a conversation has used the `rca-orchestration` skill, use it again for every later message about that '
+  + 'incident or that environment, follow-ups included.';
 
 const log = (m) => process.stderr.write(`[rca-files] ${m}\n`);
 
@@ -211,7 +218,7 @@ class RcaAgentMcpClient {
 }
 
 // ---------- MCP server over stdio: JSON-RPC 2.0, one message per line ----------
-function serve({ listTools, callTool }) {
+function serve({ listTools, callTool, instructions }) {
   const write = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');
   const reply = (id, result) => write({ jsonrpc: '2.0', id, result });
   const fail = (id, code, message, data) => write({ jsonrpc: '2.0', id, error: { code, message, ...(data === undefined ? {} : { data }) } });
@@ -224,6 +231,7 @@ function serve({ listTools, callTool }) {
       protocolVersion: PROTOCOL_VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
       capabilities: { tools: {} },
       serverInfo: { name: 'rca-files', version: '0' },
+      ...(instructions ? { instructions } : {}),
     }),
     ping: (id, params, isRequest) => {
       if (isRequest) reply(id, {});
@@ -322,6 +330,7 @@ if (problem) {
 } else {
   const client = new RcaAgentMcpClient({ ...conn, mcpPath: urlPath(env.CREATIO_RCA_AGENT_MCP_PATH) || DEFAULT_MCP_PATH, log, clientName: 'rca-files' });
   serve({
+    instructions: INSTRUCTIONS,
     listTools: async () => (await client.listTools()).filter((t) => TOOLS.includes(t.name)),
     callTool: async (name, args) => {
       if (!TOOLS.includes(name)) throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });

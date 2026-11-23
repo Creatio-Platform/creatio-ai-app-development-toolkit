@@ -719,7 +719,9 @@ lines, and the markers absent from it were simply never reached by the run it ca
 | `Installing SQL scripts` / `SQL script "X" from package "X" installed` | scripts **executed** |
 | `Schema "X" saved in package "X"` | the schema was written **into the package** — not proof that it is now in the configuration, and not proof that it survived at all |
 | `Actions added for schema "X" from package "A, B"` | the object is assembled from **more than one package** — the names are its layers |
-| `Schema data "X" saved in package "X"` | a data binding was applied |
+| `Schema data "X" saved in package "X"` | the binding was written **into the package** (package commit) — not that its records reached the target; that is the data-install line below |
+| `Installing data` / `Data "X" from package "Y" installed` | the binding's records were applied to the target — **unless the quoted name carries `Skipped`** (next row) |
+| `Data "X Skipped, InstallType = <type>" from package "Y" installed` | the binding was **skipped — nothing written**, although the line ends in `installed`. Its installation type ruled this install out (`installation-catalog-data-bindings-reference.md` §A) |
 | `Files saved in package "X"` / `SQL script "X" saved in package "X"` / `Package "X" saved` | the per-package commit |
 | `Compiling configuration dll` | the workspace build began — the compilation stage |
 | `Errors and (or) warnings occurred while compiling configuration dll` | **the build's own error marker** — the only one a failed build writes, and it is neither of the two `Error occur*` forms |
@@ -808,8 +810,28 @@ schema was applied" inverts the truth in the worst available direction — it na
 was destroyed. This is the stronger form of the rule §4 already carries for a rolled-back delivery: there
 the `saved` lines persisted nothing, here they persisted a **deletion**, and the run reported success.
 
-Four more lines mean something other than what they look like. They cost a wrong diagnosis, and they belong
+The lines below mean something other than what they look like. They cost a wrong diagnosis, and they belong
 here rather than in a catalog, because every catalog hits them:
+
+- **A data line that ends in `installed` can report a binding the installer skipped.** `[observed]` on a
+  second install of an application whose new version switched its binding to first-install-only:
+
+  ```
+  …,935 Installing data
+  …,935 Data "<binding> Skipped, InstallType = FirstInstall" from package "<package>" installed
+  …,951 Data "<binding>" from package "<package>" installed
+  …,004 Installing SQL scripts
+  …,014 Error occurred while installing SQL script "<script>" in package "<package>". UId <uid>: P0002: query returned no rows
+  ```
+
+  The installer puts the skip notice **inside** the success template, and the line after it repeats the
+  binding's name with no qualifier at all. Neither wrote anything: the binding's new rows never reached the
+  target, and the script that read them found nothing. So read the **quoted name**, not the verb: a name
+  that carries `Skipped` means not applied, whatever the line ends with. Quote such a line in full in the
+  report — shortened to `Data "<binding>" … installed` it says the opposite. Every binding the delivery
+  carried is in this block; look for `Skipped` in it **before** you settle any later stage's error, because
+  a later step that read the skipped data fails on its absence (`rca-root-cause-vs-consequence`, "The
+  failing element did not find something").
 
 - **There are two error markers, and only one of them is misspelled.** Verified across three installer
   logs:
@@ -976,13 +998,13 @@ failure nor the last.
 | Validation | archive structure, package identity, size limits | `Packages validation started` → `Packages have been validated` | none owns it — search per §5.1 |
 | Backup | the installer's own pre-install configuration backup | `Configuration backup started.` → `Configuration backup successfully created.` | none owns it — search per §5.1 |
 | Load & compose | read packages from the archive, resolve dependencies and order | `Loading packages from archive`, `Package "X" loaded` (also `Inactive package "X" loaded` — the environment's inactive packages, not the delivery's; §2.5), `Preparing packages for installation`, `Composing packages` | `installation-catalog-dependencies.md` |
-| SQL scripts | execute the packages' scripts | `Installing SQL scripts`, `SQL script "X" from package "X" installed` | see the discriminator below |
+| SQL scripts | execute the packages' scripts — **where in the sequence depends on each script's installation type** (see the note below the table) | `Installing SQL scripts`, `SQL script "X" from package "X" installed` | see the discriminator below |
 | Schema install | apply schemas into packages | `Schema "X" saved in package "X"` | `installation-catalog-conflicts.md` **and** `installation-catalog-dependencies.md` — see the discriminator below |
 | Package commit | store files and scripts, close each package | `Files saved in package "X"`, `SQL script "X" saved in package "X"`, `Package "X" saved`, then `Added - dependencies / resources / schema caption localizations in package "X"` (`Modified - …` when the package already existed) | none owns it — search per §5.1; see the note below, a failure here is fatal and silent |
 | Package hierarchy | recompute the package tree | `Package hierarchy actualization is started` → `… is completed. Affected records: N` → `Package hierarchy updated` | none owns it — search per §5.1 |
 | DB structure | create/alter tables and columns | `Updating tables structure in database` | `installation-catalog-conflicts.md` **and** `installation-catalog-data-bindings.md` §5 — a repeated install that skipped the structure update, and Change Log on the modified object, are data-binding cases that surface here |
 | Source generation | generate schema source code | `Schema source code "X" from package Y generated`; `Actions skipped for schema "X" from package "Y" in N sec` when it is skipped; then `Updating modified schemas` → `Updated modified schemas` | see the discriminator below |
-| **Data install** | apply the bindings' records to the target | `Installing data` → `Data "X" from package "Y" installed` | `installation-catalog-data-bindings.md` / `installation-catalog-localization.md` |
+| **Data install** | apply the bindings' records to the target | `Installing data` → `Data "X" from package "Y" installed`; a skipped binding is `Data "X Skipped, InstallType = …" from package "Y" installed` — **not applied** (§2.5) | `installation-catalog-data-bindings.md` / `installation-catalog-localization.md` |
 | Install scripts | run each package's default install scripts | `Executing default install scripts` → `Default install script "X" executed for package "Y"` | none owns it — search per §5.1 |
 | Application registration | record the application | `Saving application info to the system (code: X)...` → `Saved new application X` | none owns it — search per §5.1 |
 | Compilation | build the workspace assembly | `Compiling configuration dll` opens it. On failure: `Errors and (or) warnings occurred while compiling configuration dll` and one raw `… error CS####: …` line per diagnostic. Then, **whatever the compile did**, `Configuration build started` … `Configuration build finished`, with `Current schemas info loaded`, `New schemas info loaded`, `Configuration state loaded`, `Configuration server content generation started/generated`, `Schema JS module descriptors updated` between them | **§5.2 of this file** (the gate and the framing) → `compilation.md` (mechanics) + `compilation-catalog-cases.md` (signature) |
@@ -1037,9 +1059,14 @@ failure nor the last.
 > marker means "this delivery had nothing to do here" at least as often as it means "it never got this
 > far" — use the stages that *are* present to bracket, never the absence of one.
 
-> **Two things about this order, both verified and both counter-intuitive.** **SQL scripts execute *before*
-> schemas are applied** — measured in one log at `15:31:31` for `Installing SQL scripts` against `15:31:41`
-> for the first `Schema … saved`; an earlier draft of this file had them the other way round. And the four
+> **Two things about this order, both verified and both counter-intuitive.** **The SQL-scripts stage has no
+> fixed place — each script runs where its installation type puts it.** Measured in one log, scripts
+> executed *before* schemas were applied: `15:31:31` for `Installing SQL scripts` against `15:31:41` for the
+> first `Schema … saved`. `[observed]` in another, a script whose `SysPackageSqlScript.InstallType` is `2`
+> ran **after the data install** — `Installing data` and its `Data "…" installed` lines first, then
+> `Installing SQL scripts` and the script's error. A script is usually placed after the data because it
+> works on the delivered data, so when it fails, the data-install lines just above it are the first thing
+> to read (§2.5). Bracket by the markers you see, never by where this table puts the stage. And the four
 > stages at the bottom carry **no verified marker yet**: the run this vocabulary came from failed during
 > schema install and never reached them, so their order rests on domain material rather than on a log
 > anyone here has read. Say so when you route to one of them, and add the marker to this table the first
@@ -1052,7 +1079,7 @@ this file's job, not its:
 | Stage | Section of `rca-env-readonly-query` that corroborates it |
 |---|---|
 | Load & compose | "Packages and their dependencies" — is the named package present, and what dependency graph is actually stored |
-| SQL scripts | "Does the record named in an error actually exist?" — the table or object the script expected |
+| SQL scripts | "SQL script state on the target — `SysPackageSqlScript`" for the script itself; "Does the record named in an error actually exist?" — the table or object the script expected; and, when the script found nothing, "Binding state on the target — `SysPackageSchemaData`" for the bindings of the same delivery |
 | Schema install | "Schema state on the target" — `IsChanged` / `IsLocked`, a missing `Parent`, and a name collision as same `Name` + different `UId` |
 | Data | "Binding state on the target — `SysPackageSchemaData`", "Binding column settings — `SysPackageSchemaDataColumn`", "Cultures — `SysCulture`", "Localized resources — `SysLocalizableValue`", "Localization changes attributed to a log record — `LocalizationChangeLog`", and "Section bindings" for a section that did not appear |
 | Source generation | "System settings" for a setting the generation needs, and "Localized resources — `SysLocalizableValue`" for a resource missing in one culture |
@@ -1065,11 +1092,18 @@ gate. A CI/CD action that failed before its install step ran is the standard exa
 
 **Shared stages — the discriminator is set here, and catalogs follow it without overriding:**
 
-- **SQL scripts:** the script failed because the object it needs **was supposed to arrive with another
-  package** → `installation-catalog-dependencies.md`. The object exists but the target's structure or data
-  does not match what the script assumes → `installation-catalog-conflicts.md`. A *repeated* install
-  failing on a column the object visibly has is a third reading — the structure update was skipped on the
-  second attempt — and lives in `installation-catalog-data-bindings.md` §5.
+- **SQL scripts — first ask whether an earlier step of this same delivery failed to provide what the
+  script needed.** A script's error is often a consequence, not a cause. When the script **found nothing**
+  — `P0002: query returned no rows` on PostgreSQL, a not-found the script raises itself, a null where it
+  needs a value — read this delivery's data-install lines (§2.5) and its bindings' state **before** any
+  branch below. A binding of the delivery that was skipped (`Data "X Skipped, …" … installed`) or failed is
+  the cause, and the script is its consequence → `installation-catalog-data-bindings.md` §5. Only when
+  every binding of the delivery applied, take the branches: the object the script needs **was supposed to
+  arrive with another package** → `installation-catalog-dependencies.md`; the object exists but the
+  target's structure or data does not match what the script assumes, and nothing in this delivery was
+  meant to change that → `installation-catalog-conflicts.md`. A *repeated* install failing on a column
+  the object visibly has — the structure update was skipped on the second attempt — lives in
+  `installation-catalog-data-bindings.md` §5 too.
 - **Schema install:** the element the installer names **is present on the target but blocked** — locally
   modified, locked, or clashing by name/`UId` with a schema in another package →
   `installation-catalog-conflicts.md`. Something the incoming schema **needs is absent** — most often its

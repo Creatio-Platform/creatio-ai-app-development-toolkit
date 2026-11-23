@@ -4,7 +4,8 @@ Entry point for the RCA agent's domain knowledge. Classify the incident, then op
 (it sits next to this one in `references/`). Each domain file follows the pattern
 **signature → hypothesis → verification (read-query) → fix**.
 
-Read this at the start of every investigation (the agent's loop, step 1).
+Read this at the start of every investigation (the agent's loop, step 1), including a new incident raised later in
+the same conversation — an earlier read of this file does not cover it.
 
 ## How to classify
 

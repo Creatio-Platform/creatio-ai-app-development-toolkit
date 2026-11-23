@@ -47,8 +47,13 @@ does not produce vagueness, it produces a confident wrong sentence. Name the tab
 
 1. **`IsForceUpdate = false`** on a column of a row that already exists — IB4's mechanic, and the only one
    the flag fixes.
-2. **`InstallType = FirstInstall`** where the package is not new here. Emitted **as a success**:
-   `<binding> Skipped, InstallType = FirstInstall`.
+2. **`InstallType = FirstInstall`** where the package is not new here. Emitted **as a success** — the
+   notice is wrapped in the data-install line, and the next line repeats the binding with no qualifier
+   `[observed]`:
+   `Data "<binding> Skipped, InstallType = FirstInstall" from package "<package>" installed`, then
+   `Data "<binding>" from package "<package>" installed`. Neither wrote anything. Search for `Skipped`
+   inside the quoted name, never for a line of its own. When a later step of the same delivery read that
+   data — a SQL script placed after the data install — it fails on its absence: IB12.
 3. **`InstallType = InstallIfNotExists`** where the binding already exists in the target package. Emitted as
    a **warning**, not an error: `The bound data '<name>' [<UId>] (package '<name>' [<UId>]) was updated in
    package, but data install will be skipped and installation type set up as 'InstallIfNotExists'.`
