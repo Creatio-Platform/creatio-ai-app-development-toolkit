@@ -54,6 +54,12 @@ Apply the remaining plan (entities, lookups, pages, bindings) through the tools 
 DB-first and immediately runtime-accessible — they do **not** require a separate compile or deploy
 step.
 
+**Logic items for the Creatio Mobile app.** A Business Plan item recorded as mobile logic delivered
+through a remote module (see `runbooks/02-requirements-gathering.md`) is built once its pages exist.
+Hand each such item to `runbooks/04-mobile-business-logic.md`, "Entered from app creation": Gate R
+stands in for its Gate L, and its Gate D still comes before the module is pushed. When the item also
+names the web page, the same run delivers both parts (`runbooks/04-web-and-mobile-logic.md`).
+
 ### 4. Place the app in the navigation
 
 #### Provision the planned roles and users first

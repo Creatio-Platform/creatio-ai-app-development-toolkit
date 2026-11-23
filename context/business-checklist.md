@@ -214,7 +214,7 @@ For every business rule, describe it as **action + target + condition**:
 
 Do not leave this logic implicit. If the requirements imply that a field only matters in some states, that a value should be auto-populated, or that something must be protected after a transition, state the rule explicitly with its trigger condition. Where the lifecycle has distinct statuses, walk each status and note which fields become required, hidden, locked, or auto-set in that state.
 
-Prefer expressing these as deterministic business rules. Flag any condition that needs custom client-side code (custom validators/handlers/converters) as a separate, non-business-rule item, since it falls outside the standard conditional-rule path.
+Prefer expressing these as deterministic business rules. Flag any condition that needs custom client-side code (custom validators/handlers/converters) as a separate, non-business-rule item, since it falls outside the standard conditional-rule path. For a mobile page, name `runbooks/04-mobile-business-logic.md` as its delivery path.
 
 **No duplication between prose and the conditional rules block.** Each conditional rule belongs in exactly one place. If a behavior is captured as a conditional rule (action + target + condition), do not also restate it in the main `Business Logic` prose, and vice versa. The prose covers non-conditional business logic (minimum-to-create, duplicate handling, archive/close posture, ownership/editing posture, derived/aggregated values, cross-field validation that is not a UI rule); the conditional rules block covers the show/hide, required, lock, and set-value rules. Before finalizing the section, scan for any statement that appears both as prose and as a conditional rule and remove the prose copy.
 

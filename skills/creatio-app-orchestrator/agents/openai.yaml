@@ -1,5 +1,5 @@
 ---
 display_name: "Creatio App Orchestrator"
-short_description: "Create, generate, scaffold, build, add, or plan a Creatio app or a new section"
-default_prompt: "Use $creatio-app-orchestrator when the user asks to create, generate, scaffold, build, add, or plan a Creatio app or a new section - for example \"create a Todo app\" or \"add an Orders section\". It produces the Creatio app Business Plan and technical implementation handoff, then applies the approved plan through clio MCP."
+short_description: "Create, generate, scaffold, build, add, or plan a Creatio app or a new section; add custom business logic to the Creatio Mobile app"
+default_prompt: "Use $creatio-app-orchestrator when the user asks to create, generate, scaffold, build, add, or plan a Creatio app or a new section - for example \"create a Todo app\" or \"add an Orders section\". It produces the Creatio app Business Plan and technical implementation handoff, then applies the approved plan through clio MCP. Use it also when a Creatio Mobile page needs custom business logic in code - a handler, a button action or a virtual data source - which it plans, builds as a remote module and delivers behind its own approval gates."
 ---

@@ -38,6 +38,7 @@ WORKFLOW_VALUES = [
     "app-creation",
     "classic-to-freedom-migration",
     "mobile-page-conversion",
+    "mobile-business-logic",
     "branding",
     "app-maintenance",
 ]
@@ -333,8 +334,8 @@ class ProductTelemetryContractTests(unittest.TestCase):
     def test_the_two_orchestrator_telemetry_sections_do_not_drift(self):
         # The whole section — the flow-to-stage mapping included — is hand-mirrored into the Cursor
         # rule, and hand-mirrored copies drift the next time a flow's gates change. They are supposed
-        # to differ in exactly ONE way: the relative path to `context/product-telemetry.md`, because
-        # the rule sits one directory shallower than the skill. Everything else must be identical, so
+        # to differ in exactly ONE way: the relative prefix of a toolkit path (`context/…`,
+        # `runbooks/…`), because the rule sits one directory shallower than the skill. Everything else must be identical, so
         # a change to one surface that is not made to the other fails here rather than in a session.
         heading = "## Product telemetry"
         sections = {}
@@ -347,7 +348,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
             end = text.find(chr(10) + "## ", start + len(heading))
             section = text[start:end if end > 0 else len(text)]
             # Normalise only the documented difference.
-            sections[name] = section.replace("../../context/", "../context/").strip()
+            sections[name] = re.sub(r"\.\./\.\./(context|runbooks)/", r"../\1/", section).strip()
 
         self.assertEqual(
             sections["SKILL.md"], sections["cursor-rule"],
