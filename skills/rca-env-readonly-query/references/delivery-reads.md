@@ -99,8 +99,13 @@ this table it is an integer with four values (on `SysPackage` the same column na
 |---|---|
 | `0` — Install | always; on a row that already exists it overwrites only the columns with `IsForceUpdate` |
 | `1` — FirstInstall | **only when the package is new on this environment** — on any later install of the package the whole binding is skipped |
-| `2` — Update | always, like `0` |
+| `2` — Update | always; the same as `0` except for a *localized* row (`rca-knowledge-base`'s `references/installation-catalog-data-bindings-reference.md` §A) |
 | `3` — InstallIfNotExists | **only when the binding does not already exist in the target package** |
+
+Where each row comes from: all four are read from the installer's own branch on the type (the same §A); `0`
+and `1` are also `[observed]` (below), the skip on `1` with its log line. `2` and `3` are `[unverified here]` on a live environment, and so is the
+numbering on product versions other than the one read: when the log's `Skipped, InstallType = <name>` line
+is there, it names the type in words — quote it beside the number.
 
 So `1` on a package that was installed before, or `3` on a binding that was already there, means **this
 delivery wrote none of the binding's records**. The skipped binding still reads `NeedInstall = false` and an

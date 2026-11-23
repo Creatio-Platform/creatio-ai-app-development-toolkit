@@ -681,7 +681,9 @@ routes here from both rows.
     (`installation-catalog-data-bindings-reference.md` §A), and here the row already exists from the first
     install. Then re-export the application and install it again. `[unverified here]` that the script
     runs again on that install and this exact sequence then succeeds — a re-export with both settings,
-    installed over the failed state, would settle it.
+    installed over the failed state, would settle it. **Say so in the report, next to the fix:** the
+    diagnosis is confirmed by the reads above; this fix follows from how the binding's type works, and has
+    not yet been seen to clear this failure end to end. The user decides with that in front of them.
   - **Unblock now (temporary), on the target:** bring the missing values in by hand — the record and
     columns from read 4, with the values from `data.json` — then repeat the install so the script runs.
     It is a hand edit the next delivery may overwrite, so the proper fix still follows.
