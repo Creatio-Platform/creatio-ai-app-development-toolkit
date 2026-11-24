@@ -124,6 +124,10 @@ console.log("— the `Page code` row of --verify");
   const noView = renderVerify(res, {}, { ops: [{ name: "Notes", type: "crt.Input" }], handlers: CLEAN, ...QG });
   check("handlers without a viewConfig close the row on what can be checked and say the view's requests were not",
     () => /✅ Done/.test(line(noView)) && /not checked \(no viewConfig/.test(line(noView)), () => line(noView));
+  const mini = `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => { await request.$context.executeRequest({ type: "usr.RefreshTotals" }); return next?.handle(request); } }]`;
+  const twoPages = renderVerify(res, {}, { pages: { main: built(RELAY), mini: { handlers: mini, viewConfig: [] } }, ...QG });
+  check("a request declared here and sent from another built page (its mini page) is not reported as unsent",
+    () => /⚠ verify/.test(line(twoPages)) && !line(twoPages).includes("usr.RefreshTotals") && line(twoPages).includes("`idOf`"), () => line(twoPages));
   const none = renderVerify(res, {}, { ops: [{ name: "Notes", type: "crt.Input" }], ...QG });
   check("no handler source in the payload leaves the row to confirm, never a failure", () => /☐ confirm on-stand/.test(line(none)) && none.complete === true,
     () => ({ row: line(none), complete: none.complete }));

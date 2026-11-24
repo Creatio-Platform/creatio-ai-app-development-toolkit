@@ -67,7 +67,7 @@ function handlerFacts(entry) {
     functions: [{ name: entry.request, lines }, ...functions], literals, truncated: walk.truncated };
 }
 // The request names the view sends: `clicked: { request: "usr.X" }` and every other `request` value in the tree.
-function viewRequests(viewConfig) {
+export function viewRequests(viewConfig) {
   const out = new Set();
   const visit = (v) => {
     if (Array.isArray(v)) { v.forEach(visit); return; }
@@ -84,7 +84,9 @@ function viewRequests(viewConfig) {
 // The analysis. `{ error }` when the source cannot be read as a handlers array; otherwise every fact the map and
 // the verify row report. Pure: no file system, no stand. Without a `viewConfig` nobody knows what the buttons send,
 // so the unsent-request check is skipped (`sendsChecked: false`) rather than reporting every button's request.
-export function analyzePageCode(handlersSrc, viewConfig = null) {
+// `sentElsewhere` names requests another built page sends (its mini page, a child page): a request declared here
+// and dispatched from there is sent, not dead.
+export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = new Set()) {
   const text = String(handlersSrc ?? "").trim();
   const sendsChecked = viewConfig != null;
   if (!text) return { handlers: [], duplicates: [], longFunctions: [], unsent: [], sendsChecked };
@@ -97,7 +99,7 @@ export function analyzePageCode(handlersSrc, viewConfig = null) {
   if (handlers.some((h) => h.truncated)) return { error: "a handler is too large or too deeply nested to analyse — split it" };
   const definedIn = new Map();
   for (const h of handlers) for (const name of h.helpers) definedIn.set(name, [...(definedIn.get(name) || []), h.request]);
-  const sent = new Set([...handlers.flatMap((h) => [...h.literals]), ...viewRequests(viewConfig)]);
+  const sent = new Set([...handlers.flatMap((h) => [...h.literals]), ...viewRequests(viewConfig), ...sentElsewhere]);
   return {
     handlers: handlers.map(({ request, lines, helpers }) => ({ request, lines, helpers })),
     duplicates: [...definedIn].filter(([, where]) => where.length > 1).map(([name, where]) => ({ name, handlers: where })),

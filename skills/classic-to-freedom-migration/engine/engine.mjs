@@ -733,24 +733,18 @@ export function walkAstBounded(root, visit) {
   return { truncated: false };
 }
 
-// Walk one method body, collecting the facts above. Iterative (explicit stack) so a deeply nested body cannot
-// blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH.
+// Walk one method body, collecting the facts above, on the bounded walker (iterative, so a deeply nested body cannot
+// blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH).
 function walkMethodBody(fnNode) {
   const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
   const publishes = new Set(), subscribes = new Set();
-  let nodes = 0, truncated = false;
-  const stack = [[fnNode.body, 0]];
-  while (stack.length) {
-    const [node, depth] = stack.pop();
-    if (!node || typeof node !== "object") continue;
-    if (++nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { truncated = true; break; }
-    // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
-    // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
-    // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
+  // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
+  // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
+  // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
+  const { truncated } = walkAstBounded(fnNode.body, (node) => {
     if (node.type === "CallExpression" || node.type === "NewExpression")
       recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
-    pushChildren(node, depth, stack);
-  }
+  });
   const sorted = (s) => [...s].sort(byLocale);
   // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
   // accessor for both. Splitting them keeps `readsAttrs` a true list of view-model attributes (what a Freedom

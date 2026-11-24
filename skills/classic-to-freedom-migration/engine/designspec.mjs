@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
 import { RECONCILE_MODE_CLASSIC } from "./reconcile-modes.mjs";
-import { analyzePageCode, findingCount, findingPhrases, MAX_FUNCTION_LINES } from "./codemap.mjs"; // the `Page code` row measures what the writer's code map shows
+import { analyzePageCode, findingCount, findingPhrases, viewRequests, MAX_FUNCTION_LINES } from "./codemap.mjs"; // the `Page code` row measures what the writer's code map shows
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions, cardActionSignals,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
@@ -4560,6 +4560,16 @@ export function resolveHandlerVk(vk, ctx) {
   const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
   return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
 }
+// What the OTHER built pages of the payload send: a quoted name in their handler source, or a request in their view.
+function requestsSentElsewhere(root, pageKey) {
+  const out = new Set();
+  for (const [key, e] of Object.entries(root?.pages || {})) {
+    if (key === pageKey || !e || typeof e !== "object") continue;
+    for (const m of String(typeof e.handlers === "string" ? e.handlers : "").matchAll(/["'`]([\w.$-]+)["'`]/g)) out.add(m[1]);
+    for (const r of viewRequests(e.viewConfig)) out.add(r);
+  }
+  return out;
+}
 // The `Page code` row. Not provided ⇒ not checkable, the same non-gating answer a handler row gives; findings ⇒
 // ⚠ verify, which gates the run until the code is fixed or a decision records why it stays.
 export function resolvePageCodeVk(vk, ctx) {
@@ -4567,13 +4577,13 @@ export function resolvePageCodeVk(vk, ctx) {
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
   if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
   // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
-  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig);
+  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey));
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   if (!findingCount(a)) {
     const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
     return ["✅ Done", `${a.handlers.length} handler(s): none over ${MAX_FUNCTION_LINES} lines, no helper defined twice, ${sends}`, "ok"];
   }
-  return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception`, "unverified"];
+  return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception (a request sent only from a module outside the built pages is one)`, "unverified"];
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);

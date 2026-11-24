@@ -4754,7 +4754,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest), decisions });
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing

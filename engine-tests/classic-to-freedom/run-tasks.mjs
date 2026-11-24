@@ -657,9 +657,9 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
   check("task card: the decisions in force are inline, verbatim, the plan's Adjustments included",
     () => card.includes("- `D4` — Hide every element the Classic page did not have") && card.includes("- `Adjustment 1` — Keep the Notes tab"),
     () => card);
-  check("task card: an empty decisions file says none are recorded; a render without the map says they were not read, never that none exist",
+  check("task card: an empty decisions file says none are recorded; a render without the map sends the writer to the orchestrator, never to decisions.md",
     () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: new Map() }).includes("**Decisions in force:** none recorded.")
-      && /\*\*Decisions in force:\*\* not read for this render/.test(SAMPLE_TEXT));
+      && /\*\*Decisions in force:\*\* not available to this render — ask the orchestrator to re-run `--tasks`/.test(SAMPLE_TEXT));
   check("task card: the cited behaviour cards travel inline with their content, and the plan's ⚠ Confirm items and boundaries are pointed at in the table — no part-file read",
     () => {
       const rows = [
@@ -3669,6 +3669,25 @@ const minted = (over = {}, dirName = "mint") => {
   syncTaskDir(d, RUN, OPTS);
   return { d, res: addTasks(d, RUN, { ...DECL, ...over }, OPTS) };
 };
+
+// A declared task that writes a page carries the task card with the decisions in force — at minting, and again
+// after a later sync, which re-renders only the card block of an adopted file and leaves its cells and notes alone.
+check("minted: a declared page-writing task carries the decisions in force, and a later sync refreshes ONLY its card when a decision is added",
+  () => {
+    const d = tmp("mint-card");
+    const opts = { ...OPTS, decisions: new Map([["D2", "Keep the Notes tab"]]) };
+    syncTaskDir(d, RUN, opts);
+    const res = addTasks(d, RUN, DECL, opts);
+    const f = path.join(d, res.written[0].file);
+    const first = fs.readFileSync(f, "utf8");
+    fs.writeFileSync(f, first + "\nnoted by the writer\n");
+    syncTaskDir(d, RUN, { ...opts, decisions: new Map([["D2", "Keep the Notes tab"], ["D3", "Drop the History tab"]]) });
+    const second = fs.readFileSync(f, "utf8");
+    const cardOut = (t) => t.replace(/\n## Task card\n[\s\S]*?(?=\n\n## Deliverables)/, "");
+    fs.rmSync(d, { recursive: true, force: true });
+    return first.includes("- `D2` — Keep the Notes tab") && second.includes("- `D3` — Drop the History tab")
+      && cardOut(second) === cardOut(first + "\nnoted by the writer\n");
+  });
 
 // A LINE BREAK IN A DECLARED STRING FORGES FRONT MATTER: the value is interpolated into a line of its own, so an
 // embedded newline adds a line, and a `status:` there is read ahead of the engine's. Refused before anything is
@@ -7841,11 +7860,11 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
     () => ({ written: round1.written.map((t) => `${t.cause}:${t.rows.length}`) }));
   if (handlers) {
     const fp = path.join(dir, handlers.file);
-    const before = fs.readFileSync(fp, "utf8").split("\n");
+    let before = fs.readFileSync(fp, "utf8").split("\n");
 
     const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
       destination: "ENG-1", taskId: handlers.id, decisions });
-    const after = fs.readFileSync(fp, "utf8").split("\n");
+    let after = fs.readFileSync(fp, "utf8").split("\n");
     const rr = readTaskDir(dir).find((x) => x.id === handlers.id);
     check("AC 11: a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
       () => !res.refused && (res.unplaced || []).length === 0
@@ -7856,9 +7875,11 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
       () => ({ refused: res.refused, unplaced: res.unplaced?.length, touched: res.touched?.length,
         status: rr?.status, cell0: rr?.rows?.[0]?.outcome }));
 
-    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells and the three
-    // front-matter fields the engine owns may differ. Anything else means the writer rewrote a file it was
-    // supposed to edit in place.
+    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells, the three
+    // front-matter fields the engine owns and the engine-derived task card may differ. Anything else means the
+    // writer rewrote a file it was supposed to edit in place.
+    const cardFree = (lines) => lines.join("\n").replace(/\n## Task card\n[\s\S]*?(?=\n\n## Deliverables)/, "").split("\n");
+    [before, after] = [cardFree(before), cardFree(after)];
     const strayEdits = [];
     for (let i = 0; i < Math.max(before.length, after.length); i++) {
       if (before[i] === after[i]) continue;

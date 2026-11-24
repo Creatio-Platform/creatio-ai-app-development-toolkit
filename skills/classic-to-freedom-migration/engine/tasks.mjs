@@ -1060,9 +1060,9 @@ function endWithOneBlankLine(text) {
 // that writes a page: a review or the reference cache has no page code to own. `set.cardDecisions` is the
 // decisions map the caller read (`readDecisions`); without it the card says none were read rather than none exist.
 export const TASK_CARD_HEADING = "## Task card";
+const writesAPage = (task) => { const w = String(task.writesTo || ""); return w.startsWith("page:") || w === ARTIFACT_WHOLE; };
 function taskCardBlock(task, set = {}) {
-  const writes = String(task.writesTo || "");
-  if (!writes.startsWith("page:") && writes !== ARTIFACT_WHOLE) return [];
+  if (!writesAPage(task)) return [];
   const pageArg = task.pageKey ? ` --page ${task.pageKey}` : "";
   const L = ["", TASK_CARD_HEADING, "",
     "- **Your brief is this file** and your page's section of the design spec (`refs/spec.md` when the reference"
@@ -1081,7 +1081,7 @@ function taskCardBlock(task, set = {}) {
   ];
   L.push(...behaviourLines(task.rows || []));
   const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
-  if (!decisions) L.push("- **Decisions in force:** not read for this render — read `decisions.md` once, by heading.");
+  if (!decisions) L.push("- **Decisions in force:** not available to this render — ask the orchestrator to re-run `--tasks` before you build.");
   else if (!decisions.length) L.push("- **Decisions in force:** none recorded.");
   else {
     L.push("- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
@@ -3992,7 +3992,7 @@ function writeIfChanged(full, next) {
 // update: the front matter carries the `decisions:` map naming exactly the cells the body now holds, and the
 // two have to land together. `null` is passed when the run touched no cells here, so `decisions:` is never
 // added to a file that never carried it.
-function persistAdoptedTask(dir, t, unplaced) {
+function persistAdoptedTask(dir, t, unplaced, set = null) {
   const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
   const wanted = new Map();
   for (const idx of dirty) {
@@ -4014,6 +4014,24 @@ function persistAdoptedTask(dir, t, unplaced) {
   // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
   // the task for ever.
   setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "", decisionsArg);
+  refreshTaskCard(dir, t, set);
+}
+// A repair or declared task file is the record of its round and is never re-rendered, but its task card is not a
+// record: it is derived from the decisions in force, and its writer is told not to read decisions.md. So the card
+// block alone is re-rendered on every sync — replaced where the file has one, inserted before the deliverables where
+// it has none — and every cell, front-matter line and note around it stays as it is on disk.
+function refreshTaskCard(dir, t, set) {
+  if (!set?.cardDecisions || !writesAPage(t)) return;
+  const full = path.join(dir, t.file);
+  let text;
+  try { text = fs.readFileSync(full, "utf8"); } catch { return; }
+  const body = `\n\n${ENGINE_BODY_HEADING}`;
+  const end = text.indexOf(body);
+  if (end < 0) return;
+  const card = taskCardBlock(t, set).slice(1).join("\n");
+  const start = text.lastIndexOf(`\n${TASK_CARD_HEADING}\n`, end);
+  const next = start >= 0 ? text.slice(0, start) + "\n" + card + text.slice(end) : text.slice(0, end) + "\n\n" + card + text.slice(end);
+  writeIfChanged(full, next);
 }
 function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
@@ -4022,7 +4040,7 @@ function persistTaskSet(dir, merged) {
     // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
-    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced);
+    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced, merged);
     else writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
@@ -4141,7 +4159,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
   try {
-    mintDeclared(dir, result, decls, written);
+    mintDeclared(dir, result, decls, written, opts.decisions);
   } catch (e) {
     const refusal = ledgerRefusal(e);
     if (!refusal) {
@@ -4174,7 +4192,7 @@ function unmint(dir, written) {
 
 // Writes one task file per declaration, pushing each onto `written` once it is on disk, so a write that throws
 // part-way leaves `written` naming exactly the files that exist.
-function mintDeclared(dir, result, decls, written) {
+function mintDeclared(dir, result, decls, written, cardDecisions = null) {
   const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
@@ -4188,7 +4206,7 @@ function mintDeclared(dir, result, decls, written) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, cardDecisions }));
     written.push(task);
   }
 }
