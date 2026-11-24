@@ -564,8 +564,9 @@ export function parseDefineModule(src, { locations = false } = {}) {
   const depsNode = call.arguments.find((a) => a.type === "ArrayExpression");
   const deps = depsNode ? depsNode.elements.filter((el) => el?.type === "Literal" && typeof el.value === "string").map((el) => el.value) : [];
   const factory = call.arguments.find((a) => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
-  if (!factory) return { error: "define() has no factory function", deps };
-  return { error: null, deps, factory, returned: findFactoryReturn(factory) };
+  const name = call.arguments[0]?.type === "Literal" && typeof call.arguments[0].value === "string" ? call.arguments[0].value : null;
+  if (!factory) return { error: "define() has no factory function", deps, name };
+  return { error: null, deps, name, factory, returned: findFactoryReturn(factory) };
 }
 
 // One JavaScript expression as an AST node, or null when the text is not one — a get-page bundle field (`deps`,
@@ -582,11 +583,14 @@ export function parseJsExpression(src) {
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
 export function parseSchema(src, pkg) {
-  const astDiagnostics = [];
-  // `locations: true` so each method node carries its 1-based line span — the plan cites WHERE a behaviour lives
-  // in the classic body, which is what lets a reader check the engine's reading against the source. Purely
-  // additive to the AST shape; nothing else reads `loc`.
   const mod = parseDefineModule(src, { locations: true });
+  // the module's define() name (`BasePageProcessTemplate`, the page's own schema name), or null
+  return { ...parseSchemaModule(src, pkg, mod), moduleName: mod.name ?? null };
+}
+function parseSchemaModule(src, pkg, mod) {
+  const astDiagnostics = [];
+  // `mod` is parsed with `locations: true` so each method node carries its 1-based line span — the plan cites WHERE
+  // a behaviour lives in the classic body, which is what lets a reader check the engine's reading against the source.
   const amdDeps = mod.deps;
   if (mod.error) return { ...buildSchemaResult(pkg, src, mod.error, {}, amdDeps), astDiagnostics };
   const factory = mod.factory;

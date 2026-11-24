@@ -78,7 +78,7 @@ import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFile
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions, readDecisionTexts } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
-import { processTemplateOf, processTemplateOfManifest, pageSchemaNameOf, processPageInfo, processButtonMap } from "./process-page.mjs";
+import { processTemplateOf, processTemplateOfManifest, recordProcessTemplate, processPageInfo, processButtonMap } from "./process-page.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -1006,7 +1006,8 @@ const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXI
 export function placementIssues(manifest, { processPage = false } = {}) {
   const p = placementOf(manifest);
   const has = (k) => isResolvedFact(p, k);
-  const unresolved = (processPage ? PROCESS_PAGE_PLACEMENT_KEYS : requiredPlacementKeys(p)).filter((k) => !has(k));
+  const required = requiredPlacementKeys(p, { processPage });
+  const unresolved = required.filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -1017,8 +1018,7 @@ export function placementIssues(manifest, { processPage = false } = {}) {
   if (p.targetPackageEditable.value !== true) {
     issues.push(`placement.targetPackageEditable is not true — target package '${target || "(unset)"}' cannot receive design-time writes, so NO page can be built there. Pick an editable package (or create one) before this plan is approvable.`);
   }
-  // A process page is opened by its process step, never from a section or an app menu: nothing hosts it.
-  if (processPage) return issues;
+  if (!required.includes("sectionHost")) return issues;
   const mode = p.sectionHost.mode;
   if (!SECTION_HOST_MODES.includes(mode)) {
     issues.push(`placement.sectionHost.mode '${mode}' is not one of ${SECTION_HOST_MODES.join(" / ")}`);
@@ -1052,7 +1052,9 @@ const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].reso
 // nobody reads.
 const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
 const PROCESS_PAGE_PLACEMENT_KEYS = ["targetPackageEditable"];
-function requiredPlacementKeys(p) {
+// A process page is opened by its process step, never from a section or an app menu: nothing hosts it.
+function requiredPlacementKeys(p, { processPage = false } = {}) {
+  if (processPage) return PROCESS_PAGE_PLACEMENT_KEYS;
   return isResolvedFact(p, "sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
 }
 // The `parallelSection` contract. A parallel section is a NEW app and section built next to an EXISTING Freedom
@@ -1143,7 +1145,7 @@ export function checklistOpts(manifest, opts = {}) {
     // the ROOT run gates on them; a fold inherits facts the root already gated
     conventionsBlockers: opts.inheritedConventions ? [] : conventionFacts(manifest).issues,
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
-    placementKeys: processPage ? PROCESS_PAGE_PLACEMENT_KEYS : requiredPlacementKeys(placementOf(manifest)),
+    placementKeys: requiredPlacementKeys(placementOf(manifest), { processPage }),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
@@ -2917,10 +2919,11 @@ export function runMigration(manifest, opts = {}) {
   const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
   const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
   const eff = mergeHierarchy(schemas, { seedTemplate, noParentTemplate: manifest.noParentTemplate === true }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
-  // A pre-configured process page (process-page.mjs): read off the seed chain, never on a nested fold.
-  const listOf = (l) => (Array.isArray(l) ? l : []);
-  const processPage = isNestedFold(opts) ? null : processPageInfo({ template: processTemplateOf(listOf(manifest.seed).map(bodyOf)),
-    pageName: pageSchemaNameOf(listOf(manifest.schemas).map(bodyOf)), items: eff.items, manifest });
+  // A pre-configured process page (process-page.mjs): read off the parsed seed chain, never on a nested fold, and
+  // recorded on the manifest so `checklistOpts` gives the same answer.
+  const processTemplate = isNestedFold(opts) ? null : processTemplateOf(seedTemplate.map((l) => l.moduleName));
+  if (!isNestedFold(opts)) recordProcessTemplate(manifest, processTemplate);
+  const processPage = processPageInfo({ template: processTemplate, pageName: schemas.at(-1)?.moduleName, items: eff.items, manifest });
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // the embedded profile schemas a profile card renders (profiled entity + displayed columns).

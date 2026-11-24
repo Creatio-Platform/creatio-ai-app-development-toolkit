@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assembleBuilt, PROCESS_FILE } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
-import { processTemplateOf, processButtonsOf, processStepsIssues, PROCESS_BEHAVIOUR, PROCESS_TEMPLATES }
+import { processTemplateOfManifest, processButtonsOf, processStepsIssues, PROCESS_BEHAVIOUR, PROCESS_TEMPLATES }
   from "../../skills/classic-to-freedom-migration/engine/process-page.mjs";
 
 export function runProcessPageChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FIX }) {
@@ -34,8 +34,18 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
     () => run.processPage?.template === "BasePageProcessTemplate" && run.processPage.pageName === "UsrDeliveryCheckPage" && opts.processPage === true,
     () => run.processPage);
   check("process page: each of the four process templates is recognised; a define() of another name is not",
-    () => PROCESS_TEMPLATES.every((t) => processTemplateOf([`define("${t}", [], function() { return {}; });`]) === t)
-      && processTemplateOf(['define("BasePageProcessTemplateStructure", [], function() {});', 'define("BasePageV2", [], function() {});']) === null);
+    () => PROCESS_TEMPLATES.every((t) => processTemplateOfManifest({ seed: [{ body: `define("${t}", [], function() { return {}; });` }] }) === t)
+      && processTemplateOfManifest({ seed: [{ body: 'define("BasePageProcessTemplateStructure", [], function() {});' },
+        { body: '// define("BasePageProcessTemplate", [], function() {});\ndefine("BasePageV2", [], function() {});' }] }) === null);
+  // A seed given as files: the migration reads it through the manifest's base directory, and the plan options
+  // computed afterwards for the same manifest give the same answer.
+  const fileManifest = { ...manifest(), seed: [...CLEAN_SEED, { pkg: "CrtUIPlatform7x", file: "BasePageV2_skeleton.js" },
+    { pkg: "CrtWizards7x", file: "BasePageProcessTemplate.js" }] };
+  const fileRun = runMigration(fileManifest, { baseDir: dir });
+  check("process page: a file-based seed is a process page in the run and in the plan options alike",
+    () => fileRun.processPage?.template === "BasePageProcessTemplate" && checklistOpts(fileManifest).processPage === true
+      && !/\(list page\)/.test(fileRun.plan) && fileRun.signalsMissing.length === 0,
+    () => [fileRun.processPage?.template, checklistOpts(fileManifest).processPage]);
   const plain = runMigration({ entity: "", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: 'define("UsrNoObjectPage",[],function(){return{entitySchemaName:"",diff:[]};});' }] });
   check("process page: a page with an empty entitySchemaName and no process template keeps the record-page plan (list page row, section signals)",
     () => plain.processPage === null && /\(list page\)/.test(plain.plan) && plain.signalsMissing.length > 0);
@@ -45,6 +55,8 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
     () => !/\(list page\)/.test(run.plan) && !run.planMetaMissing.includes("sectionSchema") && run.signalsMissing.length === 0
       && /\| UsrDeliveryCheckPage \(process page\) \|/.test(run.plan) && /not applicable — a process page has no section/.test(run.plan),
     () => run.plan.split("\n").filter((l) => /Main scope|list page|process page/.test(l)));
+  check("process page: the Plan-vs-Done Pages group has no list-page row",
+    () => !/List page →/.test(run.checklist) && /Form page →/.test(run.checklist), () => run.checklist.split("\n").filter((l) => /page →/.test(l)));
   check("process page: placement asks only for an editable target package — nothing hosts a process page",
     () => opts.placementKeys.join() === "targetPackageEditable" && run.placementBlockers.length === 1
       && run.placementBlockers[0].includes("placement.targetPackageEditable not resolved"),

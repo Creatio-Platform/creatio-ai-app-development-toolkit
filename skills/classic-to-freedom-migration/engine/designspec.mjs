@@ -180,6 +180,8 @@ function rowActionsNote(am) {
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
 // The name a plan heading uses for the page: its entity, or for a process page (no entity) its schema name.
 const pageTitleOf = (result) => (result.processPage?.pageName ? `${result.processPage.pageName} (process page)` : result.entity || "?");
+// The form page's own label: a process page's title already says what it is.
+const pageHeadingLabel = (entity, opts) => (opts.processPage ? entity : `${entity} form page`);
 function rowsForFields(fields, regionOf, sourcePrefix = "PDS.") {
   return fields.map((f) => {
     const col = strip(f.values.control);
@@ -1152,7 +1154,7 @@ function renderConfirmWorklist(cs) {
 // count against that function's cognitive complexity (Sonar S3776); skipped entirely in `logicOnly` mode.
 function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
   const out = [
-    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity}${opts.processPage ? "" : " form page"}`,
+    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${pageHeadingLabel(entity, opts)}`,
     "#### Layout",
     // `Position` = the converted Freedom-grid cell the `classic-layout` mode places the field at
     // (`overlay` ignores it). Last column so the plan reads unchanged up to it and prefix-matching stays valid.
@@ -1978,7 +1980,7 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   const listTarget = ex ? existingPageTarget(ex.listPage) : fill(pm.listTemplate, "<FILL: Freedom list template>");
   const formTarget = ex ? existingPageTarget(ex.formPage) : fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>");
   const rows = opts.processPage ? [] : [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${listTarget} | ${mainCall} |`];
-  if (!typed.length) rows.push(`| ${esc(entity)}${opts.processPage ? "" : " form page"} | ${formTarget} | ${mainCall} |`);
+  if (!typed.length) rows.push(`| ${pageHeadingLabel(esc(entity), opts)} | ${formTarget} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
     const typeSuffix = typedTypeSuffix(t); // the RESOLVED Type name (typeName / typeColumnDisplayValue); a raw GUID only as a ⚠ fallback
@@ -2549,7 +2551,7 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
 // the whole `List page` group, not this one), so without the split every sub-page inherited a `<FILL: list
 // template>` row it can never satisfy. Its own fn so `buildPageRows` gains no branch (Sonar CC 15).
 function listPageRows(pm, opts, fill, isMain) {
-  if (!isMain) return [];
+  if (!isMain || opts.processPage) return [];
   const target = isExistingSection(opts) ? existingPageTarget(opts.existingSection?.listPage) : fill(pm.listTemplate, "<FILL: list template>");
   return [{ deliverableId: "page:list", label: `List page → ${target}` }];
 }
@@ -4930,7 +4932,8 @@ const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCou
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
 const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
-  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ...PROCESS_VK_RESOLVERS]);
+  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk],
+  ...PROCESS_VK_RESOLVERS.map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, absentEntry)])]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);

@@ -18,11 +18,12 @@
 // button and states how the element must select it; the element itself is re-pointed to the Freedom page as a
 // separate, consented step of the process.
 //
-// Pure functions: no I/O. `migrate.mjs` supplies the seed bodies and the merged items.
+// Pure functions: no I/O. `migrate.mjs` supplies the parsed layers and the merged items.
+
+import { parseDefineModule, resourceKey } from "./engine.mjs";
 
 export const PROCESS_TEMPLATES = Object.freeze(["BasePageProcessTemplate", "BasePageSimpleProcessTemplate",
   "BasePageLeftContainerProcessTemplate", "BasePageRightContainerProcessTemplate"]);
-const PROCESS_TEMPLATE_DEFINE = /\bdefine\(\s*["'](BasePage(?:Simple|LeftContainer|RightContainer)?ProcessTemplate)["']/;
 
 // What a Classic process button does to the step.
 export const PROCESS_BEHAVIOUR = Object.freeze({
@@ -32,45 +33,39 @@ export const PROCESS_BEHAVIOUR = Object.freeze({
 });
 const PROCESS_HANDLERS = new Set(["onSaveButtonClick", "onCancelProcessElementClick", "onProcessActionButtonClick"]);
 // The requests the process designer accepts on a completing button, besides declaring none.
-export const COMPLETING_REQUESTS = Object.freeze(["crt.SaveRecordRequest", "crt.ClosePageRequest", "crt.CancelRecordChangesRequest"]);
+const COMPLETING_REQUESTS = Object.freeze(["crt.SaveRecordRequest", "crt.ClosePageRequest", "crt.CancelRecordChangesRequest"]);
 export const CLOSE_PAGE_REQUEST = "crt.ClosePageRequest";
 // The Freedom form templates' own save button: the runtime shows it on every page opened from a process step.
-export const FREEDOM_SAVE_BUTTON = "SaveButton";
+const FREEDOM_SAVE_BUTTON = "SaveButton";
 // The Classic template's own save button (alias `SaveButton`): it maps onto the Freedom template's save button.
 const CLASSIC_TEMPLATE_SAVE_BUTTON = "Button-be6148b819154a0791eaee8f1635d859";
 
 const isStr = (v) => typeof v === "string" && v.trim() !== "";
 const plainObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 
-// The process template a page's seed chain defines, or null. `bodies` are the seed layers' sources. An empty
+// The process template a page's seed chain defines, or null. `names` are the seed layers' define() names. An empty
 // `entitySchemaName` is not evidence on its own: hundreds of Classic pages with no object are not process pages.
-export function processTemplateOf(bodies) {
-  for (const b of bodies || []) {
-    const m = PROCESS_TEMPLATE_DEFINE.exec(String(b ?? ""));
-    if (m) return m[1];
-  }
-  return null;
-}
-// The same, read off a manifest's inline seed bodies (every real manifest inlines them).
-export function processTemplateOfManifest(manifest) {
-  const seed = Array.isArray(manifest?.seed) ? manifest.seed : [];
-  return processTemplateOf(seed.map((e) => (e && typeof e.body === "string" ? e.body : "")));
-}
+export const processTemplateOf = (names) => (names || []).find((n) => PROCESS_TEMPLATES.includes(n)) || null;
 
-// The page's name: the `define()` name of its own top schema.
-export function pageSchemaNameOf(bodies) {
-  for (const b of [...(bodies || [])].reverse()) {
-    const m = /\bdefine\(\s*["']([A-Za-z0-9_]+)["']/.exec(String(b ?? ""));
-    if (m) return m[1];
-  }
-  return null;
+// One answer per manifest: `runMigration` records what it read off the parsed seed, and every later caller
+// (`checklistOpts` on the same manifest) reads that answer instead of deciding again. A caller that never ran the
+// migration reads the inline seed bodies' define() names.
+const TEMPLATE_BY_MANIFEST = new WeakMap();
+export function recordProcessTemplate(manifest, template) {
+  if (manifest && typeof manifest === "object") TEMPLATE_BY_MANIFEST.set(manifest, template);
+}
+export function processTemplateOfManifest(manifest) {
+  if (!manifest || typeof manifest !== "object") return null;
+  if (TEMPLATE_BY_MANIFEST.has(manifest)) return TEMPLATE_BY_MANIFEST.get(manifest);
+  const seed = Array.isArray(manifest.seed) ? manifest.seed : [];
+  return processTemplateOf(seed.map((e) => (e && typeof e.body === "string" ? parseDefineModule(e.body).name : null)));
 }
 
 // `manifest.processPage` — what the discovery step recorded about the process steps that open this page:
 //   { stepsResolved: true, evidence, steps: [{ process, element, caption?, buttons?: [{ tag, performClosePage,
 //     performSaveData }], resultBranches: bool, consent: "approved" | "declined" | "pending" }] }
 // `stepsResolved: true` with `steps: []` is a valid answer ("the user named no process"); never asked is not.
-export function processStepsOf(manifest) {
+function processStepsOf(manifest) {
   const pp = plainObject(manifest?.processPage);
   const steps = (Array.isArray(pp.steps) ? pp.steps : []).filter((s) => s && typeof s === "object").map((s) => ({
     process: isStr(s.process) ? s.process : null,
@@ -82,13 +77,13 @@ export function processStepsOf(manifest) {
   }));
   return { resolved: pp.stepsResolved === true, evidence: isStr(pp.evidence) ? pp.evidence : null, steps };
 }
-export function processStepsIssues(manifest) {
-  const pp = manifest?.processPage;
-  if (!pp || typeof pp !== "object" || pp.stepsResolved !== true)
+function stepsIssuesOf({ resolved, steps }) {
+  if (!resolved)
     return ["processPage.stepsResolved not recorded — ask the user which business processes and which of their steps open this page, record them in manifest.processPage.steps (an empty list when they name none) with stepsResolved: true"];
-  return processStepsOf(manifest).steps.filter((s) => !s.process || !s.element)
+  return steps.filter((s) => !s.process || !s.element)
     .map((s) => `processPage.steps entry ${JSON.stringify(s.caption || s.process || s.element || "?")} names no ${s.process ? "element" : "process"} — record both the process code and the Pre-configured page element name`);
 }
+export const processStepsIssues = (manifest) => stepsIssuesOf(processStepsOf(manifest));
 
 // The `Buttons` entry the process element declares for a tag, read across every recorded step. Steps that disagree
 // are reported, the first declared entry is used.
@@ -117,18 +112,11 @@ const freedomNameOf = (item) => (item.name === CLASSIC_TEMPLATE_SAVE_BUTTON ? FR
 // The page's live process buttons (the merged items; a removed button is gone), each with its Classic behaviour,
 // where that behaviour was read, and the Freedom button it maps to.
 export function processButtonsOf(items, steps = [], resources = {}) {
-  const captionOf = (raw) => {
-    const key = /^Resources\.Strings\.(.+)$/.exec(raw || "")?.[1];
-    return (key && typeof resources[key] === "string" && resources[key]) || raw || null;
-  };
+  const captionOf = (raw) => (raw && typeof resources[resourceKey(raw)] === "string" && resources[resourceKey(raw)]) || raw || null;
   return (items || [])
-    .filter((i) => i && i.itemType === 5 && PROCESS_HANDLERS.has(i.handlers?.click) && !i.engineOnlyStub)
-    .map((i) => {
-      const { behaviour, source } = behaviourOf(i.handlers.click, i.tag || null, steps);
-      return { classic: i.name, freedom: freedomNameOf(i), caption: captionOf(i.caption), tag: i.tag || null,
-        handler: i.handlers.click, behaviour, source, templateOwned: !!i.templateOwned, hidden: i.visible === false };
-    })
-    .filter((b) => !b.hidden);
+    .filter((i) => i && i.itemType === 5 && PROCESS_HANDLERS.has(i.handlers?.click) && !i.engineOnlyStub && i.visible !== false)
+    .map((i) => ({ classic: i.name, freedom: freedomNameOf(i), caption: captionOf(i.caption), tag: i.tag || null,
+      ...behaviourOf(i.handlers.click, i.tag || null, steps) }));
 }
 
 // The whole profile, or null for any other page.
@@ -143,7 +131,7 @@ export function processPageInfo({ template, pageName, items, manifest }) {
     buttons,
     completing: buttons.filter((b) => b.behaviour !== PROCESS_BEHAVIOUR.CLOSE_OPEN).length,
     stepsResolved: stepFacts.resolved, evidence: stepFacts.evidence, steps: stepFacts.steps,
-    issues: processStepsIssues(manifest),
+    issues: stepsIssuesOf(stepFacts),
   };
 }
 
@@ -163,7 +151,10 @@ const SOURCE_TEXT = {
   "element-conflict": "⚠ process element `Buttons` — the steps disagree, the first is used",
   "page-default": "⚠ template default — the process element was not read",
 };
-export function freedomMappingText(b) {
+const behaviourText = (b) => BEHAVIOUR_TEXT[b] || b;
+const buttonSourceText = (s) => SOURCE_TEXT[s] || s;
+const expectedValidate = (behaviour) => behaviour === PROCESS_BEHAVIOUR.COMPLETE_SAVE;
+function freedomMappingText(b) {
   if (b.behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN)
     return `\`${b.freedom}\` with \`${CLOSE_PAGE_REQUEST}\`; NOT selected as completing in the process element`;
   const validate = b.behaviour === PROCESS_BEHAVIOUR.COMPLETE_SAVE ? "true" : "false";
@@ -188,7 +179,7 @@ export function processPagePlanLines(info, esc) {
     "#### Process buttons",
     "| Classic button | Tag | Classic behaviour | Read from | Freedom |",
     "| --- | --- | --- | --- | --- |",
-    ...info.buttons.map((b) => `| ${esc(b.caption || b.classic)} (\`${esc(b.classic)}\`) | ${b.tag ? "`" + esc(b.tag) + "`" : "—"} | ${behaviourText(b.behaviour)} | ${sourceText(b.source)} | ${freedomMappingText(b)} |`),
+    ...info.buttons.map((b) => `| ${esc(b.caption || b.classic)} (\`${esc(b.classic)}\`) | ${b.tag ? "`" + esc(b.tag) + "`" : "—"} | ${behaviourText(b.behaviour)} | ${buttonSourceText(b.source)} | ${freedomMappingText(b)} |`),
   ];
   if (!info.buttons.length) L.push("| — | — | ⚠ the page has no process button left | — | add a completing button: a step nothing completes waits forever |");
   L.push("", `The built page keeps at least one completing button and one exit that leaves the step open (the template's \`BackButton\` / \`CloseButton\` with \`${CLOSE_PAGE_REQUEST}\`), even where the Classic page removed its own Close.`, "");
@@ -201,15 +192,11 @@ export function processPagePlanLines(info, esc) {
   }
   return L;
 }
-export const behaviourText = (b) => BEHAVIOUR_TEXT[b] || b;
-export const sourceText = (s) => SOURCE_TEXT[s] || s;
-export const expectedValidate = (behaviour) => behaviour === PROCESS_BEHAVIOUR.COMPLETE_SAVE;
 
 // ---- the plan-vs-built rows -----------------------------------------------------------------------------------
 // `--built.processSteps` is what `describe-business-process` returned for each re-pointed step, one entry per step:
 //   { process, element, page, active, buttons: [{ name, validate }] }   (`buttons` = the element's completing buttons)
 // `--built.processStandCheck` records the stand check: { pressed: [{ button, outcome: "completed" | "open" }] }.
-export const PROCESS_VK_TYPES = Object.freeze(["processbutton", "processexit", "processstep", "processstand"]);
 
 export function processPageRows(info, esc) {
   if (!info) return [];
@@ -227,20 +214,22 @@ export function processPageRows(info, esc) {
       vk: { type: "processstand", buttons: info.buttons.map((b) => ({ freedom: b.freedom, behaviour: b.behaviour })) } }];
 }
 
-const MISSING = "❌ MISSING", VERIFY = "⚠ verify", DONE = "✅ Done", CONFIRM = "☐ confirm on-stand";
+const MISSING = "❌ MISSING", VERIFY = "⚠ verify", DONE = "✅ Done";
 const builtSteps = (ctx) => (Array.isArray(ctx.root?.processSteps) ? ctx.root.processSteps.filter((s) => s && typeof s === "object") : []);
 const selectedIn = (step, name) => (Array.isArray(step.buttons) ? step.buttons : []).find((b) => b && b.name === name) || null;
 const buttonOps = (ctx) => (ctx.ops || []).filter((o) => o && typeof o.name === "string");
-const requestOf = (o) => [o.request, o.clicked?.request, o.values?.clicked?.request].find((v) => typeof v === "string") || null;
-function pageUnreadable(ctx, what) {
-  if (ctx.entryAbsent) return [CONFIRM, `no get-page entry for this page — pass it in --built to check ${what}`, "skip"];
+// The walked op list carries each node's request flat (designspec `pushWalkNode`).
+const requestOf = (o) => (typeof o.request === "string" ? o.request : null);
+// `absentEntry` is designspec's answer for a page nobody fetched, so these rows block like every other one.
+function pageUnreadable(ctx, what, absentEntry) {
+  if (ctx.entryAbsent) return absentEntry(ctx, what);
   if (ctx.page === false) return [MISSING, "the page is reported as NOT BUILT", "missing"];
   return null;
 }
 
 // One process button: on the page with the right request, and selected in every re-pointed step as the plan says.
-function resolveProcessButtonVk(vk, ctx) {
-  const unreadable = pageUnreadable(ctx, `\`${vk.freedom}\``);
+function resolveProcessButtonVk(vk, ctx, absentEntry) {
+  const unreadable = pageUnreadable(ctx, `\`${vk.freedom}\``, absentEntry);
   if (unreadable) return unreadable;
   const op = buttonOps(ctx).find((o) => o.name === vk.freedom);
   if (!op) return [MISSING, `button \`${vk.freedom}\` is not on the built page`, "missing"];
@@ -250,7 +239,8 @@ function resolveProcessButtonVk(vk, ctx) {
     return [VERIFY, `\`${vk.freedom}\` must close the page with \`${CLOSE_PAGE_REQUEST}\` (it declares ${request ? `\`${request}\`` : "no request"})`, "unverified"];
   if (!closes && request && !COMPLETING_REQUESTS.includes(request))
     return [VERIFY, `\`${vk.freedom}\` declares \`${request}\`, which the process designer does not accept on a completing button — declare no request`, "unverified"];
-  const wrong = builtSteps(ctx).flatMap((s) => {
+  const steps = builtSteps(ctx);
+  const wrong = steps.flatMap((s) => {
     const sel = selectedIn(s, vk.freedom);
     const where = `\`${s.process}\` / \`${s.element}\``;
     if (closes) return sel ? [`${where} selects it as completing — the step would end where Classic kept it open`] : [];
@@ -258,13 +248,13 @@ function resolveProcessButtonVk(vk, ctx) {
     return sel.validate === expectedValidate(vk.behaviour) ? [] : [`${where} selects it with \`validate: ${sel.validate}\`, Classic ${expectedValidate(vk.behaviour) ? "validated" : "did not validate"}`];
   });
   if (wrong.length) return [MISSING, wrong.join("; "), "missing"];
-  const stepNote = builtSteps(ctx).length ? `, selected as the plan says in ${builtSteps(ctx).length} re-pointed step(s)` : "";
+  const stepNote = steps.length ? `, selected as the plan says in ${steps.length} re-pointed step(s)` : "";
   return [DONE, `\`${vk.freedom}\` on the page${request ? ` with \`${request}\`` : " with no request"}${stepNote}`, "ok"];
 }
 // The way out: a completing button, and a button that closes the page without any re-pointed step selecting it.
-function resolveProcessExitVk(vk, ctx) {
+function resolveProcessExitVk(vk, ctx, absentEntry) {
   if (!vk.completing) return [MISSING, "no Classic button completes the step — add a completing button, or the step waits forever", "missing"];
-  const unreadable = pageUnreadable(ctx, "the exit button");
+  const unreadable = pageUnreadable(ctx, "the exit button", absentEntry);
   if (unreadable) return unreadable;
   const steps = builtSteps(ctx);
   const exits = buttonOps(ctx).filter((o) => requestOf(o) === CLOSE_PAGE_REQUEST && o.visible !== false
@@ -292,5 +282,6 @@ function resolveProcessStandVk(vk, ctx) {
   if (wrong.length) return [MISSING, wrong.map((b) => `\`${b.freedom}\` should leave the step ${expected(b)}`).join("; "), "missing"];
   return [DONE, `${vk.buttons.length} button(s) pressed from the process step, each with its Classic outcome`, "ok"];
 }
+// `[type, (vk, ctx, absentEntry) => verdict]` — designspec registers them and hands in its `absentEntry`.
 export const PROCESS_VK_RESOLVERS = Object.freeze([["processbutton", resolveProcessButtonVk], ["processexit", resolveProcessExitVk],
   ["processstep", resolveProcessStepVk], ["processstand", resolveProcessStandVk]]);
