@@ -1528,7 +1528,7 @@ function renderImperativeLogic(cs, opts = {}) {
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const unmarked = parent ? `port with \`${esc(parent)}\`` : targetText(h);
-    const target = lineStatus(pageKeyOf(opts), { deliverableId: methodId(h.sourceMethod) }, opts) || (h.listMapped ? LIST_MAPPED_TARGET : unmarked);
+    const target = lineStatus(pageKeyOf(opts), { deliverableId: methodId(h.sourceMethod), dormant: !!h.dormant }, opts) || (h.listMapped ? LIST_MAPPED_TARGET : unmarked);
     const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
@@ -2729,6 +2729,7 @@ function handlerStubRows(cs) {
     const own = (h.triggers || []).map(rootTrigger).filter(Boolean);
     const viaParent = parent ? (stubByName.get(parent)?.triggers || []).map(rootTrigger).filter(Boolean) : [];
     return { deliverableId: methodId(h.sourceMethod), label: `Handler — \`${esc(h.sourceMethod)}\`` + note, ...cardField(h), ...writesField(h),
+      ...(h.dormant ? { dormant: true } : {}),
       vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } };
   });
 }
@@ -2829,8 +2830,16 @@ function fieldReason(row) {
 export function engineStatusReason(row, ctx = {}) {
   return cardActionReason(row, ctx) || childPageReason(row) || pagesOnlyReason(row, ctx) || existingSectionReason(row, ctx) || fieldReason(row);
 }
-// THE status of one deliverable: the engine's conclusion (`not-applicable`, with its reason), else the person's
-// manifest entry (`wont-do` with its D<N>, or an explicit `build`), else null — build as planned.
+export const DORMANT_REASON = "dormant: no trigger, no caller and no reference in Classic";
+// The engine's SOFT conclusions: closed by default, but a person's `build` (or `wont-do`) entry decides instead.
+// A dormant method is one — the analysis can be wrong about what starts a method, and the person who knows the
+// page can say so; a hashed column cannot be rendered whoever asks, so that stays a hard conclusion above.
+function softStatusReason(row) {
+  return row.dormant ? DORMANT_REASON : null;
+}
+// THE status of one deliverable: the engine's hard conclusion (`not-applicable`, with its reason), else the
+// person's manifest entry (`wont-do` with its D<N>, or an explicit `build`), else the engine's soft conclusion,
+// else null — build as planned.
 export function deliverableStatusOf(pageKey, row, ctx = {}) {
   if (row.na) return { kind: "not-applicable", reason: row.na };
   const reason = engineStatusReason(row, ctx);
@@ -2838,7 +2847,9 @@ export function deliverableStatusOf(pageKey, row, ctx = {}) {
   // an alias is read first: a withheld feature's `feature:<Feature>` before its confirm id (the `withheldIds` order)
   const entry = [...(row.aliasIds || []), row.deliverableId].filter(Boolean)
     .map((id) => ctx.deliverableStatus?.[statusKey(pageKey, id)]).find(isStatusEntry);
-  return entry ? { kind: entry.status, decision: entry.decision || null } : null;
+  if (entry) return { kind: entry.status, decision: entry.decision || null };
+  const soft = softStatusReason(row);
+  return soft ? { kind: "not-applicable", reason: soft } : null;
 }
 const isStatusEntry = (e) => e?.status === STATUS_WONT_DO || e?.status === STATUS_BUILD;
 // A closed status as plan text: `**Won't do** — D6: <title>` or `**Won't do** — <engine reason>`.

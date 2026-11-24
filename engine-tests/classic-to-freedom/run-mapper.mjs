@@ -13,7 +13,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes, carriesComponent } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason, DORMANT_REASON } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -7086,11 +7086,65 @@ check("category precedence: save + lookup is lookup",
 check("category precedence: a body whose ONLY kind is save still categorises as save",
   comboCat("saveOnly") === "save", () => comboCat("saveOnly"));
 
+/* ---- DORMANT methods: nothing in Classic starts them, so the plan does not port them ---- */
+{
+  const DORMANT_BODY = `define("DormPage", [], function() { return {
+  entitySchemaName: "Deal",
+  attributes: { Stage: { dependencies: [{ columns: ["Stage"], methodName: "onStageChanged" }] } },
+  methods: {
+    onStageChanged: function() { this.set("Amount", 1); this.recalcTotals(); },
+    recalcTotals: function() { this.set("Total", 2); },
+    setCanEditFieldsRaw: function() { this.set("CanEdit", true); },
+    onCallbackDone: function() { this.set("Done", true); },
+    loadThing: function() { var esq = Ext.create("Terrasoft.EntitySchemaQuery", { rootSchemaName: "Deal" }); esq.getEntityCollection(function() {}, { callback: this.onCallbackDone, scope: this }); },
+    onBound: function() { this.set("B", 1); },
+    onNamedInString: function() { this.set("C", 1); }
+  },
+  messages: { "Ping": { mode: "ptp", direction: "subscribe" } },
+  diff: [{ operation: "insert", name: "Btn", parentName: "Header", propertyName: "items", values: { itemType: 5, click: { bindTo: "onBound" } } }],
+  rules: { X: { tip: "onNamedInString" } }
+}; });`;
+  const BASE_BODY = `define("DormPageBase", [], function() { return { entitySchemaName: "Deal", methods: {
+    setCanEditFieldsRaw: function() { return true; } }, diff: [] }; });`;
+  const dorm = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
+  const stub = (m) => dorm.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
+  const rows = checklistGroups(dorm, {}).flatMap((g) => g.rows);
+  const row = (m) => rows.find((r) => r.deliverableId === `method:${m}`);
+  const plan = renderPlan(dorm, {});
+  const planLine = (m) => plan.split("\n").find((l) => l.startsWith(`| ${m} |`)) || "";
+  check("dormant: a method with no trigger, no caller and no reference anywhere in the Classic source is closed `not-applicable — dormant` in the checklist and shown `Won't do — dormant` in the plan",
+    () => stub("setCanEditFieldsRaw").dormant === true && row("setCanEditFieldsRaw").na === DORMANT_REASON
+      && /\*\*Won't do\*\* — dormant: no trigger, no caller and no reference in Classic/.test(planLine("setCanEditFieldsRaw")),
+    () => [stub("setCanEditFieldsRaw"), row("setCanEditFieldsRaw"), planLine("setCanEditFieldsRaw")]);
+  check("dormant (guard): a method passed as a callback (`callback: this.onCallbackDone`), one bound by a diff element and one named in a string are normal rows — the call index alone sees only `this.X(…)` calls",
+    () => ["onCallbackDone", "onBound", "onNamedInString"].every((m) => !stub(m)?.dormant && !row(m)?.na),
+    () => ["onCallbackDone", "onBound", "onNamedInString"].map((m) => [m, stub(m)?.dormant, row(m)?.na, stub(m)?.triggers]));
+  check("dormant (guard): a method with a declared trigger and a helper it calls are normal rows",
+    () => !stub("onStageChanged").dormant && !stub("recalcTotals").dormant && !row("recalcTotals").na,
+    () => [stub("onStageChanged"), stub("recalcTotals")]);
+  const over = runMigration({ entity: "Deal", schemas: [{ pkg: "B", body: BASE_BODY }, { pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
+  check("dormant (guard): a method that overrides a lower layer's method is a normal row — the base may call it",
+    () => !over.changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw")?.dormant,
+    () => over.changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw"));
+  const decided = { entity: "Deal", schemas: [{ pkg: "P", body: DORMANT_BODY }], deliverableStatus: { "main#method:setCanEditFieldsRaw": { status: "build" } } };
+  const decidedRun = runMigration(decided, { baseDir: FIX });
+  const decidedRow = checklistGroups(decidedRun, checklistOpts(decided)).flatMap((g) => g.rows).find((r) => r.deliverableId === "method:setCanEditFieldsRaw");
+  check("dormant: a `deliverableStatus` `build` entry turns a dormant row into a normal deliverable row, and the entry is valid (no status issue)",
+    () => decidedRow && !decidedRow.na && decidedRow.status?.kind === "build" && !(decidedRun.statusIssues || []).length
+      && !/dormant/.test(decidedRun.plan.split("\n").find((l) => l.startsWith("| setCanEditFieldsRaw |")) || ""),
+    () => ({ row: decidedRow, issues: decidedRun.statusIssues }));
+  const hard = engineStatusReason({ fieldType: "Hashed text (not migrated)" }, {});
+  check("dormant: a hard engine conclusion (a hashed column) stays non-overridable — only the soft dormant reason yields to a `build` entry",
+    () => typeof hard === "string" && /hashed or encrypted/.test(hard) && engineStatusReason({ dormant: true }, {}) == null,
+    () => hard);
+}
+
 /* ---- the category is EVIDENCE ONLY, and the Body-does cell says what it actually read ---- */
 // A category derived from the METHOD'S NAME picks a Freedom target nothing in the body supports and reads exactly
 // like a derived one. These pin the evidence-only rule and each state the Body-does cell can take.
 const EVID_BODY = `define("EvidPage", [], function() { return {
   entitySchemaName: "Deal",
+  attributes: { A: { dependencies: [{ columns: ["A"], methodName: "onThingChanged" }] } },
   methods: {
     onThingChanged: function() { return this.Ext.isEmpty(this.get("A")) ? 1 : 2; },
     initSomething: function() { this.callParent(arguments); this.someUnknownApi(); },

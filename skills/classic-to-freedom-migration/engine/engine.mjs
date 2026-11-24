@@ -553,7 +553,14 @@ function findFactoryReturn(factory) {
 // Parse a Classic schema body into the effective-page inputs, WITHOUT executing it (AST + static eval).
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
+// The source rides on the result as a NON-enumerable `src`, so `mergeHierarchy` can ask whether a method's name
+// occurs anywhere beyond its definitions, while every serialized or compared copy of the result is unchanged.
 export function parseSchema(src, pkg) {
+  const out = parseSchemaBody(src, pkg);
+  if (typeof src === "string") Object.defineProperty(out, "src", { value: src, enumerable: false });
+  return out;
+}
+function parseSchemaBody(src, pkg) {
   const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   const astDiagnostics = [];
   let ast;
@@ -2201,6 +2208,32 @@ function mergeDetails(L, seed, details) {
   }
 }
 
+// How often each identifier-shaped word occurs in a layer's source — code, strings and comments alike. Counted
+// once per layer and kept for the process, so asking about every method of a page reads each source once.
+const wordCountsByLayer = new WeakMap();
+function wordCountsOf(L) {
+  if (typeof L.src !== "string") return null;
+  let counts = wordCountsByLayer.get(L);
+  if (!counts) {
+    counts = new Map();
+    for (const [w] of L.src.matchAll(/[A-Za-z_$][\w$]*/g)) counts.set(w, (counts.get(w) || 0) + 1);
+    wordCountsByLayer.set(L, counts);
+  }
+  return counts;
+}
+// Does `name` occur in the fold's sources more often than its `definitions` (one per layer that declares it)? A
+// comment mention counts too: a reference that cannot be told from a mention keeps the method a normal row. `null`
+// when some layer's source is not at hand.
+function nameReferenced(name, definitions, tagged) {
+  let total = 0;
+  for (const { L } of tagged) {
+    const counts = wordCountsOf(L);
+    if (!counts) return null;
+    total += counts.get(name) || 0;
+  }
+  return total > definitions;
+}
+
 // methods (override stack) — track whether any schema schema contributed, and carry the TOP layer's body facts.
 // The facts follow last-write-wins (the effective implementation is the topmost override's), while `pkgs`
 // accumulates the whole stack — so the plan can say both "what it does" and "who overrode it".
@@ -2542,6 +2575,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
     methods: [...methods.entries()].map(([n, m]) => ({
       name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched,
+      // Whether the name occurs anywhere in the Classic sources beyond the method's own definitions — a member
+      // reference (`callback: this.onX`, `Ext.bind(this.onX)`), a string, a call. `null` when a layer's source is
+      // not at hand, which a reader must take as "may be referenced".
+      referenced: nameReferenced(n, m.pkgs.length, tagged),
       // body evidence (calls / attribute reads-writes / message traffic / line span), null when the layer's body
       // was not statically readable — the NAME still survives, so a member is never lost for lack of evidence
       facts: m.facts || null,
