@@ -7,12 +7,12 @@
 //   - Quote: "<the user's words, verbatim, in the user's language>"
 //   - Asked: <the question the answer replies to>
 //   - Scope: run | <pageKey>[, <pageKey>…]
-//   - Expectation: <one statement a reviewer can check on the built page>
+//   - Expectation: <one statement a judge can check on the built page>
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
 // are the user's words, so both carry the quote: a paraphrase is where an instruction gets lost or widened, and
-// the quote is what a reviewer compares the paraphrase against.
+// the quote is what a judge compares the paraphrase against.
 //
 // An entry with none of these lines is a plain decision and is read exactly as before — the file stays one
 // append-only log, and an old file parses unchanged. The engine turns each directive into a pair of evidence rows
@@ -170,7 +170,7 @@ function directiveIssues(r, pageKeys) {
   const f = r.fields;
   if (f.kind !== KIND_DIRECTIVE) return [];
   const out = [];
-  if (blank(f.expectation)) out.push("a `directive` needs `Expectation:` — one statement a reviewer can check on the built page");
+  if (blank(f.expectation)) out.push("a `directive` needs `Expectation:` — one statement a judge can check on the built page");
   const keys = scopeKeys(f.scope);
   if (!keys.length) {
     out.push(`a \`directive\` needs \`Scope:\` — \`${RUN_SCOPE}\` or the page key(s) it applies to`);

@@ -292,7 +292,7 @@ without them is a plain decision and reads exactly as before.
 
 - **`Kind: directive`** — an instruction the user gave without being asked, in the first message or later. It
   needs `Quote:`, `Scope:` (`run`, or the page keys the plan prints — `main`, `list`, `child:<Entity>`,
-  `typed:<Schema>`, `mini:<Schema>`, comma-separated) and `Expectation:` — ONE statement a reviewer can check
+  `typed:<Schema>`, `mini:<Schema>`, comma-separated) and `Expectation:` — ONE statement a judge can check
   on the built page. The engine puts a filed + judged evidence pair under `<pageKey>#directive:D<N>` on every
   page in scope, shows the directive in the plan's `### User directives` table and in every task file of
   those pages. A directive whose scope names no published page makes the plan incomplete: it would reach no
@@ -303,6 +303,12 @@ without them is a plain decision and reads exactly as before.
   did not state in words is yours: record it `Decided by: orchestrator`. Never fold your own addition into the
   user's entry; it is a new question before the build, or its own orchestrator entry.
 - **`Decided by: orchestrator`** entries are listed in the final report under *Decided without you*.
+- **Record a directive when the user gives it.** The instructions in the first message go in before the first
+  `--plan --out`, so the plan the user approves already shows them. A directive kept only in your context
+  reaches no builder.
+- **Read the earlier folder first.** When an earlier migration folder exists for the same section, read its
+  `decisions.md` before planning: what the user decided there still holds unless they say otherwise, so ask
+  before departing from it.
 
 The plan is incomplete, and `--tasks` writes nothing, while any provenance line does not stand; the plan's
 banner names the entry and what is missing.

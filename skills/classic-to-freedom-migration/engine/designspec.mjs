@@ -3445,7 +3445,7 @@ function directiveRows(pageKey, d) {
     + ` (\`howFollowed\`) and names the components that carry it (\`components\`). If the page cannot do what the user`
     + " asked, leave this row `not-built — needs-decision` and write `Decision needed` under `## Notes`: never build"
     + " something else in its place.";
-  const judgedLabel = `${base} **This row: INDEPENDENTLY JUDGED** — a reviewer who did not build the page checked it`
+  const judgedLabel = `${base} **This row: INDEPENDENTLY JUDGED** — a judge who did not build the page checked it`
     + " against the expectation above and found the record convincing.";
   const pair = (part, label) => evidenceRow(id, label,
     { deliverableId: directiveRowId(d.id, part), directive: { id: d.id } }, { part, requires: DIRECTIVE_REQUIRES });

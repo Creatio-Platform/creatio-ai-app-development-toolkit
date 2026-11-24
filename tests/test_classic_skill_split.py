@@ -233,10 +233,10 @@ class EvidenceRecordContractTests(unittest.TestCase):
         fields = set(re.findall(r"(\w+):", skeleton.group(1))) | set(re.findall(r'"(\w+)"', required.group(1)))
         self.assertIn("noChangesReason", designspec)
         fields.add("noChangesReason")
-        shapes_block = section(designspec, "FIVE shapes:", "// Built from")
+        shapes_block = section(designspec, "SIX shapes:", "// Built from")
         # One shape per line, indented a few spaces; the deeper-indented lines continue a shape's note.
         shapes = re.findall(r"^// {1,4}`([^`]+)`", shapes_block, re.M)
-        self.assertEqual(len(shapes), 5, f"read {shapes} as the evidence-id shapes")
+        self.assertEqual(len(shapes), 6, f"read {shapes} as the evidence-id shapes")
         # The files a decision that closes a raised finding is read from.
         decision_files = re.search(r"export const DECISION_FILES = \[([^\]]*)\]", read(SKILL_DIR / "engine/assemble.mjs"))
         self.assertIsNotNone(decision_files, "DECISION_FILES is no longer where this test reads it")
