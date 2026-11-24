@@ -21,6 +21,12 @@ clio-safety rules apply to every write.
    write. Build the page YOUR task names and no other, even when its spec mentions a child: reaching
    into another page's task is how two sub-agents write the same schema. Your page's own spec is the
    one under `### Child page mappings` when your page key is a child.
+   **Your task file's `## Project conventions` block is the project's namespace and modules**: name custom
+   requests, validators and converters in its prefix (over any guide that says `usr.`), reuse its helper
+   modules, and reference record ids through its constants modules in SCHEMA_DEPS, never as pasted GUIDs.
+   `--verify` checks both, on the form page and on the list page: a foreign name keeps the page open, and so
+   does a declared module the CLASSIC page imported, or the plan maps your page's record ids to, that yours
+   does not import (the other declared modules are informational rows).
 2. Subtask order INSIDE your task, in the order the platform requires: template creation or
    existing-page selection → entity/data-source adjustments → layout → business rules →
    details/related lists/standard features → handlers/converters/validators → backend/service →
