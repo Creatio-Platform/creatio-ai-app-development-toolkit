@@ -4713,10 +4713,14 @@ function requestsSentElsewhere(root, pageKey) {
 export function resolvePageCodeVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the page's handler code");
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
-  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
+  const entry = entryObject(ctx.page);
+  const sections = { validators: entry?.validators, converters: entry?.converters };
+  if (ctx.handlersSrc == null && typeof sections.validators !== "string" && typeof sections.converters !== "string") {
+    return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
+  }
   // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
-  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey),
-    vk.thresholds || DEFAULT_QUALITY_THRESHOLDS);
+  const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey),
+    vk.thresholds || DEFAULT_QUALITY_THRESHOLDS, sections);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   if (!findingCount(a)) {
     const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";

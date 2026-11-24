@@ -64,10 +64,12 @@ function handlerFacts(entry) {
     literals, truncated: walk.truncated };
 }
 
-// Where a long function sits: the handler itself by its request, a function inside it as `request › name`.
+// Where a long function sits: a handler by its request, a function inside it as `request › name`, and a validator or
+// converter function as `validators › name` (the section is a separate source, so its lines are its own).
 function whereIs(finding, entries) {
-  const owner = entries.find((e) => e.fn && e.fn.loc.start.line <= finding.line && finding.line <= e.fn.loc.end.line)?.request;
   const own = finding.name || `line ${finding.line}`;
+  if (finding.section !== "handlers") return `${finding.section} › ${own}`;
+  const owner = entries.find((e) => e.fn && e.fn.loc.start.line <= finding.line && finding.line <= e.fn.loc.end.line)?.request;
   if (!owner || own === owner) return own;
   return `${owner} › ${own}`;
 }
@@ -90,12 +92,17 @@ export function viewRequests(viewConfig) {
 // the verify row report. Pure: no file system, no stand. Without a `viewConfig` nobody knows what the buttons send,
 // so the unsent-request check is skipped (`sendsChecked: false`) rather than reporting every button's request.
 // `sentElsewhere` names requests another built page sends (its mini page, a child page): a request declared here
-// and dispatched from there is sent, not dead. `thresholds` are the run's `manifest.qualityThresholds`.
-export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = new Set(), thresholds = DEFAULT_QUALITY_THRESHOLDS) {
+// and dispatched from there is sent, not dead. `thresholds` are the run's `manifest.qualityThresholds`. `sections`
+// carries the page's `validators` / `converters` source: their functions are held to the same length limit.
+export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = new Set(), thresholds = DEFAULT_QUALITY_THRESHOLDS, sections = {}) {
   const text = String(handlersSrc ?? "").trim();
   const sendsChecked = viewConfig != null;
   const maxFunctionLines = thresholds.maxFunctionLines;
-  if (!text) return { handlers: [], findings: [], sendsChecked, maxFunctionLines };
+  const others = Object.fromEntries(["validators", "converters"].filter((k) => typeof sections[k] === "string").map((k) => [k, sections[k]]));
+  if (!text && !Object.keys(others).length) return { handlers: [], findings: [], sendsChecked, maxFunctionLines };
+  const lint = lintPageQuality({ handlers: text || "[]", ...others }, thresholds);
+  if (lint?.unreadable.length) return { error: `the page's ${lint.unreadable.map((s) => "`" + s + "`").join(", ")} does not parse` };
+  if (!text) return { handlers: [], findings: lengthFindings(lint, []), sendsChecked, maxFunctionLines };
   let expr;
   try { expr = getAcornParse()(`(${text}\n)`, { ecmaVersion: "latest", sourceType: "script", locations: true }).body[0]?.expression; }
   catch (e) { return { error: `the handler source does not parse: ${String(e?.message || e)}` }; }
@@ -103,7 +110,6 @@ export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = 
   const entries = expr.elements.map(handlerEntryOf).filter(Boolean);
   const handlers = entries.map(handlerFacts);
   if (handlers.some((h) => h.truncated)) return { error: "a handler is too large or too deeply nested to analyse — split it" };
-  const lint = lintPageQuality({ handlers: text }, thresholds);
   const of = (rule) => (lint?.findings || []).filter((f) => f.rule === rule);
   const sent = new Set([...handlers.flatMap((h) => [...h.literals]), ...viewRequests(viewConfig), ...sentElsewhere]);
   const unsent = sendsChecked ? [...new Set(entries.filter((e) => e.declared).map((e) => e.request))]
@@ -111,13 +117,19 @@ export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = 
   return {
     handlers: handlers.map(({ request, lines, helpers }) => ({ request, lines, helpers })),
     findings: [
-      ...of(QUALITY_RULES.functionTooLong).map((f) => ({ rule: f.rule, where: whereIs(f, entries), lines: f.value, limit: f.limit })),
+      ...lengthFindings(lint, entries),
       ...of(QUALITY_RULES.duplicateInPage).map((f) => ({ rule: f.rule, name: f.name, original: f.original, originalLine: f.originalLine, count: f.count })),
       ...unsent.map((request) => ({ rule: QUALITY_RULES.requestWithoutSender, request })),
     ],
     sendsChecked,
     maxFunctionLines,
   };
+}
+
+// Every function over the length limit, in handlers, validators and converters alike.
+function lengthFindings(lint, entries) {
+  return (lint?.findings || []).filter((f) => f.rule === QUALITY_RULES.functionTooLong)
+    .map((f) => ({ rule: f.rule, where: whereIs(f, entries), lines: f.value, limit: f.limit }));
 }
 
 export const findingCount = (a) => a.findings.length;

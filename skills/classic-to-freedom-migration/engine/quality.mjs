@@ -60,7 +60,7 @@ const PLAN_CODE = /(?:\b[\w-]+\/)?\bC\d{2,}\b|\bAC-\d+\b|\bD\d+\b|\bcard [\w-]+\
 // The keys that make an object a page element (a list column, a field) rather than data: its `id` is a generated
 // local id, which only has to be unique on the page, not a record id.
 const ELEMENT_KEYS = new Set(["code", "path", "caption", "title", "width"]);
-const RESOURCE_REF = /#ResourceString\(([^)#]+)\)#|\$?Resources\.Strings\.([A-Za-z0-9_]+)/g;
+const RESOURCE_REF = /#ResourceString\(([^)#]+)\)#|\$?Resources\.Strings\.(\w+)/g;
 
 // The manifest's thresholds over the defaults; a value that is not a positive whole number is ignored.
 export function qualityThresholdsOf(manifest) {

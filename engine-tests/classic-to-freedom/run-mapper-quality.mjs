@@ -103,7 +103,8 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => ids.findings.filter((f) => f.rule === R.guidLiteral).map((f) => f.text).join() === "`8dc41780-1234-4000-8000-000000000001`",
     () => ids.findings);
   const held = "1b7e3a3c-0000-4c5d-8e9f-0a1b2c3d4e5f";
-  const guidPage = { handlers: `[${handler("usr.G", `if (s === "${held}" || t === "aaaaaaaa-0000-4000-8000-000000000001") { return; }`)}]` };
+  const comparesHeld = 'if (s === "' + held + '" || t === "aaaaaaaa-0000-4000-8000-000000000001") { return; }';
+  const guidPage = { handlers: `[${handler("usr.G", comparesHeld)}]` };
   const withModule = lintPageQuality(guidPage, DEFAULT_QUALITY_THRESHOLDS, new Set([held]));
   check("quality: a record id a constants module holds blocks; any other data GUID is advisory",
     () => withModule.findings.filter((f) => f.rule === R.guidLiteral && !f.advisory).length === 1
@@ -153,6 +154,16 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => pageCodeLine(failing.markdown));
   check("verify: function length is held by the Page code row only — Code quality has no row for it, nor for duplicates or unsent requests",
     () => [R.functionTooLong, R.duplicateInPage, R.requestWithoutSender].every((rule) => !rowLine(failing.markdown, rule)));
+  const longBody = Array.from({ length: 70 }, (_, i) => `const s${i} = ${i};`).join("\n");
+  const builtWith = (extra) => { const b = built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`); Object.assign(b.pages.main, extra); return b; };
+  const longValidator = renderVerify(result, opts, builtWith({ validators: `{ "usr.Positive": { validator: (config) => { return function(control) {\n${longBody}\nreturn null; }; }, params: [] } }` }));
+  check("verify: a validator function over the limit holds the Page code row ⚠, named by its section",
+    () => /⚠ verify/.test(pageCodeLine(longValidator.markdown)) && /`validators › line \d+` is \d+ lines \(limit 60\)/.test(pageCodeLine(longValidator.markdown)),
+    () => pageCodeLine(longValidator.markdown));
+  const longConverter = renderVerify(result, opts, builtWith({ converters: `{ "usr.ToUpper": function(value) {\n${longBody}\nreturn value; } }` }));
+  check("verify: a converter function over the limit holds the Page code row ⚠, named by its section",
+    () => /⚠ verify/.test(pageCodeLine(longConverter.markdown)) && /`converters › usr\.ToUpper` is \d+ lines \(limit 60\)/.test(pageCodeLine(longConverter.markdown)),
+    () => pageCodeLine(longConverter.markdown));
   const raised = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 100 } })), built(longHandler));
   check("verify: raising manifest.qualityThresholds.maxFunctionLines over the length clears the Page code row, under the same label",
     () => /✅ Done/.test(pageCodeLine(raised.markdown)) && pageCodeLine(raised.markdown).includes("no function longer than `maxFunctionLines`"),
@@ -172,11 +183,12 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => ROW_RULES.every((rule) => rule === R.unusedResourceString
       ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
-  const heldId = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", `if (s === "${held}") { return; }`)}]`));
+  const usesHeld = `[${handler("usr.ApplyButtonClicked", 'if (s === "' + held + '") { return; }')}]`;
+  const heldId = renderVerify(result, opts, built(usesHeld));
   check("verify: a record id the declared constants module holds blocks the GUID row",
     () => /⚠ verify/.test(rowLine(heldId.markdown, R.guidLiteral)), () => rowLine(heldId.markdown, R.guidLiteral));
-  const noConventions = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] }, built(`[${handler("usr.ApplyButtonClicked", `if (s === "${held}") { return; }`)}]`));
-  const kindOf = (v, rule) => (v.rows.find((r) => r.deliverable.includes(`[code-quality] ${rule} —`)) || {}).kind;
+  const noConventions = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] }, built(usesHeld));
+  const kindOf = (v, rule) => v.rows.find((r) => r.deliverable.includes(`[code-quality] ${rule} —`))?.kind;
   check("verify: without recorded projectConventions the GUID row says the constants-module check was skipped, does not block, and is a note (not a hand-confirm item)",
     () => /ℹ noted/.test(rowLine(noConventions.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventions.markdown, R.guidLiteral))
       && kindOf(noConventions, R.guidLiteral) === "info",
