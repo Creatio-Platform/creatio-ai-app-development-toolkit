@@ -4,7 +4,8 @@ Handed, with `./references/build-task-execution.md`, to every page build and rep
 also pointed at `./references/classic-to-freedom-mapping.md`. The mapping is a reference: look up by
 heading (`grep -n '^#'` lists them) and read every section that applies to your page — a pointer
 below names the section most tasks need, not the only one — but it is never read whole. The five
-rules in `build-task-execution.md` override every convenience in this file.
+rules in `build-task-execution.md` override every convenience in this file. A task that writes page
+code is also handed its shape, `./references/page-code-architecture.md`.
 
 ## Everything else about building a page
 
@@ -198,6 +199,68 @@ page handler is client-side: it fires on a UI save in the browser, not on an ODa
 of that save is its captured `UpdateQuery` (the columns it wrote); where a behaviour writes data, read
 the record back and check the mapped values; a detail's link shows in its captured `SelectQuery` filter
 — each with one value change per AC, as `build-task-execution.md` → *Evidence, cheapest first* says.
+The AC lines go in the checklist row's Evidence cell. A bare `AC-n` there is read against one card:
+the row's **Deliverable** names the handler or member, and that item's row in the plan's
+`⚠ Custom methods` / `⚠ Other declared logic` table names the card in its **Described in** cell.
+When that cell names more than one card, or in the task's Notes, cite card-qualified
+(`<card id>·AC-n`). The page's code
+carries no card id, AC number, decision id or task id — not in a comment, a name or a string
+(`classic-ui-expert` → `08-card-contract.md`, *Shipped code cites nothing*).
+
+**Lock and permission flags fail closed.** A flag that locks fields, hides an action or grants an
+operation (`CanEditFields`, `IsReadOnly`, `CanApprove`, …) starts at its RESTRICTIVE value and
+becomes permissive only after a check returns a clear positive answer. When the check throws, is
+denied, or returns nothing (no record, no rights to read it, an empty response), the flag stays
+restrictive and the page tells the user why, with a localizable message. No `try/catch` that only
+logs around such a check.
+
+```js
+// Incorrect — permissive default, the error is only logged: a failed read leaves the page editable.
+attributes: { "CanEditFields": { "value": true } }
+// …
+try { await setCanEditFieldsByStatus(request); } catch (e) { console.error(e); }
+
+// Correct — restrictive default, permissive only on a positive answer, the failure is shown.
+attributes: { "CanEditFields": { "value": false } }
+// …
+let canEdit = false;
+try {
+  const status = await readStatus(request);          // null when the record cannot be read
+  canEdit = status != null && editableStatuses.includes(status);
+  if (status == null) await showLockMessage(request, "NoData");
+} catch (e) {
+  await showLockMessage(request, "CheckFailed");
+}
+request.$context.CanEditFields = canEdit;
+```
+
+`readStatus`, `setCanEditFieldsByStatus` and `showLockMessage` are stand-ins, not platform APIs:
+show the message the way the page shows any other dialog or notification, with its text a
+localizable resource string.
+
+The rule covers lock and permission flags only. Any other read — a tooltip, a counter, a
+default value — may still fail without blocking the page. Test the closed path as one of the row's
+ACs: one record in a status the lock does not allow shows that the field stays locked on a negative
+answer. That record does not exercise a check that throws or comes back empty, so confirm that path
+in the code: the flag's default is restrictive and every `catch` and empty branch shows the message.
+Setting up a user without read rights is not required.
+
+**A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
+verified only when a record that MUST match it comes back, and — for each AC that says a record
+must NOT be shown — when an existing record that must not match does not come back. Pick the
+controls from the filter's own rule (for a date range: one record inside the range, one just
+outside it). Each of these leaves the row **unverified**, reported as `⚠ Partial — unverified` with its reason, never `✅ Done`:
+
+- the query returns 0 rows — an empty result proves nothing about a filter, it is what a wrong
+  operator returns too;
+- the query fails (a SQL or request error);
+- the stand has no record that should match, so no positive control exists;
+- the card has a negative AC ("an expired record must NOT be shown") and the stand has no record
+  that must not match — that AC gets no Evidence line, and the row is `⚠ Partial — unverified`
+  naming it. Do not create a record to fill the gap.
+
+The row's Evidence line names the control records (their ids or display values) and what each
+returned: `✅ Done — AC-2 inside range → returned; just after the end date → not returned`.
 
 **Gate-toggle safety (shared stand).** If a **system setting** gates the behaviour, name the exact
 `SysSettingsValue` row you are testing — its culture/user/role — since a per-role override beats the
@@ -252,10 +315,10 @@ publishes as a key and never changes or drops a value already filed, so the key 
 there when your task starts. Fill the value under that key — never type a key from a row's label,
 which is escaped for display, and never shorten or rename one.
 
-The ids come in five shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
+The ids come in six shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
 page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
-`list#listpage:<kind>:<item>` and
-`<pageKey>#datasource:<name>`, where `<pageKey>` is `main`, `list`, `child:<Entity>`,
+`list#listpage:<kind>:<item>`, `<pageKey>#datasource:<name>` and
+`<pageKey>#directive:D<N>` (one per user directive on that page), where `<pageKey>` is `main`, `list`, `child:<Entity>`,
 `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two pages would otherwise
 share a key). A record is complete only when its fields have the right shape:
 
@@ -269,6 +332,13 @@ share a key). A record is complete only when its fields have the right shape:
   (prose here raises nothing). On a `#quality-gates` record, a raised finding keeps the judged row
   open until `decisions.md` or `findings.md` names the record's exact id as a whole token — a
   verdict alone does not close it.
+
+A `#directive:D<N>` record takes two fields instead of `referencePage`: `howFollowed` (a non-blank
+string: how the page does what the user asked) and `components` (the elements that carry it). Your
+task file lists the user directives for its pages, with the user's words and the expected result: build
+to them in every task, not only the one holding the directive's rows. When the page cannot do what the
+user asked, do not build something else in its place — leave the directive's filed row `not-built —
+needs-decision` and write `Decision needed` under `## Notes`.
 
 A wrong shape — a blank page, a list that is empty or holds a non-string — is an incomplete record,
 and the row reads unverified whatever the judge rules.

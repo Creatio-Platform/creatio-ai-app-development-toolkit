@@ -39,7 +39,8 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
+import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
 import { RECONCILE_MODES } from "./reconcile-modes.mjs";
@@ -671,6 +672,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
+    directives: result.directives,
     // The decisions in force, carried on the set so every render of it — sync, start, decide, revoke — writes the
     // same task card. `mergeTaskSet` keeps it with the rest of the fresh set.
     cardDecisions: opts.decisions ?? null,
@@ -1097,8 +1099,12 @@ function decisionLines(set) {
     + " also in its `Outcome` cell):"];
   for (const [id, title] of decisions) {
     L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
-    // The text under the decision, indented into its item so no line of it can open a heading of the file.
-    for (const line of String(texts.get(id) || "").split("\n")) if (line.trim()) L.push(`    ${line.trimEnd()}`);
+    // The text under the decision, indented into its item. The indent is not enough on its own: this file's readers
+    // match `## Notes`, `## Deliverables` and `| N |` rows after trimming, so a line opening with `#` or `|` is
+    // escaped, otherwise a decision quoting either would move the notes boundary or add a deliverables row.
+    for (const line of String(texts.get(id) || "").split("\n")) {
+      if (line.trim()) L.push(`    ${line.trimEnd().replace(/^(\s*)([#|])/, "$1\\$2")}`);
+    }
   }
   return L;
 }
@@ -1181,6 +1187,22 @@ function markersBlock() {
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
+  ];
+}
+// THE USER'S DIRECTIVES, in every task that builds or reviews a page they apply to. The file is the sub-agent's
+// prompt, so a directive reaches the builder only by being written here: an instruction left in decisions.md, or in
+// the orchestrator's memory, is one the builder never reads. Each directive's own rows (filed and judged) sit in
+// the page's last build task and its review; this block is what keeps every EARLIER builder of the page from
+// building something the user ruled out.
+function directivesBlock(task, directives) {
+  const pages = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
+  const own = (directives || []).filter((d) => [...pages].some((k) => directiveCovers(d, k)));
+  if (!own.length) return [];
+  return [
+    "- **User directives — the user's own words. Build to them on every page they name:**",
+    ...own.map((d) => `  - \`${d.id}\` (${d.scope.map((k) => "`" + esc(k) + "`").join(", ")}): “${esc(d.quote)}” → expected: ${esc(d.expectation)}`),
+    "  - Cannot follow one here? Do not build something else in its place. Say so under `## Notes`, naming the"
+      + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
 function outcomeBlock(repair = false) {
@@ -1273,6 +1295,7 @@ export function renderTaskFile(task, set = {}) {
     ...outcomeBlock(task.kind === REPAIR_KIND),
     ...markersBlock(),
     ...oneAgentBlock(task),
+    ...directivesBlock(task, set.directives),
     ...taskCardBlock(task, set),
     "",
     ENGINE_BODY_HEADING,
@@ -2630,6 +2653,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
+    directives: result.directives,
     cardDecisions: opts.decisions ?? null,
     cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
@@ -2951,7 +2975,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
     writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode,
-      cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts }));
+      directives: result.directives, cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4227,7 +4251,8 @@ function mintDeclared(dir, result, decls, written, card = {}) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, ...card }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode,
+      directives: result.directives, ...card }));
     written.push(task);
   }
 }
@@ -4801,9 +4826,14 @@ function clearStaleStatusCells(tasks) {
   }
   return cleared;
 }
+// The `D<N>` each directive row of `rows` carries to a builder.
+function citedDirectives(rows) {
+  return (rows || []).map((r) => parseDirectiveRowId(r.deliverableId)?.id).filter(Boolean);
+}
 // The `D<N>` entries of `decisions` (the Map from readDecisions) that nothing cites: no task `decisions:` entry,
-// no `deliverableStatus` entry and no `withoutDeliverable` item. `{ id, title }` in file order; `Adjustment N`
-// keys are never returned.
+// no `deliverableStatus` entry, no `withoutDeliverable` item and no directive row. `{ id, title }` in file order;
+// `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
+// directive whose scope reached no task stays unaccounted and the first dispatch is refused.
 export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
   const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
   for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
@@ -4811,6 +4841,7 @@ export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus 
     if (t.unread) continue;
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     for (const d of map.values()) cited.add(decisionOf(d));
+    for (const id of citedDirectives(t.rows)) cited.add(id);
   }
   return [...(decisions || new Map()).entries()]
     .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))

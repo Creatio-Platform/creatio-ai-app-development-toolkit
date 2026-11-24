@@ -28,6 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
+import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
@@ -100,7 +101,7 @@ function readDecisionsMd(text, addHeading, add) {
   const lines = text.split(/\r?\n/);
   let structured = false;
   for (const dl of lines) {
-    const h = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
+    const h = DECISION_HEADING.exec(dl);
     if (h) { addHeading(h[1], h[2]); structured = true; continue; }
     const t = /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl);   // table row — second cell is the title ([^|] can't cross the cell)
     if (t) { add(t[1], t[2]); structured = true; }
@@ -115,7 +116,7 @@ export function readDecisions(migrationDir) {
   // A heading keeps its title verbatim (bar the leading separator); a table cell / plain line goes through
   // decisionTitle, which lifts the bold lead and caps a long cell. Headings are last-wins (a later heading refines
   // an earlier one); table/plain are first-wins.
-  const addHeading = (id, raw) => { const t = String(raw || "").replace(/^[\s—–:.-]+/, "").trim(); if (t) out.set(`D${id}`, t); };
+  const addHeading = (id, raw) => { const t = headingTitle(raw); if (t) out.set(`D${id}`, t); };
   const add = (id, raw) => { const k = `D${id}`; const t = decisionTitle(raw); if (t && !out.has(k)) out.set(k, t); };
   try {
     readDecisionsMd(fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8"), addHeading, add);
@@ -586,6 +587,26 @@ const renderDestination = (d) => {
   if (ISSUE_KEY_RE.test(s)) return `[${cell(s)}](https://creatio.atlassian.net/browse/${encodeURIComponent(s)})`;
   return cell(s);
 };
+// Every decisions.md entry recorded `Decided by: orchestrator`: choices the agent made without asking the person who
+// owns the migration. Listed so that person can see each one and overturn it; a choice they never hear about is one
+// they cannot overturn.
+function decidedWithoutYouSection(entries) {
+  if (!entries.length) return [];
+  return [`## Decided without you (${entries.length})`, "",
+    "The agent made these choices itself (`Decided by: orchestrator` in `decisions.md`). Each is open to change: say so, and it becomes a question.", "",
+    ...entries.map((d) => `- **${esc(d.id)}** — ${esc(d.title || "?")}`)];
+}
+// The section for the decisions.md above the task folder `dir`. Read only beside a task folder: with none, `..`
+// would name whatever folder the process happens to run in.
+function decidedWithoutYouFor(dir) {
+  if (!dir) return [];
+  try {
+    return decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, ".."))));
+  } catch (e) {
+    // An unreadable decisions.md does not stop the report; the section says it could not be listed.
+    return ["## Decided without you", "", `⚠ decisions.md could not be read (${esc(e.message)}), so the choices the agent made without asking are not listed.`];
+  }
+}
 function carryOverSection(items, pageName) {
   if (!items.length) return [];
   const L = [`## Carry-over — postponed items (${items.length})`, "",
@@ -709,6 +730,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
+  const withoutYou = decidedWithoutYouFor(dir);
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",
@@ -721,6 +743,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
     ...(carryOver.length ? ["", ...carryOver] : []),
+    ...(withoutYou.length ? ["", ...withoutYou] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
