@@ -247,24 +247,46 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   // AC 6 — a detail a vendor template layer declares is "inherited — decide"; one from the platform base is not.
   // A template layer above the clean seed that declares a change-log detail on the history tab.
   const layerSeed = (pkg, schema, detail) => [...CLEAN_SEED, { pkg, body: `define("${schema}",[],function(){return{details:{Log:{schemaName:"${detail}",entitySchemaName:"ChangeLog"}},diff:[{operation:"insert",name:"Log",parentName:"ChangesHistoryTab",propertyName:"items",values:{itemType:2}}]};});` }];
-  const vendorSeed = layerSeed("VendorBasePage/VendorPkg", "VendorBasePage", "VendorLogDetail");
-  const platformSeed = layerSeed("BaseRecordPage/CrtUIPlatform7x", "BaseRecordPage", "PlatformLogDetail");
+  // `pkg` as get-classic-page-sources writes it on a real run: the bare package name (`Samarasoft.Logging`, `WorkOverride`).
+  const vendorSeed = layerSeed("Vendor.Logging", "BaseModulePageV2", "VendorLogDetail");
+  const platformSeed = layerSeed("CrtUIPlatform7x", "BaseRecordPage", "PlatformLogDetail");
   const vendor = runMigration({ entity: "X", seed: vendorSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   const platform = runMigration({ entity: "X", seed: platformSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   const inh = vendor.changeSet.needsDecision.find((n) => n.kind === "detail-inherited");
   check("detail features: a detail declared by a vendor template layer → `detail-inherited` decide row naming the layer, with no recommendation",
-    () => inh?.item === "VendorLogDetail" && inh.layer === "VendorBasePage/VendorPkg" && /Inherited — decide/.test(inh.reason)
+    () => inh?.item === "VendorLogDetail" && inh.layer === "Vendor.Logging" && /Inherited — decide/.test(inh.reason)
       && !/recommend/i.test(inh.reason) && features(vendor).some((l) => /VendorLogDetail \| Inherited detail/.test(l)),
     () => ({ inh, rows: features(vendor) }));
   check("detail features: a detail declared by a platform template layer stays context — no decide row",
     () => !platform.changeSet.needsDecision.some((n) => n.kind === "detail-inherited") && (platform.changeSet.inheritedDetails || []).length === 0,
     () => platform.changeSet.inheritedDetails);
+  const documented = runMigration({ entity: "X", seed: layerSeed("BaseModulePageV2/Vendor.Logging", "BaseModulePageV2", "VendorLogDetail"),
+    schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  check("detail features: the documented `Schema/Package` form names the same layer package",
+    () => documented.changeSet.needsDecision.find((n) => n.kind === "detail-inherited")?.layer === "BaseModulePageV2/Vendor.Logging");
+  const unnamed = runMigration({ entity: "X", seed: layerSeed("", "BaseModulePageV2", "SomeLogDetail"),
+    schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  check("detail features: a template detail whose layer names no package says inheritance was NOT checked — a ⚠ row and a decision, never silence",
+    () => unnamed.changeSet.needsDecision.some((n) => n.kind === "detail-inheritance-unchecked" && n.item === "SomeLogDetail")
+      && features(unnamed).some((l) => /SomeLogDetail \| Inherited detail/.test(l) && /inheritance NOT checked/.test(l)),
+    () => ({ decisions: unnamed.changeSet.needsDecision.map((n) => n.kind), rows: features(unnamed) }));
 
   // AC 7 — a Files detail Classic never placed is an approval row, not a new Attachments tab.
   const files = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body:
     `define("XPage",[],function(){return{entitySchemaName:"X",details:{Files:{schemaName:"FileDetailV2",entitySchemaName:"XFile",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
     planMeta: docPlanMeta, signals: FULL_SIGNALS });
   const fileFeature = files.changeSet.standardFeatures.find((s) => s.classicDetail === "FileDetailV2");
+  const unplacedOf = (r) => r.changeSet.needsDecision.find((n) => n.kind === "detail-unplaced");
+  const noSeed = runMigration({ entity: "X", seed: [], schemas: [{ pkg: "P", body:
+    `define("XPage",[],function(){return{entitySchemaName:"X",details:{Files:{schemaName:"FileDetailV2",entitySchemaName:"XFile",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  check("detail features: with no seed (the chain may place the detail in a layer that was not fetched) the unplaced question says so and claims nothing about what users saw",
+    () => unplacedOf(noSeed)?.chainComplete === false && /no FETCHED layer places it/.test(unplacedOf(noSeed).reason)
+      && /Complete the chain before answering/.test(unplacedOf(noSeed).reason) && !/users never saw it/.test(unplacedOf(noSeed).reason),
+    () => unplacedOf(noSeed));
+  check("detail features: the unplaced question's wording follows the chain state — it asserts what users saw only on a complete chain",
+    () => unplacedOf(files)?.chainComplete === /users never saw it/.test(unplacedOf(files)?.reason || ""),
+    () => unplacedOf(files));
   check("detail features: an unplaced Files detail → `detail-unplaced` approval naming Attachments, its Layout row says it waits for approval",
     () => fileFeature?.unplaced === true && files.changeSet.needsDecision.some((n) => n.kind === "detail-unplaced" && n.item === "FileDetailV2" && n.feature === "Attachments")
       && files.plan.split("\n").some((l) => /⚠ unplaced/.test(l) && /not shown in Classic — build only on approval/.test(l)),

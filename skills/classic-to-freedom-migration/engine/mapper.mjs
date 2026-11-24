@@ -571,6 +571,9 @@ export function mapToFreedom(eff, opts = {}) {
   D.accountedFor.forEach(a => accountedFor.add(a));
   // details a customer or vendor template layer declares: not this page's own, yet part of what its users saw
   const inheritedDetails = inheritedLayerDetails(eff.details);
+  const inheritanceUnchecked = uncheckedTemplateDetails(eff.details);
+  inheritanceUnchecked.forEach((name) => needsDecision.push({ kind: "detail-inheritance-unchecked", item: name,
+    reason: `detail '${name}' comes from a template layer whose \`pkg\` names no package, so whether a customer or vendor layer declares it was NOT checked — supply the layer's package, then decide it like an inherited detail` }));
   inheritedDetails.forEach((d) => needsDecision.push(inheritedDetailDecision(d)));
 
   // ---- embedded profile cards (linked-record blocks) → the Freedom side profile ----
@@ -646,6 +649,8 @@ export function mapToFreedom(eff, opts = {}) {
     withheldFeatures: D.withheldFeatures,
     // details declared by a customer or vendor template layer (not the platform base): an "inherited — decide" row each
     inheritedDetails,
+    // template details whose layers name no package, so inheritance could not be checked for them
+    inheritanceUnchecked,
     // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
     // compact-profile component wired by `referenceColumn`, or the read-only-fields island fallback.
     profileCards,
@@ -1835,7 +1840,7 @@ function mapDetails(ctx, containers, profileRegion) {
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     // A detail Classic declares but never places is not shown there: building it, a standard feature included, adds a
     // surface the user never had, so it waits for their approval.
-    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat?.feature));
+    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat?.feature, chainIsComplete(ctx.eff)));
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
       const decided = featureStatus(withheldIds(feat.feature, d.schemaName || d.key));
       needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
@@ -1864,22 +1869,41 @@ function detailFeaturesOf(d, dinfo) {
 
 // A detail Classic declares but never places on the page (no diff item puts it in a tab) is not shown to its users.
 // Nothing is built or dropped on the engine's say-so, a blanket hide rule included: the user approves either way.
-function unplacedDetailDecision(d, feature = null) {
+// The text says no more than the input supports: the engine sees only the FETCHED layers, so a detail no fetched layer
+// places was hidden from users only when the parent chain is known to be complete. With a missing, skeletal or partial
+// seed a layer that was not fetched may place it, and the question says so instead of asserting what users saw.
+function unplacedDetailDecision(d, feature, chainComplete) {
   const what = feature ? `the ${feature} detail '${d.schemaName || d.key}'` : `detail '${d.schemaName || d.key}'`;
-  return { kind: "detail-unplaced", item: d.schemaName || d.key, ...(feature ? { feature } : {}),
-    reason: `${what} is declared on the Classic page but placed in no tab, so its users never saw it. Approve one: build it (name the tab) or Won't do. Nothing is built for it until the user answers` };
+  const seen = chainComplete
+    ? "no layer of the page's complete chain places it in a tab, so its users never saw it"
+    : "no FETCHED layer places it in a tab, but the parent chain is not known to be complete (no seed, or a skeletal or partial one): a layer missing from the manifest may place it. Complete the chain before answering";
+  return { kind: "detail-unplaced", item: d.schemaName || d.key, chainComplete, ...(feature ? { feature } : {}),
+    reason: `${what} is declared on the Classic page; ${seen}. Approve one: build it (name the tab) or Won't do. Nothing is built for it until the user answers` };
 }
+// Whether the merged chain is complete enough to say what Classic users saw: a real seed that is neither skeletal nor
+// partial, or a page verified to have no parent template.
+const chainIsComplete = (eff) => {
+  const q = eff?.seedQuality;
+  return !!q && ((q.seeded && !q.looksSkeletal && !q.possiblyPartial) || eff.noParentTemplate === true);
+};
 
 // The packages of the Creatio platform itself. A template layer from any other package (a customer's or a vendor's)
 // carries details its users saw on this page, so each becomes a plan row instead of silent context. A layer whose
 // `pkg` names no package (`Schema` rather than `Schema/Package`) cannot be told apart and stays context.
 const PLATFORM_PACKAGE = /^(?:Crt\w*|Base|NUI|UIv2|Platform\w*|Core|Terrasoft\w*)$/i;
-const layerPackage = (pkg) => { const s = String(pkg || ""); const at = s.indexOf("/"); return at < 0 ? null : s.slice(at + 1).trim() || null; };
+// A layer's `pkg` is the package name itself (what `get-classic-page-sources` writes, e.g. `Samarasoft.Logging`), or
+// `Schema/Package` (the form the module contract documents); either way the package is the part after any `/`.
+const layerPackage = (pkg) => { const s = String(pkg || "").trim(); return s.slice(s.indexOf("/") + 1).trim() || null; };
 const nonPlatformLayer = (pkg) => { const p = layerPackage(pkg); return !!p && !PLATFORM_PACKAGE.test(p); };
 function inheritedLayerDetails(details) {
   return (details || []).filter((d) => d.fromTemplate && (d.provenance || []).some(nonPlatformLayer))
     .map((d) => ({ key: d.key, schemaName: d.schemaName || null, entity: d.entitySchemaName || null,
       layer: (d.provenance || []).findLast(nonPlatformLayer) }));
+}
+// Template details whose layers name no package at all: whether they are inherited from a customer or vendor layer
+// was NOT checked, which the plan has to say rather than show an empty list that reads as "nothing inherited".
+function uncheckedTemplateDetails(details) {
+  return (details || []).filter((d) => d.fromTemplate && !(d.provenance || []).some(layerPackage)).map((d) => d.schemaName || d.key);
 }
 // No recommendation either way: whether a vendor's or a customer's inherited detail still belongs on the page is the
 // user's call, and a recommendation is the answer they would give without reading the question.

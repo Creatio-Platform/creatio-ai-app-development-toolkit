@@ -269,7 +269,9 @@ const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards", "wit
   // Triggers the quick-filter BUILD NOTE — advice on building rows that are themselves gated (`Quick filter — …`).
   "quickFilterConfigCompletedByBuilder",
   // Each inherited detail is also a `detail-inherited` decision, which the ⚠ Confirm worklist carries as its row.
-  "inheritedDetails"]);
+  "inheritedDetails",
+  // Likewise each unchecked template detail is a `detail-inheritance-unchecked` decision with its own ⚠ Confirm row.
+  "inheritanceUnchecked"]);
 const fieldsOfReturn = (startsAt) => {
   const at = mapperSrc.indexOf(startsAt);
   const m = at < 0 ? null : /\n {2}return \{([\s\S]*?)\n {2}\};/.exec(mapperSrc.slice(at));

@@ -1212,6 +1212,9 @@ export function detailFeatureRows(cs) {
   for (const d of cs.inheritedDetails || []) {
     rows.push([esc(d.schemaName || d.key), "Inherited detail", `declared by the template layer \`${esc(d.layer)}\``, "⚠ inherited — decide (⚠ Confirm `[detail-inherited]`)"]);
   }
+  for (const name of cs.inheritanceUnchecked || []) {
+    rows.push([esc(name), "Inherited detail", "declared by a template layer whose `pkg` names no package", "⚠ inheritance NOT checked — supply the layer's package to tell a customer or vendor layer from the platform"]);
+  }
   return rows;
 }
 function renderDetailFeaturesBlock(cs) {
