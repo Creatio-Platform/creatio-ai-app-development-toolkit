@@ -151,12 +151,14 @@ class BrowserChecksNotesLineTests(unittest.TestCase):
         self.assertIn("Every task that saved a page", flat(notes))
         self.assertIn("Browser checks: 0", flat(notes))
 
-    def test_no_check_is_valid_only_without_a_browser_surface_or_with_a_render_check(self):
+    def test_no_check_is_valid_only_when_declined_or_when_it_could_not_run(self):
         # A get-page read-back reads the saved schema, not the running page, so it never
-        # stands in for the post-save check.
+        # stands in for the post-save check; neither does "no browser surface", since
+        # page-smoke needs none.
         notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
-        self.assertRegex(notes, r"N=0 is valid only when[^.]*runtime render check[^.]*no browser surface")
+        self.assertRegex(notes, r"N=0 is valid only under `Browser: none`[^.]*could not run")
         self.assertRegex(notes, r"never because the `get-page` read-backs")
+        self.assertNotIn("no browser surface was available", notes)
         self.assertNotIn("why the read-backs sufficed", notes)
 
     def test_a_count_above_the_cap_is_a_defect(self):
@@ -164,9 +166,12 @@ class BrowserChecksNotesLineTests(unittest.TestCase):
         self.assertIn("N above 2 is a defect in the task", notes)
 
     def test_the_line_names_only_readers_that_exist(self):
-        # The judge reads a task's Notes by hand; nothing parses the line automatically.
+        # The judge reads a task's Notes by hand, and the result report reads N
+        # (engine/report.mjs browserChecksOf); nothing else does.
         notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
         self.assertIn("a reviewer and the judge", notes)
+        self.assertIn("the result report reads N", notes)
+        self.assertIn("BUILT, NOT EXERCISED", notes)
         self.assertNotIn("cost counter", notes)
 
 

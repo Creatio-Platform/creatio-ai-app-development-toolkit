@@ -470,8 +470,8 @@ This step does **not** build the approved plan here: it cuts it into one-task fi
 in full (7.0-7.7) and step 8's driver side; below is what stays in view during the build.
 
 **7.0 Resolve the dispatch route before the first `--start`** and write it into `worklog.md` as a `Route:` line
-(`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
-`AskUserQuestion`, then stop until it is answered.
+(`agent` · `codex` · `copilot` · `inline`; `inline` only through 7.0's ROUTE GATE: one `AskUserQuestion`, then
+stop). **7.0b**: the `Browser:` line page tasks need.
 
 **7.1 Record the plan approval first** (reference 7.1 step 1): without it `--tasks`, `--start` and `--route` exit 2.
 Reconcile: **first cut** takes `--reconcile-mode overlay|classic-layout`.

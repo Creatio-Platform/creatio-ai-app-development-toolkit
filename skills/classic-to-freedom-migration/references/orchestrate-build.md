@@ -107,6 +107,37 @@ not carry it.
 > holds for the non-building contexts of 7.4 (the read-back and the judge): they run here too, and
 > the step-8 report says so.
 
+**7.0b The browser question — ask it ONCE, before the first build task.** Every page a builder saves
+owes a post-save check in a running browser (`./references/build-task-execution.md`), and a builder
+cannot reach the user. clio `page-smoke` runs that check headless once the user has answered its
+browser question on this machine, and it remembers the answer, so every later call, a builder's
+included, runs without asking. So the question is yours, asked before the first `--start`:
+
+1. Call `page-smoke` once on a Freedom form page that already exists on the target environment
+   (`environment-name`, `page`; read-only, no `click`).
+2. A reply with `code: browser-consent-required` carries the question: put `browserConsent.question`
+   to the user verbatim, with its `browserConsent.choices`, and add one sentence of your own: a
+   "no" (`browser=none`) is remembered for the whole machine and turns `page-smoke` off for every
+   later run until the user changes it. Never answer it for them.
+3. Call `page-smoke` again with the choice they picked (`browser`, and `browser-path` for
+   `existing`). A reply with `success` means every builder's check will run.
+4. Write the outcome into `worklog.md` as ONE line, the user's words quoted:
+   - `Browser: page-smoke (user: "<their words>")` — `page-smoke` answered;
+   - `Browser: surface (user: "<their words>")` — the user wants the check driven in an agent browser
+     surface instead (the Chrome extension; the in-app pane asks for approval on every action, which
+     a builder cannot give);
+   - `Browser: none (user: "<their words>")` — the user declined. The run still builds, and every
+     page ends unexercised: the result report says so (step 8).
+
+   A reply that already succeeds on the first call (the answer is remembered from an earlier run)
+   is recorded as `Browser: page-smoke (remembered on this machine)`.
+
+The engine reads the LAST `Browser:` line: until it names one of `page-smoke` · `surface` · `none`,
+`--next` withholds and `--start` refuses every task that writes a page. **One answer about one check
+is not this answer.** A user who says "I'll check this one myself" about one page has answered for
+that page; never write it as `Browser: none`, and never tell builders "do not run browser checks",
+unless the user confirms it holds for the whole run. A later change of mind is a new line.
+
 **7.1 Record the approval, then slice the plan.**
 
 **Before you cut — on a RECONCILE, choose the reconcile mode.** When the plan is an existing-Freedom
@@ -425,7 +456,9 @@ component docs are not cached: each builder reads them from the tools itself; th
 task kind names in the table below; and for a task carrying imperative rows, the step-5.1 behaviour
 cards with their acceptance criteria — a handler is ported against its card's AC, never from its
 method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they
-answered on the stand is recorded there and is not repeated in its own file.
+answered on the stand is recorded there and is not repeated in its own file. A task that writes a
+page also gets the `Browser:` line of `worklog.md` (7.0b), quoted verbatim: it says which post-save
+check the builder runs, and no other words about the browser go into its prompt.
 
 | Task kind | How to recognise it in the task file | Hand it these briefs — read whole (paths) | And these references — look up by heading, never read whole (paths) |
 | --- | --- | --- | --- |
@@ -573,6 +606,11 @@ details of what is still open, with each build agent's `Check on stand (row N)` 
 plan-vs-built table is not written as a file — the report carries everything it says. The verdict is
 the CONJUNCTION: COMPLETE only when every task is closed, nothing stands recorded not built without
 a decision, no boundary was asserted without one, and every machine-checked plan item is present.
+A run that meets all of that but has a page none of whose build tasks reports `Browser checks: ≥1`
+reads `🟠 BUILT, NOT EXERCISED` instead, and its *Not exercised in a browser* section lists those
+pages with their `Check on stand` lines and the recorded `Browser:` answer: present it as it is — a
+page nobody opened after a save is work for the user now, not a footnote. Tasks reporting more than
+two checks are listed under *Browser checks over the cap*; that is a warning, not a red verdict.
 The engine copies `name` from each page's `bundle.json` into the payload as `schemaName` — that is
 how the report names the pages. Where the ledger and the built page disagree — a task `done` while
 the table names a MISSING row, or the reverse — the stand is right: re-open the task whose rows that

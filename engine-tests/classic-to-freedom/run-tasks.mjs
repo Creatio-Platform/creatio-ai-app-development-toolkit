@@ -6560,7 +6560,7 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
       () => (nextHeld.stdout || "").slice(0, 1200));
     recordBrowserAnswer(cd, "page-smoke");
     const passed = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
-    check("browser gate (CLI): once worklog.md records `Browser: page-smoke`, the browser gate no longer holds that task",
+    check("browser gate (CLI): with `Browser: page-smoke` recorded in worklog.md, the browser gate does not hold that task",
       () => !/`Browser:`/.test(`${passed.stdout || ""}${passed.stderr || ""}`),
       () => `${passed.stdout || ""}${passed.stderr || ""}`.slice(0, 600));
   }
