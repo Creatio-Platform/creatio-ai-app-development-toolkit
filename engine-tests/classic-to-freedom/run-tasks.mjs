@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, readDecisionTexts } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
@@ -25,7 +25,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
-  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE, isFiledGateRow } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
@@ -87,7 +87,7 @@ const C1_BUNDLE = { entity: "C1", seed: SEED,
 //                                              payload moves, which is the drift a label-only digest missed;
 //   `bulk` adds many fields and handlers      → the `page:main` bucket outgrows the budget, so the chunking path
 //                                              is exercised instead of the monolithic one.
-const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
+const mainBody = ({ extraChild, extraField, renameField, bulk, handlers }) => {
   const dets = ['R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}}'];
   const items = ['{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}}'];
   if (extraChild) {
@@ -102,10 +102,12 @@ const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
   }
   // Handlers are the heaviest row kind per unit, so a handful of them is what pushes a bucket over the budget
   // without needing a page body so large it stops resembling a real one.
-  const methods = bulk
-    ? ",methods:{" + Array.from({ length: 8 }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
+  // `handlers` sets their number for a page whose weight is mostly handlers, the shape of a big custom form page.
+  const methodCount = handlers ?? (bulk ? 8 : 0);
+  const methods = methodCount
+    ? ",methods:{" + Array.from({ length: methodCount }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
     : "";
-  const live = bulk ? liveMethods(...Array.from({ length: 8 }, (_, i) => `onBulk${i}`)) : "";
+  const live = methodCount ? liveMethods(...Array.from({ length: methodCount }, (_, i) => `onBulk${i}`)) : "";
   return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]${methods}};});${live}`;
 };
 const PLAN_META = { scope: "single-section", environment: "test", package: "P → UsrM", approach: "Parallel rebuild",
@@ -181,6 +183,20 @@ const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === page
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
 const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
+
+// The budget: a chunk is two sittings, so a big page is written by about half as many fresh contexts as at one
+// sitting per chunk, and a page within one chunk is still written by one.
+{
+  // A page whose weight is mostly handlers (30 of them, about a big custom form page with ~20 handlers and ~40 rules).
+  const BIG = manifestOf({ bulk: 2, handlers: 30 });
+  const bigRun = runMigration(BIG);
+  const atOneSitting = tasksOn(buildTaskSet(bigRun, { ...optsOf(BIG), taskBudget: { chunk: 40 } }), "page:main").length;
+  const now = tasksOn(buildTaskSet(bigRun, optsOf(BIG)), "page:main").length;
+  check("budget: a big handler-heavy page is cut into at most half the tasks one sitting per chunk gave it, and still more than one",
+    () => TASK_BUDGET.chunk === 80 && atOneSitting >= 4 && now > 1 && now * 2 <= atOneSitting, () => ({ atOneSitting, now }));
+  check("budget: a page within one chunk stays ONE task", () => tasksOn(SET, "page:main").length === 1,
+    () => tasksOn(SET, "page:main").map((t) => t.id));
+}
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
 // The user's approval of the plan a manifest renders, recorded in the migration folder above `dir` — `--tasks`,
 // `--start` and `--route` write nothing without it. The version is computed once per manifest.
@@ -566,8 +582,11 @@ check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that 
     const a = tasksOn(SET5, "page:main"), b = tasksOn(SET6, "page:main");
     const la = a.flatMap((t) => t.rows.map((r) => r.label)).join("|");
     const lb = b.flatMap((t) => t.rows.map((r) => r.label)).join("|");
+    // Only a chunk that STARTS on a count row is asked about: a chunk may also start on a handler whose own name
+    // carries a digit (`onBulk7`), and that digit is a name, not a count the mask is for.
+    const counted = a.filter((t) => /\d fields?/.test(t.rows[0].label));
     return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
-      && a.some((t) => /\d/.test(t.rows[0].label)) && a.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
+      && counted.length > 0 && counted.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
   }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
 check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the renamed field is its own deliverable row, so the task that carries it reads as changed and its id is kept",
   () => {
@@ -617,6 +636,92 @@ check("renderTaskFile: the file STATES the one-sub-agent contract and the parall
     && SAMPLE_TEXT.includes("`" + SAMPLE.writesTo + "`") && /no other task may be running against this artifact/.test(SAMPLE_TEXT)
     && /\*\*Depends on:\*\*/.test(SAMPLE_TEXT) && /Read their `## Notes` first/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
+// The writer OWNS the page's code, and the file it is handed is its brief (the task card).
+check("owner: a page task gives its writer the page's code to own; it carries no `Build ONLY what is listed` or `sequential is not permission` wording, and a deliverable outside its rows is a proposal under `## Notes`",
+  () => /you OWN this page's code/.test(SAMPLE_TEXT) && /yours to refactor/.test(SAMPLE_TEXT)
+    && /`Page code` row passes/.test(SAMPLE_TEXT) && SAMPLE_TEXT.includes("outside your rows") && SAMPLE_TEXT.includes("is not yours to change")
+    && !/Build ONLY what is listed/.test(SAMPLE_TEXT) && !/sequential is not permission/.test(SAMPLE_TEXT),
+  () => SAMPLE_TEXT.split("\n").slice(18, 32).join("\n"));
+{
+  const ob = fs.readFileSync(path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "references", "orchestrate-build.md"), "utf8");
+  check("owner: orchestrate-build.md rule 2 hands the next task to a different sub-agent that takes the page over as its OWNER, sends post-build changes for one page as one dispatch, and carries no `Sequential is not an exception` wording",
+    () => /it is not a guest: it takes the\s+page over as its \*\*owner\*\*/.test(ob) && /one task per page per round/.test(ob)
+      && !/Sequential is not an exception/.test(ob));
+}
+check("owner: the next task on the page still goes to a DIFFERENT sub-agent, which takes the page over as its owner — the per-task check and the dispatch token stay",
+  () => /The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner/.test(SAMPLE_TEXT)
+    && /agentNonce/.test(SAMPLE_TEXT), () => SAMPLE_TEXT);
+{
+  const decisions = new Map([["D4", "Hide every element the Classic page did not have"], ["Adjustment 1", "Keep the Notes tab"]]);
+  const carded = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions });
+  const card = carded.slice(carded.indexOf(TASK_CARD_HEADING), carded.indexOf("## Deliverables"));
+  check("task card: a page task carries the card — its brief is this file and the spec section, NOT plan.md / decisions.md / worklog.md, and it runs the code map before and after it writes",
+    () => card.startsWith(TASK_CARD_HEADING) && /Your brief is this file/.test(card)
+      && /Do not read `plan\.md`, `decisions\.md`, `worklog\.md` or the `customizations-\*` part files/.test(card)
+      && card.includes(`node engine/codemap.mjs <file> --page ${SAMPLE.pageKey}`) && /One place per behaviour/.test(card),
+    () => card);
+  check("task card: the decisions in force are inline, verbatim, the plan's Adjustments included",
+    () => card.includes("- `D4` — Hide every element the Classic page did not have") && card.includes("- `Adjustment 1` — Keep the Notes tab"),
+    () => card);
+  check("task card: an empty decisions file says none are recorded; a render without the map sends the writer to the orchestrator, never to decisions.md",
+    () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: new Map() }).includes("**Decisions in force:** none recorded.")
+      && /\*\*Decisions in force:\*\* not available to this render — ask the orchestrator to re-run `--tasks`/.test(SAMPLE_TEXT));
+  check("task card: the cited behaviour cards travel inline with their content, and the plan's ⚠ Confirm items and boundaries are pointed at in the table — no part-file read",
+    () => {
+      const rows = [
+        { label: "Handler — `onSaved`", group: "⚠ Custom methods worklist", vk: "handler",
+          behaviour: { card: "main/C03", ac: ["AC-1 saving keeps the owner"], whatItDoes: "Re-reads the owner after save.", useCase: "The user saves; the owner field refreshes." } },
+        { label: "[mixin] CompletenessMixin", group: "⚠ Confirm worklist", vk: null, confirm: true },
+        { label: "Dashboards", group: "Pages", vk: null, na: "another section owns it" },
+      ];
+      const text = renderTaskFile({ ...SAMPLE, rows }, { ...SET, cardDecisions: decisions });
+      const c = text.slice(text.indexOf(TASK_CARD_HEADING), text.indexOf("## Deliverables"));
+      return c.includes("- `main/C03` — does: Re-reads the owner after save. · use case: The user saves; the owner field refreshes. · acceptance: AC-1 saving keeps the owner")
+        && c.includes("**⚠ Confirm — answer each on the stand before you build**") && c.includes("  - [mixin] CompletenessMixin")
+        && c.includes("**Plan boundaries — never built**") && c.includes("  - Dashboards — another section owns it")
+        && c.includes("`customizations-*`") && !/read by its id in its part file/.test(c);
+    }, () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions }));
+  check("task card: each decision carries its full text under its title, indented so no line of it can open a heading of the file",
+    () => {
+      const texts = new Map([["D4", "Decided by: the user\n## not a heading here\nHide Back, Close and Export too."]]);
+      const t = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions, cardDecisionTexts: texts });
+      return t.includes("  - `D4` — Hide every element the Classic page did not have\n    Decided by: the user\n    \\## not a heading here\n    Hide Back, Close and Export too.")
+        && !t.split("\n").some((l) => l.trim() === "## not a heading here");
+    });
+  check("task card: a decision text that carries the file's own markers (an indented `## Notes`, `## Deliverables`, a `| 1 |` row) is inert — the file parses back to no notes and its own rows, and a re-render from the parse is byte-identical",
+    () => {
+      const texts = new Map([["D4", "Use this shape:\n\n    ## Notes\n    - what was built\n  ## Deliverables\n  | 1 | Fake row | built |\n| # | Deliverable | Outcome |"]]);
+      const cardSet = { ...SET, cardDecisions: decisions, cardDecisionTexts: texts };
+      const first = renderTaskFile(SAMPLE, cardSet);
+      const parsed = parseTaskFile(first);
+      const again = renderTaskFile({ ...SAMPLE, notes: parsed.notes }, cardSet);
+      const plain = parseTaskFile(renderTaskFile(SAMPLE, SET));
+      return parsed.notes === "" && parsed.rowCount === plain.rowCount
+        && JSON.stringify(parsed.outcomes) === JSON.stringify(plain.outcomes) && again === first
+        && first.includes(String.raw`    \## Notes`) && first.includes(String.raw`  \| 1 | Fake row | built |`);
+    }, () => JSON.stringify(parseTaskFile(renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions,
+      cardDecisionTexts: new Map([["D4", "    ## Notes\n    - x"]]) })).notes));
+  check("decision texts: the lines under a `D<N>` heading and the text of a plan Adjustment are read in full; a decision with no body has no entry",
+    () => {
+      const base = tmp("decision-texts");
+      fs.writeFileSync(path.join(base, "decisions.md"), "# Decisions\n\n## D4 — Hide Freedom-only elements\nDecided by: the user\nKeep Back, Close and Export.\n\n## D5 — Bare\n## Plan approval\nApproved by: someone\n");
+      fs.writeFileSync(path.join(base, "plan.md"), "# Plan\n\n### Adjustments\n\n1. **Keep the Notes tab** — the user asked for it.\n   It stays on the main page.\n2. **Drop History**\n");
+      const t = readDecisionTexts(base);
+      fs.rmSync(base, { recursive: true, force: true });
+      return t.get("D4") === "Decided by: the user\nKeep Back, Close and Export." && !t.has("D5")
+        && t.get("Adjustment 1") === "the user asked for it.\nIt stays on the main page." && !t.has("Adjustment 2");
+    });
+  check("task card: a collapsed whole-run task carries the card with the decisions in force",
+    () => {
+      const whole = buildTaskSet(RUN, { ...OPTS, decisions, taskBudget: { run: 100000 } }).tasks.find((t) => t.writesTo === ARTIFACT_WHOLE);
+      const t = whole && renderTaskFile(whole, { ...SET, cardDecisions: decisions });
+      return !!t && t.includes(TASK_CARD_HEADING) && t.includes("- `D4` — Hide every element the Classic page did not have");
+    });
+  check("task card: a read-only review task has no card — it owns no page code",
+    () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes(TASK_CARD_HEADING));
+  check("task card: the decisions ride on the task set itself, so every path that renders the set — sync, start, decide, revoke — writes the same card",
+    () => buildTaskSet(RUN, { ...OPTS, decisions }).cardDecisions === decisions && mergeTaskSet(buildTaskSet(RUN, { ...OPTS, decisions }), []).cardDecisions === decisions);
+}
 check("renderTaskFile: a read-only task says so instead of naming an artifact — a review that claimed a `writesTo` would block every task that shares its page for no reason",
   () => {
     const review = taskAt(SET, "child:C1", "Quality gates");
@@ -1722,6 +1827,29 @@ check("repair: an adopted repair file joins the WRITE CHAIN of the page it repai
     const lastBuild = m.tasks.findLast((x) => x.writesTo === t.writesTo && x.id !== t.id);
     return got.dependsOn.includes(lastBuild.id);
   }, () => "see the merged queue");
+check("repair: a repair task that writes a page carries the task card with the decisions in force, and no `Build ONLY what is listed` wording",
+  () => {
+    const dir = tmp("repair-card");
+    const opts = { ...OPTS, decisions: new Map([["D2", "Keep the Notes tab"]]) };
+    syncTaskDir(dir, RUN, opts);
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, opts);
+    const texts = res.written.filter((t) => String(t.writesTo).startsWith("page:")).map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+    fs.rmSync(dir, { recursive: true, force: true });
+    return texts.length > 0 && texts.every((x) => x.includes(TASK_CARD_HEADING) && x.includes("- `D2` — Keep the Notes tab")
+      && /Do not read `plan\.md`/.test(x) && !/Build ONLY what is listed/.test(x));
+  });
+// A run on the collapse line stays ONE build task (plus its review) with the `Page code` row in it: the row checks
+// code the other rows produce and weighs nothing.
+check("budget: a run at exactly `TASK_BUDGET.run` weight still collapses to one build task with the `Page code` row inside it",
+  () => {
+    const rows = checklistGroups(RUN, OPTS).flatMap((g) => g.rows);
+    const pc = rows.some((r) => r.vk?.type === "pagecode");
+    const base = buildTaskSet(RUN, OPTS);
+    const weight = base.tasks.filter((t) => t.writesTo).reduce((a, t) => a + (t.weight || 0), 0);
+    const atLine = buildTaskSet(RUN, { ...OPTS, taskBudget: { run: weight } });
+    const builds = atLine.tasks.filter((t) => t.writesTo);
+    return pc && weight > 0 && builds.length === 1 && builds[0].rows.some((r) => r.vk === "pagecode");
+  }, () => buildTaskSet(RUN, OPTS).tasks.map((t) => `${t.group}:${t.weight}:${t.writesTo}`));
 check("repair: syncRepairDir ADDS to the folder and never overwrites — the plan tasks are untouched, and re-verifying an UNCHANGED page opens no second round, because a round is an ATTEMPT and counting verify runs would burn the cap with nobody having run",
   () => {
     const dir = tmp("repair");
@@ -3584,6 +3712,25 @@ const minted = (over = {}, dirName = "mint") => {
   syncTaskDir(d, RUN, OPTS);
   return { d, res: addTasks(d, RUN, { ...DECL, ...over }, OPTS) };
 };
+
+// A declared task that writes a page carries the task card with the decisions in force — at minting, and again
+// after a later sync, which re-renders only the card block of an adopted file and leaves its cells and notes alone.
+check("minted: a declared page-writing task carries the decisions in force, and a later sync refreshes ONLY its card when a decision is added",
+  () => {
+    const d = tmp("mint-card");
+    const opts = { ...OPTS, decisions: new Map([["D2", "Keep the Notes tab"]]) };
+    syncTaskDir(d, RUN, opts);
+    const res = addTasks(d, RUN, DECL, opts);
+    const f = path.join(d, res.written[0].file);
+    const first = fs.readFileSync(f, "utf8");
+    fs.writeFileSync(f, first + "\nnoted by the writer\n");
+    syncTaskDir(d, RUN, { ...opts, decisions: new Map([["D2", "Keep the Notes tab"], ["D3", "Drop the History tab"]]) });
+    const second = fs.readFileSync(f, "utf8");
+    const cardOut = (t) => t.replace(/\n## Task card\n[\s\S]*?(?=\n\n## Deliverables)/, "");
+    fs.rmSync(d, { recursive: true, force: true });
+    return first.includes("- `D2` — Keep the Notes tab") && second.includes("- `D3` — Drop the History tab")
+      && cardOut(second) === cardOut(first + "\nnoted by the writer\n");
+  });
 
 // A LINE BREAK IN A DECLARED STRING FORGES FRONT MATTER: the value is interpolated into a line of its own, so an
 // embedded newline adds a line, and a `status:` there is read ahead of the engine's. Refused before anything is
@@ -7756,11 +7903,11 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
     () => ({ written: round1.written.map((t) => `${t.cause}:${t.rows.length}`) }));
   if (handlers) {
     const fp = path.join(dir, handlers.file);
-    const before = fs.readFileSync(fp, "utf8").split("\n");
+    let before = fs.readFileSync(fp, "utf8").split("\n");
 
     const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
       destination: "ENG-1", taskId: handlers.id, decisions });
-    const after = fs.readFileSync(fp, "utf8").split("\n");
+    let after = fs.readFileSync(fp, "utf8").split("\n");
     const rr = readTaskDir(dir).find((x) => x.id === handlers.id);
     check("AC 11: a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
       () => !res.refused && (res.unplaced || []).length === 0
@@ -7771,9 +7918,11 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
       () => ({ refused: res.refused, unplaced: res.unplaced?.length, touched: res.touched?.length,
         status: rr?.status, cell0: rr?.rows?.[0]?.outcome }));
 
-    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells and the three
-    // front-matter fields the engine owns may differ. Anything else means the writer rewrote a file it was
-    // supposed to edit in place.
+    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells, the three
+    // front-matter fields the engine owns and the engine-derived task card may differ. Anything else means the
+    // writer rewrote a file it was supposed to edit in place.
+    const cardFree = (lines) => lines.join("\n").replace(/\n## Task card\n[\s\S]*?(?=\n\n## Deliverables)/, "").split("\n");
+    [before, after] = [cardFree(before), cardFree(after)];
     const strayEdits = [];
     for (let i = 0; i < Math.max(before.length, after.length); i++) {
       if (before[i] === after[i]) continue;
@@ -8756,6 +8905,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
+  // `3ea0cd8a` also carries the page's `Page code` row, which no digest reads.
   const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "ce526a7f" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
@@ -8780,6 +8930,26 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER] },
     { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
   ]);
+  check("split: a split that never names the `Page code` row still resolves — the row rides with the last item writing its page, the split's cards carry the decisions, and the row moves no digest",
+    () => {
+      const good = buildTaskSetFromSplit(wRun, goodSplit, { ...wOpts, decisions: new Map([["D1", "Keep the layout"]]) });
+      const logic = good.tasks?.find((t) => t.id === "main-logic");
+      const card = logic && renderTaskFile(logic, good);
+      const digestWithout = TASKS_MODULE.rowsDigest(checklistGroups(wRun, wOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type !== "pagecode" && r.pageKey === "main"));
+      const digestWith = TASKS_MODULE.rowsDigest(checklistGroups(wRun, wOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "main"));
+      return !good.refused && logic.rows.some((r) => r.vk === "pagecode") && good.cardDecisions instanceof Map
+        && card.includes("- `D1` — Keep the layout") && digestWith === digestWithout;
+    }, () => buildTaskSetFromSplit(wRun, goodSplit, wOpts).problems);
+  check("split: a split that NAMES the `Page code` row keeps the item it chose",
+    () => {
+      const named = planSplit([
+        { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER, "@Page code"] },
+        { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
+      ]);
+      const set = buildTaskSetFromSplit(wRun, named, wOpts);
+      return !set.refused && set.tasks.find((t) => t.id === "main-layout").rows.some((r) => r.vk === "pagecode")
+        && !set.tasks.find((t) => t.id === "main-logic").rows.some((r) => r.vk === "pagecode");
+    }, () => buildTaskSetFromSplit(wRun, planSplit([]), wOpts).problems);
   check("split (real plan): the attribute placed after the handler that sets it is refused; the same plan split with only an unrelated handler earlier is cut",
     () => {
       const bad = buildTaskSetFromSplit(wRun, badSplit, wOpts);
@@ -9227,8 +9397,10 @@ check("identity digest guard: rendering the identity condition does NOT move any
 // ============================================================================================================
 console.log("\n===== --decide --build and the decision-waiting --route report =====");
 {
-  const BO = checklistOpts(MANIFEST);
   const BUILD_DECISIONS = new Map([["D5", "build the typed forms"]]);
+  // The decisions are part of the options, as the CLI passes them on every mode: the task card lists them, so a
+  // sync and a decide that read different decisions would rewrite every card between them.
+  const BO = { ...checklistOpts(MANIFEST), decisions: BUILD_DECISIONS };
   const NEEDS_DECISION = "not-built — needs-decision";
   const MANIFEST_FILE = (base) => { const f = path.join(base, "m.json"); fs.writeFileSync(f, JSON.stringify(MANIFEST)); return f; };
   const cliB = (base, ...args) => cliFileApproved(MANIFEST_FILE(base), ...args);
@@ -9684,7 +9856,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       const f = taskFilePath(dir, x.id);
       fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, NEEDS_DECISION));
     }
-    syncTaskDir(dir, RUN5, { ...OPTS5, now: AT(903) });
+    syncTaskDir(dir, RUN5, { ...OPTS5, decisions: BUILD_DECISIONS, now: AT(903) });
     const otherPath = taskFilePath(dir, other.id);
     const otherBefore = fs.readFileSync(otherPath, "utf8");
     const res = applyDecision(dir, RUN5, { ...OPTS5, decision: "D5", mode: "build", decisions: BUILD_DECISIONS, pages: ["main"] });
@@ -10579,6 +10751,10 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
         && closedLists.every(([, n]) => closed.rows[n - 1].outcome === "wont-do — not carried over (D3)" && closedMap.get(n) === "D3=")
         && JSON.stringify(snapOf(dir)) === JSON.stringify(closedSnap),
       () => ({ status: remedied.status, out: remedied.stdout.slice(0, 400), rows: closedLists.map(([, n]) => [closed?.rows[n - 1]?.outcome, closedMap.get(n)]) }));
+    const written = fs.readFileSync(path.join(dir, FILE), "utf8");
+    check("task card: a folder synced by the CLI with decisions.md in place writes the decisions in force into the task file — the writer does not re-read decisions.md",
+      () => written.includes(TASK_CARD_HEADING) && written.includes("- `D3` — not carried over"),
+      () => written.slice(written.indexOf(TASK_CARD_HEADING), written.indexOf("## Deliverables")));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
@@ -11634,6 +11810,53 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       () => ({ error: next.error?.message }));
     fs.rmSync(path.dirname(d), { recursive: true, force: true });
   }
+}
+
+console.log("\n===== project conventions: every writer of a task file carries the block =====");
+
+// The plan cut, the split cut, a repair round and a minted task are four different writers; each must hand the
+// run's conventions to `renderTaskFile`, or a builder that reads only its own task never sees the namespace.
+{
+  const CONV = { requestPrefix: "ab", validatorPrefix: "ab", converterPrefix: "ab", helperModules: ["AbClientHelperModule"],
+    constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "ab. on 7 requests", confirmedBy: "plan", conflict: null, previous: null };
+  const RUN_C = { ...RUN, projectConventions: CONV };
+  const carries = (text) => /## Project conventions/.test(text) && /the `ab\.` namespace/.test(text) && /`ab\.<Element>Clicked`/.test(text) && /`AbConstants`/.test(text)
+    && text.indexOf("## Project conventions") < text.indexOf("## Deliverables");
+  const taskFiles = (dir) => fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+  check("conventions: the split cut carries the run's conventions into every task file it renders",
+    () => { const set = buildTaskSetFromSplit(RUN_C, FULL_SPLIT, OPTS); return set.projectConventions === CONV && set.tasks.every((t) => carries(renderTaskFile(t, set))); });
+  check("conventions: a repair round's task files carry the block (syncRepairDir)",
+    () => {
+      const dir = tmp("conv-repair");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, OPTS);
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+        return repairs.length > 0 && repairs.every(carries) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: a minted (orchestrator-declared) task file carries the block (addTasks)",
+    () => {
+      const dir = tmp("conv-mint");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = addTasks(dir, RUN_C, DECL, OPTS);
+        return !(res.problems || []).length && taskFiles(dir).some((t) => /orch-render-blocker/.test(t)) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: the block sits above the task card, so a sync that re-renders a repair file's card (from its heading to the deliverables) keeps the conventions",
+    () => {
+      const dir = tmp("conv-card");
+      try {
+        const d1 = { ...OPTS, decisions: new Map([["D1", "First decision"]]) };
+        syncTaskDir(dir, RUN_C, d1);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, d1);
+        syncTaskDir(dir, RUN_C, { ...OPTS, decisions: new Map([["D1", "First decision"], ["D2", "Later decision"]]) });
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8")).filter((t) => t.includes(TASK_CARD_HEADING));
+        const ordered = (t) => t.indexOf("## Project conventions") < t.indexOf(TASK_CARD_HEADING) && t.indexOf(TASK_CARD_HEADING) < t.indexOf("## Deliverables");
+        return repairs.length > 0 && repairs.every((t) => carries(t) && ordered(t) && t.includes("`D2` — Later decision"));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
 }
 
 /* ================================================================================================

@@ -17,6 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
 import { RECONCILE_MODE_CLASSIC } from "./reconcile-modes.mjs";
+import { analyzePageCode, findingCount, findingPhrases, viewRequests, MAX_FUNCTION_LINES } from "./codemap.mjs"; // the `Page code` row measures what the writer's code map shows
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions, cardActionSignals,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
@@ -24,6 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
+import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
@@ -998,7 +1000,7 @@ const MEMBER_KIND_NOTE = {
   "attribute-virtual": "**attribute-virtual** — page UI state with NO entity column behind it, so no field insert carries it. Create it as a Freedom view-model attribute (with its default) and re-wire whatever read it.",
   "attribute-imperative": "**attribute-imperative** — a sub-key defined as a FUNCTION: a computed value the engine reads as present but cannot evaluate. Implement as a converter, virtual attribute or handler.",
   "attribute-lookup-filter": "**attribute-lookup-filter** — the lookup is filtered IMPERATIVELY via `lookupListConfig.filters`, which does NOT come across as a declarative FILTRATION rule. Rebuild as a Freedom lookup-filter handler (or an entity business rule when the filter is static).",
-  "module-dep": "**module-dep** — `define()` dependencies with no row of their own: constants/enum modules hold the lookup GUIDs the rules compare against, utility modules hold logic the page calls.",
+  "module-dep": "**module-dep** — `define()` dependencies with no row of their own: constants/enum modules hold the lookup GUIDs the rules compare against, utility modules hold logic the page calls. A module the plan's Project conventions declare (helper or constants) gets its own checked row: the built page imports it, or a decision says why it does not.",
   "referenced-module": "**referenced-module** — renders UI OUTSIDE this page's diff, so its controls are not in the ChangeSet. Port it manually, or confirm the target template provides it.",
 };
 // Exported so the golden can pin the set relation against HANDOFF_MEMBER_KINDS: a kind that renders in the table
@@ -1722,6 +1724,7 @@ function renderPlanBanners(result, opts) {
   // The keys come from the engine's gate (requiredPlacementKeys in migrate.mjs), never a second list kept here.
   const placementKeys = opts.placementKeys || [];
   if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (${placementKeys.map((k) => "`" + k + "`").join(" · ")}), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable. \`existing-section\` registers nothing: it needs the existing section's \`listPage\` / \`formPage\` names on \`sectionHost\` and \`planMeta.freedomExists: true\`.`, "");
+  P.push(...conventionsBanner(opts.conventionsBlockers || []));
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **dashboards** = \`execute-esq\` (NOT \`odata-read\` — it drops the plain-Guid \`SysModule.SectionSchemaUId\`) on \`SysDashboard\` filtered \`Section\` = the section's \`SysModule.Id\`, select \`["Id","Caption"]\`, then read which package SHIPS each dashboard from the \`SysDashboard\` data bindings and record it as \`items:[{ id, caption, sourcePackage? }]\` (omitted = stand data only). That is the read; \`saveInPackage\` (defaulting from it) and \`skip\` (absent unless recorded) are the user's decisions — the full two-step chain is in the skill's \`signals\` step. **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
@@ -2148,6 +2151,11 @@ function renderRunDiagnostics(raw) {
   return [renderDiagnosticsBlock(normalizeDiagnostics(raw, esc)).trimEnd(), ""];
 }
 
+// The project-conventions banner: empty when the block is settled.
+function conventionsBanner(blockers) {
+  if (!blockers.length) return [];
+  return [`> ⛔ **PLAN INCOMPLETE — project conventions not settled:** the plan cannot say which namespace this team names its requests in, or which of its modules the builders reuse. ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> Detect them read-only (the skill's step 4.2): custom request names in the existing Freedom pages of the target package and its direct customer-package dependencies (\`get-page\` → \`ownBodySummary.handlerRequests\`, majority namespace), else the team's schema name prefix, else the \`SchemaNamePrefix\` system setting, else \`usr\`. Record them in \`manifest.projectConventions\` with the module bodies in \`manifest.constantsModules\`, then re-run \`migrate.mjs --plan\`.`, ""];
+}
 export function renderPlan(result, opts = {}) {
   return renderPlanWith(result, { ...opts, printedStatus: new Set() });
 }
@@ -2237,7 +2245,8 @@ function renderPlanWith(result, opts) {
     }
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check"), "");
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check"), "",
+    ...conventionsPlanLines(opts.projectConventions, opts.recordIds || [], esc));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -2743,26 +2752,80 @@ function writesField(h) {
 }
 // The primary behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing
 // one card in one task. Absent when the row cites no primary card; a body card alone joins no rows.
+// The row's behaviour card: its id (what a split keys a row by) and its content — what the item does, the use case
+// and the acceptance criteria — so the task card can hand the writer the card itself instead of a pointer into the
+// agent-written part file it came from.
 function cardField(x) {
-  const card = x.describedIn?.card;
-  return card ? { card } : {};
+  const d = x.describedIn;
+  if (!d?.card) return {};
+  const behaviour = { card: d.card, ac: d.ac || [], whatItDoes: d.whatItDoes || null, useCase: d.useCase || null };
+  return { card: d.card, behaviour };
 }
 // A section method the list analyzer already read: its effect is in the positioned list ops, so the row records
 // it and must NOT ask for a second build. Same shape as the folded-helper note beside it.
 const LIST_MAPPED_TARGET = "already mapped into the list page's own ops";
 // One row per imperative member, same sharing rule.
-function memberWorklistRows(cs) {
-  return (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
-    // a virtual attribute is on the built page's `viewModelConfig.attributes` (`vmattr` vk); a
-    // `module-dep` row names Classic define() dependencies whose contribution lives in the handlers and rules that
-    // use them — nothing on the stand answers to it on its own, so it is informational, never a row to confirm.
-    .map((d) => {
+// `opts.declaredModuleRows` (the form page): the project's declared modules get their rows even when the Classic page
+// has no `module-dep` member at all — an empty or inert define() list is the page most likely to need them.
+function memberWorklistRows(cs, opts = {}) {
+  const members = (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind));
+  const rows = members
+    // a virtual attribute is on the built page's `viewModelConfig.attributes` (`vmattr` vk); the `module-dep`
+    // aggregate splits into one checked row per declared project module (see moduleDepRows).
+    .flatMap((d) => {
       const label = `[${esc(d.kind)}] ${esc(d.item)}`;
       const deliverableId = memberId(d);
-      if (d.kind === "attribute-virtual") return { deliverableId, label, ...cardField(d), vk: { type: "vmattr", name: d.item } };
-      if (d.kind === "module-dep") return { deliverableId, label, ...cardField(d), info: "Classic define() dependencies — their contribution is carried by the handlers and rules that used them; nothing on the stand answers to this row on its own" };
-      return { deliverableId, label, ...cardField(d) };
+      if (d.kind === "attribute-virtual") return [{ deliverableId, label, ...cardField(d), vk: { type: "vmattr", name: d.item } }];
+      if (d.kind === "module-dep") return moduleDepRows(d, opts.projectConventions, opts.requiredModules);
+      return [{ deliverableId, label, ...cardField(d) }];
     });
+  if (opts.declaredModuleRows && !members.some((d) => d.kind === "module-dep")) rows.push(...moduleDepRows(null, opts.projectConventions, opts.requiredModules));
+  return rows;
+}
+// The declared constants modules a page's record ids map to (`AbConstants.Status.New` → `AbConstants`): the plan
+// tells the builder to write those ids as `Module.Path`, so the page imports the module.
+function requiredModulesOf(recordIds, conventions) {
+  const declared = conventions?.constantsModules || [];
+  const paths = (recordIds || []).flatMap((r) => r.paths || []);
+  return new Set(declared.filter((m) => paths.some((p) => p === m || p.startsWith(m + "."))));
+}
+// The Classic page's define() dependencies (`d`, the `module-dep` member; null when the page has none), split by the
+// project's conventions. A helper or constants module the conventions declare is a real dependency of the Freedom
+// page too — Freedom pages import client-unit modules through SCHEMA_DEPS — so one the Classic page imported, or
+// one the plan maps this page's record ids to (`required`), gets its own CHECKED row: `--verify` closes it when the
+// built page imports the module, or a decision records why this page does not need it. Any other declared module
+// gets an informational row. The
+// per-module rows carry their own id (`module-dep:project:<Module>`), never one the aggregate could also hold, so a
+// status recorded against the aggregate cannot close a checked row.
+function moduleDepRows(d, conventions, required = new Set()) {
+  let deps = [];
+  if (d) deps = Array.isArray(d.modules) ? d.modules : String(d.item).split(",").map((x) => x.trim()).filter(Boolean);
+  const role = new Map([
+    ...(conventions?.helperModules || []).map((m) => [m, "helper module"]),
+    ...(conventions?.constantsModules || []).map((m) => [m, "constants module"]),
+  ]);
+  const card = d ? cardField(d) : {};
+  const rows = [];
+  for (const [m, kind] of role) {
+    const deliverableId = `module-dep:project:${m}`;
+    if (deps.includes(m)) rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}: import it in the page's SCHEMA_DEPS`, ...card, vk: { type: "moduledep", module: m } });
+    else if (required.has(m)) rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}: the plan maps this page's record ids to it, import it in the page's SCHEMA_DEPS`, ...card, vk: { type: "moduledep", module: m } });
+    // Nothing on the Classic page says this page needs it, so it cannot block; the builder learns of it from the
+    // task's conventions block.
+    else rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}, not in the Classic page's define() dependencies`, ...card,
+      info: "declared in projectConventions; import it in SCHEMA_DEPS only if the Freedom page uses its ids or helpers" });
+  }
+  if (!d) return rows;
+  // The aggregate keeps its OWN id (`memberId(d)`, every dependency), always: the plan's member line and a
+  // `deliverableStatus` entry recorded before the split both address the row by it, also when every dependency
+  // is a declared module.
+  const rest = deps.filter((m) => !role.has(m));
+  rows.push(rest.length
+    ? { deliverableId: memberId(d), label: `[module-dep] ${esc(rest.join(", "))}`, ...card,
+      info: "Classic define() dependencies outside the project's declared helper and constants modules — their contribution is carried by the handlers and rules that used them" }
+    : { deliverableId: memberId(d), label: `[module-dep] ${esc(d.item)}`, ...card,
+      info: "every Classic define() dependency here is a declared project module — each has its own row" });
+  return rows;
 }
 // The section's imperative work, built by the SAME two row builders as the form page's. Both titles name the
 // scope: on a withheld `list` key these ride the form page's key, where one title would be one identity for two
@@ -2772,7 +2835,7 @@ function sectionLogicGroups(listCs, key, ctx = {}) {
   const out = [];
   const methods = handlerStubRows(cs);
   if (methods.length) out.push(pageGroup(key, "List — Custom methods", methods, ctx));
-  const members = memberWorklistRows(cs);
+  const members = memberWorklistRows(cs, ctx);
   if (members.length) out.push(pageGroup(key, "List — Other declared logic worklist", members, ctx));
   return out;
 }
@@ -2991,6 +3054,16 @@ function qualityGateRows(pageKey) {
     evidenceRow(id, `${base} **This row: the design pass RAN** — a record naming the reference page and the components checked was filed under \`${esc(id)}\`.`, { deliverableId: "quality:ran" }, { part: "filed", allowNoDiff: true }),
     evidenceRow(id, `${base} **This row: the design pass was INDEPENDENTLY JUDGED** — a separate reviewer found the filed record convincing. A record nobody reviewed does not close this row, even when the row above is ✅.`, { deliverableId: "quality:judged" }, { part: "judged", allowNoDiff: true }),
   ];
+}
+// PAGE CODE. A page is built by one task after another, each a fresh context, and the measured failure of that
+// shape is code nobody owns: the same helper pasted into every handler by each writer, one handler grown past a
+// few hundred lines, requests declared and never sent. The writer owns the page's code and reads the code map
+// (codemap.mjs) before it writes; this row is where the build is held to it. It closes on the built page's handler
+// source, so it needs no stand call beyond the read-back, and a deliberate exception is a `D<N>` decision like any
+// other row (`--decide D<N> --wont-do`).
+function pageCodeRows() {
+  return [{ deliverableId: "page-code", label: `Page code — no function over ${MAX_FUNCTION_LINES} lines, no helper defined in more than one handler, no request declared but never sent`,
+    vk: { type: "pagecode" } }];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -3349,6 +3422,9 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
     const listConfirm = confirmWorklistRows(LIST_PAGE_KEY, result.listChangeSet || {});
     if (listConfirm.length) groups.push(pageGroup(LIST_PAGE_KEY, "⚠ Confirm worklist", listConfirm, opts));
     sectionLogicKey = LIST_PAGE_KEY;
+    // AC-7 covers every built page: the list page declares its own handlers, validators and converters.
+    const listConventions = [...conventionRows(opts), ...listModuleRows(result, opts)];
+    if (listConventions.length) groups.push(pageGroup(LIST_PAGE_KEY, "Project conventions", listConventions, opts));
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY), opts));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
@@ -3438,7 +3514,11 @@ export function checklistGroups(result, opts = {}) {
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Other declared logic worklist", memberWorklistRows(cs));
+  G("⚠ Other declared logic worklist", memberWorklistRows(cs, { ...opts, declaredModuleRows: true,
+    requiredModules: requiredModulesOf(result.pageRecordIds?.form, opts.projectConventions) }));
+  // The project's namespace, checked on every page that is built: a custom request, validator or converter outside
+  // it is a blocking row until it is renamed or a decision accepts it.
+  G("Project conventions", conventionRows(opts));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
@@ -3457,6 +3537,8 @@ export function checklistGroups(result, opts = {}) {
   // components are necessary, not sufficient; a 950-field wall is still native) and demoting real layout problems
   // to "refine if desired". So acceptance is now a single, checkable fact — did you run the skill on all pages —
   // and the escape phrases are explicitly rejected. See `qualityGateRows`: it is now an EVIDENCE-gated row.
+  // Page code — ALWAYS present: the page's handler code measured, the same analysis the writer's code map prints.
+  G("Page code", pageCodeRows());
   G("Quality gates", qualityGateRows(pageKey));
   // ROOT SPLICE — only the page that owns the key `main` folds the tree, so a sub-page's own groups stay its own
   // (its grandchildren are reached by the recursive walk, not by nesting rows inside rows).
@@ -4751,6 +4833,31 @@ function handlerOpenText(vk, code) {
     ? ` A handler defines \`${esc(vk.method)}\` but nothing calls it: a definition is not a port.` : "";
   return `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote}.${definedOnly} Record the port as \`Ported as (row N): <symbol>\` — the request the page sends, or the page function or \`Module.function\` a handler calls; a port that is not code (a declarative rule) is confirmed on the stand with a \`Check on stand\` line`;
 }
+// What the OTHER built pages of the payload send: a quoted name in their handler source, or a request in their view.
+function requestsSentElsewhere(root, pageKey) {
+  const out = new Set();
+  for (const [key, e] of Object.entries(root?.pages || {})) {
+    if (key === pageKey || !e || typeof e !== "object") continue;
+    for (const m of String(typeof e.handlers === "string" ? e.handlers : "").matchAll(/["'`]([\w.$-]+)["'`]/g)) out.add(m[1]);
+    for (const r of viewRequests(e.viewConfig)) out.add(r);
+  }
+  return out;
+}
+// The `Page code` row. Not provided ⇒ not checkable, the same non-gating answer a handler row gives; findings ⇒
+// ⚠ verify, which gates the run until the code is fixed or a decision records why it stays.
+export function resolvePageCodeVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the page's handler code");
+  if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
+  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
+  // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
+  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey));
+  if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
+  if (!findingCount(a)) {
+    const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
+    return ["✅ Done", `${a.handlers.length} handler(s): none over ${MAX_FUNCTION_LINES} lines, no helper defined twice, ${sends}`, "ok"];
+  }
+  return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception (a request sent only from a module outside the built pages is one)`, "unverified"];
+}
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the attribute cannot exist", "missing"];
@@ -4908,13 +5015,48 @@ export function resolveCardNativeVk(vk, ctx) {
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
 }
+// The list page's checked module rows: only the constants modules its own record ids map to (the section's define()
+// list is the list analyzer's, carried by the section's member worklist).
+function listModuleRows(result, opts) {
+  const required = requiredModulesOf(result.pageRecordIds?.list, opts.projectConventions);
+  return moduleDepRows(null, opts.projectConventions, required).filter((r) => r.vk);
+}
+// The namespace row of one page. Absent when the run recorded no conventions (the plan is gated on them anyway).
+function conventionRows(opts) {
+  const c = opts.projectConventions;
+  if (!c) return [];
+  const prefixes = prefixesOf(c);
+  const shown = [...new Set(Object.values(prefixes))].map((p) => `\`${esc(p)}.\``).join(" / ");
+  return [{ deliverableId: "conventions:namespace", label: `Custom requests, validators and converters use the project namespace ${shown}`,
+    vk: { type: "namespace", prefixes } }];
+}
+// A custom name outside the confirmed namespace is the BUILDER's to fix (rename it) or the user's to accept (a
+// decision closes the row through the task folder), never a pass.
+export function resolveNamespaceVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the page's custom names");
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its names cannot be checked", "missing"];
+  if (!ctx.customNames) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the namespace", "skip"];
+  const foreign = foreignNames(ctx.customNames, vk.prefixes || {});
+  const named = foreign.map((f) => f.kind + " `" + esc(f.name) + "`").join(", ");
+  if (foreign.length) return ["⚠ verify", `outside the project namespace: ${named} — rename it, or record a decision (\`--decide D<N>\`) that accepts it`, "unverified"];
+  const total = NAME_KINDS.reduce((n, k) => n + ctx.customNames[k].size, 0);
+  return ["✅ Done", `${total} request/validator/converter name(s) on the built page, none outside the project namespace`, "ok"];
+}
+// A declared project module the Classic page used: the built page imports it, or a decision says why it does not.
+export function resolveModuleDepVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the import of \`${esc(vk.module)}\``);
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so it imports nothing", "missing"];
+  if (!ctx.deps) return ["☐ confirm on-stand", "the bundle carries no `deps` — pass get-page's `bundle.json` whole to auto-check the page's SCHEMA_DEPS", "skip"];
+  if (ctx.deps.includes(vk.module)) return ["✅ Done", `\`${esc(vk.module)}\` is in the built page's SCHEMA_DEPS`, "ok"];
+  return ["⚠ verify", `\`${esc(vk.module)}\` is not in the built page's SCHEMA_DEPS (${ctx.deps.length ? ctx.deps.map(esc).join(", ") : "none"}) — import it where the page uses its values, or record a decision (\`--decide D<N>\`) why this page does not need it`, "unverified"];
+}
 // S3776 — the dispatch is a table, not a ladder of ifs: a category set → its resolver, then the four single-type
 // resolvers by name. Same order and behaviour, one lookup each. (The sets are disjoint, so order among them is moot.)
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
-const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
-  ["relatedpage", resolveRelatedPageVk]]);
+const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
+  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
@@ -5154,6 +5296,10 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
   const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
   return {
     pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
+    // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
+    // read for the project-conventions rows; null when the bundle did not carry them.
+    deps: bundleDeps(entry),
+    customNames: bundleCustomNames(entry, handlersSrc),
     containers: pageContainersOf(page),
     // the frozen reconcile mode (from the task folder, or null). Only `classic-layout` turns on the EXTRA-field
     // check in resolveFieldsByIdentity: a field CONTROL on the built page that is not in the plan is a base field

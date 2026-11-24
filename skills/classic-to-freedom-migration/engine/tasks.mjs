@@ -40,6 +40,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
+import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
@@ -267,23 +268,25 @@ const writesToOf = (artifact) =>
 // ---8<--- THE BUDGET: how much work one sub-agent is handed ---8<---
 
 // DECLARED, not hard-coded at the call site, because these are calibration and calibration changes with evidence.
-// The unit is nominal build effort, sized so a chunk is one sitting for one sub-agent: the measured runs put a
-// builder at roughly half an hour for about this much, and a task that outgrows a sitting is the task an agent
-// silently splits or silently merges. Override per run with `opts.taskBudget`.
+// The unit is nominal build effort; a chunk is about two sittings (one sitting is roughly 40, half an hour). Every
+// extra task on one page is a fresh context that reads the briefs and the page before it writes a line, and on a
+// measured run that relay cost more than a long sitting does: a big page had 11–15 writers, each starting at ~100k
+// tokens, and a page built by one builder cost 16M tokens against 118M for a relay-built neighbour. What a longer
+// sitting costs when a session is lost is not measured; a live run decides whether 80 holds. Override per run with
+// `opts.taskBudget`.
 export const TASK_BUDGET = {
-  chunk: 40,        // max weight in one task
+  chunk: 80,        // max weight in one task
   // A WHOLE RUN worth no more than this is ONE build task plus ONE review, not one task per artifact. The
   // artifact rule exists so two sub-agents never write one page body; on a run this small there is only ever one
   // builder, so the rule protects nothing and each extra task is a fresh context that re-reads everything the
   // last one just read. Measured: a 31-row section (write weight 60) came out as six tasks — reference cache,
   // scaffolding, two page builds, two reviews — whose five sub-agents cost 4.5M weighted tokens, of which the
   // cache alone was 0.78M for work no second builder read.
-  // TWO CHUNKS, NOT ONE, AND DELIBERATELY: `chunk` is sized to one sitting, so this hands a single sub-agent more
-  // than a sitting's work. It is the lesser cost. A chunk boundary buys protection only when another task writes
-  // the same artifact afterwards; a collapsed run has no such task, so an agent that runs long is re-dispatched
-  // against a folder of two files rather than against a chain of six. At 60 the smoke section sat exactly on the
-  // line, which is not a calibration; 80 is the round number above it that still leaves every measured multi-page
-  // plan (the smallest was 160) on the per-artifact cut.
+  // Equal to one chunk. A chunk boundary buys protection only when another task writes the same artifact afterwards;
+  // a collapsed run has no such task, so an agent that runs long is re-dispatched against a folder of two files
+  // rather than against a chain of six. At 60 the smoke section sat exactly on the line, which is not a
+  // calibration; 80 is the round number above it that still leaves every measured multi-page plan (the smallest
+  // was 160) on the per-artifact cut.
   run: 80,
   field: 1,         // one field inside a layout row
   relatedList: 4,   // a related list carries its own binding and its own child page
@@ -311,6 +314,9 @@ function rowWeight(row, baseTitle, B) {
   // so a page's item rows pack as the one aggregate row did and never cut a page into many small tasks.
   if (row.vk?.item) return 0;
   if (row.vk?.type === "rule") return (Number(row.vk.n) || 1) * B.rule;
+  // The `Page code` row checks the code the page's other rows produce; it adds no work of its own, so it never
+  // moves a cut (a run on the collapse line stays one task when the row appears).
+  if (row.vk?.type === "pagecode") return 0;
   // The binding is already in the related list's weight (`relatedList` carries its binding and its child page), so
   // the row that checks it adds none — like the per-item rows above.
   if (row.vk?.type === "relatedpage") return 0;
@@ -514,7 +520,9 @@ const rowDigestInput = (r) => {
   const boundary = r.na ? "|na" : "";
   return `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}${boundary}`;
 };
-export const rowsDigest = (rows) => shortHash(rows.map(rowDigestInput).join(" "));
+// The `Page code` row is left out: it checks the code the other rows produce, so a task that gains it has no new
+// deliverable, and a `done` task must not read as drifted (and be re-dispatched) because the engine added it.
+export const rowsDigest = (rows) => shortHash(rows.filter((r) => r.vk?.type !== "pagecode").map(rowDigestInput).join(" "));
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -546,6 +554,8 @@ function taskOf(chunk, order) {
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
     ...(r.subject ? { subject: r.subject } : {}),
+    ...(r.behaviour ? { behaviour: r.behaviour } : {}),
+    ...(r.confirm ? { confirm: true } : {}),
     ...statusFields(r),
   }));
   const task = {
@@ -609,6 +619,11 @@ function artifactRows(groups, B) {
 // task folder can always be matched against the plan that was approved rather than the plan that exists now.
 // `groups` is a parameter so a caller that already derived them — `taskSetFor`, which then checks the cut
 // against them — does not walk the plan twice for one answer.
+// The run-level fields every task set and every task file carries: the plan version an approval names, and the
+// project conventions approved with that plan (the block each build and fix task file shows). ONE place, so the
+// next run-level field cannot be added to some writers and missed at others.
+const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null,
+  directives: result.directives });
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -662,8 +677,11 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   const tasks = chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) }));
   return {
     entity: result.entity || null,
-    planVersion: result.planVersion || null,
-    directives: result.directives,
+    ...runHeader(result),
+    // The decisions in force, carried on the set so every render of it — sync, start, decide, revoke — writes the
+    // same task card. `mergeTaskSet` keeps it with the rest of the fresh set.
+    cardDecisions: opts.decisions ?? null,
+    cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -1045,6 +1063,90 @@ function endWithOneBlankLine(text) {
   return text.length - end >= 3 ? `${text.slice(0, end)}\n\n` : text;
 }
 
+// THE TASK CARD. A page is written by one task after another, each a fresh context. Without a card each of those
+// contexts rebuilds its picture of the run from the plan, the decisions and the worklog — a measured run read its
+// 139 KB plan 35 times — and still builds beside code it never saw. The card puts what
+// the writer needs into the file it is handed: where its brief ends, how to see the page's code before it writes,
+// and the decisions in force, verbatim from decisions.md (titles, plus the plan's Adjustments). Only on a task
+// that writes a page: a review or the reference cache has no page code to own. `set.cardDecisions` is the
+// decisions map the caller read (`readDecisions`); without it the card says none were read rather than none exist.
+export const TASK_CARD_HEADING = "## Task card";
+const writesAPage = (task) => { const w = String(task.writesTo || ""); return w.startsWith("page:") || w === ARTIFACT_WHOLE; };
+function taskCardBlock(task, set = {}) {
+  if (!writesAPage(task)) return [];
+  const pageArg = task.pageKey ? ` --page ${task.pageKey}` : "";
+  const L = ["", TASK_CARD_HEADING, "",
+    "- **Your brief is this file** and your page's section of the design spec (`refs/spec.md` when the reference"
+      + " cache exists, else `--spec`). Do not read `plan.md`, `decisions.md`, `worklog.md` or the `customizations-*`"
+      + " part files: what they hold for this task is in this file.",
+    ...worklistLines(task.rows || []),
+    "- **See the page's code before you write it.** Save the page's `get-page` response before your first write"
+      + ` and after your last, and run \`node engine/codemap.mjs <file>${pageArg}\` (beside \`migrate.mjs\`) on`
+      + " it. It lists the handlers, the helpers already defined and where, and what the `Page code` row will hold"
+      + " you to: reuse a helper it lists, never paste a second copy. Clear its findings on code you touched;"
+      + " finding none is part of done.",
+    "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
+      + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
+      + " you write. Either way, extend the handler the map lists for a request instead of adding a second one, and"
+      + " move a part two handlers share into one helper.",
+  ];
+  L.push(...behaviourLines(task.rows || []), ...decisionLines(set));
+  return L;
+}
+
+// Replacement that puts a backslash before a line's leading `#` or `|`.
+const MARKER_ESCAPE = String.raw`$1\$2`;
+// The decisions in force with their text, or why the card has none.
+function decisionLines(set) {
+  const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
+  if (!decisions) return ["- **Decisions in force:** not available to this render — ask the orchestrator to re-run `--tasks` before you build."];
+  if (!decisions.length) return ["- **Decisions in force:** none recorded."];
+  const texts = set.cardDecisionTexts instanceof Map ? set.cardDecisionTexts : new Map();
+  const L = ["- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
+    + " also in its `Outcome` cell):"];
+  for (const [id, title] of decisions) {
+    L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
+    // The text under the decision, indented into its item. The indent is not enough on its own: this file's readers
+    // match `## Notes`, `## Deliverables` and `| N |` rows after trimming, so a line opening with `#` or `|` is
+    // escaped, otherwise a decision quoting either would move the notes boundary or add a deliverables row.
+    for (const line of String(texts.get(id) || "").split("\n")) {
+      if (line.trim()) L.push("    " + line.trimEnd().replace(/^(\s*)([#|])/, MARKER_ESCAPE));
+    }
+  }
+  return L;
+}
+// Where the plan's worklist for THIS task sits: its ⚠ Confirm items and its boundaries are rows of the table below.
+function worklistLines(rows) {
+  const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();
+  const confirms = rows.filter((r) => r.confirm && !r.na);
+  const boundaries = rows.filter((r) => r.na);
+  const L = [];
+  if (confirms.length) {
+    L.push("- **⚠ Confirm — answer each on the stand before you build** (its row is in the table below):",
+      ...confirms.map((r) => `  - ${one(r.label)}`));
+  }
+  if (boundaries.length) {
+    L.push("- **Plan boundaries — never built** (their rows are pre-filled `not-applicable` below):",
+      ...boundaries.map((r) => `  - ${one(r.label)} — ${one(r.na)}`));
+  }
+  return L;
+}
+// The behaviour cards the task's rows cite, with their content: what the item does, its use case and its acceptance
+// criteria. A handler is ported against its card's criteria, so the card travels with the row that needs it.
+function behaviourLines(rows) {
+  const seen = new Map();
+  for (const r of rows) if (r.behaviour?.card && !seen.has(r.behaviour.card)) seen.set(r.behaviour.card, r.behaviour);
+  if (!seen.size) return [];
+  const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();
+  const L = ["- **Behaviour cards your rows cite** (from the step-5.1 analysis; port each against its criteria):"];
+  for (const [id, b] of seen) {
+    const parts = [b.whatItDoes && `does: ${one(b.whatItDoes)}`, b.useCase && `use case: ${one(b.useCase)}`,
+      b.ac?.length && `acceptance: ${b.ac.map(one).join("; ")}`].filter(Boolean);
+    L.push(`  - \`${id}\` — ${parts.join(" · ") || "no description recorded; the card id is all the analysis left"}`);
+  }
+  return L;
+}
+
 // THE ONE-SUB-AGENT CONTRACT, stated in the file the sub-agent is handed rather than only in the orchestrator's
 // instructions — the file is the prompt, so the rule that binds the reader has to be in it. The write ordering and
 // the nonce are both here because both are checkable afterwards: `writesTo` says what may not run beside this, and
@@ -1055,9 +1157,10 @@ function oneAgentBlock(task) {
     L.push(`- **Writes:** \`${task.writesTo}\` — no other task may be running against this artifact. A task with a`
       + " DIFFERENT `writesTo` (or an empty one) may run beside this one; one with the same must not."
       // "No other task may be RUNNING against this artifact" is satisfied by one agent taking a page's chunks one
-      // after another, so the sequential case is stated rather than left to be inferred.
-      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent — sequential is not permission to keep"
-      + " this one; finishing yours and picking up the next chunk of the same page is the violation.");
+      // after another, so the sequential case is stated rather than left to be inferred. The next agent is a fresh
+      // context, but it is not a guest: it takes the page over as its owner, from the code map (see the task card).
+      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner;"
+      + " do not pick up the next chunk of the same page yourself.");
   } else {
     L.push("- **Writes:** nothing — read-only. It may run beside any task it does not depend on.");
   }
@@ -1174,6 +1277,7 @@ function outcomeBlock(repair = false) {
 
 export function renderTaskFile(task, set = {}) {
   const naNote = task.naRows ? `, ${task.naRows} plan-boundary` : "";
+  const conventions = conventionsTaskLines(set.projectConventions, cell);
   const body = [
     ...renderFrontMatter(task, set),
     "",
@@ -1191,8 +1295,11 @@ export function renderTaskFile(task, set = {}) {
       "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
       "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
     ] : [
-      "> One task of an APPROVED migration plan. Build ONLY what is listed here — a deliverable that looks wrong is a",
-      "> proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+      "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
+      "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
+      "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
+      "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
+      "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
     ]),
     "",
     `- **Page key:** \`${task.pageKey}\``,
@@ -1202,6 +1309,10 @@ export function renderTaskFile(task, set = {}) {
     ...markersBlock(),
     ...oneAgentBlock(task),
     ...directivesBlock(task, set.directives),
+    // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
+    ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
+    // The card stays last before the deliverables: `refreshTaskCard` re-renders from its heading to them.
+    ...taskCardBlock(task, set),
     "",
     ENGINE_BODY_HEADING,
     "",
@@ -2538,7 +2649,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
       rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
-        ...(r.subject ? { subject: r.subject } : {}), ...statusFields(r) })),
+        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...(r.confirm ? { confirm: true } : {}), ...statusFields(r) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,
@@ -2557,8 +2668,9 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   }, B).map((c, i) => taskOf(c, i + 1));
   return {
     entity: result.entity || null,
-    planVersion: result.planVersion || null,
-    directives: result.directives,
+    ...runHeader(result),
+    cardDecisions: opts.decisions ?? null,
+    cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2872,10 +2984,13 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   const reconcileMode = effectiveFrozenMode(dir);
   const written = [];
   for (const t of tasks) {
+    // The file's task card is the exception to "never rewritten": it is derived from the decisions in force, so
+    // every sync re-renders that block alone (`refreshTaskCard`) and a later round's writer reads current decisions.
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode, directives: result.directives }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { ...runHeader(result), reconcileMode,
+      cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -3937,7 +4052,7 @@ function writeIfChanged(full, next) {
 // update: the front matter carries the `decisions:` map naming exactly the cells the body now holds, and the
 // two have to land together. `null` is passed when the run touched no cells here, so `decisions:` is never
 // added to a file that never carried it.
-function persistAdoptedTask(dir, t, unplaced) {
+function persistAdoptedTask(dir, t, unplaced, set = null) {
   const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
   const wanted = new Map();
   for (const idx of dirty) {
@@ -3959,6 +4074,24 @@ function persistAdoptedTask(dir, t, unplaced) {
   // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
   // the task for ever.
   setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "", decisionsArg);
+  refreshTaskCard(dir, t, set);
+}
+// A repair or declared task file is the record of its round and is never re-rendered, but its task card is not a
+// record: it is derived from the decisions in force, and its writer is told not to read decisions.md. So the card
+// block alone is re-rendered on every sync — replaced where the file has one, inserted before the deliverables where
+// it has none — and every cell, front-matter line and note around it stays as it is on disk.
+function refreshTaskCard(dir, t, set) {
+  if (!set?.cardDecisions || !writesAPage(t)) return;
+  const full = path.join(dir, t.file);
+  let text;
+  try { text = fs.readFileSync(full, "utf8"); } catch { return; }
+  const body = `\n\n${ENGINE_BODY_HEADING}`;
+  const end = text.indexOf(body);
+  if (end < 0) return;
+  const card = taskCardBlock(t, set).slice(1).join("\n");
+  const start = text.lastIndexOf(`\n${TASK_CARD_HEADING}\n`, end);
+  const next = start >= 0 ? text.slice(0, start) + "\n" + card + text.slice(end) : text.slice(0, end) + "\n\n" + card + text.slice(end);
+  writeIfChanged(full, next);
 }
 function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
@@ -3967,7 +4100,7 @@ function persistTaskSet(dir, merged) {
     // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
-    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced);
+    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced, merged);
     else writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
@@ -4086,7 +4219,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
   try {
-    mintDeclared(dir, result, decls, written);
+    mintDeclared(dir, result, decls, written, { cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts });
   } catch (e) {
     const refusal = ledgerRefusal(e);
     if (!refusal) {
@@ -4119,7 +4252,7 @@ function unmint(dir, written) {
 
 // Writes one task file per declaration, pushing each onto `written` once it is on disk, so a write that throws
 // part-way leaves `written` naming exactly the files that exist.
-function mintDeclared(dir, result, decls, written) {
+function mintDeclared(dir, result, decls, written, card = {}) {
   const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
@@ -4133,7 +4266,7 @@ function mintDeclared(dir, result, decls, written) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, directives: result.directives }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { ...runHeader(result), reconcileMode, ...card }));
     written.push(task);
   }
 }

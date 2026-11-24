@@ -44,7 +44,7 @@ export function __setVendorIntegrityForTest(result) {
 // runs. The CommonJS build (`vendor/acorn.cjs`) loads via a plain synchronous `require()` on ANY supported Node
 // (no `require(esm)` floor), keeping parseSchema sync. Memoized: the check + require run once per process.
 let __acornParse = null;
-function getAcornParse() {
+export function getAcornParse() {
   if (__acornParse) return __acornParse;
   ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
   // Defense-in-depth: the gate above passes when every LISTED pin matches, but never asserts that the file we are
@@ -550,6 +550,34 @@ function findFactoryReturn(factory) {
   return null;
 }
 
+// A `define("Name", [deps], function (…) { … return {…}; })` body as AST nodes — the one reader of the AMD shell,
+// shared by `parseSchema` (a page) and the project-conventions GUID index (a constants module). Nothing is
+// evaluated. Returns `{ error, deps }` on a body it cannot read (`deps` is what it read before failing), else
+// `{ error: null, deps, factory, returned }` (`returned` may be null). `locations` adds line spans to the nodes.
+export function parseDefineModule(src, { locations = false } = {}) {
+  const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
+  let ast;
+  try { ast = acornParse(String(src ?? ""), { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations }); }
+  catch (e) { return { error: "acorn parse failed: " + String(e?.message || e), deps: [] }; }
+  const call = findDefineCall(ast);
+  if (!call) return { error: "no define() call found", deps: [] };
+  const depsNode = call.arguments.find((a) => a.type === "ArrayExpression");
+  const deps = depsNode ? depsNode.elements.filter((el) => el?.type === "Literal" && typeof el.value === "string").map((el) => el.value) : [];
+  const factory = call.arguments.find((a) => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
+  if (!factory) return { error: "define() has no factory function", deps };
+  return { error: null, deps, factory, returned: findFactoryReturn(factory) };
+}
+
+// One JavaScript expression as an AST node, or null when the text is not one — a get-page bundle field (`deps`,
+// `handlers`, `validators`, `converters`) is the SOURCE of an array or object literal. Nothing is evaluated.
+export function parseJsExpression(src) {
+  const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
+  try {
+    const ast = acornParse("(" + String(src ?? "") + "\n)", { ecmaVersion: "latest", sourceType: "script" });
+    return ast.body.length === 1 && ast.body[0].type === "ExpressionStatement" ? ast.body[0].expression : null;
+  } catch { return null; }
+}
+
 // Parse a Classic schema body into the effective-page inputs, WITHOUT executing it (AST + static eval).
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
@@ -561,21 +589,15 @@ export function parseSchema(src, pkg) {
   return out;
 }
 function parseSchemaBody(src, pkg) {
-  const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   const astDiagnostics = [];
-  let ast;
   // `locations: true` so each method node carries its 1-based line span — the plan cites WHERE a behaviour lives
   // in the classic body, which is what lets a reader check the engine's reading against the source. Purely
   // additive to the AST shape; nothing else reads `loc`.
-  try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations: true }); }
-  catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e?.message || e), {}, []), astDiagnostics }; }
-  const call = findDefineCall(ast);
-  if (!call) return { ...buildSchemaResult(pkg, src, "no define() call found", {}, []), astDiagnostics };
-  const depsNode = call.arguments.find(a => a.type === "ArrayExpression");
-  const amdDeps = depsNode ? depsNode.elements.filter(el => el?.type === "Literal" && typeof el.value === "string").map(el => el.value) : [];
-  const factory = call.arguments.find(a => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
-  if (!factory) return { ...buildSchemaResult(pkg, src, "define() has no factory function", {}, amdDeps), astDiagnostics };
-  const retArg = findFactoryReturn(factory);
+  const mod = parseDefineModule(src, { locations: true });
+  const amdDeps = mod.deps;
+  if (mod.error) return { ...buildSchemaResult(pkg, src, mod.error, {}, amdDeps), astDiagnostics };
+  const factory = mod.factory;
+  const retArg = mod.returned;
   // A missing return is a ROOT-level structural hole (path "" → gate blocks): the schema contributes nothing.
   if (!retArg) { astDiagnostics.push({ kind: "no-return", path: "", snippet: "" });
     return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics }; }
@@ -725,25 +747,33 @@ function pushChildren(node, depth, stack) {
     } else if (v?.type) stack.push([v, depth + 1]);
   }
 }
-
-// Walk one method body, collecting the facts above. Iterative (explicit stack) so a deeply nested body cannot
-// blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH.
-function walkMethodBody(fnNode) {
-  const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
-  const publishes = new Set(), subscribes = new Set();
-  let nodes = 0, truncated = false;
-  const stack = [[fnNode.body, 0]];
+// The same bounded walk for any other untrusted body (a built Freedom page's handlers): `visit` sees every node once,
+// in no particular order, and the result says whether the node budget or the depth cap cut the walk short.
+export function walkAstBounded(root, visit) {
+  let nodes = 0;
+  const stack = [[root, 0]];
   while (stack.length) {
     const [node, depth] = stack.pop();
     if (!node || typeof node !== "object") continue;
-    if (++nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { truncated = true; break; }
-    // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
-    // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
-    // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
-    if (node.type === "CallExpression" || node.type === "NewExpression")
-      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
+    if (++nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) return { truncated: true };
+    visit(node);
     pushChildren(node, depth, stack);
   }
+  return { truncated: false };
+}
+
+// Walk one method body, collecting the facts above, on the bounded walker (iterative, so a deeply nested body cannot
+// blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH).
+function walkMethodBody(fnNode) {
+  const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
+  const publishes = new Set(), subscribes = new Set();
+  // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
+  // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
+  // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
+  const { truncated } = walkAstBounded(fnNode.body, (node) => {
+    if (node.type === "CallExpression" || node.type === "NewExpression")
+      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
+  });
   const sorted = (s) => [...s].sort(byLocale);
   // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
   // accessor for both. Splitting them keeps `readsAttrs` a true list of view-model attributes (what a Freedom
@@ -790,13 +820,13 @@ function objectNodeOf(node, scope) {
 // `methods: { … }` facts for one schema body. Empty array when the block is absent or not statically readable —
 // the method NAMES still come from the evaluated object, so an unreadable body loses evidence, never members.
 // an object-literal property's static key, or null when it is a spread / computed / unreadable key
-function staticPropKey(p) {
+export function staticPropKey(p) {
   if (p.type === "SpreadElement" || p.computed) return null;
   if (p.key?.type === "Identifier") return p.key.name;
   return p.key == null ? null : String(p.key.value);
 }
 
-const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
 
 // `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is not in
 // this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the module is a

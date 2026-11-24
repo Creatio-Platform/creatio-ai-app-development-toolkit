@@ -1,5 +1,6 @@
 // Golden test for the mapper: merge -> map -> assert Freedom ChangeSet.
 import { runMachineRowChecks } from "./run-mapper-machine-rows.mjs";
+import { runConventionsChecks } from "./run-mapper-conventions.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -2739,15 +2740,19 @@ const FULL_PLACEMENT = {
   targetPackageInApplication: { resolved: true, value: true },
   sectionHost: { resolved: true, mode: "existing-app" },
 };
+// settled PROJECT CONVENTIONS — the verified fallback (no custom requests, SchemaNamePrefix = Usr). A `--plan` run
+// is not approvable without a resolved block (conventions.mjs), exactly like placement.
+const FULL_CONVENTIONS = { resolved: true, requestPrefix: "usr", helperModules: [], constantsModules: [],
+  source: "fallback", evidence: "no custom requests in the target packages; SchemaNamePrefix = Usr", confirmedBy: "plan" };
 const planRun = runMigrate(["-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, projectConventions: FULL_CONVENTIONS }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || "") && !/PLAN INCOMPLETE/.test(planRun.stdout || ""));
 // ⛔ PLACEMENT GATE — the app-hosting facts. A run once cleared every other gate, built five pages, and only then
 // found that `create-app-section` could not run at all: the owning app was an install-time wrapper with no primary
 // package, its one package was locked, and the editable target package was not in the app's composition. Each leg
 // below is one of those three, plus the "never checked" case the whole gate exists for.
-const placementBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS };
+const placementBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, projectConventions: FULL_CONVENTIONS };
 const runWithPlacement = (placement, mode) => runMigrate(["-", mode], {
   input: JSON.stringify(placement === undefined ? placementBase : { ...placementBase, placement }), encoding: "utf8" });
 const planWithPlacement = (placement) => runWithPlacement(placement, "--plan");
@@ -2935,7 +2940,7 @@ const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
 try {
   fs.rmSync(outPath, { force: true });
   const outRun = runMigrate(["-", "--plan", "--out", outPath], {
-    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, projectConventions: FULL_CONVENTIONS, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
   const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
   check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
     outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
@@ -6237,6 +6242,7 @@ const dashMani = (dashboards) => ({
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
   signals: dashboards === undefined ? OTHER_SIGNALS : { ...OTHER_SIGNALS, dashboards },
   placement: { ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "P", editable: true } },
+  projectConventions: FULL_CONVENTIONS,
 });
 const dashCliRun = (mani, args = ["--plan"]) => runMigrate(["-", ...args], { input: JSON.stringify(mani), encoding: "utf8" });
 const dashRow = (md, needle) => md.split("\n").find((l) => l.includes(needle)) || "";
@@ -10620,6 +10626,7 @@ check("renderVerify: `rows` carries every table row with its page, kind (machine
       && v.rows.some((r) => r.kind === "machine" && r.outcome === "ok") && v.rows.every((r) => ["machine", "confirm", "na", "info"].includes(r.kind));
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
 runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
+runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX, ENGINE_DIR });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
