@@ -813,7 +813,7 @@ export function staticPropKey(p) {
   return p.key == null ? null : String(p.key.value);
 }
 
-const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
 
 // `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is not in
 // this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the module is a
@@ -1000,7 +1000,7 @@ function readMenuNode(obj) {
 }
 // Ordered child nodes. Generic (every own value that is a node or array of nodes) so the walk stays complete as
 // the AST shape grows.
-function childNodesOf(node) {
+export function childNodesOf(node) {
   const out = [];
   for (const key of Object.keys(node)) {
     if (WALK_SKIP_KEYS.has(key)) continue;

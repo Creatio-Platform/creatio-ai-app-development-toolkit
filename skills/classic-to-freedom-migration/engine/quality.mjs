@@ -9,7 +9,7 @@
 //
 // Everything is read from get-page's bundle as the read-back filed it (`handlers`, `validators`, `converters` are
 // SOURCE strings; `viewConfig`, `viewModelConfig`, `modelConfig`, `resources` are JSON). Nothing is evaluated.
-import { parseJsExpression, staticPropKey } from "./engine.mjs";
+import { parseJsExpression, staticPropKey, childNodesOf, isFnNode } from "./engine.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const QUALITY_RULES = Object.freeze({
@@ -33,7 +33,8 @@ export const DEFAULT_QUALITY_THRESHOLDS = Object.freeze({
   maxSequentialIndependentAwaits: 2,
 });
 
-// What each rule's row says it checks, in the order the rows are shown. `advisory` rows are noted, never blocking.
+// What each rule's row says it checks, in the order the rows are shown. A finding marked `advisory` is noted, never
+// blocking; every unused-string finding is one.
 export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.functionTooLong, label: (t) => `no function longer than ${t.maxFunctionLines} lines` },
   { rule: QUALITY_RULES.nestedFunctions, label: (t) => `no handler declaring more than ${t.maxNestedFunctionsPerHandler} functions in its body` },
@@ -45,7 +46,7 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.guidLiteral, label: () => "no hard-coded record id a project constants module holds" },
   { rule: QUALITY_RULES.planCodeInComment, label: () => "no plan code (card, AC, decision id) in a comment" },
   { rule: QUALITY_RULES.requestWithoutSender, label: () => "every custom request the page handles has a sender" },
-  { rule: QUALITY_RULES.unusedResourceString, label: () => "resource strings in use", advisory: true },
+  { rule: QUALITY_RULES.unusedResourceString, label: () => "resource strings in use (advisory)" },
 ]);
 
 // A named helper smaller than this many AST nodes (`v => v`) is not worth moving to a module, so copies of it are
@@ -69,16 +70,8 @@ export function qualityThresholdsOf(manifest) {
 
 // ---- walking ESTree nodes ----
 
-function childNodes(node) {
-  const out = [];
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "loc" || key === "type") continue;
-    if (Array.isArray(value)) { for (const v of value) if (v && typeof v.type === "string") out.push(v); }
-    else if (value && typeof value.type === "string") out.push(value);
-  }
-  return out;
-}
-const isFunction = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression" || n?.type === "FunctionDeclaration";
+const childNodes = childNodesOf;
+const isFunction = (n) => isFnNode(n) || n?.type === "FunctionDeclaration";
 const lineOf = (n) => n?.loc?.start?.line ?? 0;
 
 // ---- one page ----
@@ -114,7 +107,9 @@ export function lintPageQuality(entry, thresholds = DEFAULT_QUALITY_THRESHOLDS, 
     }
   }
   collectJsonStrings([entry.viewConfig, entry.viewModelConfig, entry.modelConfig], page.strings);
-  page.unusedStrings = unusedResourceStrings(entry, sources);
+  for (const key of unusedResourceStrings(entry, sources)) {
+    page.findings.push(finding(QUALITY_RULES.unusedResourceString, "resources", 0, `\`${key}\``, { advisory: true }));
+  }
   return page;
 }
 
@@ -139,7 +134,7 @@ function walkSection(node, section, ownerKey, page, t, constantsGuids, depth = 0
       const guid = node.value.toLowerCase();
       page.findings.push(finding(QUALITY_RULES.guidLiteral, section, lineOf(node), `\`${node.value}\``, { advisory: !constantsGuids.has(guid) }));
     }
-    if (!page.requestKeys.has(node)) page.strings.add(node.value);
+    if (!page.requestKeys.has(node)) addSenderCandidate(page.strings, node.value);
   }
   for (const child of childNodes(node)) {
     const owner = node.type === "Property" && child === node.value ? staticPropKey(node) : null;
@@ -170,7 +165,7 @@ function lintHandlers(array, page, t) {
     // The handler's own variables: its parameters and what its body declares outside the functions in it. A sibling
     // helper is not one of them — a helper calling another moves to the module with it.
     const helperNames = new Set(helpers.map((h) => h.name));
-    const handlerNames = new Set([...handler.params.flatMap((p) => [...bindingNames(p)]), ...declaredInScope(handler.body)]
+    const handlerNames = new Set([...handler.params.flatMap((p) => [...bindingNames(p)]), ...declaredNamesIn(handler.body, { intoFunctions: false })]
       .filter((n) => !helperNames.has(n)));
     for (const h of helpers) {
       if (h.nodeCount >= MIN_DUPLICATE_FUNCTION_NODES && !usesHandlerVariables(h, handlerNames)) page.helpers.push(h);
@@ -204,7 +199,7 @@ function describeHelper(name, anchor, fn) {
   };
   for (const p of fn.params) shape(p);
   shape(fn.body);
-  const own = new Set([name, ...fn.params.flatMap((p) => [...bindingNames(p)]), ...declaredInside(fn.body)]);
+  const own = new Set([name, ...fn.params.flatMap((p) => [...bindingNames(p)]), ...declaredNamesIn(fn.body, { intoFunctions: true })]);
   const free = [...referencedNames(fn.body)].filter((n) => !own.has(n));
   return { name, line: lineOf(anchor), section: "handlers", shape: parts.join(""), nodeCount, free };
 }
@@ -224,24 +219,20 @@ function bindingNames(pattern, out = new Set()) {
   return out;
 }
 
-// Every name a function body declares: variables, functions and the parameters of the functions inside it.
-function declaredInside(node, out = new Set(), depth = 0) {
-  if (!node || depth > 1000) return out;
-  if (node.type === "VariableDeclarator") bindingNames(node.id, out);
-  else if (node.type === "FunctionDeclaration" && node.id) out.add(node.id.name);
-  if (isFunction(node)) node.params.forEach((p) => bindingNames(p, out));
-  if (node.type === "CatchClause") bindingNames(node.param, out);
-  for (const child of childNodes(node)) declaredInside(child, out, depth + 1);
-  return out;
-}
-
-// The names one function scope declares, without descending into the functions inside it.
-function declaredInScope(node, out = new Set(), depth = 0) {
+// The names a function body declares: variables, functions and catch parameters, and - with `intoFunctions` - the
+// declarations and parameters of the functions inside it too.
+function declaredNamesIn(node, { intoFunctions }, out = new Set(), depth = 0) {
   if (!node || depth > 1000) return out;
   if (node.type === "VariableDeclarator") bindingNames(node.id, out);
   else if (node.type === "FunctionDeclaration" && node.id) out.add(node.id.name);
   else if (node.type === "CatchClause") bindingNames(node.param, out);
-  for (const child of childNodes(node)) if (!isFunction(child)) declaredInScope(child, out, depth + 1);
+  for (const child of childNodes(node)) {
+    if (isFunction(child)) {
+      if (!intoFunctions) continue;
+      child.params.forEach((p) => bindingNames(p, out));
+    }
+    declaredNamesIn(child, { intoFunctions }, out, depth + 1);
+  }
   return out;
 }
 
@@ -272,12 +263,11 @@ function checkSequentialAwaits(node, page, t, depth = 0) {
     let independent = 0;
     let first = null;
     for (const statement of node.body) {
-      const referenced = identifierNames(statement);
-      const usesLoad = [...referenced].some((n) => fromLoads.has(n));
-      if (isAwaitedLoad(statement)) {
-        if (!usesLoad) { independent++; first ??= statement; }
-        declaredNames(statement).forEach((n) => fromLoads.add(n));
-      } else if (usesLoad) declaredNames(statement).forEach((n) => fromLoads.add(n));
+      // Nothing can depend on a load before the first one, so the statement is only read once there is one.
+      const usesLoad = fromLoads.size > 0 && [...referencedNames(statement)].some((n) => fromLoads.has(n));
+      const isLoad = isAwaitedLoad(statement);
+      if (isLoad && !usesLoad) { independent++; first ??= statement; }
+      if (isLoad || usesLoad) statementBindings(statement).forEach((n) => fromLoads.add(n));
     }
     if (independent > t.maxSequentialIndependentAwaits) {
       page.findings.push(finding(QUALITY_RULES.sequentialAwaits, "handlers", lineOf(first),
@@ -301,15 +291,9 @@ function isAwaitedLoad(statement) {
     || (obj.type === "MemberExpression" && !obj.computed && obj.property.name === "Model"));
 }
 
-function identifierNames(node, out = new Set(), depth = 0) {
-  if (!node || depth > 1000) return out;
-  if (node.type === "Identifier") out.add(node.name);
-  for (const child of childNodes(node)) identifierNames(child, out, depth + 1);
-  return out;
-}
-
-function declaredNames(statement) {
-  if (statement.type === "VariableDeclaration") return statement.declarations.flatMap((d) => [...identifierNames(d.id)]);
+// The names a statement binds: the declared variables of a declaration, or the assigned identifier of an assignment.
+function statementBindings(statement) {
+  if (statement.type === "VariableDeclaration") return statement.declarations.flatMap((d) => [...bindingNames(d.id)]);
   if (statement.type === "ExpressionStatement" && statement.expression.type === "AssignmentExpression" && statement.expression.left.type === "Identifier") {
     return [statement.expression.left.name];
   }
@@ -318,9 +302,14 @@ function declaredNames(statement) {
 
 // ---- strings and resources ----
 
+// Only a string that could name a custom request (`ns.Name`, not `crt.`) is kept: it is all the sender check reads.
+function addSenderCandidate(out, s) {
+  if (s.includes(".") && !/^crt\./i.test(s)) out.add(s);
+}
+
 function collectJsonStrings(values, out, depth = 0) {
   for (const v of values) {
-    if (typeof v === "string") out.add(v);
+    if (typeof v === "string") addSenderCandidate(out, v);
     else if (v && typeof v === "object" && depth < 200) collectJsonStrings(Array.isArray(v) ? v : Object.values(v), out, depth + 1);
   }
 }
@@ -377,16 +366,16 @@ export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, c
         page.findings.push(finding(QUALITY_RULES.requestWithoutSender, "handlers", line, `\`${request}\` is handled but no page of the run sends it`));
       }
     }
-    for (const key2 of page.unusedStrings) page.findings.push(finding(QUALITY_RULES.unusedResourceString, "resources", 0, `\`${key2}\``, { advisory: true }));
   }
   return byPage;
 }
 
 // The run's findings, built once per `--built` root: the verify rows of every page read the same result.
 const RUN_CACHE = new WeakMap();
-export function runQualityOf(root, thresholds, constantsGuids) {
+// The key of one thresholds + constants-module combination, built once per set of rows (see `codeQualityRows`).
+export const qualityRunKey = (thresholds, constantsGuids) => JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort().join();
+export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids)) {
   const pages = root?.pages && typeof root.pages === "object" ? root.pages : { main: root };
-  const cacheKey = JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort().join();
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
   if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || [])));

@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
-import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf } from "./quality.mjs";
+import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
@@ -4844,11 +4844,13 @@ export function resolveCardNativeVk(vk, ctx) {
 function codeQualityRows(opts) {
   const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
   const constantsGuids = opts.constantsGuids || [];
-  const conventions = !!opts.projectConventions;
-  return QUALITY_ROW_RULES.map(({ rule, label, advisory }) => ({
+  const runKey = qualityRunKey(thresholds, constantsGuids);
+  // A rule whose check needs something the run did not record says so on its own row.
+  const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
+  return QUALITY_ROW_RULES.map(({ rule, label }) => ({
     deliverableId: `quality:${rule}`,
     label: `[code-quality] ${rule} — ${label(thresholds)}`,
-    vk: { type: "quality", rule, thresholds, constantsGuids, conventions, advisory: !!advisory },
+    vk: { type: "quality", rule, thresholds, constantsGuids, runKey, note: notes[rule] || "" },
   }));
 }
 const QUALITY_LISTED = 5;
@@ -4857,21 +4859,20 @@ const QUALITY_LISTED = 5;
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the page's code");
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its code cannot be checked", "missing"];
-  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids).get(ctx.pageKey);
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
   const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
     + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
-  const blocking = vk.advisory ? [] : found.filter((f) => !f.advisory);
-  const noted = found.filter((f) => vk.advisory || f.advisory);
-  const skipped = vk.rule === QUALITY_RULES.guidLiteral && !vk.conventions
-    ? "the constants-module check was skipped: the run recorded no `projectConventions`. " : "";
+  const blocking = found.filter((f) => !f.advisory);
+  const noted = found.filter((f) => f.advisory);
+  const note = vk.note ? vk.note + " " : "";
   if (blocking.length) {
     return ["⚠ verify", `${blocking.length} finding(s): ${listed(blocking)} — fix the code, or record a decision (\`--decide D<N>\`) that accepts it${blocking.some((f) => f.limit != null) ? ", or raise the limit in `manifest.qualityThresholds`" : ""}`, "unverified"];
   }
-  if (noted.length) return ["ℹ noted", `${skipped}${noted.length} noted, not blocking: ${listed(noted)}`, "skip"];
-  if (skipped) return ["ℹ noted", skipped.trim(), "skip"];
+  if (noted.length) return ["ℹ noted", `${note}${noted.length} noted, not blocking: ${listed(noted)}`, "skip"];
+  if (note) return ["ℹ noted", note.trim(), "skip"];
   return ["✅ Done", "none on the built page", "ok"];
 }
 // The list page's checked module rows: only the constants modules its own record ids map to (the section's define()

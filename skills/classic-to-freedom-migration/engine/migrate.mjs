@@ -1117,6 +1117,8 @@ export function checklistOpts(manifest, opts = {}) {
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
   // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
   const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  // The run's project conventions, read once: a fold inherits the root's, the root parses its constants modules.
+  const conventions = runConventionsOf(manifest, opts);
   return {
     // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
     deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
@@ -1132,13 +1134,13 @@ export function checklistOpts(manifest, opts = {}) {
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
     // PROJECT CONVENTIONS (conventions.mjs) — gated like placement, and inherited by every fold like the signals.
-    projectConventions: runConventionsOf(manifest, opts).conventions,
+    projectConventions: conventions.conventions,
     // the ROOT run gates on them; a fold inherits facts the root already gated
-    conventionsBlockers: opts.inheritedConventions ? [] : conventionFacts(manifest).issues,
+    conventionsBlockers: opts.inheritedConventions ? [] : conventions.issues,
     // CODE QUALITY (quality.mjs) — the run's thresholds (the root manifest's, inherited by every fold) and the record
     // ids the project's constants modules hold, which make a hard-coded copy of one a blocking finding.
     qualityThresholds: opts.inheritedQualityThresholds || qualityThresholdsOf(manifest),
-    constantsGuids: [...(runConventionsOf(manifest, opts).guidIndex?.keys() || [])],
+    constantsGuids: [...(conventions.guidIndex?.keys() || [])],
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
     placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the

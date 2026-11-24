@@ -52,6 +52,10 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => measured.findings.some((f) => f.rule === R.functionTooLong && f.value === 64 && f.limit === 60 && /64 lines \(limit 60\)/.test(f.text)),
     () => measured.findings);
 
+  const keyNamed = lintPageQuality(pageOf(handler("usr.Init", "const data = await a.load(); const b1 = await b.load({ data: 1 }); const c1 = await c.load();")));
+  check("quality: an object key that shares a load result's name is not a read of it — the loads stay independent",
+    () => count(keyNamed, R.sequentialAwaits) === 1, () => keyNamed.findings);
+
   // A helper closing over its handler's own variables is a binding of that handler, not a copy of a helper.
   const wrapper = "const { $context, scopes } = request; const process = (config) => sdk.HandlerChainService.instance.process({ ...config, $context, scopes: [...scopes] }); await process({ type: \"usr.Sent\" });";
   check("quality: a helper reading its handler's $context/scopes is not a duplicate in another handler",
