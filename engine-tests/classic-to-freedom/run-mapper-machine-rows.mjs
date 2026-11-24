@@ -117,6 +117,11 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     check("Ported as: a platform request a handler answers (`crt.HandleViewModelInitRequest`) is reached — the platform sends it",
       () => st(platform) === "✅ Done" && /answers platform request/.test(ev(platform)), () => platform);
     const trigPage = verifyCtx({ pages: { main: page({ handlers: HANDLERS }) } }, "main");
+    const attrChange = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: trigContact,
+      portedAs: ["crt.HandleViewModelAttributeChangeRequest"] }, trigPage);
+    check("Ported as: `crt.HandleViewModelAttributeChangeRequest` with a handler that branches on the trigger attribute (the natural port of a Classic attribute-change method) reads ✅ — the platform sends the request, page code never does",
+      () => st(attrChange) === "✅ Done" && /answers platform request `crt\.HandleViewModelAttributeChangeRequest`/.test(ev(attrChange)),
+      () => attrChange);
     const fallThrough = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: trigContact, portedAs: ["usr.Invented"] }, trigPage);
     const notSymbol = P(["not a symbol"]);
     check("Ported as: a record that does not hold still lets the trigger branch close the row ✅; with nothing else closing it, the record's ⚠ is reported, and a word that is not a symbol is named as such",

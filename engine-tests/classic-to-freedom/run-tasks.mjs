@@ -12205,6 +12205,7 @@ console.log("\n===== project conventions: every writer of a task file carries th
     () => portedSymbols("`usr.SetCanEditRequest`, `Helpers.format` — sends it on save").join() === "usr.SetCanEditRequest,Helpers.format"
       && portedSymbols("applyRights — called from the init handler").join() === "applyRights"
       && portedSymbols("`applyRights()`; and `Helpers.format();`").join() === "applyRights,Helpers.format"
+      && portedSymbols("`a( )`, `b.`, `c(x)`, `d();:`").join() === "a,b,c(x),d"
       && portedSymbols("`not a symbol`").join() === "not a symbol",
     () => [portedSymbols("`usr.SetCanEditRequest`, `Helpers.format` — sends it on save"), portedSymbols("applyRights — called from the init handler")]);
   check("ported as (marker): the line shape matches `Check on stand` — a list bullet and bold are allowed", () =>

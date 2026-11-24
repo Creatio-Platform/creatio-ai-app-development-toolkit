@@ -4762,8 +4762,42 @@ function calledIn(code, name, bare = false) {
 }
 // The handler source with its comments blanked and its strings kept: a request type is a string, and a request
 // named only in a comment is not sent.
-const withoutComments = (s) => String(s).replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
-  (m) => (m.startsWith("/") ? " " : m));
+// Where the string opened at `i` ends: one past its unescaped closing quote.
+function stringEnd(src, i) {
+  let j = i + 1;
+  while (j < src.length && src[j] !== src[i]) j += src[j] === "\\" ? 2 : 1;
+  return j + 1;
+}
+// Where the comment opened at `i` ends: a line comment at its newline (kept), a block comment past its `*/`.
+function commentEnd(src, i) {
+  if (src[i + 1] === "/") {
+    const eol = src.indexOf("\n", i);
+    return eol < 0 ? src.length : eol;
+  }
+  const close = src.indexOf("*/", i + 2);
+  return close < 0 ? src.length : close + 2;
+}
+const QUOTES = new Set(['"', "'", "`"]);
+// One linear pass: a quote opens a string that runs to its unescaped twin, `//` and `/*` open a comment.
+function withoutComments(s) {
+  const src = String(s);
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    let end = i + 1;
+    if (QUOTES.has(src[i])) {
+      end = stringEnd(src, i);
+      out.push(src.slice(i, end));
+    } else if (src[i] === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
+      end = commentEnd(src, i);
+      out.push(" ");
+    } else {
+      out.push(src[i]);
+    }
+    i = end;
+  }
+  return out.join("");
+}
 // Is `name` a function the page itself defines (`function name(`, `const name = `, a `name:` / `name(` member)?
 const definedIn = (code, name) => new RegExp(String.raw`function\s+${reEsc(name)}\s*\(|\b(?:const|let|var)\s+${reEsc(name)}\s*=|[{,]\s*${reEsc(name)}\s*[:(]`).test(code);
 // A request a page sends: a handler's `type: "<request>"` or an element's `request: "<request>"` in the view config.
@@ -4778,7 +4812,7 @@ const requestDeclared = (src, request) => new RegExp(String.raw`\brequest\s*:\s*
 // (`usr.SetCanEditRequest`) or `Module.function`. Anything else is named back as not a symbol.
 const IDENT = String.raw`[A-Za-z_$][\w$]*`;
 const PAGE_FUNCTION = new RegExp(`^${IDENT}$`);
-const PLATFORM_REQUEST = /^crt\./;
+const PLATFORM_REQUEST_PREFIX = "crt.";
 const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
 // Whether a handler calls `sym`, as a verdict; `from` names where the function lives when it is not on the page.
 const callVerdict = (code, sym, from = "") => (calledIn(code, sym)
@@ -4818,7 +4852,7 @@ function portedSymbolVerdict(sym, ctx, code) {
   // A platform request (`crt.HandleViewModelInitRequest`, `crt.SaveRecordRequest`) is sent by the platform itself, so
   // a handler that answers it is reached; a custom request is reached only when something on the page sends it.
   if (requestDeclared(src, sym)) {
-    return PLATFORM_REQUEST.test(sym) ? { ok: true, text: `a handler answers platform request \`${esc(sym)}\`` }
+    return sym.startsWith(PLATFORM_REQUEST_PREFIX) ? { ok: true, text: `a handler answers platform request \`${esc(sym)}\`` }
       : { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
   }
   return moduleFunctionVerdict(sym, dotted[1], ctx, code);

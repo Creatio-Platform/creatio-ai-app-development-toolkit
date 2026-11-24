@@ -4406,7 +4406,16 @@ export const PORTED_MARKER = notesMarker("Ported as");
 export function portedSymbols(value) {
   const spans = [...String(value || "").matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
   const words = spans.length ? spans : [String(value || "").trim().split(/[\s,;]+/)[0]];
-  return words.map((w) => w.replace(/(\(\s*\))?[;.,:]*$/, "")).filter(Boolean);
+  return words.map(withoutCallSuffix).filter(Boolean);
+}
+// `fn();` -> `fn`: trailing `;.,:` off, then one empty `()`. A loop, not an anchored regex, so it stays linear.
+const TRAILING_PUNCT = new Set([";", ".", ",", ":"]);
+function withoutCallSuffix(word) {
+  let end = word.length;
+  while (end > 0 && TRAILING_PUNCT.has(word[end - 1])) end -= 1;
+  const w = word.slice(0, end);
+  const open = w.endsWith(")") ? w.lastIndexOf("(") : -1;
+  return open >= 0 && w.slice(open + 1, -1).trim() === "" ? w.slice(0, open) : w;
 }
 // Every `Ported as` record of the folder, keyed like `decidedRowKeys` (`verifyRowKey(page, label)`) so `--verify`
 // finds it on the plan row the task row was cut from. A row number outside the task's rows names nothing. The LATEST
