@@ -578,7 +578,7 @@ check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that 
     const lb = b.flatMap((t) => t.rows.map((r) => r.label)).join("|");
     // Only a chunk that STARTS on a count row is asked about: a chunk may also start on a handler whose own name
     // carries a digit (`onBulk7`), and that digit is a name, not a count the mask is for.
-    const counted = a.filter((t) => /\d+ fields?/.test(t.rows[0].label));
+    const counted = a.filter((t) => /\d fields?/.test(t.rows[0].label));
     return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
       && counted.length > 0 && counted.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
   }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
@@ -1800,12 +1800,12 @@ check("repair: a repair task that writes a page carries the task card with the d
 check("budget: a run at exactly `TASK_BUDGET.run` weight still collapses to one build task with the `Page code` row inside it",
   () => {
     const rows = checklistGroups(RUN, OPTS).flatMap((g) => g.rows);
-    const pc = rows.find((r) => r.vk?.type === "pagecode");
+    const pc = rows.some((r) => r.vk?.type === "pagecode");
     const base = buildTaskSet(RUN, OPTS);
     const weight = base.tasks.filter((t) => t.writesTo).reduce((a, t) => a + (t.weight || 0), 0);
     const atLine = buildTaskSet(RUN, { ...OPTS, taskBudget: { run: weight } });
     const builds = atLine.tasks.filter((t) => t.writesTo);
-    return !!pc && weight > 0 && builds.length === 1 && builds[0].rows.some((r) => r.vk === "pagecode");
+    return pc && weight > 0 && builds.length === 1 && builds[0].rows.some((r) => r.vk === "pagecode");
   }, () => buildTaskSet(RUN, OPTS).tasks.map((t) => `${t.group}:${t.weight}:${t.writesTo}`));
 check("repair: syncRepairDir ADDS to the folder and never overwrites — the plan tasks are untouched, and re-verifying an UNCHANGED page opens no second round, because a round is an ATTEMPT and counting verify runs would burn the cap with nobody having run",
   () => {
