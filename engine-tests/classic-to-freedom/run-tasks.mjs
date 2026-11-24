@@ -9271,6 +9271,15 @@ check("identity digest guard: rendering the identity condition does NOT move any
   },
   () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
 
+// The RelatedPage add-on is per object, so every wiring row says so and that an existing entry moves only on the
+// user's answer — the builder reads the row, not the reference, at the moment it writes the add-on.
+check("child page wiring: every binding row states that the add-on is object-wide and moves an existing entry only on the user's answer",
+  () => {
+    const rows = SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).filter((r) => !r.na);
+    return rows.length > 0 && rows.every((r) => /The add-on is object-wide/.test(r.label) && /only on the user's answer/.test(r.label));
+  },
+  () => SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).map((r) => r.label));
+
 // Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
 // add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
 // LAST task writing the page that holds the list, and nothing that writes the page body waits on it.

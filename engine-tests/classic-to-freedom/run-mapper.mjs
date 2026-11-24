@@ -584,6 +584,38 @@ check("entity-filter: dynamic filter → incomplete + folded into ONE concrete e
 check("entity-filter: static filter marked complete + NOT in the folded line",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && /\bSt by\b/.test(n.reason)));
 
+/* ---- object-wide scope: a Classic FILTRATION is page-scoped, its Freedom entity rule is object-wide ---- */
+// Freedom page rules carry no lookup filter, so every FILTRATION becomes an entity rule that reaches every page and
+// list of the object. The plan states that on the rule and asks the user once per page before anything is built.
+{
+  const scope = efcs.needsDecision.filter((n) => n.kind === "object-wide-scope");
+  check("object-wide scope: every entity rule is marked object-scoped and its note names the entity",
+    () => efcs.entityBusinessRules.length === 2
+      && efcs.entityBusinessRules.every((r) => r.scope === "object" && /applies on ALL pages and lists of X/.test(r.note)),
+    () => efcs.entityBusinessRules.map((r) => [r.scope, r.note]));
+  check("object-wide scope: ONE folded decision per page, fixed item, naming every filtered lookup",
+    () => scope.length === 1 && scope[0].item === "entity business rules"
+      && /\bLk\b/.test(scope[0].reason) && /\bSt\b/.test(scope[0].reason),
+    () => scope);
+  check("object-wide scope: the decision tells the agent to name the other pages and what a refusal means",
+    () => /list-pages/.test(scope[0]?.reason) && /ALL pages and lists of X/.test(scope[0]?.reason)
+      && /not migrated — add manually: Freedom page rules have no lookup filter/.test(scope[0]?.reason),
+    () => scope[0]?.reason);
+  const spec = renderDesignSpec({ entity: "X", changeSet: efcs });
+  check("object-wide scope: the plan's rule row carries the label and ⚠ Confirm carries the folded row",
+    () => /entity business rule — applies on ALL pages of `X`/.test(spec)
+      && /- \*\*\[object-wide-scope\]\*\* entity business rules — /.test(spec),
+    () => spec.split("\n").filter((l) => /entity business rule|object-wide/.test(l)).join("\n"));
+  const groups = checklistGroups({ entity: "X", changeSet: efcs }, {})
+    .filter((g) => g.baseTitle === "⚠ Confirm worklist").flatMap((g) => g.rows);
+  check("object-wide scope: the decision reaches the checklist, not only plan.md",
+    () => groups.filter((r) => r.confirm?.kind === "object-wide-scope").length === 1,
+    () => groups.map((r) => r.label));
+}
+check("object-wide scope (negative): a page with no FILTRATION raises no object-wide decision",
+  () => !dcs.needsDecision.some((n) => n.kind === "object-wide-scope") && (dcs.entityBusinessRules || []).length === 0,
+  () => dcs.needsDecision.map((n) => n.kind));
+
 /* ---- image component + tooltip carry (Product gaps) ---- */
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Photo", parentName: "Header", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),

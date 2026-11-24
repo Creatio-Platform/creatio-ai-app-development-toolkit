@@ -122,6 +122,16 @@ clio-safety rules apply to every write.
      and waits on the last build task of each child page and of the page holding the lists, so both
      exist when you start. Read the add-on first: `get-related-page-addon` with
      `entity-schema-name` = the child entity and `package-name` = the target package.
+     **The add-on is per object, not per page:** whatever it names as default or add page opens the
+     records of that entity from EVERY related list, section and lookup, not only from the page you
+     built. When the add-on you read already has a general default or add entry naming ANOTHER page
+     (Freedom or Classic), stop and ask the user before moving it, naming that page; record the answer
+     as its own `D<N>` in `decisions.md`. An add-on with no such entry is written without asking.
+     Then read the entity's `SysModuleEdit` card (read only — **never write `SysModuleEdit`**, a system
+     table). When it still points to a Classic page, the binding leaves navigation mixed: the related
+     list opens the Freedom page while other entry points open Classic. Ask the user whether to keep
+     that state (they switch it themselves if not), record the answer as its own `D<N>` and write
+     `mixed navigation — <entity>: SysModuleEdit → <Classic page>` under the row's `## Notes`.
      `create-related-page-addon` REPLACES the whole configuration, so send back every entry you read
      plus your change: the BUILT child page as the general default entry (`is-default`, no
      `type-column-value`, the `All employees` role or none), a separate `is-add` entry only when a

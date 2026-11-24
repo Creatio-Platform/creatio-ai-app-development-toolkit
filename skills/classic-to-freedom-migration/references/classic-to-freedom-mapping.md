@@ -688,7 +688,7 @@ page's own layer declares becomes a decision.
 | Classic UI Pattern | Preferred Freedom Target |
 | --- | --- |
 | `businessRules` visibility/editability/required | Page or entity business rule. |
-| Simple dependent lookup | Entity business rule with `apply-filter` when supported. |
+| Simple dependent lookup | Entity business rule with `apply-filter` when supported. A Classic FILTRATION filters the lookup on ONE page, but Freedom page rules have no lookup filter, so the entity rule applies on ALL pages and lists of the object. Ask the user first (the plan's `object-wide-scope` ⚠ Confirm row). If they decline, do not build it: the row is `not-built — not migrated — add manually: Freedom page rules have no lookup filter`, citing the answer's `D<N>`. |
 | `onEntityInitialized`, `init`, `onSaved`, `save` overrides | Freedom request handlers for equivalent lifecycle requests. |
 | Button click methods | Freedom button bound to a request handler. |
 | Sandbox messages | Handler-mediated communication, shared service, or explicit event replacement design. |
