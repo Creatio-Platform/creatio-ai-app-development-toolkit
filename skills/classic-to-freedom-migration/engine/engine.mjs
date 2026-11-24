@@ -2238,31 +2238,22 @@ function mergeDetails(L, seed, details) {
   }
 }
 
-// How often each identifier-shaped word occurs in a layer's source — code, strings and comments alike. Counted
-// once per layer and kept for the process, so asking about every method of a page reads each source once.
-const wordCountsByLayer = new WeakMap();
-function wordCountsOf(L) {
-  if (typeof L.src !== "string") return null;
-  let counts = wordCountsByLayer.get(L);
-  if (!counts) {
-    counts = new Map();
-    for (const [w] of L.src.matchAll(/[A-Za-z_$][\w$]*/g)) counts.set(w, (counts.get(w) || 0) + 1);
-    wordCountsByLayer.set(L, counts);
-  }
-  return counts;
-}
-// Does `name` occur in the fold's sources more often than its `definitions` (one per layer that declares it)? A
-// comment mention counts too: a reference that cannot be told from a mention keeps the method a normal row. `null`
+// Does `name` occur in the fold's sources more often than its `definitions` (one per layer that declares it)? Code,
+// strings and comments alike: a reference that cannot be told from a mention keeps the method a normal row. `null`
 // when some layer's source is not at hand.
 function nameReferenced(name, definitions, tagged) {
+  const word = new RegExp(String.raw`(?<![\w$])${name.replaceAll("$", String.raw`\$`)}(?![\w$])`, "g");
   let total = 0;
   for (const { L } of tagged) {
-    const counts = wordCountsOf(L);
-    if (!counts) return null;
-    total += counts.get(name) || 0;
+    if (typeof L.src !== "string") return null;
+    total += [...L.src.matchAll(word)].length;
+    if (total > definitions) return true;
   }
-  return total > definitions;
+  return false;
 }
+// Only a method a client layer alone declares, with a readable body, can be dormant (see `isDormant` in mapper.mjs),
+// so only such a method is looked up in the sources; every other one reads `null`, "may be referenced".
+const dormantCandidate = (m) => m.schemaTouched && m.pkgs.length === 1 && !!m.facts;
 
 // methods (override stack) — track whether any schema schema contributed, and carry the TOP layer's body facts.
 // The facts follow last-write-wins (the effective implementation is the topmost override's), while `pkgs`
@@ -2608,7 +2599,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // Whether the name occurs anywhere in the Classic sources beyond the method's own definitions — a member
       // reference (`callback: this.onX`, `Ext.bind(this.onX)`), a string, a call. `null` when a layer's source is
       // not at hand, which a reader must take as "may be referenced".
-      referenced: nameReferenced(n, m.pkgs.length, tagged),
+      referenced: dormantCandidate(m) ? nameReferenced(n, m.pkgs.length, tagged) : null,
       // body evidence (calls / attribute reads-writes / message traffic / line span), null when the layer's body
       // was not statically readable — the NAME still survives, so a member is never lost for lack of evidence
       facts: m.facts || null,

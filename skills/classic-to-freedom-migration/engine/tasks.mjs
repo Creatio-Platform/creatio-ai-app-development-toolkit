@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, PORTED_SYMBOL } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -1181,6 +1181,18 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
+// One `## Notes` marker line, `<Label> (row N): <value>`: a list bullet, a quote mark and bold around it are
+// allowed, so every marker accepts the same formatting a build agent gives it.
+export const notesMarker = (label) => new RegExp(String.raw`^[\s*>-]*${label} \(row (\d+)\)[\s:*]*([^\s:*].*)$`, "i");
+// Every value of one marker in `notes`, by row number, in file order.
+export function notesMarkers(notes, re) {
+  const out = new Map();
+  for (const line of String(notes || "").split(/\r?\n/)) {
+    const m = re.exec(line);
+    if (m) out.set(Number(m[1]), [...(out.get(Number(m[1])) || []), m[2].trim()]);
+  }
+  return out;
+}
 // THE LINES THE ENGINE READS OFF `## Notes`. Free prose under the row number is still yours; these are fixed in
 // shape. The final report quotes the first two VERBATIM to the person who owns the migration — without them it can
 // only say "the agent did not state the question", which is true and unhelpful. `--verify` reads the third: it is
@@ -4389,8 +4401,7 @@ export function decidedRowKeys(set) {
 // function a handler calls, or `Module.function`. `--verify` checks the symbol against the built page. Several
 // symbols are written as code spans (`` `a`, `b` ``); without code spans the first word is the symbol, so prose
 // after it is never read as a claim.
-export const PORTED_MARKER = /^[\s*>-]*Ported as \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
-const PORTED_SYMBOL = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$/;
+export const PORTED_MARKER = notesMarker("Ported as");
 export function portedSymbols(value) {
   const spans = [...String(value || "").matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
   const words = spans.length ? spans : [String(value || "").trim().split(/[\s,;]+/)[0]];
@@ -4402,13 +4413,12 @@ export function portedRowSymbols(set) {
   const out = new Map();
   for (const t of set?.tasks || []) {
     if (t.unread) continue;
-    for (const line of String(t.notes || "").split(/\r?\n/)) {
-      const m = PORTED_MARKER.exec(line);
-      const row = m ? t.rows?.[Number(m[1]) - 1] : null;
+    for (const [n, values] of notesMarkers(t.notes, PORTED_MARKER)) {
+      const row = t.rows?.[n - 1];
       const page = row && (row.pageKey || t.pageKey);
       if (!page) continue;
       const key = verifyRowKey(page, row.label);
-      out.set(key, [...new Set([...(out.get(key) || []), ...portedSymbols(m[2])])]);
+      out.set(key, [...new Set([...(out.get(key) || []), ...values.flatMap(portedSymbols)])]);
     }
   }
   return out;

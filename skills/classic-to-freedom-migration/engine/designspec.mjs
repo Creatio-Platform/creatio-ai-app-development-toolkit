@@ -4236,11 +4236,12 @@ export function resolveRuleVk(vk, ctx) {
   const decided = vk.decided || {};
   // A page nobody read, or one reported NOT BUILT, answers for every rule the same way it does without decisions.
   if (ctx.entryAbsent || ctx.page === false) return resolveOpenRules(vk, ctx);
-  const closed = Object.keys(decided).length ? `; built another way on the user's decision: ${decidedRuleText(decided)}` : "";
+  if (!Object.keys(decided).length) return resolveOpenRules(vk, ctx);
+  const text = decidedRuleText(decided);
   const open = [...new Set(vk.names || [])].filter((n) => !Object.hasOwn(decided, n));
-  if (closed && !open.length) return ["✅ Done", `every expected business-rule target attribute was built another way on the user's decision: ${decidedRuleText(decided)}`, "ok"];
+  if (!open.length) return ["✅ Done", `every expected business-rule target attribute was built another way on the user's decision: ${text}`, "ok"];
   const [mark, ev, ...rest] = resolveOpenRules({ ...vk, names: open }, ctx);
-  return [mark, ev + closed, ...rest];
+  return [mark, `${ev}; built another way on the user's decision: ${text}`, ...rest];
 }
 function resolveOpenRules(vk, ctx) {
   const want = [...new Set(vk.names || [])];
@@ -4762,9 +4763,15 @@ function requestSent(src, viewConfigJson, request) {
   return new RegExp(String.raw`\btype\s*:\s*${lit}`).test(src) || new RegExp(String.raw`"request"\s*:\s*${lit}`).test(viewConfigJson);
 }
 const requestDeclared = (src, request) => new RegExp(String.raw`\brequest\s*:\s*["'\`]${reEsc(request)}["'\`]`).test(src);
+// What a `Ported as` line may name: a page function (`applyRights`) or a dotted symbol — a request type
+// (`usr.SetCanEditRequest`) or `Module.function`. The task parser reads symbols by this same grammar.
 const IDENT = String.raw`[A-Za-z_$][\w$]*`;
+export const PORTED_SYMBOL = new RegExp(String.raw`^${IDENT}(?:\.${IDENT})?$`);
 const PAGE_FUNCTION = new RegExp(`^${IDENT}$`);
 const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
+// Whether a handler calls `sym`, as a verdict; `from` names where the function lives when it is not on the page.
+const callVerdict = (code, sym, from = "") => (calledIn(code, sym)
+  ? { ok: true, text: `a handler calls \`${esc(sym)}\`${from}` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` });
 // The page's declared `define()` dependencies, when the page entry carries them (`--built.pages[<key>].deps`, read
 // off the page's `body.js`). Null when absent: a module function's port cannot be checked without them.
 function pageDepsOf(page) {
@@ -4777,19 +4784,18 @@ function moduleFunctionVerdict(sym, module, ctx, code) {
   const deps = pageDepsOf(ctx.page);
   if (!deps) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
   if (!deps.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
-  return calledIn(code, sym) ? { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
+  return callVerdict(code, sym, ` from module \`${esc(module)}\``);
 }
 // One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
 // the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
 // a module function (`Module.fn`) a handler calls from a module the page declares in its `define()` deps.
 function portedSymbolVerdict(sym, ctx, code) {
   const src = ctx.handlersSrc;
-  if (PAGE_FUNCTION.test(sym)) {
-    return calledIn(code, sym) ? { ok: true, text: `a handler calls \`${esc(sym)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
-  }
+  if (PAGE_FUNCTION.test(sym)) return callVerdict(code, sym);
   const dotted = DOTTED_SYMBOL.exec(sym);
   if (!dotted) return { ok: false, text: `\`${esc(sym)}\` is not a request type, a page function or \`Module.function\`` };
-  const viewConfigJson = JSON.stringify(entryObject(ctx.page)?.viewConfig ?? null);
+  // Memoized on the page ctx like `_codeOnly`: every dotted symbol of the page reads the same view config.
+  const viewConfigJson = ctx._viewConfigJson ?? (ctx._viewConfigJson = JSON.stringify(entryObject(ctx.page)?.viewConfig ?? null));
   if (requestSent(src, viewConfigJson, sym)) return { ok: true, text: `the page sends request \`${esc(sym)}\`` };
   if (requestDeclared(src, sym)) return { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
   return moduleFunctionVerdict(sym, dotted[1], ctx, code);

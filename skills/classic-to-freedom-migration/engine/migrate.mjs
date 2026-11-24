@@ -883,7 +883,8 @@ function validIdsOf(page, rows) {
 function entryProblems(key, entry, byKey, rows, opts) {
   const e = entry && typeof entry === "object" ? entry : {};
   const page = key.includes("#") ? key.slice(0, key.indexOf("#")) : "";
-  if (key.slice(page.length + 1).startsWith(RULE_ATTR_PREFIX)) return ruleEntryProblems(key, e, page, rows, opts);
+  const id = key.slice(page.length + 1);
+  if (id.startsWith(RULE_ATTR_PREFIX)) return ruleEntryProblems(key, e, page, id.slice(RULE_ATTR_PREFIX.length), rows, opts);
   const row = byKey.get(key);
   if (!row) return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no deliverable of this plan", valid: validIdsOf(page, rows) }];
   if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, kind: STATUS_ISSUE.status, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`) — \`${STATUS_BUILT_ELSEWHERE}\` addresses one business-rule attribute, \`<pageKey>#${RULE_ATTR_PREFIX}<Attribute>\``, valid: [] }];
@@ -895,9 +896,9 @@ function entryProblems(key, entry, byKey, rows, opts) {
 // A `built-elsewhere` entry: one business-rule target attribute of the page, built another way (in code, as an
 // entity rule) on the USER's decision. The decision must resolve and carry `Decided by: user` with the quote of
 // their words — a choice the orchestrator made cannot close a rule the plan owes.
-function ruleEntryProblems(key, e, page, rows, opts) {
+function ruleEntryProblems(key, e, page, attr, rows, opts) {
   const attrs = rows.filter((r) => r.pageKey === page && r.vk?.type === "rule").flatMap((r) => r.vk.names || []);
-  if (!attrs.includes(key.slice(page.length + 1 + RULE_ATTR_PREFIX.length))) {
+  if (!attrs.includes(attr)) {
     return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no business-rule target attribute of this page", valid: attrs.map((a) => statusKey(page, ruleAttrId(a))) }];
   }
   if (e.status !== STATUS_BUILT_ELSEWHERE) return [{ key, kind: STATUS_ISSUE.status, problem: `a business-rule attribute takes \`${STATUS_BUILT_ELSEWHERE}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
