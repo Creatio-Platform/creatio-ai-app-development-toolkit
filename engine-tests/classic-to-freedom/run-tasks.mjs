@@ -9297,6 +9297,17 @@ check("child page wiring: every binding row states that the add-on is object-wid
     return rows.length > 0 && rows.every((r) => /The add-on is object-wide/.test(r.label) && /only on the user's answer/.test(r.label));
   },
   () => SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).map((r) => r.label));
+// The wiring step reads the edit cards through a named call and the fields it acts on, so a builder can run it as
+// written instead of inventing a lookup into a system table.
+check("child page wiring: build-page.md names the call, argument and fields of the SysModuleEdit read",
+  () => {
+    const doc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/references/build-page.md"), "utf8");
+    const step = doc.slice(doc.indexOf("read the entity's `SysModuleEdit` cards"), doc.indexOf("one line\n     per Classic entry"));
+    return step.length > 0 && /`list-entity-client-schemas` with `entity-name`/.test(step)
+      && /`editPages\[\]`/.test(step) && /`cardSchema`/.test(step) && /`kind: classic`/.test(step)
+      && /never write `SysModuleEdit`/.test(step);
+  });
 
 // Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
 // add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
