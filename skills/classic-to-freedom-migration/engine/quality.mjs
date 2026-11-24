@@ -1,4 +1,4 @@
-// CODE QUALITY of the built pages — the `--verify` rows that measure what a reviewer would otherwise count by hand:
+// CODE QUALITY of the built pages — the `--verify` rows that measure what would otherwise be counted by hand:
 // long functions, helpers nested in handlers or copied between them, catch blocks that swallow errors, bare numeric
 // comparison types, loads that wait for each other for no reason, hard-coded record ids, plan codes left in
 // comments, requests nobody sends and strings nobody shows.

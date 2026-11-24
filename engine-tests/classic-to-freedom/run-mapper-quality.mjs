@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { lintPageQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
-import { verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 
 const R = QUALITY_RULES;
@@ -138,6 +138,12 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("verify: without recorded projectConventions the GUID row says the constants-module check was skipped and does not block",
     () => /ℹ noted/.test(rowLine(noConventions.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventions.markdown, R.guidLiteral)),
     () => rowLine(noConventions.markdown, R.guidLiteral));
+  check("verify: the Code quality rows are verify-only — the plan's groups (and so the task cut, a split and every digest) carry none",
+    () => !checklistGroups(result, opts).some((g) => /Code quality/.test(g.title)) && /\*\*Code quality/.test(clean.markdown));
+  const notBuilt = renderVerify(result, opts, { pages: { main: false } });
+  check("verify: a page reported not built gets non-gating Code quality rows — its own rows already block",
+    () => /☐ confirm on-stand/.test(rowLine(notBuilt.markdown, R.functionTooLong)) && /no code to check/.test(rowLine(notBuilt.markdown, R.functionTooLong)),
+    () => rowLine(notBuilt.markdown, R.functionTooLong));
   const noBundle = renderVerify(result, opts, { pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate", viewConfig: { items: [] } } } });
   check("verify: a bundle without code sections cannot be checked — the rows are confirm-on-stand, never a silent ✅",
     () => /confirm on-stand/.test(rowLine(noBundle.markdown, R.functionTooLong)), () => rowLine(noBundle.markdown, R.functionTooLong));

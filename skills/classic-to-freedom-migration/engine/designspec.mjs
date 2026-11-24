@@ -3392,7 +3392,6 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
     // AC-7 covers every built page: the list page declares its own handlers, validators and converters.
     const listConventions = [...conventionRows(opts), ...listModuleRows(result, opts)];
     if (listConventions.length) groups.push(pageGroup(LIST_PAGE_KEY, "Project conventions", listConventions, opts));
-    groups.push(pageGroup(LIST_PAGE_KEY, "Code quality", codeQualityRows(opts), opts));
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY), opts));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
@@ -3469,8 +3468,6 @@ export function checklistGroups(result, opts = {}) {
   // The project's namespace, checked on every page that is built: a custom request, validator or converter outside
   // it is a blocking row until it is renamed or a decision accepts it.
   G("Project conventions", conventionRows(opts));
-  // The built page's code, measured: one row per rule of quality.mjs, blocking unless the rule is advisory.
-  G("Code quality", codeQualityRows(opts));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
@@ -4839,6 +4836,14 @@ export function resolveCardNativeVk(vk, ctx) {
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
 }
+// THE CODE QUALITY GROUPS are verify-only: one per page the table already shows, appended when the built pages are
+// checked. They measure how the plan's rows were written and add no row of their own to build, so they stay out of
+// `checklistGroups` — the plan, the task cut, a split's coverage and every task's digest never see them. An open one
+// still becomes a repair task, because those are cut from the verify rows.
+function codeQualityGroups(planGroups, opts) {
+  const pageKeys = [...new Set(planGroups.map((g) => g.pageKey).filter((k) => k && k !== "run"))];
+  return pageKeys.map((k) => pageGroup(k, "Code quality", codeQualityRows(opts), opts));
+}
 // The code-quality rows of one page, one per rule. The thresholds and the constants modules' record ids travel in
 // the row itself, so the resolver needs nothing but the built root.
 function codeQualityRows(opts) {
@@ -4855,10 +4860,11 @@ function codeQualityRows(opts) {
 }
 const QUALITY_LISTED = 5;
 // A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
-// `manifest.qualityThresholds` — never a pass. An advisory one is noted.
+// `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
+// not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
 export function resolveQualityVk(vk, ctx) {
-  if (ctx.entryAbsent) return absentEntry(ctx, "the page's code");
-  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its code cannot be checked", "missing"];
+  if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
+  if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
   const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
@@ -5384,7 +5390,8 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // of the run, the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
-  const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
+  const planGroups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
+  const groups = [...planGroups, ...codeQualityGroups(planGroups, opts)];
   const L = []; let n = 0;
   // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
