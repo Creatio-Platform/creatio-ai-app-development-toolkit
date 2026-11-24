@@ -64,7 +64,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues } from "./directives.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, directiveCovers } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
@@ -1473,22 +1473,32 @@ function summariesDecision(what, item) {
 // A container of the page whose name says summary and that holds labels: the custom summary bar of a Classic page.
 function pageSummaryBar(ops) {
   const list = ops || [];
-  const containers = new Set(list.filter((o) => /summar/i.test(o.name || "") && !/Label$/.test(o.values?.type || "")).map((o) => o.name));
-  const labels = list.filter((o) => /Label$/.test(o.values?.type || "") && (containers.has(o.parentName) || /summar/i.test(o.name || ""))).length;
+  const isLabel = (o) => (o.values?.type || "").endsWith("Label");
+  const containers = new Set(list.filter((o) => /summar/i.test(o.name || "") && !isLabel(o)).map((o) => o.name));
+  const labels = list.filter((o) => isLabel(o) && (containers.has(o.parentName) || /summar/i.test(o.name || ""))).length;
   return containers.size && labels ? { container: [...containers][0], labels } : null;
 }
-// A user directive that asks for summaries settles the question on every page it covers: the questions leave
-// ⚠ Confirm and each summary surface records the directive that answered it. A directive that declines them ("no
-// summaries", "without summaries") does not ask for them. Exported for the goldens.
-const ASKS_FOR_SUMMARIES = /crt\.Summar|\bsummar/i;
-const DECLINES_SUMMARIES = /\b(?:no|not|without|don't|do not)\b[^.]{0,30}summar/i;
+// A user directive that asks for the summaries COMPONENT settles the question on every page its scope covers: the
+// questions leave ⚠ Confirm and each summary surface records the directive that answered it. Only an explicit request
+// counts — `crt.Summaries` or "summaries component / panel" — and a negation on either side of the word declines it.
+// Any other mention ("keep the summary labels as Classic had", "a summary of changes") leaves the question open.
+const ASKS_FOR_SUMMARIES = /crt\.Summar|\bsummar(?:y|ies)\s{1,3}(?:component|panel)\b/i;
+const SUMMARY_WORD = /summar/gi;
+const NEGATION = /\b(?:no|not|without|instead|never|don't|do not|unwanted)\b/i;
+const NEGATION_REACH = 40;
+function asksForSummaries(directive) {
+  const text = `${directive.quote} ${directive.expectation}`;
+  if (!ASKS_FOR_SUMMARIES.test(text)) return false;
+  return ![...text.matchAll(SUMMARY_WORD)].some((m) => NEGATION.test(text.slice(Math.max(0, m.index - NEGATION_REACH), m.index + NEGATION_REACH)));
+}
+// `results` are the root (page key `main`) and the folded sub-pages, each under its own page key. Exported for the goldens.
 export function applySummariesDirective(results, directives) {
-  const d = (directives || []).find((x) => {
-    const text = `${x.quote} ${x.expectation}`;
-    return ASKS_FOR_SUMMARIES.test(text) && !DECLINES_SUMMARIES.test(text);
-  });
-  if (!d) return;
-  for (const cs of results.map((r) => r?.changeSet).filter(Boolean)) {
+  const asking = (directives || []).filter(asksForSummaries);
+  if (!asking.length) return;
+  for (const r of results.filter((x) => x?.changeSet)) {
+    const d = asking.find((x) => directiveCovers(x, r.pageKey || "main"));
+    if (!d) continue;
+    const cs = r.changeSet;
     cs.needsDecision = (cs.needsDecision || []).filter((n) => n.kind !== SUMMARIES_KIND);
     for (const det of (cs.details || []).filter((x) => x.features?.summaries)) det.features.summariesDirective = d.id;
     if (cs.summaryBar) cs.summaryBar.directive = d.id;
@@ -2280,12 +2290,30 @@ function multiSelectMode(body, spans) {
 
 // The attribute names a filter body reads: `this.$Name` and `this.get("Name")`.
 const ATTRIBUTE_READ = /this\.\$(\w{1,80})|this\.get\(\s{0,5}["'](\w{1,80})["']\s{0,5}\)/g;
-// The attributes a control or a method of the detail changes: an element of the detail diff named after it or bound to
-// it, or an assignment (`this.$Name = …`, `this.set("Name", …)`). Collected in one pass. An attribute nothing in the
-// detail changes (the master record's id, say) narrows the list the same way on every visit — a fixed filter.
-const ATTRIBUTE_CHANGE = /["']?(?:name|bindTo)["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']|this\.\$(\w{1,80})\s{0,5}=(?!=)|this\.set\(\s{0,5}["'](\w{1,80})["']/g;
-function changedAttributes(body) {
-  return new Set([...body.matchAll(ATTRIBUTE_CHANGE)].map((m) => m[1] || m[2] || m[3]));
+// The attributes the USER changes: an element of the detail diff named after it or bound to it (its control), or an
+// assignment (`this.$Name = …`, `this.set("Name", …)`) outside the members that run once when the list opens. An
+// attribute set only while the list initialises (the current user's contact, today's date with no control to change
+// it) narrows the list the same way on every visit — a fixed filter. One small pattern per shape, merged.
+const ATTRIBUTE_CONTROLS = [/["']?name["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']/g, /["']?bindTo["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']/g];
+const ATTRIBUTE_ASSIGNMENTS = [/this\.\$(\w{1,80})\s{0,5}=(?!=)/g, /this\.set\(\s{0,5}["'](\w{1,80})["']/g];
+const INIT_MEMBERS = ["init", "initData", "onEntityInitialized", "constructor", "onRender"];
+// The spans of every layer's init members, as [open, close] offsets.
+function initSpans(body, spans) {
+  const out = [];
+  for (const name of INIT_MEMBERS) {
+    for (const start of memberValueStarts(body, name, spans)) {
+      const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(body.slice(start, start + 400));
+      const inner = fm ? braceBody(body, start + fm[0].length - 1) : null;
+      if (inner != null) out.push([start, start + fm[0].length + inner.length]);
+    }
+  }
+  return out;
+}
+function changedAttributes(body, spans = literalSpans(body)) {
+  const init = initSpans(body, spans);
+  const inInit = (i) => init.some(([a, b]) => i >= a && i <= b);
+  return new Set([...ATTRIBUTE_CONTROLS.flatMap((re) => [...body.matchAll(re)].map((m) => m[1])),
+    ...ATTRIBUTE_ASSIGNMENTS.flatMap((re) => [...body.matchAll(re)].filter((m) => !inInit(m.index)).map((m) => m[1]))]);
 }
 
 // The kind of control a quick filter needs, read off the attribute's declared data type.
@@ -2303,28 +2331,91 @@ function profileWindows(body) {
   return [...body.matchAll(PROFILE_SAVE)].map((m) => body.slice(Math.max(0, m.index - PROFILE_WINDOW), m.index + PROFILE_WINDOW));
 }
 
-// The column filters of the most-derived `getFilters`, each with the column it filters and its value expression.
-const COLUMN_FILTER = /ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["'](\w{1,80})["']\s{0,10}(?:,\s{0,10}([^)]{0,200}))?\)|createColumnInFilterWithParameters\s{0,10}\(\s{0,10}["'](\w{1,80})["']\s{0,10},\s{0,10}([^)]{0,200})\)/g;
+// The column filters a body builds, each with the column, its value expression and its offset. One pattern per call
+// shape: a comparison filter and an IN filter.
+const COMPARISON_FILTER = /ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["'](\w{1,80})["']\s{0,10}(?:,\s{0,10}([^)]{0,200}))?\)/g;
+const IN_FILTER = /createColumnInFilterWithParameters\s{0,10}\(\s{0,10}["'](\w{1,80})["']\s{0,10},\s{0,10}([^)]{0,200})\)/g;
+function columnFilterCalls(code) {
+  return [COMPARISON_FILTER, IN_FILTER].flatMap((re) => [...code.matchAll(re)].map((m) => ({ column: m[1], value: m[2] || "", index: m.index })));
+}
+// The `if (…) { … }` blocks of a body, each with its condition and its span: a filter added inside one whose
+// condition reads an attribute is switched by that attribute, the inline toggle shape.
+const IF_HEAD = /\bif\s{0,5}\(([^{};]{0,300})\)\s{0,5}\{/g;
+function guardedBlocks(code) {
+  const blocks = [];
+  for (const m of code.matchAll(IF_HEAD)) {
+    const open = m.index + m[0].length - 1;
+    const inner = braceBody(code, open);
+    if (inner != null) blocks.push({ cond: m[1], start: open, end: open + inner.length + 1 });
+  }
+  return blocks;
+}
+// Locals that hold an attribute (`var d = this.get("OnDate")`): a filter whose value is the local reads the attribute.
+const ATTRIBUTE_ALIAS = /\b(?:var|let|const)\s{1,5}(\w{1,80})\s{0,5}=\s{0,5}this\.(?:\$(\w{1,80})|get\(\s{0,5}["'](\w{1,80})["']\s{0,5}\))/g;
+// A method `getFilters` calls on the detail itself: the filters it adds belong to `getFilters` too.
+const OWN_CALL = /\bthis\.(\w{1,80})\s{0,5}\(/g;
+const MAX_FILTER_HELPERS = 20;
+const NOT_HELPERS = new Set(["callParent", "get", "set", "getFilters"]);
 
 // ONE reading of the detail's `getFilters`, split into its two halves. QUICK filters: each attribute it reads that a
-// control or a method of the detail changes, with the columns whose value is that attribute (a filter built in a helper
-// method leaves the list empty). FIXED columns: the column filters whose value reads none of those attributes. A
-// `getFilters` with no quick filter is all fixed; a mixed one keeps both halves.
+// control or a method of the detail changes, with the columns it switches — a filter whose value is the attribute (or
+// a local holding it), or one added inside an `if` on it, directly or through a helper method `getFilters` calls there.
+// FIXED columns: every other column filter of `getFilters` and its helpers. A `getFilters` with no quick filter is all
+// fixed; a mixed one keeps both halves.
+// Every layer's `getFilters` that the most-derived one reaches: each override down the chain while it calls
+// `callParent`, bounded like the row-action scan. `undefined` when no layer overrides it, `null` when one cannot be read.
+function filterChainCode(body, spans) {
+  const starts = memberValueStarts(body, "getFilters", spans);
+  if (!starts.length) return undefined;
+  const codes = [];
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k], { raw: true });
+    if (!v) return codes.length ? codes.join("\n") : null;
+    codes.push(v.code);
+    if (!/\bcallParent\b/.test(v.code)) break;
+  }
+  return codes.join("\n");
+}
 export function classifyDetailFilters(body, spans = literalSpans(body)) {
-  const filters = lastMemberCode(body, "getFilters", spans, { raw: true });
-  if (!filters) return { present: filters === null, quickFilters: [], fixedColumns: [] };
-  const changed = changedAttributes(body);
-  const attrs = [...new Set([...filters.code.matchAll(ATTRIBUTE_READ)].map((m) => m[1] || m[2]))].filter((a) => changed.has(a));
-  const calls = [...filters.code.matchAll(COLUMN_FILTER)].map((m) => ({ column: m[1] || m[3], value: m[2] || m[4] || "" }));
+  const code = filterChainCode(body, spans);
+  if (code == null) return { present: code === null, quickFilters: [], fixedColumns: [] };
+  const changed = changedAttributes(body, spans);
+  const attrs = [...new Set([...code.matchAll(ATTRIBUTE_READ)].map((m) => m[1] || m[2]))].filter((a) => changed.has(a));
+  const named = new Map(attrs.map((a) => [a, new RegExp(String.raw`\b${reEsc(a)}\b`)]));
+  const aliases = [...code.matchAll(ATTRIBUTE_ALIAS)].map((m) => ({ local: new RegExp(String.raw`\b${reEsc(m[1])}\b`), attr: m[2] || m[3] }));
+  const reads = (text, a) => named.get(a).test(text) || aliases.some((x) => x.attr === a && x.local.test(text));
+  const blocks = guardedBlocks(code);
+  const guardsAt = (index) => attrs.filter((a) => blocks.some((b) => index > b.start && index < b.end && reads(b.cond, a)));
+  const tied = (value, index) => [...new Set([...attrs.filter((a) => reads(value, a)), ...guardsAt(index)])];
+  const calls = columnFilterCalls(code).map((c) => ({ column: c.column, attrs: tied(c.value, c.index) }));
+  const helperCalls = [...code.matchAll(OWN_CALL)].filter((m) => !NOT_HELPERS.has(m[1])).slice(0, MAX_FILTER_HELPERS);
+  for (const m of helperCalls) {
+    const helper = lastMemberCode(body, m[1], spans, { raw: true });
+    const guards = guardsAt(m.index);
+    for (const c of helper ? columnFilterCalls(helper.code) : []) {
+      calls.push({ column: c.column, attrs: [...new Set([...attrs.filter((a) => named.get(a).test(c.value)), ...guards])] });
+    }
+  }
   const windows = attrs.length ? profileWindows(body) : [];
-  const quickFilters = attrs.map((attribute) => {
-    const named = new RegExp(String.raw`\b${reEsc(attribute)}\b`);
-    return { attribute, kind: filterKind(body, attribute),
-      columns: calls.filter((c) => named.test(c.value)).map((c) => c.column),
-      persisted: windows.some((w) => named.test(w)) };
-  });
-  const quickCols = new Set(quickFilters.flatMap((q) => q.columns));
-  return { present: true, quickFilters, fixedColumns: [...new Set(calls.map((c) => c.column).filter((c) => !quickCols.has(c)))] };
+  const quickFilters = attrs.map((attribute) => ({ attribute, kind: filterKind(body, attribute),
+    columns: [...new Set(calls.filter((c) => c.attrs.includes(attribute)).map((c) => c.column))],
+    persisted: windows.some((w) => named.get(attribute).test(w)) }));
+  return { present: true, quickFilters, fixedColumns: [...new Set(calls.filter((c) => !c.attrs.length).map((c) => c.column))] };
+}
+
+// The fixed half of a detail's filters: the columns `classifyDetailFilters` read as fixed. When it read none, a body
+// that still builds column filters (deeper than one helper) names them body-wide, less the quick filters' columns, so a
+// fixed filter is never dropped because a quick filter sits beside it.
+const BODY_FILTER_COLUMN = /ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["']([A-Za-z]\w{0,80})["']/g;
+function fixedFilterSignal(body, filters) {
+  if (!filters.present) return { fixedFilters: false, filterCols: [] };
+  if (filters.fixedColumns.length) return { fixedFilters: true, filterCols: filters.fixedColumns };
+  if (!/createColumn(?:In)?Filter\w{0,40}/.test(body)) return { fixedFilters: false, filterCols: [] };
+  const quickCols = new Set(filters.quickFilters.flatMap((q) => q.columns));
+  const rest = [...new Set([...body.matchAll(BODY_FILTER_COLUMN)].map((m) => m[1]))].filter((c) => !quickCols.has(c));
+  // with no quick filter every column filter is fixed, named or not; beside one, only the columns no quick filter owns
+  if (!filters.quickFilters.length) return { fixedFilters: true, filterCols: rest };
+  return { fixedFilters: rest.length > 0, filterCols: rest };
 }
 
 // The whole inventory of one detail body. Every key is always present, so a reader never type-checks it. `filters`
@@ -2332,7 +2423,9 @@ export function classifyDetailFilters(body, spans = literalSpans(body)) {
 export function scanDetailFeatures(body, spans = literalSpans(String(body || "")), filters = null) {
   const text = String(body || "");
   const styling = lastMemberCode(text, "prepareResponseCollectionItem", spans);
-  const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index));
+  // a detail that overrides `getSummaryVisible` to return nothing or `false` shows no summaries
+  const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index))
+    && !switchedOff(text, "getSummaryVisible", spans);
   return {
     toolsMenu: toolsMenuDeviations(text, spans),
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
@@ -2343,7 +2436,7 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
 }
 // Every function of the feature scan, for the structural ReDoS golden.
 export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
-  filterKind, profileWindows, classifyDetailFilters, scanDetailFeatures];
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, initSpans, filterChainCode];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
@@ -2381,15 +2474,10 @@ export function detectAddMode(body, scan = {}) {
   // the Click handler name — that's the custom add/attach flow the Freedom rebuild must reproduce.
   const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
   const clickM = customAction ? /getButtonMenuItem\s*\(\s*\{[\s\S]{0,200}?Click\s*:\s*\{[^}]*bindTo["']\s*:\s*["'](\w+)["']/.exec(body) : null;
-  // FIXED list filters — the half of a getFilters override the user never changes (`classifyDetailFilters`), with the
-  // columns it filters. The half driven by an attribute the user changes is a QUICK filter on the feature inventory:
-  // reproducing it as a fixed data-source filter would take the control away from the user. A getFilters that adds
-  // its filters in a helper method still counts as fixed when the body builds column filters at all.
-  const quick = filters.quickFilters.length > 0;
-  const fixedFilters = filters.present && (quick ? filters.fixedColumns.length > 0 : /createColumn(?:In)?Filter\w*/.test(body));
-  // Filters built in a helper method name their columns outside getFilters; the body-wide read then names them.
-  const helperCols = () => [...new Set([...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]))];
-  const filterCols = fixedFilters ? (filters.fixedColumns.length || quick ? filters.fixedColumns : helperCols()) : [];
+  // FIXED list filters — the half of a getFilters override the user never changes (`fixedFilterSignal`). The half
+  // driven by an attribute the user changes is a QUICK filter on the feature inventory: reproducing it as a fixed
+  // data-source filter would take the control away from the user.
+  const { fixedFilters, filterCols } = fixedFilterSignal(body, filters);
   const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
     openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
     rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };

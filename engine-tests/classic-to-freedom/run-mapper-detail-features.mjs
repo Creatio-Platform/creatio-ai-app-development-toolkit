@@ -57,7 +57,47 @@ const MIXED_BODY = `define("MixedDetail",[],function(){return{entitySchemaName:"
   methods:{initData:function(){this.$OnDate=new Date();this.callParent(arguments);},
     getFilters:function(){var f=this.callParent(arguments);
       f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));
-      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",this.$OnDate));return f;}}};});`;
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",this.$OnDate));return f;}},
+  diff:[{operation:"insert",name:"OnDate",parentName:"Detail",propertyName:"tools",values:{markerValue:"OnDate"}}]};});`;
+// The inline toggle: the attribute GUARDS the filter (an `if`), it is not the filter's value.
+const INLINE_TOGGLE_BODY = `define("InlineDetail",[],function(){return{entitySchemaName:"Limit",
+  attributes:{"IsActiveOnly":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}},
+  methods:{onActiveOnlyButtonClick:function(){this.$IsActiveOnly=!this.$IsActiveOnly;this.reloadGridData();},
+    getFilters:function(){var f=this.callParent(arguments);
+      if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
+      return f;}}};});`;
+// A date read into a local first, and the filter's value is the local.
+const ALIAS_BODY = `define("AliasDetail",[],function(){return{entitySchemaName:"Line",
+  attributes:{"OnDate":{dataValueType:Terrasoft.DataValueType.DATE}},
+  methods:{initData:function(){this.set("OnDate",new Date());this.callParent(arguments);},
+    getFilters:function(){var f=this.callParent(arguments);var d=this.get("OnDate");
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",d));return f;}},
+  diff:[{operation:"insert",name:"OnDateEdit",parentName:"Detail",propertyName:"tools",values:{bindTo:"OnDate"}}]};});`;
+// A toggle in getFilters beside a helper that adds a literal filter: both halves must reach the plan.
+const TOGGLE_AND_HELPER_BODY = `define("BothDetail",[],function(){return{entitySchemaName:"Req",
+  attributes:{"IsActiveOnly":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}},
+  methods:{onActiveOnlyButtonClick:function(){this.$IsActiveOnly=!this.$IsActiveOnly;this.reloadGridData();},
+    getFilters:function(){var f=this.callParent(arguments);
+      if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
+      this.addCategoryFilter(f);return f;},
+    addCategoryFilter:function(f){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));}}};});`;
+// An attribute set only while the list initialises: the user never changes it, so its filter is fixed.
+const INIT_ONLY_BODY = `define("MineDetail",[],function(){return{entitySchemaName:"Task",
+  methods:{init:function(){this.$CurrentContact=Terrasoft.SysValue.CURRENT_USER_CONTACT.value;this.callParent(arguments);},
+    getFilters:function(){var f=this.callParent(arguments);
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Owner",this.$CurrentContact));return f;}}};});`;
+// Two layers: the vendor layer filters by a date the user picks; the customer layer adds a literal filter and calls up.
+const VENDOR_LAYER = `define("LayeredDetail",[],function(){return{entitySchemaName:"Line",
+  attributes:{"OnDate":{dataValueType:Terrasoft.DataValueType.DATE}},
+  methods:{getFilters:function(){var f=this.callParent(arguments);
+    f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",this.$OnDate));return f;}},
+  diff:[{operation:"insert",name:"OnDate",parentName:"Detail",propertyName:"tools",values:{markerValue:"OnDate"}}]};});`;
+const CUSTOMER_LAYER = `define("LayeredDetail",[],function(){return{methods:{getFilters:function(){var f=this.callParent(arguments);
+    f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));return f;}}};});`;
+// Row actions taken away: the list must declare its own row toolbar.
+const NO_COPY_BODY = `define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
+// Summaries present but switched off.
+const SUMMARY_OFF_BODY = `define("SumOffDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return false;}}};});`;
 const PLAIN_BODY = `define("PlainDetail",[],function(){return{entitySchemaName:"Note",methods:{}};});`;
 const SUMMARY_BODY = `define("SumDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return true;}},
   mixins:{GroupEdit:"Terrasoft.RecordsGroupEditing"}};});`;
@@ -65,7 +105,7 @@ const SUMMARY_BODY = `define("SumDetail",["SummaryModuleV2"],function(){return{e
 export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta }) {
   const run = (schema, entity, body, extra = {}) => runMigration({ entity: "X", seed: CLEAN_SEED,
     schemas: [{ pkg: "P", body: extra.page || page(oneDetail(schema, entity)) }],
-    detailSchemas: { [schema]: { body, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS, ...(extra.manifest || {}) });
+    detailSchemas: { [schema]: { body, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS, ...extra.manifest });
   const detailOf = (r, schema) => r.changeSet.details.find((d) => d.detailSchema === schema);
   const features = (r) => r.plan.split("\n").filter((l) => l.startsWith("| ") && /Tools menu|Quick filter|Multi-select|Row styling|Summaries|Inherited detail/.test(l));
 
@@ -84,6 +124,41 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => detailOf(fixed, "FixedDetail").addMode?.fixedFilters === true && (detailOf(fixed, "FixedDetail").features?.quickFilters || []).length === 0
       && /FIXED list filters on Category, Owner/.test(fixed.plan),
     () => ({ addMode: detailOf(fixed, "FixedDetail").addMode, features: detailOf(fixed, "FixedDetail").features }));
+  const inline = run("InlineDetail", "Limit", INLINE_TOGGLE_BODY);
+  const inlineDetail = detailOf(inline, "InlineDetail");
+  check("detail features: a filter added inside `if (this.$Toggle)` belongs to the toggle's quick filter — no FIXED instruction for it",
+    () => inlineDetail.features.quickFilters.map((q) => `${q.attribute}:${q.columns.join("+")}`).join(",") === "IsActiveOnly:IsActive"
+      && inlineDetail.addMode?.fixedFilters !== true && !/FIXED list filters/.test(inline.plan),
+    () => ({ addMode: inlineDetail.addMode, quick: inlineDetail.features.quickFilters }));
+  const alias = run("AliasDetail", "Line", ALIAS_BODY);
+  const aliasDetail = detailOf(alias, "AliasDetail");
+  check("detail features: a filter whose value is a local holding the attribute belongs to the quick filter",
+    () => aliasDetail.features.quickFilters.map((q) => `${q.attribute}:${q.kind}:${q.columns.join("+")}`).join(",") === "OnDate:date:EndDate"
+      && aliasDetail.addMode?.fixedFilters !== true,
+    () => ({ addMode: aliasDetail.addMode, quick: aliasDetail.features.quickFilters }));
+  const both = run("BothDetail", "Req", TOGGLE_AND_HELPER_BODY);
+  const bothDetail = detailOf(both, "BothDetail");
+  check("detail features: a toggle beside a helper that adds a literal filter keeps BOTH — the quick filter on IsActive and FIXED on Category",
+    () => bothDetail.features.quickFilters.map((q) => `${q.attribute}:${q.columns.join("+")}`).join(",") === "IsActiveOnly:IsActive"
+      && bothDetail.addMode?.fixedFilters === true && bothDetail.addMode.filterCols.join(",") === "Category"
+      && /FIXED list filters on Category/.test(both.plan) && features(both).some((l) => /Quick filter \(toggle\) `IsActiveOnly`/.test(l)),
+    () => ({ addMode: bothDetail.addMode, quick: bothDetail.features.quickFilters }));
+  const toggleHelper = detailOf(toggle, "LimitDetail");
+  check("detail features: a helper called inside the toggle's `if` adds the toggle's columns, not fixed ones",
+    () => toggleHelper.features.quickFilters[0]?.columns.join(",") === "EndDate" && toggleHelper.addMode?.fixedFilters !== true,
+    () => ({ addMode: toggleHelper.addMode, quick: toggleHelper.features.quickFilters }));
+  const initOnly = run("MineDetail", "Task", INIT_ONLY_BODY);
+  const initDetail = detailOf(initOnly, "MineDetail");
+  check("detail features: an attribute set only in init (no control changes it) is a FIXED filter, not a quick filter",
+    () => initDetail.features.quickFilters.length === 0 && initDetail.addMode?.fixedFilters === true && initDetail.addMode.filterCols.join(",") === "Owner",
+    () => ({ addMode: initDetail.addMode, quick: initDetail.features.quickFilters }));
+  const layered = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: page(oneDetail("LayeredDetail", "Line")) }],
+    detailSchemas: { LayeredDetail: { bodies: [VENDOR_LAYER, CUSTOMER_LAYER], editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const layeredDetail = detailOf(layered, "LayeredDetail");
+  check("detail features: a quick filter in a lower layer's getFilters, reached through callParent, is kept beside the upper layer's fixed filter",
+    () => layeredDetail.features.quickFilters.map((q) => `${q.attribute}:${q.columns.join("+")}`).join(",") === "OnDate:EndDate"
+      && layeredDetail.addMode?.fixedFilters === true && layeredDetail.addMode.filterCols.join(",") === "Category",
+    () => ({ addMode: layeredDetail.addMode, quick: layeredDetail.features.quickFilters }));
   const mixed = run("MixedDetail", "Req", MIXED_BODY);
   const mixedDetail = detailOf(mixed, "MixedDetail");
   check("detail features: a getFilters with one literal and one user-driven filter keeps BOTH halves — a quick filter on EndDate and a fixed filter on Category",
@@ -120,13 +195,22 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && directed.changeSet.details.find((d) => d.detailSchema === "SumDetail")?.features?.summariesDirective === "D1"
       && dRows.length === 1 && /crt\.Summaries.*user directive D1/.test(dRows[0][3]),
     () => ({ decisions: directed.changeSet.needsDecision.map((n) => n.kind), dRows }));
-  const unrelated = copyOfSum();
-  applySummariesDirective([unrelated], [{ id: "D2", quote: "hide what Classic did not have", expectation: "Freedom-only elements hidden", scope: ["main"] }]);
-  const declined = copyOfSum();
-  applySummariesDirective([declined], [{ id: "D3", quote: "no summaries please", expectation: "keep the labels, no summaries component", scope: ["main"] }]);
-  check("detail features: a directive about something else, or one that declines summaries, leaves the summaries question open",
-    () => unrelated.changeSet.needsDecision.some((n) => n.kind === "detail-summaries")
-      && declined.changeSet.needsDecision.some((n) => n.kind === "detail-summaries"));
+  const leavesOpen = (quote, expectation, scope = ["main"]) => {
+    const r = copyOfSum();
+    applySummariesDirective([r], [{ id: "D9", quote, expectation, scope }]);
+    return r.changeSet.needsDecision.some((n) => n.kind === "detail-summaries");
+  };
+  check("detail features: only an explicit request for the summaries component answers the question — other mentions and declines leave it open",
+    () => leavesOpen("hide what Classic did not have", "Freedom-only elements hidden")
+      && leavesOpen("no summaries please", "keep the labels, no summaries component")
+      && leavesOpen("keep the summary labels as Classic had", "summary labels kept")
+      && leavesOpen("summaries are not wanted", "the summaries component is not wanted")
+      && leavesOpen("add a summary of changes to the notes", "a summary of changes in the notes")
+      && leavesOpen("keep plain labels instead of summaries", "plain labels instead of the summaries component")
+      && !leavesOpen("build the totals with crt.Summaries", "crt.Summaries on the page"));
+  check("detail features: a summaries directive applies only to the pages its scope covers",
+    () => leavesOpen("use the summaries component", "crt.Summaries on the child page", ["child:Line"])
+      && !leavesOpen("use the summaries component", "crt.Summaries everywhere", ["run"]));
   const bar = { details: [], needsDecision: [], viewConfigDiff: [
     { name: "SummaryItemsContainer", parentName: "Header", values: { type: "crt.FlexContainer" } },
     { name: "TotalLabel", parentName: "SummaryItemsContainer", values: { type: "crt.Label" } },
@@ -137,6 +221,10 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && /2 labels/.test(bar.needsDecision[0].reason) && bar.summaryBar?.container === "SummaryItemsContainer"
       && detailFeatureRows(bar).some((r) => r[0] === "SummaryItemsContainer" && /Decision needed/.test(r[3])),
     () => bar.needsDecision);
+
+  const sumOff = run("SumOffDetail", "Line", SUMMARY_OFF_BODY);
+  check("detail features: summaries the detail switches off (getSummaryVisible returns false) raise no question",
+    () => detailOf(sumOff, "SumOffDetail").features.summaries === false && !sumOff.changeSet.needsDecision.some((n) => n.kind === "detail-summaries"));
 
   // AC 4 — the standard tools menu is one line; a change to it is a row.
   const plain = run("PlainDetail", "Note", PLAIN_BODY);
@@ -181,6 +269,12 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => fileFeature?.unplaced === true && files.changeSet.needsDecision.some((n) => n.kind === "detail-unplaced" && n.item === "FileDetailV2" && n.feature === "Attachments")
       && files.plan.split("\n").some((l) => /⚠ unplaced/.test(l) && /not shown in Classic — build only on approval/.test(l)),
     () => ({ fileFeature, rows: files.plan.split("\n").filter((l) => /unplaced/.test(l)) }));
+  const fileRows = checklistGroups(files, {}).flatMap((g) => g.rows);
+  check("detail features: the checklist gates nothing for the unplaced Files detail — no Attachments row, no related-list row or count for it",
+    () => !fileRows.some((r) => r.deliverableId === "feature:Attachments")
+      && !fileRows.some((r) => /^related-list:/.test(r.deliverableId || ""))
+      && fileRows.filter((r) => r.vk?.type === "details").every((r) => r.vk.n === 0),
+    () => fileRows.filter((r) => /feature:|related-list:/.test(r.deliverableId || "") || r.vk?.type === "details").map((r) => [r.deliverableId, r.vk]));
 
   // AC 8 — a field the page's own diff disables is read-only, and --verify holds the built field to it.
   const ro = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body:
@@ -208,6 +302,15 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && resolveVk(fRow.vk, builtPage([{ type: "crt.DataGrid", name: "DGrid" }]))[0] === "❌ MISSING"
       && resolveVk(fRow.vk, builtPage([{ type: "crt.QuickFilter", name: "DQuickFilterByIsActiveOnly" }]))[0] === "✅ Done",
     () => fRow);
+  const noCopy = run("NoCopyDetail", "Line", NO_COPY_BODY);
+  const tbRow = checklistGroups(noCopy, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "rowtoolbar");
+  check("detail features: --verify matches the row toolbar on the related list's own grid — another grid's toolbar does not close it",
+    () => tbRow?.vk.names.join(",") === "D"
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "DDataGrid" }]))[0] === "❌ MISSING"
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "DDataGrid", rowToolbarItems: [] }]))[0] === "✅ Done"
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "D", values: { rowToolbarItems: [] } }]))[0] === "✅ Done"
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "OtherGrid", rowToolbarItems: [] }]))[0] !== "✅ Done",
+    () => tbRow);
   const groupTitles = checklistGroups(date, {}).map((g) => g.baseTitle || g.title);
   check("detail features: the checklist carries a `Form — Detail features` group, and the build orders it after the layout and coverage",
     () => groupTitles.includes("Form — Detail features") && GROUP_PHASE.get("Form — Detail features") > GROUP_PHASE.get("Form — Coverage (verified)"),

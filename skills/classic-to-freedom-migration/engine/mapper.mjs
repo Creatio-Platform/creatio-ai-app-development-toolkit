@@ -1806,6 +1806,8 @@ function mapDetails(ctx, containers, profileRegion) {
       texts: detailTexts,
       columns: dinfo?.columns?.length ? dinfo.columns : null,
       editable,
+      // the Classic element name of the detail: the plan names the list's quick filters and grid after it
+      element: d.key || null,
       // what users can do with the list besides its columns; null when the detail's schema was not bundled
       features: detailFeaturesOf(d, dinfo),
       ...(d.parent ? {} : { unplaced: true }),
@@ -1877,14 +1879,15 @@ const nonPlatformLayer = (pkg) => { const p = layerPackage(pkg); return !!p && !
 function inheritedLayerDetails(details) {
   return (details || []).filter((d) => d.fromTemplate && (d.provenance || []).some(nonPlatformLayer))
     .map((d) => ({ key: d.key, schemaName: d.schemaName || null, entity: d.entitySchemaName || null,
-      layer: (d.provenance || []).filter(nonPlatformLayer).at(-1) }));
+      layer: (d.provenance || []).findLast(nonPlatformLayer) }));
 }
 // No recommendation either way: whether a vendor's or a customer's inherited detail still belongs on the page is the
 // user's call, and a recommendation is the answer they would give without reading the question.
 function inheritedDetailDecision(d) {
   const name = d.schemaName || d.key;
+  const over = d.entity ? " (over '" + d.entity + "')" : "";
   return { kind: "detail-inherited", item: name, layer: d.layer,
-    reason: `detail '${name}'${d.entity ? ` (over '${d.entity}')` : ""} comes from the template layer '${d.layer}', not from the page's own schema, and Classic users saw it on this page. Inherited — decide: build it as a related list (name the tab) or Won't do` };
+    reason: `detail '${name}'${over} comes from the template layer '${d.layer}', not from the page's own schema, and Classic users saw it on this page. Inherited — decide: build it as a related list (name the tab) or Won't do` };
 }
 
 // A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and
