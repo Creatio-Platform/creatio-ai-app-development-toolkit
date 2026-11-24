@@ -272,7 +272,7 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   const fileRows = checklistGroups(files, {}).flatMap((g) => g.rows);
   check("detail features: the checklist gates nothing for the unplaced Files detail — no Attachments row, no related-list row or count for it",
     () => !fileRows.some((r) => r.deliverableId === "feature:Attachments")
-      && !fileRows.some((r) => /^related-list:/.test(r.deliverableId || ""))
+      && !fileRows.some((r) => (r.deliverableId || "").startsWith("related-list:"))
       && fileRows.filter((r) => r.vk?.type === "details").every((r) => r.vk.n === 0),
     () => fileRows.filter((r) => /feature:|related-list:/.test(r.deliverableId || "") || r.vk?.type === "details").map((r) => [r.deliverableId, r.vk]));
 
