@@ -612,6 +612,24 @@ check("entity-filter: static filter marked complete + NOT in the folded line",
   check("object-wide scope: the decision reaches the checklist, not only plan.md",
     () => groups.filter((r) => r.confirm?.kind === "object-wide-scope").length === 1,
     () => groups.map((r) => r.label));
+  // The decline path names a deliverable id; it must be a row of this plan that holds the entity rules and nothing
+  // else, so closing it `wont-do` leaves the page rules to be built.
+  const named = /`<pageKey>#([\w-]+)`/.exec(scope[0]?.reason || "")?.[1];
+  const mixed = { ...efcs, pageBusinessRules: [{ action: "show", element: "Shown", inverseAction: "hide" }] };
+  const rows = checklistGroups({ entity: "X", changeSet: mixed }, {}).flatMap((g) => g.rows);
+  const declined = rows.find((r) => r.deliverableId === named);
+  const pageRules = rows.find((r) => r.deliverableId === "business-rules");
+  check("object-wide scope: the id the decline path names is a checklist row holding exactly the entity rules",
+    () => named === "entity-rules" && declined?.vk?.type === "rule"
+      && [...declined.vk.names].sort().join() === "Lk,St"
+      && pageRules?.vk?.names.join() === "Shown" && !pageRules.vk.names.some((n) => declined.vk.names.includes(n)),
+    () => ({ named, declined, pageRules }));
+  const closed = checklistGroups({ entity: "X", changeSet: mixed },
+    { deliverableStatus: { "main#entity-rules": { status: "wont-do", decision: "D1" } } }).flatMap((g) => g.rows);
+  check("object-wide scope: closing `main#entity-rules` wont-do closes only that row; the page rules stay open",
+    () => closed.find((r) => r.deliverableId === "entity-rules")?.status?.kind === "wont-do"
+      && closed.find((r) => r.deliverableId === "business-rules")?.status?.kind !== "wont-do",
+    () => closed.filter((r) => /rules/.test(r.deliverableId || "")).map((r) => [r.deliverableId, r.status]));
 }
 // With no entity on the page, the row and the decision still read as instructions the agent can follow.
 {
@@ -13575,10 +13593,15 @@ const n2TreeManifest = (titleA, titleB) => ({
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
-    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => r.label.startsWith("Business rules ×"));
-    check("T4 (R3): the Business rules checklist row carries a `rule` vk (never a vk-less skip) with the expected identities",
-      ruleRow?.vk?.type === "rule" && ruleRow.vk.names.includes("Contact") && ruleRow.vk.names.includes("Owner"),
-      () => ruleRow);
+    const rrRows = checklistGroups(rr, {}).flatMap((g) => g.rows);
+    const ruleRow = rrRows.find((r) => r.label.startsWith("Business rules ×"));
+    const entityRow = rrRows.find((r) => r.label.startsWith("Entity business rules ×"));
+    check("T4 (R3): the page and entity business-rule rows each carry a `rule` vk (never a vk-less skip) with their own identities",
+      ruleRow?.vk?.type === "rule" && ruleRow.deliverableId === "business-rules"
+        && ruleRow.vk.names.join() === "Contact" && ruleRow.vk.n === 1
+        && entityRow?.vk?.type === "rule" && entityRow.deliverableId === "entity-rules"
+        && entityRow.vk.names.join() === "Owner" && entityRow.vk.n === 1,
+      () => ({ ruleRow, entityRow }));
   }
   // Applicant-case contract fixture — a built payload mirroring the real Applicant page: 11 business rules read off
   // the slot and the native crt.CommunicationOptions. The whole point of N1: NONE of this reads ❌ MISSING now.

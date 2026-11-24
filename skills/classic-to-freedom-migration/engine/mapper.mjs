@@ -2504,6 +2504,9 @@ const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const LOOKUP_VALUE_ITEM = "business-rule conditions";
 // The `object-wide-scope` row's `item`: fixed for the same reason.
 const OBJECT_WIDE_SCOPE_ITEM = "entity business rules";
+// The checklist deliverable that holds a page's entity rules, apart from its page rules, so declining the object-wide
+// scope closes exactly the entity rules.
+export const ENTITY_RULES_DELIVERABLE = "entity-rules";
 function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, entityName) {
   if (r.ruleType === "FILTRATION") {
     const filter = r.filterColumn
@@ -2572,9 +2575,10 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set(), entity
         + `filter, so each becomes an entity business rule that applies on ALL pages and lists of ${entity}. Before `
         + `building, ${listPages} and name its other Freedom pages when you ask the user. `
         + "Accepted: build the entity rules. Declined: build none of them; record the answer as its own D<N> in "
-        + "`decisions.md` (not migrated — add manually: Freedom page rules have no lookup filter) and close each "
-        + "entity-rule deliverable `wont-do` under it: `manifest.deliverableStatus` at plan approval, "
-        + "`--decide D<N> --wont-do --row <task>:<n>` during the build" });
+        + "`decisions.md` (not migrated — add manually: Freedom page rules have no lookup filter) and close the "
+        + `\`Entity business rules × N\` row \`wont-do\` under it: \`manifest.deliverableStatus\` key `
+        + `\`<pageKey>#${ENTITY_RULES_DELIVERABLE}\` at plan approval, \`--decide D<N> --wont-do --row <task>:<n>\` on `
+        + "that row during the build. The page's own `Business rules × N` row is not part of the answer and is still built" });
   }
 
   // A condition comparing against a lookup-record GUID reads as an opaque id, so the display name is resolved

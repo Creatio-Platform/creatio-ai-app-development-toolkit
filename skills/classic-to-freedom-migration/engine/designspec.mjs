@@ -24,7 +24,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // attachments component is inert without, and the two resolvers that say which plan row is covered by that item.
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
-import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
+import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
@@ -583,7 +583,8 @@ function pageRuleRows(cs) {
 // The target cell names the object an entity rule reaches, so the approver sees it is not limited to this page.
 function entityFilterRows(cs) {
   const entity = (cs.entityBusinessRules || []).find((r) => r.entity)?.entity;
-  const target = `entity business rule — applies on ALL pages of ${entity ? `\`${esc(entity)}\`` : "the object"}`;
+  const reach = entity ? "`" + esc(entity) + "`" : "the object";
+  const target = `entity business rule — applies on ALL pages of ${reach}`;
   const filtBy = {};
   for (const r of cs.entityBusinessRules || []) { filtBy[r.targetAttribute] ||= []; filtBy[r.targetAttribute].push(r); }
   return Object.entries(filtBy).map(([attr, rs]) => {
@@ -3448,7 +3449,6 @@ export function checklistGroups(result, opts = {}) {
   // Form — Business rules: business rules folded to a count. Form — Custom methods: ONE row per handler (the
   // dropped-in-prose case). Split into two groups to MIRROR the plan's two behaviour sections. Agent-confirmed.
   const ruleItems = [];
-  const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
   // The rule IDENTITIES — each rule's target element/attribute, the column its logic governs (a page rule's
   // `element`, an entity rule's `targetAttribute`). Published in the vk so `--verify` and `--checklist` have the same
   // expected set to match a built page's rules against, exactly as `fields` publishes its expected element names.
@@ -3456,11 +3456,14 @@ export function checklistGroups(result, opts = {}) {
   // closed by asserting it in prose — the false MISSING/skip this ticket removes. It now carries a `rule` vk and is
   // gated against `--built.pages[<key>].businessRules` (the read-page-business-rules result), because a page's
   // rules persist as separate BusinessRule_* schemas INVISIBLE to a page-body grep.
-  const ruleIds = [...new Set([
-    ...(cs.pageBusinessRules || []).map((r) => r.element),
-    ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
-  ].filter(Boolean))];
-  if (ruleN) ruleItems.push({ deliverableId: "business-rules", label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  // Page rules and entity rules are two deliverables: an entity rule reaches every page of the object, so the user
+  // may decline it on its own (`entity-rules`, closed `wont-do`) while the page rules are still built.
+  const pageRuleN = (cs.pageBusinessRules || []).length;
+  const pageRuleIds = [...new Set((cs.pageBusinessRules || []).map((r) => r.element).filter(Boolean))];
+  const entityRuleIds = [...new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute).filter(Boolean))];
+  if (pageRuleN) ruleItems.push({ deliverableId: "business-rules", label: `Business rules × ${pageRuleN}`, vk: { type: "rule", n: pageRuleN, names: pageRuleIds } });
+  if (entityRuleIds.length) ruleItems.push({ deliverableId: ENTITY_RULES_DELIVERABLE,
+    label: `Entity business rules × ${entityRuleIds.length}`, vk: { type: "rule", n: entityRuleIds.length, names: entityRuleIds } });
   G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
