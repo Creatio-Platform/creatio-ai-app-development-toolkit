@@ -340,14 +340,16 @@ function rowCounts(rows) {
 }
 
 // --- sections -------------------------------------------------------------------------------------------------
-function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }) {
-  const withRef = boundaries.filter((b) => b.refs.resolved.length).length;
-  const boundNote = boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : "";
+function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined = [], rc, repair, handLeft }) {
+  // Declined rows are closed by a recorded decision, so they count here exactly as section 2 lists them.
+  const without = boundaries.filter((b) => !b.refs.resolved.length).length;
+  const closed = boundaries.length + declined.length;
+  const boundNote = closed ? ` — with a recorded decision ${closed - without} · without ${without}` : "";
   const L = ["| | |", "| --- | --- |",
     `| Tasks | ${tc.total} — ${statusParts(tc).join(" · ")} |`,
     `| Open questions (plan items recorded NOT BUILT, no decision yet) | ${openNotBuilt.length} |`,
     ...(decidedNotBuilt.length ? [`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`] : []),
-    `| Boundaries the agent closed | ${boundaries.length}${boundNote} |`,
+    `| Boundaries the agent closed | ${closed}${boundNote} |`,
     `| Plan items confirmed (on the built page, or by review) | ${rc.machineOk + rc.judgeOk}/${rc.machine + rc.judge} |`,
     `| Plan items to confirm manually | ${handLeft} |`];
   if (repair) {
@@ -748,6 +750,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
   let sec = 3;
+  const declined = declinedRows(tasks, decisions);
   const md = [
     `# Migration result${entity}`, "",
     `**Verdict:** ${verdict}`, "",
@@ -755,9 +758,9 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
       + ` \`migrate.mjs --verify ${source || "--from <migration-folder>"} --tasks <dir>\` from the task files AND the built pages — present it`
       + ` verbatim; it supersedes \`build-tasks/index.md\`.`,
     "", "## Summary", "",
-    ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),
+    ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
-    "", ...boundariesSection(boundaries, decidedNotBuilt, pageName, declinedRows(tasks, decisions)),
+    "", ...boundariesSection(boundaries, decidedNotBuilt, pageName, declined),
     ...(carryOver.length ? ["", ...carryOver] : []),
     ...(withoutYou.length ? ["", ...withoutYou] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),

@@ -5906,6 +5906,11 @@ console.log("\n===== the migration result report — one artifact, computed from
       () => s2);
     check("report section 2 does not list a `wont-do` row that cites no recorded decision",
       () => !/Filter · St/.test(s2), () => s2);
+    const summaryN = /\| Boundaries the agent closed \| (\d+)/.exec(repW.markdown)?.[1];
+    const headingN = /## 2\. Boundaries the agent closed \((\d+)\)/.exec(repW.markdown)?.[1];
+    check("report summary counts the declined row as a boundary closed by a recorded decision, the same number section 2's heading gives",
+      () => summaryN === "1" && headingN === "1" && /Boundaries the agent closed \| 1 — with a recorded decision 1 · without 0/.test(repW.markdown),
+      () => ({ summaryN, headingN }));
   }
   // decisions.md written as a TABLE (`| D1 | **title** | … |`), per references/migration-documentation.md — the
   // second cell is the title (bold lead lifted). Structured shapes (heading / table) take precedence, so a plain
