@@ -1,7 +1,10 @@
-// CODE QUALITY of the built pages — the `--verify` rows that measure what would otherwise be counted by hand:
-// long functions, helpers nested in handlers or copied between them, catch blocks that swallow errors, bare numeric
-// comparison types, loads that wait for each other for no reason, hard-coded record ids, plan codes left in
-// comments, requests nobody sends and strings nobody shows.
+// CODE QUALITY of the built pages — what would otherwise be counted by hand: long functions, helpers nested in
+// handlers or copied between them, catch blocks that swallow errors, bare numeric comparison types, loads that wait
+// for each other for no reason, hard-coded record ids, plan codes left in comments and strings nobody shows.
+//
+// Two `--verify` rows read it. The `Page code` row (codemap.mjs) holds a page's function length and its duplicated
+// helpers, beside the requests it declares and never sends; the `Code quality` rows (QUALITY_ROW_RULES) hold the
+// rest. One measurement, one limit (`manifest.qualityThresholds`), one decision closes a finding.
 //
 // The per-page rules share their ids and thresholds with clio's page-body lint (`PageBodyAstLinter.Quality.cs`),
 // which gives the same findings as save-time warnings in every flow. Here they BLOCK: a page that breaks one is not
@@ -33,20 +36,18 @@ export const DEFAULT_QUALITY_THRESHOLDS = Object.freeze({
   maxSequentialIndependentAwaits: 2,
 });
 
-// What each rule's row says it checks, in the order the rows are shown. The label names the threshold KEY, never its
-// value: a row's label is its decision key, so a decision recorded on it survives a changed limit. A finding marked
-// `advisory` is noted, never blocking; every unused-string finding is one.
+// What each `Code quality` row says it checks, in the order the rows are shown — every rule except the ones the
+// `Page code` row holds (function length, a helper declared twice on the page, a request nobody sends). The label
+// names the threshold KEY, never its value: a row's label is its decision key, so a decision recorded on it survives a
+// changed limit. A finding marked `advisory` is noted, never blocking; every unused-string finding is one.
 export const QUALITY_ROW_RULES = Object.freeze([
-  { rule: QUALITY_RULES.functionTooLong, label: "no function longer than `maxFunctionLines`" },
   { rule: QUALITY_RULES.nestedFunctions, label: "no handler declaring more than `maxNestedFunctionsPerHandler` functions in its body" },
-  { rule: QUALITY_RULES.duplicateInPage, label: "no helper declared twice on the page" },
   { rule: QUALITY_RULES.duplicateAcrossPages, label: "no helper copied from another page of the run" },
   { rule: QUALITY_RULES.catchLogOnly, label: "no catch block that only logs the error" },
   { rule: QUALITY_RULES.numericComparisonType, label: "no bare numeric `comparisonType`" },
   { rule: QUALITY_RULES.sequentialAwaits, label: "no more than `maxSequentialIndependentAwaits` independent model loads awaited one after another" },
   { rule: QUALITY_RULES.guidLiteral, label: "no hard-coded record id a project constants module holds" },
   { rule: QUALITY_RULES.planCodeInComment, label: "no plan code (card, AC, decision id) in a comment" },
-  { rule: QUALITY_RULES.requestWithoutSender, label: "every custom request the page handles has a sender" },
   { rule: QUALITY_RULES.unusedResourceString, label: "resource strings in use (advisory)" },
 ]);
 
@@ -82,18 +83,16 @@ const finding = (rule, section, line, text, extra = {}) => ({ rule, section, lin
 // ---- one page ----
 
 // Lint one built page. Returns null when the bundle carries none of the code sections (the row then asks for the
-// bundle, never passes silently); otherwise the page's findings and what the run-wide checks need from it.
+// bundle, never passes silently); otherwise the page's findings and the helpers the run-wide check compares.
 export function lintPageQuality(entry, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set()) {
   if (!entry || typeof entry !== "object") return null;
   const sources = SECTIONS.filter((s) => typeof entry[s] === "string");
   if (!sources.length) return null;
-  // `requestKeys` are the `request` literals of the handler entries: naming the request a handler answers is not
-  // sending it, so they stay out of `strings` (the values a sender could be).
-  const page = { findings: [], helpers: [], handled: [], requestKeys: new Set(), strings: new Set(), unreadable: [] };
-  const ctx = { page, t: thresholds, constantsGuids };
+  const page = { findings: [], helpers: [], unreadable: [] };
+  // `fnNames` names a function by where it is defined: a handler by its request, a helper by its variable.
+  const ctx = { page, t: thresholds, constantsGuids, fnNames: new WeakMap() };
   for (const section of sources) lintSection(entry[section], section, ctx);
   reportDuplicateHelpers(page);
-  collectJsonStrings([entry.viewConfig, entry.viewModelConfig, entry.modelConfig], page.strings);
   for (const key of unusedResourceStrings(entry, sources)) {
     page.findings.push(finding(QUALITY_RULES.unusedResourceString, "resources", 0, `\`${key}\``, { advisory: true }));
   }
@@ -121,7 +120,8 @@ function reportDuplicateHelpers(page) {
   for (const copies of groupBy(page.helpers, (h) => h.shape).values()) {
     for (const copy of copies.slice(1)) {
       page.findings.push(finding(QUALITY_RULES.duplicateInPage, copy.section, copy.line,
-        `\`${copy.name}\` repeats \`${copies[0].name}\` (line ${copies[0].line}); declared ${copies.length} times`));
+        `\`${copy.name}\` repeats \`${copies[0].name}\` (line ${copies[0].line}); declared ${copies.length} times`,
+        { name: copy.name, original: copies[0].name, originalLine: copies[0].line, count: copies.length }));
     }
   }
 }
@@ -131,6 +131,7 @@ function reportDuplicateHelpers(page) {
 // or `type` is data and is reported.
 function walkSection(node, section, isElementId, ctx, depth = 0) {
   if (!node || depth > 1000) return;
+  nameChildFunction(node, ctx.fnNames);
   const found = checkNode(node, section, isElementId, ctx);
   if (found) ctx.page.findings.push(found);
   const elementObject = node.type === "ObjectExpression" && isElementObject(node);
@@ -141,11 +142,17 @@ function walkSection(node, section, isElementId, ctx, depth = 0) {
   }
 }
 
+// `const name = () => {}` and `name: function () {}` name the function they hold.
+function nameChildFunction(node, fnNames) {
+  if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) fnNames.set(node.init, node.id.name);
+  else if (node.type === "Property" && isFunction(node.value) && !fnNames.has(node.value)) fnNames.set(node.value, staticPropKey(node));
+}
+
 const isElementObject = (obj) => obj.properties.some((p) => p.type === "Property" && ELEMENT_KEYS.has(staticPropKey(p)));
 
 // The finding one node raises, if any.
 function checkNode(node, section, isElementId, ctx) {
-  if (isFunction(node)) return checkFunctionLength(node, section, ctx.t);
+  if (isFunction(node)) return checkFunctionLength(node, section, ctx);
   if (node.type === "CatchClause") {
     return node.body.body.every(isConsoleCall) ? finding(QUALITY_RULES.catchLogOnly, section, lineOf(node), "the catch block only logs the error") : null;
   }
@@ -154,12 +161,12 @@ function checkNode(node, section, isElementId, ctx) {
   return null;
 }
 
-function checkFunctionLength(node, section, t) {
+function checkFunctionLength(node, section, { t, fnNames }) {
   const lines = node.loc.end.line - node.loc.start.line + 1;
   if (lines <= t.maxFunctionLines) return null;
-  const name = node.id?.name ? "`" + node.id.name + "` is " : "";
-  return finding(QUALITY_RULES.functionTooLong, section, lineOf(node), `${name}${lines} lines (limit ${t.maxFunctionLines})`,
-    { value: lines, limit: t.maxFunctionLines });
+  const name = node.id?.name || fnNames.get(node) || null;
+  return finding(QUALITY_RULES.functionTooLong, section, lineOf(node), `${name ? "`" + name + "` is " : ""}${lines} lines (limit ${t.maxFunctionLines})`,
+    { name, value: lines, limit: t.maxFunctionLines });
 }
 
 function checkComparisonType(node, section) {
@@ -168,7 +175,6 @@ function checkComparisonType(node, section) {
 }
 
 function checkStringLiteral(node, section, isElementId, ctx) {
-  if (!ctx.page.requestKeys.has(node)) addSenderCandidate(ctx.page.strings, node.value);
   if (isElementId || !GUID_RE.test(node.value)) return null;
   return finding(QUALITY_RULES.guidLiteral, section, lineOf(node), `\`${node.value}\``,
     { advisory: !ctx.constantsGuids.has(node.value.toLowerCase()) });
@@ -182,22 +188,22 @@ const isConsoleCall = (s) => s.type === "ExpressionStatement" && s.expression.ty
 function lintHandlers(array, ctx) {
   for (const entry of array.elements) {
     if (entry?.type !== "ObjectExpression") continue;
-    const handler = readHandlerEntry(entry, ctx.page);
-    if (handler) lintHandler(handler, ctx);
+    const { request, handler } = readHandlerEntry(entry);
+    if (!handler) continue;
+    if (request) ctx.fnNames.set(handler, request);
+    lintHandler(handler, ctx);
   }
 }
 
-// Records the request a handler entry answers and returns its handler function (null when it has none).
-function readHandlerEntry(entry, page) {
-  let handler = null;
+// The request a handler entry answers (null when it is not a literal) and its handler function (null when none).
+function readHandlerEntry(entry) {
+  let request = null, handler = null;
   for (const p of entry.properties) {
     const key = p.type === "Property" ? staticPropKey(p) : null;
-    if (key === "request" && p.value.type === "Literal" && typeof p.value.value === "string") {
-      page.handled.push({ request: p.value.value, line: lineOf(p) });
-      page.requestKeys.add(p.value);
-    } else if (key === "handler" && isFunction(p.value)) handler = p.value;
+    if (key === "request" && p.value.type === "Literal" && typeof p.value.value === "string") request = p.value.value;
+    else if (key === "handler" && isFunction(p.value)) handler = p.value;
   }
-  return handler;
+  return { request, handler };
 }
 
 function lintHandler(handler, { page, t }) {
@@ -367,18 +373,6 @@ function statementBindings(statement) {
 
 // ---- strings and resources ----
 
-// Only a string that could name a custom request (`ns.Name`, not `crt.`) is kept: it is all the sender check reads.
-function addSenderCandidate(out, s) {
-  if (s.includes(".") && !/^crt\./i.test(s)) out.add(s);
-}
-
-function collectJsonStrings(values, out, depth = 0) {
-  for (const v of values) {
-    if (typeof v === "string") addSenderCandidate(out, v);
-    else if (v && typeof v === "object" && depth < 200) collectJsonStrings(Array.isArray(v) ? v : Object.values(v), out, depth + 1);
-  }
-}
-
 // The page's resource strings, from get-page's `{ strings: {…} }` or a flat map; null when the bundle has none.
 function resourceStringsOf(res) {
   if (!res || typeof res !== "object") return null;
@@ -408,29 +402,16 @@ function groupBy(items, keyOf) {
   return map;
 }
 
-// Every built page of the run linted once, then the checks that need more than one page: a helper copied from
-// another page, and a custom request no page sends. `pages` is `{ pageKey: bundle entry }`.
+// Every built page of the run linted once, then the check that needs more than one page: a helper copied from another
+// page. `pages` is `{ pageKey: bundle entry }`.
 export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set()) {
   const byPage = new Map();
-  const sent = new Set();
-  for (const [key, entry] of Object.entries(pages || {})) {
-    const page = lintPageQuality(entry, thresholds, constantsGuids);
-    byPage.set(key, page);
-    // A page with no code sections still sends requests from its buttons, so its config strings count either way.
-    if (page) page.strings.forEach((s) => sent.add(s));
-    else if (entry && typeof entry === "object") collectJsonStrings([entry.viewConfig, entry.viewModelConfig, entry.modelConfig], sent);
-  }
+  for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   const helperOwners = new Map();
   for (const [key, page] of byPage) {
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
-  // A section that could not be read may hold the sender, so "nobody sends it" cannot be decided for the run.
-  const sendersKnown = ![...byPage.values()].some((page) => page?.unreadable.length);
-  for (const [key, page] of byPage) {
-    if (!page) continue;
-    reportCopiesFromOtherPages(key, page, helperOwners);
-    if (sendersKnown) reportRequestsWithoutSender(page, sent);
-  }
+  for (const [key, page] of byPage) if (page) reportCopiesFromOtherPages(key, page, helperOwners);
   return byPage;
 }
 
@@ -441,13 +422,6 @@ function reportCopiesFromOtherPages(key, page, helperOwners) {
     if (owner.key === key || seen.has(h.shape)) continue;
     seen.add(h.shape);
     page.findings.push(finding(QUALITY_RULES.duplicateAcrossPages, h.section, h.line, `\`${h.name}\` copies \`${owner.helper.name}\` of page \`${owner.key}\``));
-  }
-}
-
-function reportRequestsWithoutSender(page, sent) {
-  for (const { request, line } of page.handled) {
-    if (/^crt\./i.test(request) || sent.has(request)) continue;
-    page.findings.push(finding(QUALITY_RULES.requestWithoutSender, "handlers", line, `\`${request}\` is handled but no page of the run sends it`));
   }
 }
 

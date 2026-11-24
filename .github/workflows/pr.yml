@@ -140,6 +140,12 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-tasks.mjs
+      # The page code map a page writer reads before it writes, and the analysis behind the blocking `Page code`
+      # verify row: a helper defined in several handlers, a function over the length limit, a request nothing sends.
+      - name: Run page code-map goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-codemap.mjs
       # The coverage report for everything the steps above ran, ubuntu leg only. Informational: no threshold is
       # configured, so a low percentage can never fail this job, and `continue-on-error` keeps a broken report
       # (registry outage, c8 crash, artifact service) from failing it either — the failed step still shows in the

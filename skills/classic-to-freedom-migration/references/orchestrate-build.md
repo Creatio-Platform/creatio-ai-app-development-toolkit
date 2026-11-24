@@ -371,9 +371,13 @@ may change it at any time by saying so — update the line first.
 2. **One sub-agent per task, in a fresh context, and the sub-agent marks its own work.** Never run
    two build sub-agents at once — two tasks may overlap ONLY when their `writesTo` differ and
    neither lists the other in `dependsOn`, which in practice means a read-only task beside a build.
-   **Sequential is not an exception**: the next task on the same page is a different sub-agent, so
-   finishing one chunk of a page and picking up the next in the same context is the violation this
-   rule names, not a way of keeping the page coherent. Each sub-agent echoes the dispatch token you
+   The next task on the same page is a different sub-agent too, but it is not a guest: it takes the
+   page over as its **owner**. Its task card tells it to read the page's code map before it writes,
+   and it may refactor any code on the page so the `Page code` row passes. Only plan deliverables
+   outside its own rows stay proposals. The page stays coherent through that ownership and the map,
+   not through one context. **Changes after the build go to one task per page per round:** the
+   decisions the user answered for one page in one round re-open that page's rows (`--decide D<N>
+   --build`) and go out as ONE dispatch, never one sub-agent per decision. Each sub-agent echoes the dispatch token you
    handed it into `agentNonce:` before it finishes. You hand the token over and the engine checks
    it; you are the wrong party to prove this rule held, which is why the check is neither yours nor
    the sub-agent's to make. Which mechanism dispatches the sub-agent is 7.0's route; `Route: inline`
@@ -418,7 +422,8 @@ may change it at any time by saying so — update the line first.
 looking for a file, so pass all of it explicitly: the **path to its own task file** (it carries the
 contract, the deliverables, the artifact it writes and the tasks it waits on); the migration folder;
 the environment name; the manifest path and the resolved path to `engine/migrate.mjs`; the approved
-`plan.md`; the `refs/` folder when the run has a `Reference cache` task (it holds the guidance
+`plan.md` only to a task WITHOUT a `## Task card` (a page-writing task's card replaces it, so do not
+hand it there); the `refs/` folder when the run has a `Reference cache` task (it holds the guidance
 articles and the design spec; a collapsed run has none) — **paths, never pasted bodies**, because
 inlining a cached file into every build prompt costs more than fetching it does. Tool contracts and
 component docs are not cached: each builder reads them from the tools itself; the briefs its

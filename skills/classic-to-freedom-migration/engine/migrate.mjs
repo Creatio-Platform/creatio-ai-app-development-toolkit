@@ -77,7 +77,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
-import { renderFinalReport, readDecisions } from "./report.mjs";
+import { renderFinalReport, readDecisions, readDecisionTexts } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 import { qualityThresholdsOf } from "./quality.mjs";
 
@@ -4578,10 +4578,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // The decision titles and their provenance records (the directives, who decided what) come from the same file.
   const decisionsFolder = planDecisionsFolder({ outFile, tasksDir, fromDir, readsDir, builtFile });
   const decisions = decisionsFolder ? readDecisions(decisionsFolder) : null;
+  const decisionTexts = decisionsFolder ? readDecisionTexts(decisionsFolder) : null;
   let decisionRecords = [];
   try { decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : []; }
   catch (e) { fail(`cannot read ${path.join(decisionsFolder, "decisions.md")}: ${e.message}`); }
-  const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
+  const taskOpts = () => ({ ...checklistOpts(manifest), decisions, decisionTexts });
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
@@ -4843,7 +4844,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest), decisions, decisionTexts });
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing

@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { lintPageQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS }
+import { lintPageQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
@@ -91,14 +91,6 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     + handler("usr.B", "function fmt2(v) { return v && v.value ? v.value : v; } fmt2(2);")));
   check("quality: two `function name() {}` helpers with one body in two handlers are a duplicate",
     () => count(declared, R.duplicateInPage) === 1, () => declared.findings);
-  const codeless = lintRunQuality({ main: { handlers: `[${handler("usr.Go", "const x = 1;")}]` },
-    "child:Other": { viewConfig: { items: [{ type: "crt.Button", name: "Go", clicked: { request: "usr.Go" } }] } } });
-  check("quality: a page with no code sections still counts as a sender — its button closes the request on another page",
-    () => count(codeless.get("main"), R.requestWithoutSender) === 0, () => codeless.get("main").findings);
-  const undecidable = lintRunQuality({ main: { handlers: `[${handler("usr.Orphan", "const x = 1;")}]` }, "child:Other": { handlers: "[ {" } });
-  check("quality: with an unreadable page in the run, no request is reported as unsent — the sender may be in what was not read",
-    () => count(undecidable.get("main"), R.requestWithoutSender) === 0, () => undecidable.get("main").findings);
-
   // A helper closing over its handler's own variables is a binding of that handler, not a copy of a helper.
   const wrapper = "const { $context, scopes } = request; const process = (config) => sdk.HandlerChainService.instance.process({ ...config, $context, scopes: [...scopes] }); await process({ type: \"usr.Sent\" });";
   check("quality: a helper reading its handler's $context/scopes is not a duplicate in another handler",
@@ -120,14 +112,10 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
 
   // The run-wide checks: a helper copied from another page, a request no page sends.
   const helper = "const idOf = (v) => v && v.value ? v.value : v; idOf(1);";
-  const run = lintRunQuality({ main: pageOf(handler("usr.Sent", helper)), "child:Other": { handlers: `[${handler("usr.Orphan", helper)}]` } });
+  const run = lintRunQuality({ main: pageOf(handler("usr.Sent", helper)), "child:Other": { handlers: `[${handler("usr.Other", helper)}]` } });
   check("quality: a helper copied from another page of the run is reported on the copying page only",
     () => count(run.get("child:Other"), R.duplicateAcrossPages) === 1 && count(run.get("main"), R.duplicateAcrossPages) === 0,
     () => Object.fromEntries([...run].map(([k, p]) => [k, p.findings])));
-  check("quality: a custom request no page of the run sends is reported; one a button sends, and crt.* requests, are not",
-    () => run.get("child:Other").findings.some((f) => f.rule === R.requestWithoutSender && /usr\.Orphan/.test(f.text))
-      && count(run.get("main"), R.requestWithoutSender) === 0
-      && count(lintRunQuality({ main: { handlers: `[${handler("crt.SaveRecordRequest", "const x = 1;")}]` } }).get("main"), R.requestWithoutSender) === 0);
   const strings = lintRunQuality({ main: { handlers: "[]", resources: { strings: { Used: {}, Unused: {} } },
     viewConfig: { items: [{ caption: "#ResourceString(Used)#" }] } } }).get("main");
   check("quality: a resource string nothing on the page names is an advisory finding",
@@ -156,26 +144,32 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     schemaUId: "11111111-1111-4111-8111-111111111111", viewConfig: { items: [{ type: "crt.Button", name: "ApplyButton", clicked: { request: "usr.ApplyButtonClicked" } }] },
     handlers, validators: "{}", converters: "{}", deps: '["AbConstants"]' } } });
   const rowLine = (md, rule) => md.split("\n").find((l) => l.includes(`[code-quality] ${rule} —`)) || "";
+  const pageCodeLine = (md) => (md.split("\n").find((l) => l.includes("| Page code — ")) || "").replaceAll("ˋ", "`");
+  const ROW_RULES = QUALITY_ROW_RULES.map((r) => r.rule);
   const longHandler = `[${handler("usr.ApplyButtonClicked", lines(70))}]`;
   const failing = renderVerify(result, opts, built(longHandler));
-  check("verify: a function over the limit makes its Code quality row a blocking ⚠ that keeps the page from complete",
-    () => /⚠ verify/.test(rowLine(failing.markdown, R.functionTooLong)) && /73 lines \(limit 60\)/.test(rowLine(failing.markdown, R.functionTooLong)) && !failing.complete,
-    () => rowLine(failing.markdown, R.functionTooLong));
+  check("verify: a function over the limit makes the Page code row a blocking ⚠ (the limit comes from quality.mjs) that keeps the page from complete",
+    () => /⚠ verify/.test(pageCodeLine(failing.markdown)) && /`usr\.ApplyButtonClicked` is 73 lines \(limit 60\)/.test(pageCodeLine(failing.markdown)) && !failing.complete,
+    () => pageCodeLine(failing.markdown));
+  check("verify: function length is held by the Page code row only — Code quality has no row for it, nor for duplicates or unsent requests",
+    () => [R.functionTooLong, R.duplicateInPage, R.requestWithoutSender].every((rule) => !rowLine(failing.markdown, rule)));
   const raised = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 100 } })), built(longHandler));
-  check("verify: raising manifest.qualityThresholds.maxFunctionLines over the length clears that row, under the same label",
-    () => /✅ Done/.test(rowLine(raised.markdown, R.functionTooLong)) && rowLine(raised.markdown, R.functionTooLong).includes("no function longer than `maxFunctionLines`"),
-    () => rowLine(raised.markdown, R.functionTooLong));
-  const failingLabel = `[code-quality] ${R.functionTooLong} — no function longer than \`maxFunctionLines\``;
+  check("verify: raising manifest.qualityThresholds.maxFunctionLines over the length clears the Page code row, under the same label",
+    () => /✅ Done/.test(pageCodeLine(raised.markdown)) && pageCodeLine(raised.markdown).includes("no function longer than `maxFunctionLines`"),
+    () => pageCodeLine(raised.markdown));
+  const failingLabel = "Page code — no function longer than `maxFunctionLines`, no helper declared twice on the page, no request declared but never sent";
   const decided = renderVerify(result, opts, built(longHandler), new Set([verifyRowKey("main", failingLabel)]));
-  check("verify: a D<N> decision recorded on a Code quality row closes it",
-    () => !/⚠ verify/.test(rowLine(decided.markdown, R.functionTooLong)), () => rowLine(decided.markdown, R.functionTooLong));
+  check("verify: a D<N> decision recorded on the Page code row closes it, and nothing else holds the same finding",
+    () => !/⚠ verify/.test(pageCodeLine(decided.markdown)) && (decided.decided || []).some((d) => /Page code/.test(d.label || JSON.stringify(d)))
+      && ROW_RULES.every((rule) => !/⚠ verify/.test(rowLine(decided.markdown, rule))),
+    () => ({ row: pageCodeLine(decided.markdown), decided: decided.decided }));
   const decidedRaised = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 65 } })), built(longHandler),
     new Set([verifyRowKey("main", failingLabel)]));
-  check("verify: a decision recorded on a Code quality row still holds after the threshold changes (the label names no value)",
-    () => !/⚠ verify/.test(rowLine(decidedRaised.markdown, R.functionTooLong)), () => rowLine(decidedRaised.markdown, R.functionTooLong));
+  check("verify: a decision recorded on the Page code row still holds after the threshold changes (the label names no value)",
+    () => !/⚠ verify/.test(pageCodeLine(decidedRaised.markdown)), () => pageCodeLine(decidedRaised.markdown));
   const clean = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`));
   check("verify: a clean page closes every Code quality row ✅ (the advisory one never reads ⚠)",
-    () => Object.values(R).every((rule) => rule === R.unusedResourceString
+    () => ROW_RULES.every((rule) => rule === R.unusedResourceString
       ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
   const heldId = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", `if (s === "${held}") { return; }`)}]`));
@@ -191,17 +185,17 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => !checklistGroups(result, opts).some((g) => /Code quality/.test(g.title)) && /\*\*Code quality/.test(clean.markdown));
   const notBuilt = renderVerify(result, opts, { pages: { main: false } });
   check("verify: a page reported not built gets non-gating Code quality rows — its own rows already block",
-    () => /☐ confirm on-stand/.test(rowLine(notBuilt.markdown, R.functionTooLong)) && /no code to check/.test(rowLine(notBuilt.markdown, R.functionTooLong))
-      && kindOf(notBuilt, R.functionTooLong) === "info",
-    () => rowLine(notBuilt.markdown, R.functionTooLong));
+    () => /☐ confirm on-stand/.test(rowLine(notBuilt.markdown, R.catchLogOnly)) && /no code to check/.test(rowLine(notBuilt.markdown, R.catchLogOnly))
+      && kindOf(notBuilt, R.catchLogOnly) === "info",
+    () => rowLine(notBuilt.markdown, R.catchLogOnly));
   // The Evidence cell goes through esc(), which renders a backtick as U+02CB; the pattern accepts either.
   const unparsable = renderVerify(result, opts, built("[ {"));
   check("verify: an unparsable handlers section blocks every Code quality row and names the section",
-    () => /⚠ verify/.test(rowLine(unparsable.markdown, R.functionTooLong)) && /[`ˋ]handlers[`ˋ] could not be parsed/.test(rowLine(unparsable.markdown, R.functionTooLong)) && !unparsable.complete,
-    () => rowLine(unparsable.markdown, R.functionTooLong));
+    () => /⚠ verify/.test(rowLine(unparsable.markdown, R.catchLogOnly)) && /[`ˋ]handlers[`ˋ] could not be parsed/.test(rowLine(unparsable.markdown, R.catchLogOnly)) && !unparsable.complete,
+    () => rowLine(unparsable.markdown, R.catchLogOnly));
   const noBundle = renderVerify(result, opts, { pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate", viewConfig: { items: [] } } } });
   check("verify: a bundle without code sections cannot be checked — the rows are confirm-on-stand, never a silent ✅",
-    () => /confirm on-stand/.test(rowLine(noBundle.markdown, R.functionTooLong)), () => rowLine(noBundle.markdown, R.functionTooLong));
+    () => /confirm on-stand/.test(rowLine(noBundle.markdown, R.catchLogOnly)), () => rowLine(noBundle.markdown, R.catchLogOnly));
 
   // Through the REAL payload path: get-page's bundle.json → assembleBuilt → built.json → --verify.
   const asDir = fs.mkdtempSync(path.join(os.tmpdir(), "quality-assemble-"));

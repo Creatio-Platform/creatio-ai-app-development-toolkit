@@ -17,6 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
 import { RECONCILE_MODE_CLASSIC } from "./reconcile-modes.mjs";
+import { analyzePageCode, findingCount, findingPhrases, viewRequests } from "./codemap.mjs"; // the `Page code` row measures what the writer's code map shows
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions, cardActionSignals,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
@@ -2751,9 +2752,14 @@ function writesField(h) {
 }
 // The primary behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing
 // one card in one task. Absent when the row cites no primary card; a body card alone joins no rows.
+// The row's behaviour card: its id (what a split keys a row by) and its content — what the item does, the use case
+// and the acceptance criteria — so the task card can hand the writer the card itself instead of a pointer into the
+// agent-written part file it came from.
 function cardField(x) {
-  const card = x.describedIn?.card;
-  return card ? { card } : {};
+  const d = x.describedIn;
+  if (!d?.card) return {};
+  const behaviour = { card: d.card, ac: d.ac || [], whatItDoes: d.whatItDoes || null, useCase: d.useCase || null };
+  return { card: d.card, behaviour };
 }
 // A section method the list analyzer already read: its effect is in the positioned list ops, so the row records
 // it and must NOT ask for a second build. Same shape as the folded-helper note beside it.
@@ -3031,6 +3037,17 @@ function qualityGateRows(pageKey) {
     evidenceRow(id, `${base} **This row: the design pass RAN** — a record naming the reference page and the components checked was filed under \`${esc(id)}\`.`, { deliverableId: "quality:ran" }, { part: "filed", allowNoDiff: true }),
     evidenceRow(id, `${base} **This row: the design pass was INDEPENDENTLY JUDGED** — a separate reviewer found the filed record convincing. A record nobody reviewed does not close this row, even when the row above is ✅.`, { deliverableId: "quality:judged" }, { part: "judged", allowNoDiff: true }),
   ];
+}
+// PAGE CODE. A page is built by one task after another, each a fresh context, and the measured failure of that
+// shape is code nobody owns: the same helper pasted into every handler by each writer, one handler grown past a
+// few hundred lines, requests declared and never sent. The writer owns the page's code and reads the code map
+// (codemap.mjs) before it writes; this row is where the build is held to it. It closes on the built page's handler
+// source, so it needs no stand call beyond the read-back, and a deliberate exception is a `D<N>` decision like any
+// other row (`--decide D<N> --wont-do`).
+// The label names the threshold KEY, never its value, so a decision recorded on the row survives a changed limit.
+function pageCodeRows(opts) {
+  return [{ deliverableId: "page-code", label: "Page code — no function longer than `maxFunctionLines`, no helper declared twice on the page, no request declared but never sent",
+    vk: { type: "pagecode", thresholds: opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS } }];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -3486,6 +3503,8 @@ export function checklistGroups(result, opts = {}) {
   // components are necessary, not sufficient; a 950-field wall is still native) and demoting real layout problems
   // to "refine if desired". So acceptance is now a single, checkable fact — did you run the skill on all pages —
   // and the escape phrases are explicitly rejected. See `qualityGateRows`: it is now an EVIDENCE-gated row.
+  // Page code — ALWAYS present: the page's handler code measured, the same analysis the writer's code map prints.
+  G("Page code", pageCodeRows(opts));
   G("Quality gates", qualityGateRows(pageKey));
   // ROOT SPLICE — only the page that owns the key `main` folds the tree, so a sub-page's own groups stay its own
   // (its grandchildren are reached by the recursive walk, not by nesting rows inside rows).
@@ -4679,6 +4698,32 @@ export function resolveHandlerVk(vk, ctx) {
   const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
   return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
 }
+// What the OTHER built pages of the payload send: a quoted name in their handler source, or a request in their view.
+function requestsSentElsewhere(root, pageKey) {
+  const out = new Set();
+  for (const [key, e] of Object.entries(root?.pages || {})) {
+    if (key === pageKey || !e || typeof e !== "object") continue;
+    for (const m of String(typeof e.handlers === "string" ? e.handlers : "").matchAll(/["'`]([\w.$-]+)["'`]/g)) out.add(m[1]);
+    for (const r of viewRequests(e.viewConfig)) out.add(r);
+  }
+  return out;
+}
+// The `Page code` row. Not provided ⇒ not checkable, the same non-gating answer a handler row gives; findings ⇒
+// ⚠ verify, which gates the run until the code is fixed or a decision records why it stays.
+export function resolvePageCodeVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the page's handler code");
+  if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
+  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
+  // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
+  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey),
+    vk.thresholds || DEFAULT_QUALITY_THRESHOLDS);
+  if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
+  if (!findingCount(a)) {
+    const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
+    return ["✅ Done", `${a.handlers.length} handler(s): none over ${a.maxFunctionLines} lines, no helper declared twice, ${sends}`, "ok"];
+  }
+  return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception (a request sent only from a module outside the built pages is one)`, "unverified"];
+}
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the attribute cannot exist", "missing"];
@@ -4921,7 +4966,7 @@ export function resolveModuleDepVk(vk, ctx) {
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
-const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
+const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
