@@ -2892,23 +2892,6 @@ function mapWidgets(eff, opts = {}) {
   return { widgets, chromeWidgets, needsDecision, accountedFor, dcmActive: dcmPresent, cardWidgets };
 }
 
-// Moment 4b: the ON-SAVE DUPLICATE CHECK — a second on-stand signal, for the same reason `dcm` is one.
-// Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
-// `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
-// `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
-// classifies it as `context`. There is no member to map and no element to gate on — so a plan can only know about
-// it from a resolved on-stand fact. The RULES themselves live on the ENTITY (`DuplicatesRule`, columns `IsActive` /
-// `UseAtSave`), not on the page, so they survive a page migration untouched; what does not survive is the check.
-// MEASURED 2026-08-21 on a stand newer than 8.3.4 (core 10.1.496): Classic posts
-// `DeduplicationService/FindDuplicatesOnSave` and shows its duplicates screen, while the Freedom form page issues
-// only `InsertQuery` and saves the duplicate silently. The platform DOES ship a Freedom implementation —
-// `crt.ValidateDuplicatesOnSaveHandler` registered on `crt.SaveDataRequest`, scoped to `BasePageTemplate` /
-// `BaseMiniPageTemplate` (entity-generic), plus the `DuplicateNotificationPage` dialog — but it fired nothing,
-// and that stand had `DeduplicationWebApiUrl` empty with `ESDeduplication`/`BulkESDeduplication` off. Classic needs
-// no service because its `asyncValidate` falls back to the rule's SQL procedure.
-// Hence the wording rule this row must keep: it is a CHECK, never the claim "Freedom cannot do this". On a stand
-// where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
-// into a lie the day it does.
 // `manifest.siblingOf` — this page matches one an EARLIER migration already built: the user said so, or that
 // migration rebuilt a page with the same custom Classic parent. Nothing in the page body shows it, so it is a fact
 // the orchestrator records at discovery (references/manifest-conditional-inputs.md). Without the question the
@@ -2928,6 +2911,23 @@ function mapSiblingPage(siblingOf) {
     reason: `This page matches ${page}${from}.${because} Ask the user which one applies: REUSE — open ${page} from this page's process steps and build nothing here, listing the rebinding and what differs (for example the buttons) for the user, never editing ${page} or the process without them; SHARED MODULE — move the shared logic into one client module that ${page} and this page both import; SEPARATE PAGE — build this page on its own. Whichever is chosen, never copy ${page}'s handlers into this page.` }];
 }
 
+// Moment 4b: the ON-SAVE DUPLICATE CHECK — a second on-stand signal, for the same reason `dcm` is one.
+// Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
+// `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
+// `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
+// classifies it as `context`. There is no member to map and no element to gate on — so a plan can only know about
+// it from a resolved on-stand fact. The RULES themselves live on the ENTITY (`DuplicatesRule`, columns `IsActive` /
+// `UseAtSave`), not on the page, so they survive a page migration untouched; what does not survive is the check.
+// MEASURED 2026-08-21 on a stand newer than 8.3.4 (core 10.1.496): Classic posts
+// `DeduplicationService/FindDuplicatesOnSave` and shows its duplicates screen, while the Freedom form page issues
+// only `InsertQuery` and saves the duplicate silently. The platform DOES ship a Freedom implementation —
+// `crt.ValidateDuplicatesOnSaveHandler` registered on `crt.SaveDataRequest`, scoped to `BasePageTemplate` /
+// `BaseMiniPageTemplate` (entity-generic), plus the `DuplicateNotificationPage` dialog — but it fired nothing,
+// and that stand had `DeduplicationWebApiUrl` empty with `ESDeduplication`/`BulkESDeduplication` off. Classic needs
+// no service because its `asyncValidate` falls back to the rule's SQL procedure.
+// Hence the wording rule this row must keep: it is a CHECK, never the claim "Freedom cannot do this". On a stand
+// where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
+// into a lie the day it does.
 function mapDedupOnSave(opts = {}) {
   // `opts.signals` is the RUN-level answer set, in which a bundle's OWN `manifest.signals` key already won the
   // merge (see runMigration/checklistOpts). `opts.ownSignals` is that bundle's own keys alone — the only way to

@@ -4,9 +4,8 @@ Handed, with `./references/build-task-execution.md`, to every page build and rep
 also pointed at `./references/classic-to-freedom-mapping.md`. The mapping is a reference: look up by
 heading (`grep -n '^#'` lists them) and read every section that applies to your page — a pointer
 below names the section most tasks need, not the only one — but it is never read whole. The five
-rules in `build-task-execution.md` override every convenience in this file. The shape of the code
-you write into the page (thin handlers, the page's logic module, reads) is
-`./references/page-code-architecture.md`, handed with this file and read whole.
+rules in `build-task-execution.md` override every convenience in this file. The shape of the page's
+code is `./references/page-code-architecture.md`.
 
 ## Everything else about building a page
 

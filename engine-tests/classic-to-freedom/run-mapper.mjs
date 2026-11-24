@@ -6657,34 +6657,32 @@ check("dedup signal: the On-stand signals section states which of the two servic
    in a second run, with the user saying it is identical to the first apart from its buttons, came out as a ~22 KB
    copy of the first page's handlers in two independent runs. Recorded at discovery, the fact becomes a ⚠ Confirm
    offering reuse / one shared module / a separate page, so the copy is a question and never a default. */
-const siblingSignals = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
-  printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false },
-  deduplication: { resolved: true, present: false } };
-const siblingRun = (siblingOf) => runMigration({ ...sigBase, signals: siblingSignals, ...(siblingOf === undefined ? {} : { siblingOf }) });
+const siblingRun = (siblingOf) => runMigration({ ...sigBase, signals: FULL_SIGNALS, siblingOf });
 const siblingRows = (r) => (r.changeSet?.needsDecision || []).filter((d) => d.kind === "sibling-page");
 const siblingNone = siblingRun(undefined);
 check("siblingOf: absent → no sibling-page row (a page with no earlier twin is never asked about one)",
   siblingRows(siblingNone).length === 0 && !/\[sibling-page\]/.test(siblingNone.plan),
   () => siblingRows(siblingNone));
-const siblingSet = siblingRun({ folder: "migrations/OrderPage", page: "UsrOrder_FormPage", reason: "the user: the two pages are identical except for their buttons" });
+const siblingArg = { folder: "migrations/OrderPage", page: "UsrOrder_FormPage", reason: "the user: the two pages are identical except for their buttons" };
+const siblingSet = siblingRun(siblingArg);
+const siblingRow = siblingRows(siblingSet)[0];
+const siblingReason = siblingRow?.reason ?? "";
 check("siblingOf: present → ONE sibling-page row naming the earlier page and its migration folder, with the user's reason",
-  siblingRows(siblingSet).length === 1
-  && siblingRows(siblingSet)[0].item === "UsrOrder_FormPage"
-  && siblingRows(siblingSet)[0].reason.includes("migrations/OrderPage")
-  && siblingRows(siblingSet)[0].reason.includes("identical except for their buttons"),
+  siblingRows(siblingSet).length === 1 && siblingRow.item === "UsrOrder_FormPage"
+  && siblingReason.includes("migrations/OrderPage") && siblingReason.includes("identical except for their buttons"),
   () => siblingRows(siblingSet));
 check("siblingOf: the row offers all three answers — reuse the built page, one shared module, a separate page — and says copying is none of them",
-  /REUSE/.test(siblingRows(siblingSet)[0]?.reason || "") && /SHARED MODULE/.test(siblingRows(siblingSet)[0]?.reason || "")
-  && /SEPARATE PAGE/.test(siblingRows(siblingSet)[0]?.reason || "") && /never cop/i.test(siblingRows(siblingSet)[0]?.reason || ""),
-  () => siblingRows(siblingSet)[0]?.reason);
+  [/REUSE/, /SHARED MODULE/, /SEPARATE PAGE/, /never cop/i].every((re) => re.test(siblingReason)),
+  () => siblingReason);
 check("siblingOf: the row reaches the RENDERED plan's ⚠ Confirm worklist, and its identifiers survive `esc` (no backticks in the reason)",
   /\[sibling-page\]/.test(siblingSet.plan) && siblingSet.plan.includes("UsrOrder_FormPage")
-  && !siblingSet.plan.split("\n").some((l) => /\[sibling-page\]/.test(l) && /ˋ/.test(l)),
+  && !siblingSet.plan.split("\n").some((l) => /\[sibling-page\]/.test(l) && /\u02cb/.test(l)),
   () => siblingSet.plan.split("\n").filter((l) => /sibling-page/.test(l)));
+const siblingLabels = checklistGroups(siblingSet, checklistOpts({ ...sigBase, signals: FULL_SIGNALS, siblingOf: siblingArg }))
+  .flatMap((g) => g.rows.map((r) => r.label));
 check("siblingOf: the Plan-vs-Done checklist carries a row for it, so the answer is reported, not just asked",
-  checklistGroups(siblingSet, checklistOpts({ ...sigBase, signals: siblingSignals, siblingOf: { folder: "migrations/OrderPage", page: "UsrOrder_FormPage" } }))
-    .some((g) => g.rows.some((r) => /sibling-page/.test(r.label) && /UsrOrder_FormPage/.test(r.label))),
-  () => checklistGroups(siblingSet, checklistOpts({ ...sigBase, signals: siblingSignals })).flatMap((g) => g.rows.map((r) => r.label)).filter((l) => /Confirm|sibling/i.test(l)));
+  siblingLabels.some((l) => /sibling-page/.test(l) && /UsrOrder_FormPage/.test(l)),
+  () => siblingLabels.filter((l) => /Confirm|sibling/i.test(l)));
 const siblingBad = siblingRun({ folder: "migrations/OrderPage" });
 check("siblingOf: recorded without a page → still a row, saying what is missing — a malformed fact is never dropped in silence",
   siblingRows(siblingBad).length === 1 && /no page/i.test(siblingRows(siblingBad)[0].reason),

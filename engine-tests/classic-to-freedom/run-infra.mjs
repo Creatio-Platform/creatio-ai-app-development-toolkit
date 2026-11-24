@@ -620,6 +620,18 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // Pipe converters (`$Attr | crt.InvertBooleanValue`) are not components either: the component index does not carry
   // them, so the ones the engine emits are listed here by name and checked the other way round below.
   const PIPE_CONVERTERS = new Set(["crt.InvertBooleanValue"]);
+// The rows of orchestrate-build.md 7.3 (what each sub-agent is handed), as [kind, recogniser, briefs, references]
+// cells. Empty when the step or its table moved, so every check that reads it also asserts the rows it expects.
+const handedRows = () => {
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  return (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4);
+};
 // The browser-check reference exists to stop ONE measured loop: eight minutes of re-probing a page whose main
 // thread was blocked, where no script could ever have answered. The rule and the order are what the file is for,
 // so the doc lint holds it to both, and SKILL.md must actually send a builder there.
@@ -642,14 +654,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
   // A builder is handed exactly the files its 7.3 row names, so a SKILL.md mention alone never reaches it: the
   // page-build row itself must hand the reference, in the look-up column and not as a brief to read whole.
-  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
-  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
-  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
-  const pageBuildRows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
-    .split("\n")
-    .filter((l) => l.trimStart().startsWith("|"))
-    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
-    .filter((cells) => cells.length === 4 && cells[0].startsWith("Page build"));
+  const pageBuildRows = handedRows().filter((cells) => cells[0].startsWith("Page build"));
   check("orchestrate-build.md 7.3: the page-build row hands `freedom-ui-browser-check.md` as a reference to look up, not as a brief — the row is what a builder is given, so a reference it does not name is never opened",
     () => pageBuildRows.length === 1
       && pageBuildRows[0][3].includes("`./references/freedom-ui-browser-check.md`")
@@ -666,14 +671,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const ref = "skills/classic-to-freedom-migration/references/";
   const read = (p) => readFileSync(fileURLToPath(new URL("../../" + ref + p, import.meta.url)), "utf8");
   const contract = read("page-code-architecture.md");
-  const orchestrate = read("orchestrate-build.md");
-  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
-  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
-  const rows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
-    .split("\n").filter((l) => l.trimStart().startsWith("|"))
-    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
-    .filter((cells) => cells.length === 4);
-  const writers = rows.filter((c) => /^(Page build|Repair round|Whole migration)/.test(c[0]));
+  const writers = handedRows().filter((c) => /^(Page build|Repair round|Whole migration)/.test(c[0]));
   check("orchestrate-build.md 7.3: every task kind that writes page code (page build, repair, whole migration) hands `page-code-architecture.md` as a brief to read whole",
     () => writers.length === 3 && writers.every((c) => c[2].includes("`./references/page-code-architecture.md`")),
     () => writers.map((c) => [c[0], c[2]]));
