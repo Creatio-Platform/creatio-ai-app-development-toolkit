@@ -1089,6 +1089,8 @@ function taskCardBlock(task, set = {}) {
   return L;
 }
 
+// Replacement that puts a backslash before a line's leading `#` or `|`.
+const MARKER_ESCAPE = String.raw`$1\$2`;
 // The decisions in force with their text, or why the card has none.
 function decisionLines(set) {
   const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
@@ -1103,7 +1105,7 @@ function decisionLines(set) {
     // match `## Notes`, `## Deliverables` and `| N |` rows after trimming, so a line opening with `#` or `|` is
     // escaped, otherwise a decision quoting either would move the notes boundary or add a deliverables row.
     for (const line of String(texts.get(id) || "").split("\n")) {
-      if (line.trim()) L.push(`    ${line.trimEnd().replace(/^(\s*)([#|])/, String.raw`$1\$2`)}`);
+      if (line.trim()) L.push("    " + line.trimEnd().replace(/^(\s*)([#|])/, MARKER_ESCAPE));
     }
   }
   return L;
