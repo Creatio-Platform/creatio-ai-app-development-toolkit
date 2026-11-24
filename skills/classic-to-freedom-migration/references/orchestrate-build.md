@@ -554,6 +554,11 @@ both are yours:
 
 ## Step 8 — the driver's side
 
+**A process page** (the plan has a `### Process page` section): after its build task closes, re-point each step the
+user approved and run the stand check yourself — both act on the user's process, so no builder does them. Write
+what `describe-business-process` returns for each re-pointed step and the outcome of every button you pressed into
+`<migration-folder>/process.json`, as `./process-page.md` → *Verify* shows. Without it the process rows stay open.
+
 **A folder of `done` task files is not a completion report — and neither is the machine table
 alone.** The task statuses are how the step-7 orchestrator schedules work and how a killed session
 resumes; they are recorded by the sub-agents that did the work, so a run closed on them alone would

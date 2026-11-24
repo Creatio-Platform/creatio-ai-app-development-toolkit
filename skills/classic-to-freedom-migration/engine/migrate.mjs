@@ -78,6 +78,7 @@ import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFile
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions, readDecisionTexts } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
+import { processTemplateOf, processTemplateOfManifest, pageSchemaNameOf, processPageInfo, processButtonMap } from "./process-page.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -1002,10 +1003,10 @@ const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu", EXI
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
-export function placementIssues(manifest) {
+export function placementIssues(manifest, { processPage = false } = {}) {
   const p = placementOf(manifest);
   const has = (k) => isResolvedFact(p, k);
-  const unresolved = requiredPlacementKeys(p).filter((k) => !has(k));
+  const unresolved = (processPage ? PROCESS_PAGE_PLACEMENT_KEYS : requiredPlacementKeys(p)).filter((k) => !has(k));
   if (unresolved.length) {
     return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
   }
@@ -1016,6 +1017,8 @@ export function placementIssues(manifest) {
   if (p.targetPackageEditable.value !== true) {
     issues.push(`placement.targetPackageEditable is not true — target package '${target || "(unset)"}' cannot receive design-time writes, so NO page can be built there. Pick an editable package (or create one) before this plan is approvable.`);
   }
+  // A process page is opened by its process step, never from a section or an app menu: nothing hosts it.
+  if (processPage) return issues;
   const mode = p.sectionHost.mode;
   if (!SECTION_HOST_MODES.includes(mode)) {
     issues.push(`placement.sectionHost.mode '${mode}' is not one of ${SECTION_HOST_MODES.join(" / ")}`);
@@ -1048,6 +1051,7 @@ const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].reso
 // plan's placement banner asks for — a banner listing keys the gate does not need sends the agent after answers
 // nobody reads.
 const EXISTING_SECTION_PLACEMENT_KEYS = ["targetPackageEditable", "sectionHost"];
+const PROCESS_PAGE_PLACEMENT_KEYS = ["targetPackageEditable"];
 function requiredPlacementKeys(p) {
   return isResolvedFact(p, "sectionHost") && p.sectionHost.mode === EXISTING_SECTION_MODE ? EXISTING_SECTION_PLACEMENT_KEYS : PLACEMENT_KEYS;
 }
@@ -1115,6 +1119,9 @@ export function checklistOpts(manifest, opts = {}) {
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
   // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
   const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  // A process page (see process-page.mjs) has no section, list page or object: the section's plan values, the
+  // section-level on-stand signals and the section host do not apply to it.
+  const processPage = !isNestedFold(opts) && !!processTemplateOfManifest(manifest);
   return {
     // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
     deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
@@ -1125,16 +1132,18 @@ export function checklistOpts(manifest, opts = {}) {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
-    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? formTemplateMissing(pm, manifest) : blank(pm[k])),
+    planMetaMissing: REQUIRED_PLANMETA.filter((k) => !(processPage && k === "sectionSchema"))
+      .filter((k) => k === "formTemplate" ? formTemplateMissing(pm, manifest) : blank(pm[k])),
     signals,
-    signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
-    placementBlockers: placementIssues(manifest),
+    signalsMissing: processPage ? [] : SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
+    placementBlockers: placementIssues(manifest, { processPage }),
+    processPage,
     // PROJECT CONVENTIONS (conventions.mjs) — gated like placement, and inherited by every fold like the signals.
     projectConventions: runConventionsOf(manifest, opts).conventions,
     // the ROOT run gates on them; a fold inherits facts the root already gated
     conventionsBlockers: opts.inheritedConventions ? [] : conventionFacts(manifest).issues,
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
-    placementKeys: requiredPlacementKeys(placementOf(manifest)),
+    placementKeys: processPage ? PROCESS_PAGE_PLACEMENT_KEYS : requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
@@ -2908,6 +2917,10 @@ export function runMigration(manifest, opts = {}) {
   const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
   const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
   const eff = mergeHierarchy(schemas, { seedTemplate, noParentTemplate: manifest.noParentTemplate === true }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
+  // A pre-configured process page (process-page.mjs): read off the seed chain, never on a nested fold.
+  const listOf = (l) => (Array.isArray(l) ? l : []);
+  const processPage = isNestedFold(opts) ? null : processPageInfo({ template: processTemplateOf(listOf(manifest.seed).map(bodyOf)),
+    pageName: pageSchemaNameOf(listOf(manifest.schemas).map(bodyOf)), items: eff.items, manifest });
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // the embedded profile schemas a profile card renders (profiled entity + displayed columns).
@@ -2932,6 +2945,7 @@ export function runMigration(manifest, opts = {}) {
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
     requestPrefix: runConventions.conventions?.requestPrefix, // the project's request namespace (projectConventions); the engine default when none is recorded
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
+    processButtons: processButtonMap(processPage), // a process page's buttons end or keep its step: no generated request handler
     siblingOf: manifest.siblingOf,            // an earlier migration built this page's twin — this bundle's own fact, never inherited by a fold
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
@@ -3196,6 +3210,8 @@ export function runMigration(manifest, opts = {}) {
   // The sub-pages folded into this run (child, typed, mini), each carrying its own run's ids and blockers up — a
   // grandchild's already sit in its child's. The root's plan is the one approved, so it lists the whole tree's.
   const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
+  out.processPage = processPage;
+  out.processPageBlockers = processPage ? processPage.issues : [];
   out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
     ...folded.flatMap((f) => f.conventionsBlockers || [])])];
   // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
@@ -4869,7 +4885,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
   const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0)
-    || (result.conventionsBlockers?.length > 0));
+    || (result.conventionsBlockers?.length > 0) || (result.processPageBlockers?.length > 0));
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
@@ -4997,6 +5013,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (planMode && result.conventionsBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — project conventions not settled: " + result.conventionsBlockers.join(" | ") + "\n");
+  if (planMode && result.processPageBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — process steps not recorded: " + result.processPageBlockers.join(" | ") + "\n");
   // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
   // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
   // the built pages and nothing about who built them.

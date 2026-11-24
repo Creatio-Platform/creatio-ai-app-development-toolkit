@@ -7,6 +7,7 @@ import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForIte
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
 import { resolveRowTarget, runCarries } from "./mapping-registry.mjs";
 import { DEFAULT_REQUEST_PREFIX, normalizePrefix } from "./conventions.mjs";
+import { PROCESS_BEHAVIOUR, CLOSE_PAGE_REQUEST } from "./process-page.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -552,7 +553,9 @@ export function mapToFreedom(eff, opts = {}) {
     // whether a row's version-gated `upgrade` target is emitted (crt.RadioGroup) or its fallback `target`.
     registry: opts.registry || null,
     // the namespace every custom request this page emits is named in (see `freedomRequest`)
-    requestPrefix: normalizePrefix(opts.requestPrefix) || DEFAULT_REQUEST_PREFIX };
+    requestPrefix: normalizePrefix(opts.requestPrefix) || DEFAULT_REQUEST_PREFIX,
+    // a process page's buttons (process-page.mjs): Classic button name → what it does to the process step
+    processButtons: opts.processButtons instanceof Map ? opts.processButtons : new Map() };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -1430,7 +1433,12 @@ function mapFields(ctx, containers) {
     // Tier B: the view is automatic, the behaviour is not. The element gets its `clicked` request and the request
     // goes on the worklist — the classic method it came from is already a stub row of its own (the engine resolves
     // a control's click binding as that method's trigger), so this adds the WIRING, not a second copy of the method.
-    if (row.target.events?.clicked && it.handlers?.click) {
+    // A process button ends or keeps the process step, and the process element decides which: a completing button
+    // declares no request (the runtime appends the completion), an exit that keeps the step open closes the page.
+    const processBehaviour = ctx.processButtons.get(it.name);
+    if (processBehaviour) {
+      if (processBehaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN) values.clicked = { request: CLOSE_PAGE_REQUEST };
+    } else if (row.target.events?.clicked && it.handlers?.click) {
       const request = freedomRequest(it.name, ctx.requestPrefix);
       values.clicked = { request };
       sink.handlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
@@ -1449,7 +1457,8 @@ function mapFields(ctx, containers) {
     if (values.control == null) {
       tableElements.push({ classic: it.name, element: elName, componentType: row.target.componentType, classicKind: itemKindName(it),
         parent, tier: row.tier, caption: values.caption ?? values.label ?? null,
-        request: values.clicked?.request || null, folded: sink.claimed.length ? [...sink.claimed] : null });
+        request: values.clicked?.request || null, folded: sink.claimed.length ? [...sink.claimed] : null,
+        process: processBehaviour || null });
     }
     accountedFor.add(it.name);
     sink.claimed.forEach((c) => accountedFor.add(c));

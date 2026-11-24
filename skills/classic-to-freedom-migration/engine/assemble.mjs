@@ -32,6 +32,9 @@ export const JUDGE_FILE = "judge.json";
 // The on-stand keys the BUILD agent records rather than reads (see reads.mjs). Merged into `reachability`, so a
 // row whose value no read can produce still has a way to close.
 export const RECORDED_FILE = "recorded.json";
+// A process page's process side (process-page.mjs): `processSteps` (describe-business-process of each re-pointed
+// step) and `processStandCheck` (the buttons pressed from the process step). Neither is a page read.
+export const PROCESS_FILE = "process.json";
 // The provenance field's shape (defined once, in conventions.mjs): the drop-sweep here applies the same test the
 // payload guard will. migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export { GUID_RE };
@@ -348,6 +351,11 @@ function mergeSideFiles(dir, built, acc, problems) {
   for (const [key, file] of [["evidence", EVIDENCE_FILE], ["judge", JUDGE_FILE]]) {
     const j = readSideFile(dir, file, problems, `the ${key} records`);
     if (j != null) built[key] = j;
+  }
+  const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
+  if (proc && typeof proc === "object") {
+    if (Array.isArray(proc.processSteps)) built.processSteps = proc.processSteps;
+    if (proc.processStandCheck && typeof proc.processStandCheck === "object") built.processStandCheck = proc.processStandCheck;
   }
 }
 

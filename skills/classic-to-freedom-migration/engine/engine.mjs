@@ -1401,6 +1401,8 @@ function normalizeDiffOp(op, i) {
     tip: v.tip?.content && isStr(v.tip.content.bindTo) ? v.tip.content.bindTo : null,
     hint: hintKey(v),
     generator: strOrNull(v.generator),
+    // a button's `tag`: the process-page template routes its click handler by it (`SaveData`, `ClosePage`, a custom one)
+    tag: strOrNull(v.tag),
     visible: visibility(v),
     enabled: enablement(v),
     readonly: readOnlyLiteral(v),
@@ -1608,7 +1610,7 @@ function makeItem(op, seed, pkg, layer) {
     parentSetLayer: layer, parentSetBySeed: seed, // read by `cascadeRemove`; a move carrying `parentName` overwrites both
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
-    tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, enabled: op.enabled, caption: op.caption,
+    tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, enabled: op.enabled, caption: op.caption, tag: op.tag,
     readonly: op.readonly, protect: op.protect,
     labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
     // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
@@ -1773,7 +1775,7 @@ function applyMergeOrderVisible(op, cur) {
 }
 // Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
 function applyMergeContentFields(op, cur) {
-  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator", "tag"]) {
     if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
   }
 }
@@ -2539,6 +2541,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       engineOnlyStub: !!i.engineOnlyStub,
       contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
+      tag: i.tag || null,
       // EFFECTIVE caption, in the platform's own order: `config.caption`, then `labelConfig.caption`
       // (`getLabelCaption`, ViewGeneratorV2 L1675-1689). `labelCaption` rides along so a reader can tell WHICH of
       // the two supplied the text — a label a later layer may remove on its own (`remove properties:
