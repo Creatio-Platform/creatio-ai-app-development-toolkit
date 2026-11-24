@@ -19,8 +19,8 @@ define("MbApproveContractProcessPage", [], function() {
 			 * and completes the process step.
 			 */
 			mbApprove: function() {
-				var contractId = this.get("ContractId");
-				var update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: "MbContract"});
+				const contractId = this.get("ContractId");
+				const update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: "MbContract"});
 				update.filters.add("Id", Terrasoft.createColumnFilterWithParameter(
 					Terrasoft.ComparisonType.EQUAL, "Id", contractId));
 				update.setParameterValue("MbApproved", true, Terrasoft.DataValueType.BOOLEAN);

@@ -1,6 +1,10 @@
-define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities"], function(BusinessRuleModule, ProcessModuleUtilities) {
+define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities", "MbDocumentTotalsMixin"],
+		function(BusinessRuleModule, ProcessModuleUtilities) {
 	return {
 		entitySchemaName: "MbContract",
+		mixins: {
+			MbDocumentTotalsMixin: "Terrasoft.MbDocumentTotalsMixin"
+		},
 		attributes: {
 			"MbCanEditFields": {
 				"dataValueType": Terrasoft.DataValueType.BOOLEAN,
@@ -133,9 +137,9 @@ define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities"], funct
 			 */
 			mbAssignNumber: function() {
 				Terrasoft.SysSettings.querySysSettingsItem("MbContractLastNumber", function(lastNumber) {
-					var next = (parseInt(lastNumber, 10) || 0) + 1;
+					const next = (Number.parseInt(lastNumber, 10) || 0) + 1;
 					Terrasoft.SysSettings.postSysSettingsValue("MbContractLastNumber", next);
-					var format = this.get("Resources.Strings.MbNumberFormat");
+					const format = this.get("Resources.Strings.MbNumberFormat");
 					this.set("MbNumber", Ext.String.format(format, Ext.String.leftPad(next, 5, "0")));
 				}, this);
 			},
@@ -145,8 +149,8 @@ define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities"], funct
 			},
 
 			mbUpdateCanEditFields: function() {
-				var status = this.get("MbStatus");
-				this.set("MbCanEditFields", !status || status.value !== "6f0c4b2e-1d1a-4c3e-9a51-0b1c2d3e4f03");
+				const status = this.get("MbStatus");
+				this.set("MbCanEditFields", status?.value !== "6f0c4b2e-1d1a-4c3e-9a51-0b1c2d3e4f03");
 			},
 
 			mbIsStartApprovalEnabled: function() {
@@ -155,6 +159,7 @@ define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities"], funct
 
 			mbStartApproval: function() {
 				if (!this.mbIsStartApprovalEnabled()) {
+					this.showInformationDialog(this.get("Resources.Strings.MbAlreadyApprovedMessage"));
 					return;
 				}
 				ProcessModuleUtilities.executeProcess({
@@ -167,27 +172,17 @@ define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities"], funct
 
 			onDetailChanged: function(detail) {
 				this.callParent(arguments);
-				if (detail && detail.schemaName === "MbContractItemDetail") {
+				if (detail?.schemaName === "MbContractItemDetail") {
 					this.mbRecalculateAmount();
 				}
 			},
 
+			/**
+			 * Recalculates the amount with the same rule the document pages use (MbDocumentTotalsMixin).
+			 */
 			mbRecalculateAmount: function() {
-				var esq = Ext.create("Terrasoft.EntitySchemaQuery", {rootSchemaName: "MbContractItem"});
-				esq.addColumn("MbTotal");
-				esq.filters.add("Contract", Terrasoft.createColumnFilterWithParameter(
-					Terrasoft.ComparisonType.EQUAL, "MbContract", this.get("Id")));
-				esq.filters.add("Active", Terrasoft.createColumnFilterWithParameter(
-					Terrasoft.ComparisonType.EQUAL, "MbIsActive", true));
-				esq.getEntityCollection(function(result) {
-					if (!result.success) {
-						return;
-					}
-					var total = 0;
-					result.collection.each(function(item) {
-						total += item.get("MbTotal") || 0;
-					});
-					this.set("MbAmount", total);
+				this.mbRecalculateContractAmount(this.get("Id"), function(amount) {
+					this.set("MbAmount", amount);
 				}, this);
 			}
 		},

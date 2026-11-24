@@ -17,7 +17,7 @@ define("MbBaseDocumentPage", [], function() {
 			 * Writes one line to the document log of the current record.
 			 */
 			mbWriteLog: function(message) {
-				var insert = Ext.create("Terrasoft.InsertQuery", {rootSchemaName: "MbDocumentLog"});
+				const insert = Ext.create("Terrasoft.InsertQuery", {rootSchemaName: "MbDocumentLog"});
 				insert.setParameterValue("MbName", message, Terrasoft.DataValueType.TEXT);
 				insert.setParameterValue("MbRecordId", this.get("Id"), Terrasoft.DataValueType.GUID);
 				insert.setParameterValue("MbEntityName", this.entitySchemaName, Terrasoft.DataValueType.TEXT);

@@ -16,7 +16,10 @@ define("MbDocumentTotalsMixin", [], function() {
 				isSilent: true,
 				callback: function() {
 					this.mbWriteLog("Posted document " + (this.get("MbNumber") || ""));
-					this.mbUpdateContractAmount();
+					const contract = this.get("MbContract");
+					if (contract) {
+						this.mbRecalculateContractAmount(contract.value);
+					}
 				},
 				scope: this
 			});
@@ -27,31 +30,48 @@ define("MbDocumentTotalsMixin", [], function() {
 		},
 
 		/**
-		 * Recalculates the contract amount from its active items and posted documents.
+		 * Recalculates the contract amount and writes it to the contract: the total of its active
+		 * items, plus its posted delivery notes, minus its posted return notes.
+		 * The contract page calls it too, so the amount has one definition.
+		 * @param {String} contractId Contract id.
+		 * @param {Function} [callback] Called with the new amount.
+		 * @param {Object} [scope] Callback scope.
 		 */
-		mbUpdateContractAmount: function() {
-			var contract = this.get("MbContract");
-			if (!contract) {
-				return;
-			}
-			var esq = Ext.create("Terrasoft.EntitySchemaQuery", {rootSchemaName: "MbContractItem"});
-			esq.addAggregationSchemaColumn("MbTotal", Terrasoft.AggregationType.SUM, "ItemsTotal");
+		mbRecalculateContractAmount: function(contractId, callback, scope) {
+			this.mbSumContractColumn("MbContractItem", "MbTotal", "MbIsActive", contractId, function(items) {
+				this.mbSumContractColumn("MbDeliveryNote", "MbAmount", "MbIsPosted", contractId, function(deliveries) {
+					this.mbSumContractColumn("MbReturnNote", "MbAmount", "MbIsPosted", contractId, function(returns) {
+						const amount = items + deliveries - returns;
+						const update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: "MbContract"});
+						update.filters.add("Id", Terrasoft.createColumnFilterWithParameter(
+							Terrasoft.ComparisonType.EQUAL, "Id", contractId));
+						update.setParameterValue("MbAmount", amount, Terrasoft.DataValueType.MONEY);
+						update.execute(function() {
+							if (callback) {
+								callback.call(scope || this, amount);
+							}
+						}, this);
+					});
+				});
+			});
+		},
+
+		/**
+		 * Sums a column over the contract's rows whose flag column is true.
+		 * @private
+		 */
+		mbSumContractColumn: function(schemaName, columnName, flagColumnName, contractId, callback) {
+			const esq = Ext.create("Terrasoft.EntitySchemaQuery", {rootSchemaName: schemaName});
+			esq.addAggregationSchemaColumn(columnName, Terrasoft.AggregationType.SUM, "Total");
 			esq.filters.add("Contract", Terrasoft.createColumnFilterWithParameter(
-				Terrasoft.ComparisonType.EQUAL, "MbContract", contract.value));
-			esq.filters.add("Active", Terrasoft.createColumnFilterWithParameter(
-				Terrasoft.ComparisonType.EQUAL, "MbIsActive", true));
+				Terrasoft.ComparisonType.EQUAL, "MbContract", contractId));
+			esq.filters.add("Flag", Terrasoft.createColumnFilterWithParameter(
+				Terrasoft.ComparisonType.EQUAL, flagColumnName, true));
 			esq.getEntityCollection(function(result) {
 				if (!result.success) {
 					return;
 				}
-				var total = result.collection.getByIndex(0).get("ItemsTotal") || 0;
-				var sign = this.entitySchemaName === "MbReturnNote" ? -1 : 1;
-				var update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: "MbContract"});
-				update.filters.add("Id", Terrasoft.createColumnFilterWithParameter(
-					Terrasoft.ComparisonType.EQUAL, "Id", contract.value));
-				update.setParameterValue("MbAmount", total + sign * (this.get("MbAmount") || 0),
-					Terrasoft.DataValueType.FLOAT);
-				update.execute();
+				callback.call(this, result.collection.getByIndex(0).get("Total") || 0);
 			}, this);
 		}
 	});

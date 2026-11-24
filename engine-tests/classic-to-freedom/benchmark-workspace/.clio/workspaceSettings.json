@@ -2,7 +2,7 @@
   "Packages": [
     "MbMigrationBench"
   ],
-  "ApplicationVersion": "8.1.3",
+  "ApplicationVersion": "10.2.959",
   "IgnorePackages": [],
   "ExternalPackages": []
 }

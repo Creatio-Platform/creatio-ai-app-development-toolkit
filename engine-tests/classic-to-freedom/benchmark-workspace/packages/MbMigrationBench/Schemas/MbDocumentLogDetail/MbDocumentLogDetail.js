@@ -18,7 +18,7 @@ define("MbDocumentLogDetail", [], function() {
 			},
 			addGridDataColumns: function(esq) {
 				this.callParent(arguments);
-				var column = esq.columns.contains("CreatedOn") ? esq.columns.get("CreatedOn") : esq.addColumn("CreatedOn");
+				const column = esq.columns.contains("CreatedOn") ? esq.columns.get("CreatedOn") : esq.addColumn("CreatedOn");
 				column.orderPosition = 0;
 				column.orderDirection = Terrasoft.OrderDirection.DESC;
 			}

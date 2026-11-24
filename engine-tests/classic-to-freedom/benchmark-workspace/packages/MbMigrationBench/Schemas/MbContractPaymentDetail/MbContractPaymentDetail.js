@@ -18,7 +18,7 @@ define("MbContractPaymentDetail", [], function() {
 			},
 			addGridDataColumns: function(esq) {
 				this.callParent(arguments);
-				var column = esq.columns.contains("MbDate") ? esq.columns.get("MbDate") : esq.addColumn("MbDate");
+				const column = esq.columns.contains("MbDate") ? esq.columns.get("MbDate") : esq.addColumn("MbDate");
 				column.orderPosition = 0;
 				column.orderDirection = Terrasoft.OrderDirection.DESC;
 			}

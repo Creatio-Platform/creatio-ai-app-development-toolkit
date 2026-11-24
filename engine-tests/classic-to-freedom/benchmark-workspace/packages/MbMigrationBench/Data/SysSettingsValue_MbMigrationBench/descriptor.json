@@ -2,7 +2,7 @@
   "Descriptor": {
     "UId": "36dd34cd-ab6c-4a2e-bec0-39ca2cda792b",
     "Name": "SysSettingsValue_MbMigrationBench",
-    "ModifiedOnUtc": "\/Date(1795500783000)\/",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
     "InstallType": 0,
     "Schema": {
       "UId": "951b2bbb-0ba3-4049-9a29-b5d4c0b6d50f",
@@ -60,7 +60,7 @@
       },
       {
         "ColumnUId": "b36bfa07-34c7-45b1-a2ee-39e653034ba0",
-        "IsForceUpdate": false,
+        "IsForceUpdate": true,
         "IsKey": false,
         "ColumnName": "IntegerValue",
         "DataTypeValueUId": "6b6b74e2-820d-490e-a017-2b73d4ccf2b0"

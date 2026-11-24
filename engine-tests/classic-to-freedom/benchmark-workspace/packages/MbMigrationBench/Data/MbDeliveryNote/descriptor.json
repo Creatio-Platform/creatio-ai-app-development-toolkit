@@ -2,7 +2,7 @@
   "Descriptor": {
     "UId": "524df76a-4172-45b6-af9f-c965fe316147",
     "Name": "MbDeliveryNote",
-    "ModifiedOnUtc": "\/Date(1795500765000)\/",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
     "InstallType": 0,
     "Schema": {
       "UId": "a2d9df40-00f3-4853-b2ac-56fdd6fe06c6",
@@ -25,7 +25,7 @@
       },
       {
         "ColumnUId": "9eca472a-c998-46c8-9f31-f1639ca893d5",
-        "IsForceUpdate": false,
+        "IsForceUpdate": true,
         "IsKey": false,
         "ColumnName": "MbIsPosted",
         "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"

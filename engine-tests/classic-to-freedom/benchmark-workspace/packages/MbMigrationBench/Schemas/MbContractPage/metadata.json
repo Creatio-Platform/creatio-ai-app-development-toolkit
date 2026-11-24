@@ -2,6 +2,13 @@
 = MetaData.Schema.A2 "MbContractPage"
 = MetaData.Schema.A5 "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
 + MetaData.Schema.B2 {
+  "UId": "c29d6cac-4072-5134-8015-08f27a7f638d",
+  "A2": "MbAlreadyApprovedMessage",
+  "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A4": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A5": "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
+}
++ MetaData.Schema.B2 {
   "UId": "511aa388-b3a0-5e16-abe3-af304a43653a",
   "A2": "MbDocumentsTabCaption",
   "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",

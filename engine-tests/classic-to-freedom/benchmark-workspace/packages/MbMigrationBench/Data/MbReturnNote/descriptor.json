@@ -2,7 +2,7 @@
   "Descriptor": {
     "UId": "83b970fb-a5b6-47e0-a46f-f351bca5875b",
     "Name": "MbReturnNote",
-    "ModifiedOnUtc": "\/Date(1795500765000)\/",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
     "InstallType": 0,
     "Schema": {
       "UId": "05fbe3c8-335f-461d-90ae-f67ee8c02152",
@@ -60,7 +60,7 @@
       },
       {
         "ColumnUId": "eaeca512-3e7f-41f0-b664-8cc2b7a878c7",
-        "IsForceUpdate": false,
+        "IsForceUpdate": true,
         "IsKey": false,
         "ColumnName": "MbIsPosted",
         "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"

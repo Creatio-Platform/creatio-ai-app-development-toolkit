@@ -46,13 +46,13 @@ define("MbContractItemDetail", [], function() {
 			},
 
 			getFilters: function() {
-				var filters = this.callParent(arguments);
+				const filters = this.callParent(arguments);
 				if (this.get("MbOnlyActive")) {
 					filters.add("MbOnlyActiveFilter", Terrasoft.createColumnFilterWithParameter(
 						Terrasoft.ComparisonType.EQUAL, "MbIsActive", true));
 				}
 				if (this.get("MbDueSoon")) {
-					var limit = new Date();
+					const limit = new Date();
 					limit.setDate(limit.getDate() + 30);
 					filters.add("MbDueSoonFilter", Terrasoft.createColumnFilterWithParameter(
 						Terrasoft.ComparisonType.LESS_OR_EQUAL, "MbDeliveryDate", limit));
@@ -88,11 +88,11 @@ define("MbContractItemDetail", [], function() {
 			},
 
 			mbUpdateSummary: function() {
-				var masterId = this.get("MasterRecordId");
+				const masterId = this.get("MasterRecordId");
 				if (!masterId) {
 					return;
 				}
-				var esq = Ext.create("Terrasoft.EntitySchemaQuery", {rootSchemaName: "MbContractItem"});
+				const esq = Ext.create("Terrasoft.EntitySchemaQuery", {rootSchemaName: "MbContractItem"});
 				esq.addAggregationSchemaColumn("MbTotal", Terrasoft.AggregationType.SUM, "Total");
 				esq.addAggregationSchemaColumn("Id", Terrasoft.AggregationType.COUNT, "ActiveCount");
 				esq.filters.add("Contract", Terrasoft.createColumnFilterWithParameter(
@@ -103,7 +103,7 @@ define("MbContractItemDetail", [], function() {
 					if (!result.success) {
 						return;
 					}
-					var row = result.collection.getByIndex(0);
+					const row = result.collection.getByIndex(0);
 					this.set("MbSummary", Ext.String.format(this.get("Resources.Strings.MbSummaryTemplate"),
 						row.get("Total") || 0, row.get("ActiveCount") || 0));
 				}, this);
@@ -120,9 +120,9 @@ define("MbContractItemDetail", [], function() {
 			},
 
 			mbDeactivateSelected: function() {
-				var selected = this.getSelectedItems() || [];
+				const selected = this.getSelectedItems() || [];
 				selected.forEach(function(id) {
-					var update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: "MbContractItem"});
+					const update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: "MbContractItem"});
 					update.filters.add("Id", Terrasoft.createColumnFilterWithParameter(
 						Terrasoft.ComparisonType.EQUAL, "Id", id));
 					update.setParameterValue("MbIsActive", false, Terrasoft.DataValueType.BOOLEAN);

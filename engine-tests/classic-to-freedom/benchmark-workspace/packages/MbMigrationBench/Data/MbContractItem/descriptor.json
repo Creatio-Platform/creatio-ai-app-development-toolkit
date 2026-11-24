@@ -2,7 +2,7 @@
   "Descriptor": {
     "UId": "1e3e7ad5-afb2-4ded-98fd-e751dc090e54",
     "Name": "MbContractItem",
-    "ModifiedOnUtc": "\/Date(1795500764000)\/",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
     "InstallType": 0,
     "Schema": {
       "UId": "1da69ae3-b526-47b4-aab9-8036034b51db",
@@ -25,7 +25,7 @@
       },
       {
         "ColumnUId": "70a03217-15c1-4dc5-b4c3-f03eab7070ed",
-        "IsForceUpdate": false,
+        "IsForceUpdate": true,
         "IsKey": false,
         "ColumnName": "MbIsActive",
         "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"

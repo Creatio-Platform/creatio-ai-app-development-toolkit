@@ -3,6 +3,7 @@
 	<Group Type="String">
 		<Items>
 			<Item Name="Caption" Value="Contract edit page" />
+			<Item Name="LocalizableStrings.MbAlreadyApprovedMessage.Value" Value="This contract is already approved." />
 			<Item Name="LocalizableStrings.MbDocumentsTabCaption.Value" Value="Documents" />
 			<Item Name="LocalizableStrings.MbGeneralTabCaption.Value" Value="General" />
 			<Item Name="LocalizableStrings.MbItemsTabCaption.Value" Value="Items and payments" />
