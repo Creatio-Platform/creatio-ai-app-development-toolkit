@@ -85,6 +85,8 @@ earlier migration, read the `### Project conventions` table of the newest earlie
   client-unit modules — list the module in SCHEMA_DEPS and take it as a factory argument.
 - A declared helper or constants module the Classic page imported gets its own checked row: `--verify` closes
   it when the built page's SCHEMA_DEPS (`bundle.deps`) list it, or a decision (`--decide D<N>`) says why the page
-  does not need it.
-- `--verify` reads the built page's `handlers`, `validators` and `converters`: a custom name outside the
-  confirmed namespace keeps the page from COMPLETE until it is renamed or a decision accepts it.
+  does not need it. A declared module the Classic page did not import gets an informational row.
+- `--verify` reads the built page's `handlers`, `validators` and `converters`: a custom name the page declares
+  (a handler entry's `request`, a validator or converter key) outside the confirmed namespace keeps the page
+  from COMPLETE until it is renamed or a decision accepts it. A request a handler only dispatches is not read.
+- Record the block on the root manifest only: a child bundle's own block is ignored and blocks the plan.

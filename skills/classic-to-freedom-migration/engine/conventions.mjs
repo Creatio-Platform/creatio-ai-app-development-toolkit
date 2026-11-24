@@ -26,7 +26,7 @@
 //
 // Pure: no I/O. migrate.mjs resolves the facts once per run (`conventionFacts`) and gates `--plan` on their issues;
 // designspec.mjs renders and verifies; tasks.mjs copies the block into every task file.
-import { parseDefineModule, staticPropKey } from "./engine.mjs";
+import { parseDefineModule, parseJsExpression, staticPropKey } from "./engine.mjs";
 
 // The namespace every Creatio page defaulted to before a project said otherwise.
 export const DEFAULT_REQUEST_PREFIX = "usr";
@@ -89,6 +89,9 @@ function previousOf(v) {
   return {
     folder: typeof v.folder === "string" ? v.folder : "",
     requestPrefix: normalizePrefix(v.requestPrefix),
+    // Empty when the earlier record did not name them — then they took its request prefix, as this run's do.
+    validatorPrefix: normalizePrefix(v.validatorPrefix) || normalizePrefix(v.requestPrefix),
+    converterPrefix: normalizePrefix(v.converterPrefix) || normalizePrefix(v.requestPrefix),
     helperModules: nameList(v.helperModules),
     constantsModules: nameList(v.constantsModules),
   };
@@ -98,7 +101,10 @@ function previousDifferences(c) {
   const p = c?.previous;
   if (!p) return [];
   const out = [];
-  if (p.requestPrefix && p.requestPrefix !== c.requestPrefix) out.push(`request prefix ${p.requestPrefix}. → ${c.requestPrefix}.`);
+  for (const kind of NAME_KINDS) {
+    const key = PREFIX_KEY[kind];
+    if (p[key] && p[key] !== c[key]) out.push(`${kind} prefix ${p[key]}. → ${c[key]}.`);
+  }
   for (const key of ["helperModules", "constantsModules"]) {
     const was = new Set(p[key]);
     const now = new Set(c[key]);
@@ -209,16 +215,16 @@ function guidIndexOf(modules) {
   return index;
 }
 function moduleGuids(name, parsed) {
-  const vars = factoryVars(parsed.factory);
-  const st = { vars, out: [], onPath: new Set(), reached: new Set() };
+  const body = parsed.factory?.body?.type === "BlockStatement" ? parsed.factory.body.body : [];
+  const vars = factoryVars(body);
+  const st = { vars, assigned: factoryAssignments(body, vars), out: [], onPath: new Set(), reached: new Set() };
   walkValue(parsed.returned, [name], st);
   for (const [varName, node] of vars) if (!st.reached.has(node)) walkValue(node, [name, varName], st);
   return st.out;
 }
 // The factory's top-level `var`/`let`/`const` declarators with an object or array initializer.
-function factoryVars(factory) {
+function factoryVars(body) {
   const vars = new Map();
-  const body = factory?.body?.type === "BlockStatement" ? factory.body.body : [];
   for (const st of body) {
     if (st.type !== "VariableDeclaration") continue;
     for (const d of st.declarations) {
@@ -226,6 +232,35 @@ function factoryVars(factory) {
     }
   }
   return vars;
+}
+// A tree filled by assignment rather than written as one literal: `var Ids = {}; Ids.Status = {}; Ids.Status.New =
+// "…";`. Each top-level `Var.a.b = value` is kept against the variable's initializer as `[["a", "b"], value]`, so
+// the walk reaches it under the same path a literal would give it.
+function factoryAssignments(body, vars) {
+  const assigned = new Map();
+  for (const st of body) {
+    const e = st.type === "ExpressionStatement" ? st.expression : null;
+    if (e?.type !== "AssignmentExpression" || e.operator !== "=") continue;
+    const chain = memberChain(e.left);
+    if (!chain || chain.keys.length === 0 || !vars.has(chain.root)) continue;
+    const init = vars.get(chain.root);
+    assigned.set(init, [...(assigned.get(init) || []), [chain.keys, e.right]]);
+  }
+  return assigned;
+}
+// `Ids.Status["New"]` → `{ root: "Ids", keys: ["Status", "New"] }`; null for anything not statically keyed.
+function memberChain(node) {
+  const keys = [];
+  let n = node;
+  while (n?.type === "MemberExpression") {
+    let key = null;
+    if (!n.computed && n.property.type === "Identifier") key = n.property.name;
+    else if (n.computed && n.property.type === "Literal") key = String(n.property.value);
+    if (key == null) return null;
+    keys.unshift(key);
+    n = n.object;
+  }
+  return n?.type === "Identifier" ? { root: n.name, keys } : null;
 }
 // `onPath` holds the nodes on the CURRENT path only, so a self-reference terminates while one object exposed under
 // two keys (`{ OrderStatus: s, Status: s }`) is indexed under both paths — every candidate the plan must list.
@@ -239,6 +274,7 @@ function walkValue(node, path, st) {
     st.onPath.add(node);
     st.reached.add(node);
     for (const [key, child] of childEntries(node)) walkValue(child, [...path, key], st);
+    for (const [keys, child] of st.assigned.get(node) || []) walkValue(child, [...path, ...keys], st);
     st.onPath.delete(node);
   }
 }
@@ -279,34 +315,47 @@ export function bundleDeps(entry) {
   const v = entry?.deps;
   if (v == null) return null;
   if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
-  try {
-    const parsed = JSON.parse(String(v));
-    if (Array.isArray(parsed)) return parsed.filter((x) => typeof x === "string");
-  } catch { /* not JSON — read the quoted names below */ }
-  return [...String(v).matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+  // The source of an array literal: its string elements. Anything else is read as text, from its first `[…]` only,
+  // so a name quoted elsewhere in the payload cannot pass for an import.
+  const node = parseJsExpression(v);
+  if (node?.type === "ArrayExpression") return node.elements.filter(isStringLiteral).map((el) => el.value);
+  const list = /\[([^\]]*)\]/.exec(String(v));
+  return list ? [...list[1].matchAll(/["']([^"']+)["']/g)].map((m) => m[1]) : [];
 }
-// The custom names a built page declares, per kind: handler requests (plus the `clicked` requests its elements
-// fire), validator and converter registrations. A kind whose source the bundle did not carry is null — "not
-// provided", never "provided and empty" — and the whole result is null when none of the three is there.
+const isStringLiteral = (n) => n?.type === "Literal" && typeof n.value === "string";
+// The custom names a built page DECLARES, per kind: the request of each handler entry, validator and converter
+// registrations. A request a handler body only dispatches (`next?.handle({ request: "pkg.X" })`) or a button only
+// fires belongs to whoever declares its handler, so it is not read. A kind whose source the bundle did not carry is
+// null — "not provided", never "provided and empty" — and the whole result is null when none of the three is there.
 // `handlersSrc` is verifyCtx's own normalization of `entry.handlers` (source text either way).
-export function bundleCustomNames(entry, handlersSrc, ops = []) {
+export function bundleCustomNames(entry, handlersSrc) {
   if (!entry || (handlersSrc == null && entry.validators == null && entry.converters == null)) return null;
-  let request = null;
-  if (handlersSrc != null) {
-    request = new Set([...String(handlersSrc).matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)].map((m) => m[1]));
-    for (const o of ops) if (typeof o.request === "string") request.add(o.request);
-  }
   return {
-    request,
+    request: handlersSrc == null ? null : new Set(handlerRequests(Array.isArray(entry.handlers) ? entry.handlers : handlersSrc)),
     validator: entry.validators == null ? null : new Set(registeredNames(entry.validators)),
     converter: entry.converters == null ? null : new Set(registeredNames(entry.converters)),
   };
 }
-// The keys of a validators/converters registration object: `{ "ab.Positive": { … } }`.
+// The `request` of each top-level entry of a handlers array — parsed, or its source. Source that does not parse
+// is read as text, every `request:` in it: over-reading only asks for a decision, under-reading hides a name.
+function handlerRequests(v) {
+  if (Array.isArray(v)) return v.map((h) => (isObj(h) && typeof h.request === "string" ? h.request : null)).filter(Boolean);
+  const node = parseJsExpression(v);
+  if (node?.type !== "ArrayExpression") return [...String(v).matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)].map((m) => m[1]);
+  return node.elements.filter((el) => el?.type === "ObjectExpression")
+    .map((el) => el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value)
+    .filter(isStringLiteral).map((n) => n.value);
+}
+// The keys of a validators/converters registration object: `{ "ab.Positive": { … } }`, a name of any number of
+// segments (`ab.Order.Approve`). Source that does not parse is read as text, every quoted dotted key in it.
 function registeredNames(v) {
   if (v == null) return [];
   if (isObj(v)) return Object.keys(v);
-  return [...String(v).matchAll(/["']([A-Za-z][A-Za-z0-9]*\.[A-Za-z_$][\w$]*)["']\s*:/g)].map((m) => m[1]);
+  const node = parseJsExpression(v);
+  if (node?.type === "ObjectExpression") {
+    return node.properties.filter((p) => p.type === "Property").map(staticPropKey).filter((k) => typeof k === "string");
+  }
+  return [...String(v).matchAll(/["']([A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z_$][\w$]*)+)["']\s*:/g)].map((m) => m[1]);
 }
 // The names outside the confirmed namespace, `[{ kind, name }]`. `prefixes` is `prefixesOf(conventions)`. The
 // namespace is the text before the FIRST dot (`ab.Order.Approve` is in `ab`), compared without case; a name with no

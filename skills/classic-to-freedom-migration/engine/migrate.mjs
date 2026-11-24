@@ -1030,6 +1030,17 @@ const placementOf = (manifest) => manifest.placement && typeof manifest.placemen
 // The run's project-conventions facts (`conventionFacts`: the block, its blockers, the GUID index): the ROOT
 // manifest's, inherited WHOLE by every fold — a fold's child bundle carries neither the block nor the module bodies.
 const runConventionsOf = (manifest, opts = {}) => opts.inheritedConventions || conventionFacts(manifest);
+// A fold that finds a block on its own child bundle ignores it — the root's holds for the whole tree — and says so, so
+// an answer recorded in the wrong place blocks the plan instead of vanishing.
+const ownConventionsBlockers = (manifest, opts = {}) => (opts.inheritedConventions && manifest?.projectConventions != null
+  ? [`projectConventions on the child bundle of '${opts.scopeSchema || "a sub-page"}' is ignored — a sub-page uses the root manifest's block; record the answer there and remove it from the child bundle`]
+  : []);
+// The record-id lists of several runs as one, by id in first-seen order, each id with every path that holds it.
+function mergeRecordIds(lists) {
+  const byGuid = new Map();
+  for (const { guid, paths } of lists.flat()) byGuid.set(guid, [...new Set([...(byGuid.get(guid) || []), ...paths])]);
+  return [...byGuid].map(([guid, paths]) => ({ guid, paths }));
+}
 const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
 // `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
 // target package and the host decision are required. The ONE source for both the gate above and the keys the
@@ -1239,6 +1250,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   const res = f.res;
   c.spec = res.designSpec;
   c.changeSet = pageTextsOf(res.changeSet);
+  c.recordIds = res.recordIds; c.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
   c.mappedEntity = res.entity;
   c.resolvedFrom = key;
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
@@ -1300,6 +1312,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
     t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
+    t.recordIds = res.recordIds; t.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
     t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
     t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
     t.coverage = res.coverage || null;        // aggregated into the parent's coverage gate
@@ -1340,6 +1353,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
   else {
     const res = f.res;
     miniPage.spec = res.designSpec; miniPage.changeSet = pageTextsOf(res.changeSet); miniPage.blocked = !!res.gate?.blocked;
+    miniPage.recordIds = res.recordIds; miniPage.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
@@ -2646,11 +2660,18 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // Everything the manifest carries is covered here rather than an allowlist — the allowlist is what went stale.
 // The one key left out is `runDiagnostics`: it records the machine the plan was produced on (skill build, clio,
 // stand), not what the plan says, so a plugin or clio update between plan and build does not ask for re-approval.
-const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics"]);
-function computePlanVersion(manifest, readBody) {
+// `constantsModules` is replaced by what the plan shows of it, the record-id table: re-fetching a module (reformatted,
+// or holding a constant this plan never uses) leaves the plan as it was, so the approval stands; an id the plan maps
+// differently moves the version.
+const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules"]);
+function computePlanVersion(manifest, readBody, recordIds = []) {
   const h = createHash("sha256");
   const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
   feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
+  if (recordIds.length) {
+    h.update("\u0001R");
+    h.update(JSON.stringify(recordIds.map(({ guid, paths }) => [guid, [...paths].sort()]).sort((a, b) => (a[0] < b[0] ? -1 : 1))));
+  }
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
@@ -3159,9 +3180,18 @@ export function runMigration(manifest, opts = {}) {
   }
   out.placementBlockers = specOpts.placementBlockers;
   out.projectConventions = specOpts.projectConventions;
-  out.conventionsBlockers = specOpts.conventionsBlockers;
+  // The sub-pages folded into this run (child, typed, mini), each carrying its own run's ids and blockers up — a
+  // grandchild's already sit in its child's. The root's plan is the one approved, so it lists the whole tree's.
+  const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
+  out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
+    ...folded.flatMap((f) => f.conventionsBlockers || [])])];
+  // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
+  // constants module holds — this page's, and every folded sub-page's. `recordIdsUsed` touches no source when the
+  // index is empty (no constants module declared).
+  out.recordIds = mergeRecordIds([recordIdsUsed(runConventions.guidIndex, [out.changeSet, out.listChangeSet,
+    () => (Array.isArray(manifest.schemas) ? manifest.schemas : []).map(bodyOf)]), ...folded.map((f) => f.recordIds || [])]);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
-  out.planVersion = computePlanVersion(manifest, bodyOf);
+  out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds);
   out.translationsMissing = translationsMissing(manifest);
   // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
@@ -3176,11 +3206,8 @@ export function runMigration(manifest, opts = {}) {
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
-  // constants module holds. `recordIdsUsed` touches no source when the index is empty — every fold, most runs.
-  const recordIds = recordIdsUsed(runConventions.guidIndex, [out.changeSet, out.listChangeSet,
-    () => (Array.isArray(manifest.schemas) ? manifest.schemas : []).map(bodyOf)]);
-  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics, recordIds });
+  out.plan = renderPlan(out, { ...specOpts, conventionsBlockers: out.conventionsBlockers, planGroups, runDiagnostics: manifest.runDiagnostics,
+    recordIds: out.recordIds });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }

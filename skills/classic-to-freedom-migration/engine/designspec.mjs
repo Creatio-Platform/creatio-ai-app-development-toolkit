@@ -2782,6 +2782,13 @@ function moduleDepRows(d, conventions) {
   const rest = deps.filter((m) => !role.has(m));
   const rows = declared.map((m) => ({ deliverableId: `module-dep:${m}`, label: `[module-dep] ${esc(m)} — project ${role.get(m)}: import it in the page's SCHEMA_DEPS`,
     ...cardField(d), vk: { type: "moduledep", module: m } }));
+  // A declared module the Classic page never imported still gets its row, informational: the builder learns of it
+  // from the task's conventions block, and nothing on the Classic page says this page needs it, so it cannot block.
+  for (const m of role.keys()) {
+    if (deps.includes(m)) continue;
+    rows.push({ deliverableId: `module-dep:${m}`, label: `[module-dep] ${esc(m)} — project ${role.get(m)}, not imported by the Classic page`, ...cardField(d),
+      info: "declared in projectConventions; import it in SCHEMA_DEPS only if the Freedom page uses its ids or helpers" });
+  }
   if (rest.length) {
     const item = rest.join(", ");
     // The aggregate's OWN id (`memberId(d)`, every dependency), not one rebuilt from the rest: the plan's member
@@ -5014,7 +5021,7 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
     // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
     // read for the project-conventions rows; null when the bundle did not carry them.
     deps: bundleDeps(entry),
-    customNames: bundleCustomNames(entry, handlersSrc, ops),
+    customNames: bundleCustomNames(entry, handlersSrc),
     containers: pageContainersOf(page),
     // the frozen reconcile mode (from the task folder, or null). Only `classic-layout` turns on the EXTRA-field
     // check in resolveFieldsByIdentity: a field CONTROL on the built page that is not in the plan is a base field

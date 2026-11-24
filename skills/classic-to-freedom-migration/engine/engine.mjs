@@ -568,6 +568,16 @@ export function parseDefineModule(src, { locations = false } = {}) {
   return { error: null, deps, factory, returned: findFactoryReturn(factory) };
 }
 
+// One JavaScript expression as an AST node, or null when the text is not one — a get-page bundle field (`deps`,
+// `handlers`, `validators`, `converters`) is the SOURCE of an array or object literal. Nothing is evaluated.
+export function parseJsExpression(src) {
+  const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
+  try {
+    const ast = acornParse("(" + String(src ?? "") + "\n)", { ecmaVersion: "latest", sourceType: "script" });
+    return ast.body.length === 1 && ast.body[0].type === "ExpressionStatement" ? ast.body[0].expression : null;
+  } catch { return null; }
+}
+
 // Parse a Classic schema body into the effective-page inputs, WITHOUT executing it (AST + static eval).
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).

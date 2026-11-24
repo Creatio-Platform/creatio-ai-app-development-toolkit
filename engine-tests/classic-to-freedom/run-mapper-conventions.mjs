@@ -236,6 +236,68 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
   check("conventions: a child page folded from a detail names its requests in the ROOT's prefix, and the root alone gates",
     () => /ab\.GoBtnClicked/.test(childSpec) && !/usr\.GoBtnClicked/.test(withChild.plan) && withChild.conventionsBlockers.length === 0,
     () => ({ blockers: withChild.conventionsBlockers, spec: childSpec.split("\n").filter((l) => /GoBtn/.test(l)) }));
+
+  // A record id only a CHILD page uses reaches the root's table: the plan the user approves is the root's.
+  const childWithId = { ...child, schemas: [{ pkg: "CH", body: child.schemas[0].body.replace("onGo:function(){}", 'onGo:function(){this.set("Status","1b7e3a3c-0000-4c5d-8e9f-0a1b2c3d4e5f");}') }] };
+  const rootOf = (ch) => runMigration({ ...manifest(DW), schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"UsrOrder",diff:[{operation:"insert",name:"PT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"PD",parentName:"PT",values:{itemType:2}}],details:{PD:{schemaName:"CHDetail",entitySchemaName:"CH",filter:{detailColumn:"X",masterColumn:"Id"}}}};});' }],
+    childPageSchemas: { CH: ch, CHPage: ch } }, { baseDir: dir });
+  const childIdRun = rootOf(childWithId);
+  check("conventions: a record id only a folded child page uses is listed in the ROOT plan's record-id table",
+    () => /\| `1b7e3a3c-0000-4c5d-8e9f-0a1b2c3d4e5f` \| `AbConstants\.OrderStatus\.New` \|/.test(section(childIdRun.plan)),
+    () => section(childIdRun.plan));
+  const childOwnBlock = rootOf({ ...child, projectConventions: { ...DW, requestPrefix: "zz" } });
+  check("conventions: a block recorded on a child bundle is not dropped silently — the root plan is blocked and says where to record it",
+    () => childOwnBlock.conventionsBlockers.some((x) => /projectConventions on the child bundle of '.*' is ignored/.test(x)) && /ab\.GoBtnClicked/.test((childOwnBlock.childPages || []).map((c) => c.spec || "").join("\n")),
+    () => childOwnBlock.conventionsBlockers);
+
+  // planVersion takes what the plan shows of a constants module, not its bytes.
+  const reformatted = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js").replace(/\n/g, "\n\n") + "\n// re-fetched" },
+    AbCommonConstants: body("AbCommonConstants.js") } }), { baseDir: dir });
+  const extraConstant = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js") },
+    AbCommonConstants: body("AbCommonConstants.js").replace("return", 'var Unused = { X: "4e4e4e4e-0000-4000-8000-000000000004" }; return') } }), { baseDir: dir });
+  const remapped = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js").replace(/OrderStatus/g, "Status") },
+    AbCommonConstants: body("AbCommonConstants.js") } }), { baseDir: dir });
+  check("planVersion: re-fetching a constants module (reformatted, or one more constant the plan never uses) keeps the version; an id mapped to another path moves it",
+    () => reformatted.planVersion === ab.planVersion && extraConstant.planVersion === ab.planVersion && remapped.planVersion !== ab.planVersion,
+    () => [ab.planVersion, reformatted.planVersion, extraConstant.planVersion, remapped.planVersion]);
+
+  // A constants module that fills its tree by assignment is read like a literal one.
+  const assignedIdx = constantsGuidIndex({ projectConventions: { ...DW, constantsModules: ["AssignedConstants"] }, constantsModules: { AssignedConstants:
+    'define("AssignedConstants", [], function() { var Ids = {}; Ids.Status = {}; Ids.Status.New = "6f6f6f6f-0000-4000-8000-000000000006"; Ids["Type"] = { Retail: "6e6e6e6e-0000-4000-8000-000000000006" }; return Ids; });' } });
+  check("conventions: a constants module filled by assignment (`Ids.Status.New = …`) is indexed under the same paths a literal gives",
+    () => assignedIdx.get("6f6f6f6f-0000-4000-8000-000000000006")?.[0] === "AssignedConstants.Status.New"
+      && assignedIdx.get("6e6e6e6e-0000-4000-8000-000000000006")?.[0] === "AssignedConstants.Type.Retail",
+    () => Object.fromEntries(assignedIdx));
+
+  // The bundle readers: names of any number of segments, declared requests only, an import only from the deps list.
+  const P = { request: "ab", validator: "ab", converter: "ab" };
+  check("bundle readers: a validator or converter named with three segments is read from the SOURCE string, and a foreign one is reported",
+    () => foreignNames(bundleCustomNames({ validators: '{ "zz.Order.Approve": { validator: () => null } }', converters: '{ "ab.Order.Format": { converter: (v) => v } }' }, null), P)
+      .map((f) => `${f.kind}:${f.name}`).join() === "validator:zz.Order.Approve"
+      && bundleCustomNames({ validators: '{ zz.broken', converters: '{ "zz.Order.Approve": 1, ' }, null).converter.has("zz.Order.Approve"));
+  check("bundle readers: a request a handler body only dispatches is not a name the page declares; the entry's own request is",
+    () => [...bundleCustomNames({}, '[{ request: "ab.Go", handler: async (r, next) => { await next?.handle({ request: "pkg.SomethingRequest" }); } }]').request].join() === "ab.Go"
+      && [...bundleCustomNames({ handlers: [{ request: "ab.Parsed" }] }, '[{"request":"ab.Parsed"}]').request].join() === "ab.Parsed");
+  check("bundle readers: deps in single-quoted source are read from the array; a module named elsewhere in the text is not an import",
+    () => bundleDeps({ deps: "['@creatio-devkit/common', 'AbConstants']" }).join() === "@creatio-devkit/common,AbConstants"
+      && bundleDeps({ deps: "['@creatio-devkit/common'] /* 'AbConstants' */ junk(" }).join() === "@creatio-devkit/common");
+  const nsRow = (handlers) => rowLine(renderVerify(ab, opts, { pages: { main: page({ handlers, validators: "{}", converters: "{}", deps: "[]" }) } }).markdown, NS_ROW);
+  check("verify: a page that dispatches another package's request but declares only its own is ✅ on the namespace row",
+    () => /✅ Done/.test(nsRow('[{ request: "ab.ApplyButtonClicked", handler: async (r, next) => next?.handle({ request: "pkg.OtherRequest" }) }]')),
+    () => nsRow('[{ request: "ab.ApplyButtonClicked", handler: async (r, next) => next?.handle({ request: "pkg.OtherRequest" }) }]'));
+
+  // AC 4 — a validator namespace that differs from the earlier migration's is a difference too.
+  const valDiff = runMigration(manifest({ ...DW, validatorPrefix: "abv", previous: { folder: "migrations/orders-1", requestPrefix: "ab", helperModules: DW.helperModules, constantsModules: DW.constantsModules } }), { baseDir: dir });
+  check("conventions: a validator prefix that differs from the earlier migration's raises the question",
+    () => valDiff.conventionsBlockers.length === 1 && /validator prefix ab\. → abv\./.test(valDiff.conventionsBlockers[0]),
+    () => valDiff.conventionsBlockers);
+
+  // AC 8 — a declared module the Classic page never imported still has its (informational) row.
+  check("conventions: a declared constants module the Classic page never imported gets an informational row, not a blocking one",
+    () => /\[module-dep\] AbCommonConstants — project constants module, not imported by the Classic page/.test(ab.checklist)
+      && rowIds(ab, opts).includes("module-dep:AbCommonConstants")
+      && !/⚠ verify/.test(rowLine(foreign.markdown, /\[module-dep\] AbCommonConstants/)),
+    () => [ab.checklist.split("\n").filter((l) => /AbCommonConstants/.test(l)), rowLine(foreign.markdown, /\[module-dep\] AbCommonConstants/)]);
 }
 
 // The deliverable ids of every row a run publishes.
