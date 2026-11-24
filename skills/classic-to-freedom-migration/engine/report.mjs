@@ -559,6 +559,12 @@ function decidedWithoutYouSection(entries) {
     "The agent made these choices itself (`Decided by: orchestrator` in `decisions.md`). Each is open to change: say so, and it becomes a question.", "",
     ...entries.map((d) => `- **${esc(d.id)}** — ${esc(d.title || "?")}`)];
 }
+// The section for the decisions.md above the task folder `dir`. Read only beside a task folder: with none, `..`
+// would name whatever folder the process happens to run in.
+function decidedWithoutYouFor(dir) {
+  if (!dir) return [];
+  return decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, ".."))));
+}
 function carryOverSection(items, pageName) {
   if (!items.length) return [];
   const L = [`## Carry-over — postponed items (${items.length})`, "",
@@ -682,8 +688,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
-  // Read only beside a task folder: with none, `..` would name whatever folder the process happens to run in.
-  const withoutYou = dir ? decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, "..")))) : [];
+  const withoutYou = decidedWithoutYouFor(dir);
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",
