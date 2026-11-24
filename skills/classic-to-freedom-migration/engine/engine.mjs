@@ -2238,12 +2238,13 @@ function mergeDetails(L, seed, details) {
   }
 }
 
+const ESCAPED_DOLLAR = String.raw`\$`;
 // Does `name` occur in the fold's sources more often than its `definitions` (one per layer that declares it)? Code,
 // strings and comments alike: a reference that cannot be told from a mention keeps the method a normal row. `null`
 // when some layer's source is not at hand.
 function nameReferenced(name, definitions, tagged) {
   if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
-  const word = new RegExp(String.raw`(?<![\w$])${name.replaceAll("$", String.raw`\$`)}(?![\w$])`, "g");
+  const word = new RegExp(String.raw`(?<![\w$])${name.replaceAll("$", ESCAPED_DOLLAR)}(?![\w$])`, "g");
   let total = 0;
   for (const { L } of tagged) {
     if (typeof L.src !== "string") return null;
@@ -2597,7 +2598,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
     methods: [...methods.entries()].map(([n, m]) => ({
       name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched,
-      // Whether the name occurs anywhere in the Classic sources beyond the method's own definitions — a member
+      // Whether the name occurs anywhere in this fold's Classic sources (the page's base chain and its own layers) beyond the method's own definitions — a member
       // reference (`callback: this.onX`, `Ext.bind(this.onX)`), a string, a call. `null` when a layer's source is
       // not at hand, which a reader must take as "may be referenced".
       referenced: dormantCandidate(m) ? nameReferenced(n, m.pkgs.length, tagged) : null,

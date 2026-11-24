@@ -3235,9 +3235,6 @@ export function runMigration(manifest, opts = {}) {
   // them: a directive changes what the plan builds.
   const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
   out.directives = directivesOf(decisionRecords);
-  // Rides on the root result too, so a mode that re-derives the groups from `checklistOpts(manifest)` alone (the cut,
-  // `--verify`) closes the same rule attributes the plan did.
-  if (!opts.scopeSchema) out.decisionProvenance = specOpts.decisionProvenance;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds, out.directives);
   out.translationsMissing = translationsMissing(manifest);
@@ -3245,6 +3242,9 @@ export function runMigration(manifest, opts = {}) {
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
   const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
   if (!opts.scopeSchema) {
+    // Rides on the root result too, so a mode that re-derives the groups from `checklistOpts(manifest)` alone (the
+    // cut, `--verify`) closes the same rule attributes the plan did.
+    out.decisionProvenance = specOpts.decisionProvenance;
     out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
     out.noDeliverableIssues = noDeliverableIssues(manifest.decisionsWithoutDeliverable, specOpts);
     out.provenanceIssues = provenanceIssues(decisionRecords, publishedPageKeys(planGroups));

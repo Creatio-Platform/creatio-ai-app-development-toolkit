@@ -7124,7 +7124,7 @@ check("category precedence: a body whose ONLY kind is save still categorises as 
   const planLine = (m) => plan.split("\n").find((l) => l.startsWith(`| ${m} |`)) || "";
   check("dormant: a method with no trigger, no caller and no reference anywhere in the Classic source is closed `not-applicable — dormant` in the checklist and shown `Won't do — dormant` in the plan",
     () => stub("setCanEditFieldsRaw").dormant === true && row("setCanEditFieldsRaw").na === DORMANT_REASON
-      && /\*\*Won't do\*\* — dormant: no trigger, no caller and no reference in Classic/.test(planLine("setCanEditFieldsRaw")),
+      && /\*\*Won't do\*\* — dormant: no trigger, no caller and no reference in this page's Classic schemas/.test(planLine("setCanEditFieldsRaw")),
     () => [stub("setCanEditFieldsRaw"), row("setCanEditFieldsRaw"), planLine("setCanEditFieldsRaw")]);
   check("dormant (guard): a method passed as a callback (`callback: this.onCallbackDone`), one bound by a diff element and one named in a string are normal rows — the call index alone sees only `this.X(…)` calls",
     () => ["onCallbackDone", "onBound", "onNamedInString"].every((m) => !stub(m)?.dormant && !row(m)?.na),

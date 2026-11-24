@@ -496,9 +496,10 @@ page template rows of an `existing-section` run, whose section and pages already
 its template row). `RunProcess` and custom actions are never closed by a signal.
 
 A **dormant** method is the engine's one SOFT conclusion: a custom method with no declared trigger, no caller in the
-call index and no other occurrence of its name in any layer's Classic source (code, strings or comments — so
+call index and no other occurrence of its name in the fold's Classic sources — the page's base chain and its own
+layers; a section schema or another page is not read — (code, strings or comments — so
 `callback: this.onX` and `Ext.bind(this.onX)` keep it live) is closed `dormant: no trigger, no caller and no
-reference in Classic`. A manifest entry decides instead (`build` reopens it), where a hard conclusion — a hashed
+reference in this page's Classic schemas`. A manifest entry decides instead (`build` reopens it), where a hard conclusion — a hashed
 column — rejects an entry. An override of a lower layer's method, a body the parser could not read and a method
 assigned from another module are never dormant.
 

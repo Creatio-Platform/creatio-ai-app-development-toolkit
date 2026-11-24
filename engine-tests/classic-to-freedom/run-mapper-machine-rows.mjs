@@ -68,7 +68,10 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
   // `Ported as (row N): <symbol>` — the build agent's record of the port, checked against the built page.
   {
     const PORTED = `[
-      { request: "usr.SetCanEditFieldsRequest", handler: async (request, next) => { applyEditRights(request); return next?.handle(request); } },
+      { request: "usr.SetCanEditFieldsRequest", handler: async (request, next) => {
+          function applyEditRights(r) { return r; }
+          function neverCalled() { return 1; }
+          applyEditRights(request); return next?.handle(request); } },
       { request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
           await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest", $context: request.$context });
           UsrRights.check(request.$context);
@@ -88,14 +91,28 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const unsent = P(["usr.NeverSentRequest"]);
     const missing = P(["usr.InventedRequest"]);
     const uncalled = P(["neverCalled"]);
+    const undefinedFn = P(["notOnThePage"]);
     const noDeps = P(["UsrRights.check"]);
     const undeclared = P(["UsrRights.check"], pctx({ deps: ["@creatio-devkit/common"] }));
     const mixed = P(["usr.SetCanEditFieldsRequest", "neverCalled"]);
-    check("Ported as: a request with no sender, a symbol not on the page, an uncalled function, a module function without `deps` or from an undeclared module, and a claim mixing a real and an invented symbol each read ⚠ verify, never ✅",
-      () => [unsent, missing, uncalled, noDeps, undeclared, mixed].every((r) => r[0] === "⚠ verify" && r[2] === "unverified")
+    check("Ported as: a request with no sender, a symbol not on the page, a function the page defines but never calls, one it does not define, a module function without `deps` or from an undeclared module, and a claim mixing a real and an invented symbol each read ⚠ verify, never ✅",
+      () => [unsent, missing, uncalled, undefinedFn, noDeps, undeclared, mixed].every((r) => r[0] === "⚠ verify" && r[2] === "unverified")
         && /nothing on the page sends it/.test(ev(unsent)) && /no handler calls `neverCalled`/.test(ev(uncalled))
+        && /defines no function `notOnThePage`/.test(ev(undefinedFn))
         && /carries no `deps`/.test(ev(noDeps)) && /not among the page's `define\(\)` deps/.test(ev(undeclared)),
-      () => [unsent, missing, uncalled, noDeps, undeclared, mixed]);
+      () => [unsent, missing, uncalled, undefinedFn, noDeps, undeclared, mixed]);
+    const COMMENTED = `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        // TODO: await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest" });
+        helpers.applyRights(request);
+        return next?.handle(request); } }]`;
+    const cctx2 = verifyCtx({ pages: { main: page({ handlers: COMMENTED }) } }, "main");
+    const commented = P(["usr.SetCanEditFieldsRequest"], cctx2);
+    const scaffold = P(["handle"], cctx2);
+    const memberOnly = P(["applyRights"], cctx2);
+    check("Ported as: a request named only in a comment is not sent, the platform name `handle` (every handler's `next?.handle(request)`) names no port, and a name reached only as another object's method (`helpers.applyRights(…)`) with no definition on the page is not a page function — each reads ⚠, never ✅",
+      () => [commented, scaffold, memberOnly].every((x) => x[0] === "⚠ verify")
+        && /is a platform name every handler uses/.test(ev(scaffold)) && /defines no function `applyRights`/.test(ev(memberOnly)),
+      () => [commented, scaffold, memberOnly]);
     const platform = P(["crt.HandleViewModelInitRequest"]);
     check("Ported as: a platform request a handler answers (`crt.HandleViewModelInitRequest`) is reached — the platform sends it",
       () => st(platform) === "✅ Done" && /answers platform request/.test(ev(platform)), () => platform);

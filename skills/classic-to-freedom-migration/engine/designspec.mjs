@@ -2900,7 +2900,7 @@ function fieldReason(row) {
 export function engineStatusReason(row, ctx = {}) {
   return cardActionReason(row, ctx) || childPageReason(row) || pagesOnlyReason(row, ctx) || existingSectionReason(row, ctx) || fieldReason(row);
 }
-export const DORMANT_REASON = "dormant: no trigger, no caller and no reference in Classic";
+export const DORMANT_REASON = "dormant: no trigger, no caller and no reference in this page's Classic schemas";
 // The engine's SOFT conclusions: closed by default, but a person's `build` (or `wont-do`) entry decides instead.
 // A dormant method is one — the analysis can be wrong about what starts a method, and the person who knows the
 // page can say so; a hashed column cannot be rendered whoever asks, so that stays a hard conclusion above.
@@ -4745,8 +4745,13 @@ function closingParen(code, open) {
 // Is `name` CALLED in `code` (a `codeOnly` output)? `name(…)`, `this.name(…)` and `obj.name(…)` are calls;
 // `function name(…)` and the method shorthand `name(…) { … }` are definitions, and a function that is only defined
 // does nothing on the page. A dotted `name` (`Helpers.format`) matches its dotted call.
-function calledIn(code, name) {
-  const re = new RegExp(String.raw`(function\s+)?(?<![\w$])${reEsc(name).replaceAll(String.raw`\.`, String.raw`\s*\.\s*`)}\s*\(`, "g");
+const ESCAPED_DOT = String.raw`\.`;
+const SPACED_DOT = String.raw`\s*\.\s*`;
+// `bare` asks for a call of the name itself, never `obj.name(…)` — another object's method of the same name.
+function calledIn(code, name, bare = false) {
+  const callee = reEsc(name).replaceAll(ESCAPED_DOT, SPACED_DOT);
+  const before = bare ? String.raw`(?<![\w$.]\s*)` : String.raw`(?<![\w$])`;
+  const re = new RegExp(String.raw`(function\s+)?${before}${callee}\s*\(`, "g");
   for (const m of code.matchAll(re)) {
     if (m[1]) continue;
     const end = closingParen(code, m.index + m[0].length - 1);
@@ -4755,6 +4760,12 @@ function calledIn(code, name) {
   }
   return false;
 }
+// The handler source with its comments blanked and its strings kept: a request type is a string, and a request
+// named only in a comment is not sent.
+const withoutComments = (s) => String(s).replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+  (m) => (m.startsWith("/") ? " " : m));
+// Is `name` a function the page itself defines (`function name(`, `const name = `, a `name:` / `name(` member)?
+const definedIn = (code, name) => new RegExp(String.raw`function\s+${reEsc(name)}\s*\(|\b(?:const|let|var)\s+${reEsc(name)}\s*=|[{,]\s*${reEsc(name)}\s*[:(]`).test(code);
 // A request a page sends: a handler's `type: "<request>"` or an element's `request: "<request>"` in the view config.
 // A handler DECLARING it (`request: "<request>", handler: …`) only answers it, so the declaration alone is not a
 // sender.
@@ -4772,6 +4783,13 @@ const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
 // Whether a handler calls `sym`, as a verdict; `from` names where the function lives when it is not on the page.
 const callVerdict = (code, sym, from = "") => (calledIn(code, sym)
   ? { ok: true, text: `a handler calls \`${esc(sym)}\`${from}` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` });
+// A page function: one the page defines, called bare. A platform name (`handle`, `save`) is Freedom scaffolding —
+// every handler ends in `next?.handle(request)` — so it names no port.
+function pageFunctionVerdict(code, sym) {
+  if (HANDLER_NAME_DENY.has(sym)) return { ok: false, text: `\`${esc(sym)}\` is a platform name every handler uses, not a port` };
+  if (!definedIn(code, sym)) return { ok: false, text: `the page defines no function \`${esc(sym)}\`` };
+  return calledIn(code, sym, true) ? { ok: true, text: `a handler calls \`${esc(sym)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
+}
 // The page's declared `define()` dependencies, when the page entry carries them (`--built.pages[<key>].deps`, read
 // off the page's `body.js`). Null when absent: a module function's port cannot be checked without them.
 function pageDepsOf(page) {
@@ -4790,8 +4808,8 @@ function moduleFunctionVerdict(sym, module, ctx, code) {
 // the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
 // a module function (`Module.fn`) a handler calls from a module the page declares in its `define()` deps.
 function portedSymbolVerdict(sym, ctx, code) {
-  const src = ctx.handlersSrc;
-  if (PAGE_FUNCTION.test(sym)) return callVerdict(code, sym);
+  const src = ctx._noComments ?? (ctx._noComments = withoutComments(ctx.handlersSrc));
+  if (PAGE_FUNCTION.test(sym)) return pageFunctionVerdict(code, sym);
   const dotted = DOTTED_SYMBOL.exec(sym);
   if (!dotted) return { ok: false, text: `\`${esc(sym)}\` is not a request type, a page function or \`Module.function\`` };
   // Memoized on the page ctx like `_codeOnly`: every dotted symbol of the page reads the same view config.

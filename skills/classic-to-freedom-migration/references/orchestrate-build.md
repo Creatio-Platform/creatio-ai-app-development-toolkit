@@ -336,7 +336,8 @@ may change it at any time by saying so — update the line first.
    never in `decisionsWithoutDeliverable`.
 
    **A Classic method nothing starts is not ported.** A custom method with no declared trigger, no
-   caller and no other occurrence of its name in the Classic sources is shown **Won't do — dormant**
+   caller and no other occurrence of its name in the page's Classic schemas (its base chain and its own
+   layers) is shown **Won't do — dormant**
    on its plan line and arrives closed. When the user knows the page does run it, record
    `"<pageKey>#method:<name>": { "status": "build" }` and re-run `--plan`: the row is a normal
    deliverable again.
