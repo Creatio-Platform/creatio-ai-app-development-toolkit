@@ -56,6 +56,9 @@ const MIN_DUPLICATE_FUNCTION_NODES = 8;
 const SECTIONS = ["handlers", "validators", "converters"];
 // A card id (`C04`, `shared/C04`), an AC number (`AC-16`), a decision id (`D8`) or a card path (`card PIS/`).
 const PLAN_CODE = /(?:\b[\w-]+\/)?\bC\d{2,}\b|\bAC-\d+\b|\bD\d+\b|\bcard [\w-]+\//g;
+// The keys that make an object a page element (a list column, a field) rather than data: its `id` is a generated
+// local id, which only has to be unique on the page, not a record id.
+const ELEMENT_KEYS = new Set(["code", "path", "caption", "title", "width"]);
 const RESOURCE_REF = /#ResourceString\(([^)#]+)\)#|\$?Resources\.Strings\.([A-Za-z0-9_]+)/g;
 
 // The manifest's thresholds over the defaults; a value that is not a positive whole number is ignored.
@@ -102,7 +105,7 @@ function lintSection(src, section, ctx) {
   const ast = parseJsExpression(src, { locations: true, onComment: comments });
   if (!ast) { ctx.page.unreadable.push(section); return; }
   if (section === "handlers" && ast.type === "ArrayExpression") lintHandlers(ast, ctx);
-  walkSection(ast, section, null, ctx);
+  walkSection(ast, section, false, ctx);
   for (const c of comments) checkComment(c, section, ctx.page);
 }
 
@@ -123,26 +126,31 @@ function reportDuplicateHelpers(page) {
   }
 }
 
-// One walk over a section for the rules that look at single nodes. `ownerKey` is the key of the property whose value
-// the node is, so an element's own `id` is told apart from a record id used as data.
-function walkSection(node, section, ownerKey, ctx, depth = 0) {
+// One walk over a section for the rules that look at single nodes. `isElementId` marks the value of an element-shaped
+// object's `id`, so a generated local id is told apart from a record id used as data; an `id` beside `displayValue`
+// or `type` is data and is reported.
+function walkSection(node, section, isElementId, ctx, depth = 0) {
   if (!node || depth > 1000) return;
-  const found = checkNode(node, section, ownerKey, ctx);
+  const found = checkNode(node, section, isElementId, ctx);
   if (found) ctx.page.findings.push(found);
+  const elementObject = node.type === "ObjectExpression" && isElementObject(node);
   for (const child of childNodes(node)) {
-    const owner = node.type === "Property" && child === node.value ? staticPropKey(node) : null;
-    walkSection(child, section, owner, ctx, depth + 1);
+    const elementId = (elementObject && child.type === "Property" && staticPropKey(child) === "id")
+      || (isElementId && node.type === "Property" && child === node.value);
+    walkSection(child, section, elementId, ctx, depth + 1);
   }
 }
 
+const isElementObject = (obj) => obj.properties.some((p) => p.type === "Property" && ELEMENT_KEYS.has(staticPropKey(p)));
+
 // The finding one node raises, if any.
-function checkNode(node, section, ownerKey, ctx) {
+function checkNode(node, section, isElementId, ctx) {
   if (isFunction(node)) return checkFunctionLength(node, section, ctx.t);
   if (node.type === "CatchClause") {
     return node.body.body.every(isConsoleCall) ? finding(QUALITY_RULES.catchLogOnly, section, lineOf(node), "the catch block only logs the error") : null;
   }
   if (node.type === "Property") return checkComparisonType(node, section);
-  if (node.type === "Literal" && typeof node.value === "string") return checkStringLiteral(node, section, ownerKey, ctx);
+  if (node.type === "Literal" && typeof node.value === "string") return checkStringLiteral(node, section, isElementId, ctx);
   return null;
 }
 
@@ -159,9 +167,9 @@ function checkComparisonType(node, section) {
   return finding(QUALITY_RULES.numericComparisonType, section, lineOf(node), `\`comparisonType: ${node.value.raw}\``);
 }
 
-function checkStringLiteral(node, section, ownerKey, ctx) {
+function checkStringLiteral(node, section, isElementId, ctx) {
   if (!ctx.page.requestKeys.has(node)) addSenderCandidate(ctx.page.strings, node.value);
-  if (ownerKey === "id" || !GUID_RE.test(node.value)) return null;
+  if (isElementId || !GUID_RE.test(node.value)) return null;
   return finding(QUALITY_RULES.guidLiteral, section, lineOf(node), `\`${node.value}\``,
     { advisory: !ctx.constantsGuids.has(node.value.toLowerCase()) });
 }
@@ -201,7 +209,8 @@ function lintHandler(handler, { page, t }) {
   const handlerNames = new Set([...handler.params.flatMap((p) => [...bindingNames(p)]), ...declaredNamesIn(handler.body, { intoFunctions: false })]
     .filter((n) => !helperNames.has(n)));
   for (const h of helpers) {
-    if (h.nodeCount >= MIN_DUPLICATE_FUNCTION_NODES && !usesHandlerVariables(h, handlerNames)) page.helpers.push(h);
+    // A helper nested in another helper is part of that helper: it moves (or is copied) with it.
+    if (!h.nested && h.nodeCount >= MIN_DUPLICATE_FUNCTION_NODES && !usesHandlerVariables(h, handlerNames)) page.helpers.push(h);
   }
   if (helpers.length > t.maxNestedFunctionsPerHandler) {
     page.findings.push(finding(QUALITY_RULES.nestedFunctions, "handlers", lineOf(handler),
@@ -212,11 +221,11 @@ function lintHandler(handler, { page, t }) {
 }
 
 // Named functions only (`function name() {}`, `const name = () => {}`): an inline callback is not a helper.
-function collectNamedFunctions(node, out, depth = 0) {
+function collectNamedFunctions(node, out, insideHelper = false, depth = 0) {
   if (!node || depth > 1000) return;
-  if (node.type === "FunctionDeclaration" && node.id) out.push(describeHelper(node.id.name, node, node));
-  else if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) out.push(describeHelper(node.id.name, node, node.init));
-  for (const child of childNodes(node)) collectNamedFunctions(child, out, depth + 1);
+  if (node.type === "FunctionDeclaration" && node.id) out.push(describeHelper(node.id.name, node, node, insideHelper));
+  else if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) out.push(describeHelper(node.id.name, node, node.init, insideHelper));
+  for (const child of childNodes(node)) collectNamedFunctions(child, out, insideHelper || isFunction(child), depth + 1);
 }
 
 // The part of a node its shape keeps besides its type: an identifier's name, a literal's source text.
@@ -226,7 +235,7 @@ function shapeToken(n) {
   return "";
 }
 
-function describeHelper(name, anchor, fn) {
+function describeHelper(name, anchor, fn, nested) {
   const parts = [];
   let nodeCount = 0;
   const shape = (n, depth = 0) => {
@@ -240,7 +249,7 @@ function describeHelper(name, anchor, fn) {
   shape(fn.body);
   const own = new Set([name, ...fn.params.flatMap((p) => [...bindingNames(p)]), ...declaredNamesIn(fn.body, { intoFunctions: true })]);
   const free = [...referencedNames(fn.body)].filter((n) => !own.has(n));
-  return { name, line: lineOf(anchor), section: "handlers", shape: parts.join(""), nodeCount, free };
+  return { name, line: lineOf(anchor), section: "handlers", shape: parts.join(""), nodeCount, free, nested };
 }
 
 // A helper that reads a variable of its own handler (`$context`, `scopes`, a local) is a binding of that handler: it
@@ -289,6 +298,8 @@ function referencedNames(node, out = new Set(), depth = 0) {
     referencedNames(node.value, out, depth + 1);
     return out;
   }
+  // The target is written, not read: `data = await other.load()` does not depend on the old `data`.
+  if (node.type === "AssignmentExpression" && node.left.type === "Identifier") return referencedNames(node.right, out, depth + 1);
   for (const child of childNodes(node)) referencedNames(child, out, depth + 1);
   return out;
 }
@@ -296,11 +307,12 @@ function referencedNames(node, out = new Set(), depth = 0) {
 // ---- sequential awaits ----
 
 // Within each block: the awaited model loads (`await x.load(…)`, `await sdk.Model.create(…)`) that use no earlier
-// load's result, followed through the variables assigned from it. A nested function is its own sequence.
+// load's result, followed through the variables assigned from it. A nested function is its own sequence: its body is
+// checked on its own (each block keeps its own count).
 function checkSequentialAwaits(node, page, t, depth = 0) {
   if (!node || depth > 1000) return;
   if (node.type === "BlockStatement") checkBlockAwaits(node, page, t);
-  for (const child of childNodes(node)) if (!isFunction(child)) checkSequentialAwaits(child, page, t, depth + 1);
+  for (const child of childNodes(node)) checkSequentialAwaits(isFunction(child) ? child.body : child, page, t, depth + 1);
 }
 
 function checkBlockAwaits(block, page, t) {

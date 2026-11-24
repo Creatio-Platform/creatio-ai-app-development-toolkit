@@ -71,15 +71,31 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("quality: an object key that shares a load result's name is not a read of it — the loads stay independent",
     () => count(keyNamed, R.sequentialAwaits) === 1, () => keyNamed.findings);
 
+  const inHelper = lintPageQuality(pageOf(handler("usr.Init", "const loadAll = async () => { const a = await m1.load(); const b = await m2.load(); const c = await m3.load(); return [a, b, c]; }; await loadAll();")));
+  check("quality: loads inside a helper declared in a handler are checked as their own sequence",
+    () => count(inHelper, R.sequentialAwaits) === 1, () => inHelper.findings);
+  const reassigned = lintPageQuality(pageOf(handler("usr.Init", "let data = await a.load(); data = await b.load(); const c1 = await c.load();")));
+  check("quality: assigning a new load result to an earlier load's variable is a write, not a read — the loads stay independent",
+    () => count(reassigned, R.sequentialAwaits) === 1, () => reassigned.findings);
+  const dataIds = ["await request.$context.executeRequest({ type: \"usr.Open\", id: \"8dc41780-1234-4000-8000-000000000001\" });",
+    "const owner = { id: \"8dc41780-1234-4000-8000-000000000001\", displayValue: \"Supervisor\" };",
+    "const filter = { recordId: \"8dc41780-1234-4000-8000-000000000001\" };"];
+  check("quality: a record id passed as data — a request id, a lookup value, a recordId — is a GUID finding whatever its key",
+    () => dataIds.every((code) => count(lintPageQuality(pageOf(handler("usr.Data", code))), R.guidLiteral) === 1));
+  const nestedCopies = lintPageQuality(pageOf(`${handler("usr.A", "const outer = (cfg) => { const inner = (v) => v && v.value ? v.value : v; return inner(cfg); }; outer(1);")}, `
+    + handler("usr.B", "const other = (x) => { const inner = (v) => v && v.value ? v.value : v; return inner(x) + 1; }; other(2);")));
+  check("quality: a helper nested in another helper is part of it — its copies are not reported on their own",
+    () => count(nestedCopies, R.duplicateInPage) === 0, () => nestedCopies.findings);
+
   // A helper closing over its handler's own variables is a binding of that handler, not a copy of a helper.
   const wrapper = "const { $context, scopes } = request; const process = (config) => sdk.HandlerChainService.instance.process({ ...config, $context, scopes: [...scopes] }); await process({ type: \"usr.Sent\" });";
   check("quality: a helper reading its handler's $context/scopes is not a duplicate in another handler",
     () => count(lintPageQuality(pageOf(`${handler("usr.A", wrapper)}, ${handler("usr.B", wrapper)}`)), R.duplicateInPage) === 0);
 
   // a local element id is never a finding; a record id used as data is.
-  const ids = lintPageQuality({ handlers: `[${handler("usr.Cols", "const column = { id: \"8dc41780-0000-4000-8000-000000000002\" }; if (s === \"8dc41780-1234-4000-8000-000000000001\") { return; }")}]`,
+  const ids = lintPageQuality({ handlers: `[${handler("usr.Cols", "const column = { id: \"8dc41780-0000-4000-8000-000000000002\", code: \"Name\" }; if (s === \"8dc41780-1234-4000-8000-000000000001\") { return; }")}]`,
     viewConfig: { items: [{ type: "crt.ListWidget", columns: [{ id: "8dc41780-0000-4000-8000-000000000001" }] }] } });
-  check("quality: an element's own `id` (handler object or viewConfig columns[].id) is never a GUID finding; a compared record id is",
+  check("quality: an element's own `id` (an element-shaped handler object or viewConfig columns[].id) is never a GUID finding; a compared record id is",
     () => ids.findings.filter((f) => f.rule === R.guidLiteral).map((f) => f.text).join() === "`8dc41780-1234-4000-8000-000000000001`",
     () => ids.findings);
   const held = "1b7e3a3c-0000-4c5d-8e9f-0a1b2c3d4e5f";
