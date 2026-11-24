@@ -2534,7 +2534,9 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, en
 }
 
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
-function mapRules(payloadRules, payloadFields, knownElements = new Set(), entityName = null) {
+function mapRules(payloadRules, payloadFields, knownElements = new Set(), entity = null) {
+  // The merge marks an unread entitySchemaName as "?": that is no name to list pages by or to print as one.
+  const entityName = entity && entity !== "?" ? entity : null;
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
   for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, entityName);
   // C4: flag a rule ONLY when its target resolves to NOTHING on the page — neither a mapped field NOR any known
@@ -2563,10 +2565,12 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set(), entity
     const targets = [...new Set(entityBusinessRules.map((r) => r.targetAttribute).filter(Boolean))];
     if (!targets.length) return;
     const entity = entityName || "the object";
+    const listPages = entityName ? `run \`list-pages\` by entity ${entityName}`
+      : "read this page's entity on-stand (its `entitySchemaName`), run `list-pages` by it";
     needsDecision.push({ kind: "object-wide-scope", item: OBJECT_WIDE_SCOPE_ITEM,
       reason: `the Classic page filters ${targets.join(", ")} for THIS page only, but Freedom page rules have no lookup `
         + `filter, so each becomes an entity business rule that applies on ALL pages and lists of ${entity}. Before `
-        + `building, run \`list-pages\` by entity ${entity} and name its other Freedom pages when you ask the user. `
+        + `building, ${listPages} and name its other Freedom pages when you ask the user. `
         + "Accepted: build the entity rules. Declined: build none of them; record the answer as its own D<N> in "
         + "`decisions.md` (not migrated — add manually: Freedom page rules have no lookup filter) and close each "
         + "entity-rule deliverable `wont-do` under it: `manifest.deliverableStatus` at plan approval, "

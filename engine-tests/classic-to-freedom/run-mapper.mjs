@@ -613,6 +613,19 @@ check("entity-filter: static filter marked complete + NOT in the folded line",
     () => groups.filter((r) => r.confirm?.kind === "object-wide-scope").length === 1,
     () => groups.map((r) => r.label));
 }
+// With no entity on the page, the row and the decision still read as instructions the agent can follow.
+{
+  const noEnt = mapToFreedom(mergeHierarchy([L("Client", {
+    diff: [di({ name: "Lk", parentName: "Header", propertyName: "items", bindTo: "Lk" })],
+    businessRules: { Lk: { r: { ruleType: 1, baseAttributePatch: "OtherCol" } } } })]));
+  const d = (noEnt.needsDecision || []).find((n) => n.kind === "object-wide-scope");
+  const spec = renderDesignSpec({ entity: null, changeSet: noEnt });
+  check("object-wide scope (no entity): the decision asks for the entity first instead of `list-pages` by a placeholder, and the rule row names the object generically",
+    () => noEnt.entity === "?" && /read this page's entity on-stand/.test(d?.reason) && !/by entity (the object|\?)/.test(d?.reason)
+      && !/ALL pages and lists of \?/.test(d?.reason) && !/ALL pages of `\?`/.test(spec)
+      && /entity business rule — applies on ALL pages of the object/.test(spec),
+    () => ({ entity: noEnt.entity, reason: d?.reason }));
+}
 check("object-wide scope (negative): a page with no FILTRATION raises no object-wide decision",
   () => !dcs.needsDecision.some((n) => n.kind === "object-wide-scope") && (dcs.entityBusinessRules || []).length === 0,
   () => dcs.needsDecision.map((n) => n.kind));

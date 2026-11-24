@@ -5889,6 +5889,24 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
   }
+  // A filter the user did not want object-wide is closed `wont-do` under its decision: section 2 lists it with
+  // the decision, so the reader learns it was not migrated and has to be added by hand. A `wont-do` citing no
+  // recorded decision is not listed there.
+  {
+    const baseW = tmp("result-report-declined"); fs.mkdirSync(baseW, { recursive: true });
+    fs.writeFileSync(path.join(baseW, "decisions.md"), "# Decisions\n\n## D4 — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter\n");
+    const dW = path.join(baseW, "build-tasks");
+    const wnt = (id, reason) => ({ id, file: `${id}.md`, group: "Logic", pageKey: "main", status: "done", kind: "build", notes: "",
+      rows: [{ label: `Filter · ${id}`, outcomeKind: "wont-do", outcome: `wont-do — ${reason}`, outcomeReason: reason, na: null }] });
+    const repW = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [wnt("Lk", "declined object-wide scope (D4)"), wnt("St", "not wanted")] }, dir: dW });
+    const s2 = repW.markdown.slice(repW.markdown.indexOf("## 2."), repW.markdown.indexOf("## 3.") > 0 ? repW.markdown.indexOf("## 3.") : undefined);
+    check("report section 2 lists a `wont-do` row that cites a recorded decision, with the decision's title — a declined filter is visible as not migrated",
+      () => /Closed by a recorded decision/.test(s2) && /Filter · Lk/.test(s2)
+        && /\*\*D4\*\* — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter/.test(s2),
+      () => s2);
+    check("report section 2 does not list a `wont-do` row that cites no recorded decision",
+      () => !/Filter · St/.test(s2), () => s2);
+  }
   // decisions.md written as a TABLE (`| D1 | **title** | … |`), per references/migration-documentation.md — the
   // second cell is the title (bold lead lifted). Structured shapes (heading / table) take precedence, so a plain
   // `D<n> —` PROSE line in the same file does NOT register a decision.
