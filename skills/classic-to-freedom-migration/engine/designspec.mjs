@@ -2475,7 +2475,7 @@ function templateNameNote(name) {
 
 function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   const cover = [];
-  if (pm.formTemplate) cover.push({ deliverableId: "template:form", label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate, ...(pm.freedomExists ? { reconcile: true } : {}) } });
+  if (pm.formTemplate) cover.push({ deliverableId: "template:form", label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate, ...(pm.freedomExists ? { reconcile: true } : {}), ...(result.processPage ? { parametersOnly: true } : {}) } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expTabs = new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name)).size;
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
@@ -3668,7 +3668,8 @@ function primaryDataSourceGap(ctx) {
 function resolveTemplateVk(vk, ctx) {
   const tpl = entryObject(ctx.page)?.parentSchemaName;
   if (!tpl) return ["⚠ verify", "get-page `parentSchemaName` not provided for this page — confirm the built page's template", "unverified"];
-  const gap = primaryDataSourceGap(ctx);
+  // A process page binds its fields to page parameters and has no object, so it has no data source to declare.
+  const gap = vk.parametersOnly ? null : primaryDataSourceGap(ctx);
   if (gap) return ["❌ MISSING", gap, "missing"];
   if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
   // A reconcile saves a REPLACING schema whose parent is the page ITSELF; the real template sits at the chain root
@@ -4933,7 +4934,7 @@ const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCou
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
 const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk],
-  ...PROCESS_VK_RESOLVERS.map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, absentEntry)])]);
+  ...PROCESS_VK_RESOLVERS.map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, { absentEntry, esc })])]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);

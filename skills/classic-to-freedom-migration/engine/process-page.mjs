@@ -114,7 +114,7 @@ const freedomNameOf = (item) => (item.name === CLASSIC_TEMPLATE_SAVE_BUTTON ? FR
 export function processButtonsOf(items, steps = [], resources = {}) {
   const captionOf = (raw) => (raw && typeof resources[resourceKey(raw)] === "string" && resources[resourceKey(raw)]) || raw || null;
   return (items || [])
-    .filter((i) => i && i.itemType === 5 && PROCESS_HANDLERS.has(i.handlers?.click) && !i.engineOnlyStub && i.visible !== false)
+    .filter((i) => i && i.itemType === 5 && PROCESS_HANDLERS.has(i.handlers?.click) && !i.engineOnlyStub)
     .map((i) => ({ classic: i.name, freedom: freedomNameOf(i), caption: captionOf(i.caption), tag: i.tag || null,
       ...behaviourOf(i.handlers.click, i.tag || null, steps) }));
 }
@@ -206,6 +206,8 @@ export function processPageRows(info, esc) {
   const stepRows = info.steps.map((s) => ({ deliverableId: `process-step:${s.process}:${s.element}`,
     label: `[process step] \`${esc(s.process || "?")}\` / \`${esc(s.element || "?")}\` — re-point the Pre-configured page element to the Freedom page`,
     vk: { type: "processstep", process: s.process, element: s.element, consent: s.consent, resultBranches: s.resultBranches } }));
+  if (info.stepsResolved && !info.steps.length) stepRows.push({ deliverableId: "process-step:none",
+    label: "[process step] none named — hand over the manual re-pointing steps", vk: { type: "processstep", consent: "none" } });
   return [...buttonRows,
     { deliverableId: "process-exit", label: "The page keeps a completing button and an exit that leaves the process step open",
       vk: { type: "processexit", completing: info.completing } },
@@ -220,68 +222,75 @@ const selectedIn = (step, name) => (Array.isArray(step.buttons) ? step.buttons :
 const buttonOps = (ctx) => (ctx.ops || []).filter((o) => o && typeof o.name === "string");
 // The walked op list carries each node's request flat (designspec `pushWalkNode`).
 const requestOf = (o) => (typeof o.request === "string" ? o.request : null);
-// `absentEntry` is designspec's answer for a page nobody fetched, so these rows block like every other one.
-function pageUnreadable(ctx, what, absentEntry) {
+// `absentEntry` is designspec's answer for a page nobody fetched, so these rows block like every other one; `esc`
+// neutralises the stand-derived names the notes quote.
+function pageUnreadable(ctx, what, { absentEntry }) {
   if (ctx.entryAbsent) return absentEntry(ctx, what);
   if (ctx.page === false) return [MISSING, "the page is reported as NOT BUILT", "missing"];
   return null;
 }
 
 // One process button: on the page with the right request, and selected in every re-pointed step as the plan says.
-function resolveProcessButtonVk(vk, ctx, absentEntry) {
-  const unreadable = pageUnreadable(ctx, `\`${vk.freedom}\``, absentEntry);
+function resolveProcessButtonVk(vk, ctx, helpers) {
+  const { esc } = helpers;
+  const name = `\`${esc(vk.freedom)}\``;
+  const unreadable = pageUnreadable(ctx, name, helpers);
   if (unreadable) return unreadable;
   const op = buttonOps(ctx).find((o) => o.name === vk.freedom);
-  if (!op) return [MISSING, `button \`${vk.freedom}\` is not on the built page`, "missing"];
+  if (!op) return [MISSING, `button ${name} is not on the built page`, "missing"];
   const request = requestOf(op);
   const closes = vk.behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN;
   if (closes && request !== CLOSE_PAGE_REQUEST)
-    return [VERIFY, `\`${vk.freedom}\` must close the page with \`${CLOSE_PAGE_REQUEST}\` (it declares ${request ? `\`${request}\`` : "no request"})`, "unverified"];
+    return [VERIFY, `${name} must close the page with \`${CLOSE_PAGE_REQUEST}\` (it declares ${request ? `\`${esc(request)}\`` : "no request"})`, "unverified"];
+  // A request the process designer does not accept leaves the step with no completing candidate for this button.
   if (!closes && request && !COMPLETING_REQUESTS.includes(request))
-    return [VERIFY, `\`${vk.freedom}\` declares \`${request}\`, which the process designer does not accept on a completing button — declare no request`, "unverified"];
+    return [MISSING, `${name} declares \`${esc(request)}\`, which the process designer does not accept on a completing button — declare no request`, "missing"];
   const steps = builtSteps(ctx);
   const wrong = steps.flatMap((s) => {
     const sel = selectedIn(s, vk.freedom);
-    const where = `\`${s.process}\` / \`${s.element}\``;
+    const where = `\`${esc(s.process)}\` / \`${esc(s.element)}\``;
     if (closes) return sel ? [`${where} selects it as completing — the step would end where Classic kept it open`] : [];
     if (!sel) return [`${where} does not select it as completing — the step never ends from this button`];
     return sel.validate === expectedValidate(vk.behaviour) ? [] : [`${where} selects it with \`validate: ${sel.validate}\`, Classic ${expectedValidate(vk.behaviour) ? "validated" : "did not validate"}`];
   });
   if (wrong.length) return [MISSING, wrong.join("; "), "missing"];
   const stepNote = steps.length ? `, selected as the plan says in ${steps.length} re-pointed step(s)` : "";
-  return [DONE, `\`${vk.freedom}\` on the page${request ? ` with \`${request}\`` : " with no request"}${stepNote}`, "ok"];
+  return [DONE, `${name} on the page${request ? ` with \`${esc(request)}\`` : " with no request"}${stepNote}`, "ok"];
 }
 // The way out: a completing button, and a button that closes the page without any re-pointed step selecting it.
-function resolveProcessExitVk(vk, ctx, absentEntry) {
+function resolveProcessExitVk(vk, ctx, helpers) {
   if (!vk.completing) return [MISSING, "no Classic button completes the step — add a completing button, or the step waits forever", "missing"];
-  const unreadable = pageUnreadable(ctx, "the exit button", absentEntry);
+  const unreadable = pageUnreadable(ctx, "the exit button", helpers);
   if (unreadable) return unreadable;
   const steps = builtSteps(ctx);
   const exits = buttonOps(ctx).filter((o) => requestOf(o) === CLOSE_PAGE_REQUEST && o.visible !== false
     && !steps.some((s) => selectedIn(s, o.name)));
   if (!exits.length) return [MISSING, `no visible button closes the page with \`${CLOSE_PAGE_REQUEST}\` while leaving the step open — keep the template's BackButton or CloseButton`, "missing"];
-  return [DONE, `exit: ${exits.map((o) => "`" + o.name + "`").join(", ")}`, "ok"];
+  return [DONE, `exit: ${exits.map((o) => "`" + helpers.esc(o.name) + "`").join(", ")}`, "ok"];
 }
 // One process step: re-pointed to the Freedom page in an active version, or left to the user with manual steps.
-function resolveProcessStepVk(vk, ctx) {
+function resolveProcessStepVk(vk, ctx, { esc }) {
+  if (vk.consent === "none") return [VERIFY, "no process step names this page — the page cannot complete a step until the user re-points one; record a decision (`--decide D<N>`) once the manual steps are handed over", "unverified"];
   if (vk.resultBranches) return [VERIFY, "manual — the process branches on this step's result: map each Classic tag to its Freedom button by hand, then record a decision (`--decide D<N>`)", "unverified"];
   if (vk.consent !== "approved") return [VERIFY, `not re-pointed (${vk.consent === "declined" ? "declined" : "no consent"}) — the page cannot complete the step until the user re-points it; record a decision (\`--decide D<N>\`) once the manual steps are handed over`, "unverified"];
   const step = builtSteps(ctx).find((s) => s.process === vk.process && s.element === vk.element);
   if (!step) return [VERIFY, "pass `describe-business-process` of the re-pointed step as `--built.processSteps` to check it", "unverified"];
   if (typeof step.page !== "string" || !step.page) return [MISSING, "the step names no Freedom page", "missing"];
-  if (step.active === false) return [VERIFY, `re-pointed to \`${step.page}\` in a version that is not active — activate it`, "unverified"];
-  return [DONE, `re-pointed to \`${step.page}\` in the active version`, "ok"];
+  if (step.active === false) return [VERIFY, `re-pointed to \`${esc(step.page)}\` in a version that is not active — activate it`, "unverified"];
+  return [DONE, `re-pointed to \`${esc(step.page)}\` in the active version`, "ok"];
 }
 // The stand check: every button pressed from the process step, with the outcome Classic had.
-function resolveProcessStandVk(vk, ctx) {
-  const pressed = Array.isArray(ctx.root?.processStandCheck?.pressed) ? ctx.root.processStandCheck.pressed : [];
+function resolveProcessStandVk(vk, ctx, { esc }) {
+  const recorded = Array.isArray(ctx.root?.processStandCheck?.pressed) ? ctx.root.processStandCheck.pressed : [];
+  const pressed = recorded.filter((p) => p && typeof p === "object");
   const expected = (b) => (b.behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN ? "open" : "completed");
-  const notPressed = vk.buttons.filter((b) => !pressed.some((p) => p?.button === b.freedom));
-  if (notPressed.length) return [VERIFY, `built, not exercised — open the page from its process step and press ${notPressed.map((b) => "`" + b.freedom + "`").join(", ")}; record each outcome in \`--built.processStandCheck\``, "unverified"];
-  const wrong = vk.buttons.filter((b) => pressed.find((p) => p.button === b.freedom).outcome !== expected(b));
-  if (wrong.length) return [MISSING, wrong.map((b) => `\`${b.freedom}\` should leave the step ${expected(b)}`).join("; "), "missing"];
+  const outcomeOf = (b) => pressed.find((p) => p.button === b.freedom)?.outcome;
+  const notPressed = vk.buttons.filter((b) => outcomeOf(b) === undefined);
+  if (notPressed.length) return [VERIFY, `built, not exercised — open the page from its process step and press ${notPressed.map((b) => "`" + esc(b.freedom) + "`").join(", ")}; record each outcome in \`--built.processStandCheck\``, "unverified"];
+  const wrong = vk.buttons.filter((b) => outcomeOf(b) !== expected(b));
+  if (wrong.length) return [MISSING, wrong.map((b) => `\`${esc(b.freedom)}\` should leave the step ${expected(b)}`).join("; "), "missing"];
   return [DONE, `${vk.buttons.length} button(s) pressed from the process step, each with its Classic outcome`, "ok"];
 }
-// `[type, (vk, ctx, absentEntry) => verdict]` — designspec registers them and hands in its `absentEntry`.
+// `[type, (vk, ctx, { absentEntry, esc }) => verdict]` — designspec registers them and hands in its own helpers.
 export const PROCESS_VK_RESOLVERS = Object.freeze([["processbutton", resolveProcessButtonVk], ["processexit", resolveProcessExitVk],
   ["processstep", resolveProcessStepVk], ["processstand", resolveProcessStandVk]]);

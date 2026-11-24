@@ -18,12 +18,13 @@ not a process page.
 
   | Classic | Classic behaviour | Freedom |
   | --- | --- | --- |
-  | `onSaveButtonClick`, or tag `SaveData` | validates, saves, completes | completing button, `validate: true` (the template's `SaveButton` for the template's own save button) |
+  | `onSaveButtonClick` | validates, saves, completes | completing button, `validate: true` (the template's `SaveButton` for the template's own save button) |
   | `onCancelProcessElementClick` | completes WITHOUT saving; the tag is the result | a button with no `clicked` request, completing, `validate: false` |
   | `onProcessActionButtonClick` | read from the process element's `Buttons` for the tag: `PerformClosePage` completes (saving first with `PerformSaveData`), otherwise the page only closes | as the row above it matches |
-  | tag `ClosePage` or any tag with no element entry | closes the page; the step keeps waiting | `crt.ClosePageRequest`, NOT selected as completing |
+  | the above with no element entry: tag `SaveData` | ⚠ template default: validates, saves, completes | completing button, `validate: true` |
+  | the above with no element entry: any other tag (`ClosePage` too) | ⚠ template default: closes the page; the step keeps waiting | `crt.ClosePageRequest`, NOT selected as completing |
 
-  With no element read, `onProcessActionButtonClick` falls back to the template default and the row says so (⚠).
+  A button hidden by default is still a process button: a rule or binding may show it.
 - **The page always keeps a way out:** at least one completing button and one exit that leaves the step open (the
   Freedom template's `BackButton` / `CloseButton`), even where the Classic page removed its Close. A hide rule never
   removes that exit.
@@ -66,10 +67,11 @@ single steps; record each as `"consent": "approved"` or `"declined"` and re-run 
 Re-pointing changes the user's process, so it is the orchestrator's job, never a builder's, and runs after the page
 is built and only for approved steps:
 
-1. `get-process-page-facts --schema-name <Freedom page>` — the completing-button candidates and data sources.
-2. `modify-business-process-as-new-version` with `setElement` on the element: `page` = the Freedom page, `buttons` =
-   the candidates the plan selects as completing, each with its `validate`, `dataSources` passed through unchanged
-   (`[]` when the page declares none).
+Read each tool's arguments from `get-tool-contract` before you call it.
+
+1. `get-process-page-facts` on the Freedom page — the completing-button candidates and data sources.
+2. `modify-business-process-as-new-version`, changing the element's page to the Freedom page, with the buttons the
+   plan selects as completing (each with its `validate`) and the page's data sources passed through unchanged.
 3. `set-active-business-process-version` on the new version. Rollback is activating the previous version; running
    instances stay on the version they started in.
 

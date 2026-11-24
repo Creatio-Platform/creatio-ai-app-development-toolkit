@@ -150,6 +150,39 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
     () => { const md = renderVerify(steps, checklistOpts(manifest({ processPage: { stepsResolved: true, steps: [STEP,
         { process: "UsrReturnProcess", element: "CheckReturn", consent: "declined" }, { process: "UsrAuditProcess", element: "Audit", consent: "approved", resultBranches: true }] } })), built()).markdown;
       return /⚠ verify.*not re-pointed \(declined\)/.test(rowOf(md, "`UsrReturnProcess`")) && /⚠ verify.*manual — the process branches/.test(rowOf(md, "`UsrAuditProcess`")); });
+  check("process page: a completing button that declares a request the process designer does not accept is ❌",
+    () => /❌ MISSING.*does not accept on a completing button/.test(rowOf(verify(built({ cancelRequest: "usr.CustomRequest" })), "[process button] Cancel")));
+  check("process page: a hidden exit is not a way out",
+    () => { const b = built(); b.pages.main.viewConfig[2].visible = false;
+      return /❌ MISSING.*no visible button closes the page/.test(rowOf(verify(b), "keeps a completing button and an exit")); });
+  check("process page: a button pressed on the stand with an outcome other than Classic's is ❌, and a malformed record is ignored",
+    () => /❌ MISSING.*should leave the step completed/.test(rowOf(verify(built({ stand: { pressed: [null, { button: "SaveButton", outcome: "completed" }, { button: CANCEL, outcome: "open" }] } })), "Stand check")));
+  const noSteps = { processPage: { stepsResolved: true, evidence: "the user named none", steps: [] } };
+  check("process page: when no process step is named, an open step row keeps the page from COMPLETE",
+    () => /⚠ verify.*no process step names this page/.test(rowOf(renderVerify(runMigration(manifest(noSteps)), checklistOpts(manifest(noSteps)), built({ processSteps: [] })).markdown, "[process step] none named")));
+  const tplManifest = manifest({ planMeta: { formTemplate: "PageWithTabsFreedomTemplate" } });
+  const tplVerify = renderVerify(runMigration(tplManifest), checklistOpts(tplManifest), { ...built(), pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate", modelConfig: {},
+    viewConfig: [...viewConfig(), { name: "Order", type: "crt.ComboBox", control: "$UsrOrderParam" }] } } }).markdown;
+  check("process page: verify does not demand a primary data source from a page that binds page parameters",
+    () => { const row = rowOf(tplVerify, "Form template →"); return row !== "" && !/❌|primaryDataSourceName/.test(row); }, () => rowOf(tplVerify, "Form template →"));
+  const hiddenCancel = PAGE.replace('"click": { "bindTo": "onCancelProcessElementClick" },', '"click": { "bindTo": "onCancelProcessElementClick" },\n\t\t\t\t\t"visible": false,');
+  const hiddenRun = runMigration(manifest({}, hiddenCancel));
+  check("process page: a process button hidden by default is still planned and gets no generated handler",
+    () => hiddenCancel !== PAGE && hiddenRun.processPage.buttons.some((b) => b.classic === CANCEL)
+      && !(hiddenRun.changeSet.requestHandlers || []).some((h) => h.element === CANCEL), () => hiddenRun.processPage.buttons);
+  check("process page: the Classic template's save button maps onto the Freedom template's SaveButton — no element, no handler",
+    () => run.processPage.buttons.find((b) => b.classic === SAVE)?.freedom === "SaveButton"
+      && !(run.changeSet.requestHandlers || []).some((h) => h.element === SAVE) && !run.changeSet.tableElements.some((e) => e.classic === SAVE));
+  const onlyClose = closePage.replace('"operation": "merge",\n\t\t\t\t"name": "Button-be6148b819154a0791eaee8f1635d859"', '"operation": "remove",\n\t\t\t\t"name": "Button-be6148b819154a0791eaee8f1635d859"');
+  const onlyCloseRun = runMigration(manifest({}, onlyClose));
+  check("process page: a page whose buttons only close it has no completing button — the way-out row is ❌",
+    () => onlyClose !== closePage && onlyCloseRun.processPage.completing === 0
+      && /❌ MISSING.*no Classic button completes the step/.test(rowOf(renderVerify(onlyCloseRun, checklistOpts(manifest({}, onlyClose)), built()).markdown, "keeps a completing button and an exit")),
+    () => onlyCloseRun.processPage.buttons);
+  const noButtons = runMigration(manifest({}, onlyClose.replace('"bindTo": "onProcessActionButtonClick"', '"bindTo": "onUsrOwnClick"')));
+  check("process page: a page with no process button left says so in the plan",
+    () => noButtons.processPage.buttons.length === 0 && /⚠ the page has no process button left/.test(noButtons.plan));
+
   // `--verify --from` composes the payload from the migration folder: the process side comes from process.json.
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "process-page-"));
   try {
