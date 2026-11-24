@@ -67,9 +67,6 @@ const check = (name, cond, detail) => {
    with fewer than 5 as skeletal, and a BLOCKED plan is exactly what `--tasks` refuses to slice —
    so a skeletal seed would make every CLI check below test the refusal path instead of the happy one.
    ================================================================================================ */
-// A fixture method is a stand-in for one the page really calls, so its body names it once more: a method whose name
-// occurs nowhere but its definition is planned as dormant and never reaches a builder.
-const liveMethods = (...names) => `/* reached from elsewhere on the Classic page: ${names.join(" ")} */`;
 const SEED_METHODS = ["init", "getActions", "onSaved", "setColumns", "loadValues", "onRender", "onEntry", "onExit"]
   .map((m, i) => `${m}:function(){return ${i + 1};}`).join(",");
 const SEED = [{ pkg: "BaseModulePageV2", body: `define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{${SEED_METHODS}}};});` }];
@@ -107,8 +104,7 @@ const mainBody = ({ extraChild, extraField, renameField, bulk, handlers }) => {
   const methods = methodCount
     ? ",methods:{" + Array.from({ length: methodCount }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
     : "";
-  const live = methodCount ? liveMethods(...Array.from({ length: methodCount }, (_, i) => `onBulk${i}`)) : "";
-  return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]${methods}};});${live}`;
+  return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]${methods}};});`;
 };
 const PLAN_META = { scope: "single-section", environment: "test", package: "P → UsrM", approach: "Parallel rebuild",
   whatItDoes: "M register.", sectionSchema: "MSection", listTemplate: "ListPageV3", formTemplate: "FormPageTemplate" };
@@ -8387,7 +8383,7 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
 // build the source row while the other page's task is still held.
 {
   const childWithHandler = { ...C1_BUNDLE, schemas: [{ pkg: "P", body: C1_BUNDLE.schemas[0].body
-    .replace("]};});", '],methods:{onChildC7:function(){return this.get("x");}}};});' + liveMethods("onChildC7")) }] };
+    .replace("]};});", '],methods:{onChildC7:function(){return this.get("x");}}};});') }] };
   const manifest = { ...manifestOf({ bulk: 2 }), childPageSchemas: { C1Page: childWithHandler },
     behaviourIndex: { onBulk0: { card: "C7", ac: ["AC-1"] }, "C1Page::onChildC7": { card: "C7", ac: ["AC-2"] } } };
   const opts = { ...optsOf(manifest), taskBudget: { run: 0, chunk: 8 } };
@@ -8664,10 +8660,10 @@ console.log("\n===== build order: virtual attributes are declared before the han
     + '"IsSignVisible":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false},'
     + '"Amount":{dependencies:[{columns:["Price"],methodName:"setLegalEntity"}]}},'
     + 'diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}],'
-    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},setSignAttrs:function(){this.set("IsSignVisible",true);}}};});' + liveMethods("setSignAttrs");
+    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},setSignAttrs:function(){this.set("IsSignVisible",true);}}};});';
   const attrSection = 'define("MSection",[],function(){return{entitySchemaName:"M",'
     + 'attributes:{"IsListFlag":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false}},'
-    + 'methods:{setListFlag:function(){this.set("IsListFlag",true);},refreshFlag:function(){this.set("IsListFlag",false);}}};});' + liveMethods("setListFlag", "refreshFlag");
+    + 'methods:{setListFlag:function(){this.set("IsListFlag",true);},refreshFlag:function(){this.set("IsListFlag",false);}}};});';
   const attrManifest = {
     entity: "M", seed: SEED, schemas: [{ pkg: "P", body: attrBody }], addRecordMiniPage: false,
     section: { schemas: [{ pkg: "P", body: attrSection }],
@@ -8882,7 +8878,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     + 'attributes:{"LegalEntity":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN},'
     + '"IsSignVisible":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false}},'
     + 'diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}],'
-    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},getEmailFilter:function(){return this.get("Id");}}};});' + liveMethods("setLegalEntity", "getEmailFilter");
+    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},getEmailFilter:function(){return this.get("Id");}}};});';
   const wManifest = {
     entity: "M", seed: SEED, schemas: [{ pkg: "P", body: wBody }], addRecordMiniPage: false,
     section: { schemas: [], listColumns: { success: true, sectionSchema: "MSection", entity: "M", source: "schema-default", columns: [{ name: "Name" }] } },
@@ -9363,7 +9359,7 @@ check("identity digest guard: rendering the identity condition does NOT move any
 // A page whose only related list to a rebuilt child is an inline grid binds nothing, so it gets no wiring task: the
 // grid's no-page row stays with the page build.
 {
-  const gridChild = { entity: "C1", seed: SEED, schemas: [{ pkg: "P", body: 'define("C1Page",[],function(){return{entitySchemaName:"C1",methods:{getFilter:function(){return 1;}},diff:[]};});' + liveMethods("getFilter") }] };
+  const gridChild = { entity: "C1", seed: SEED, schemas: [{ pkg: "P", body: 'define("C1Page",[],function(){return{entitySchemaName:"C1",methods:{getFilter:function(){return 1;}},diff:[]};});' }] };
   const m = { ...manifestOf(), childPageSchemas: { C1Page: gridChild } };
   const set = buildTaskSet(runMigration(m), optsOf(m));
   const naTask = set.tasks.find((t) => t.rows.some((r) => r.group === "Child page wiring"));
@@ -9958,7 +9954,7 @@ const locateRow = (dir, label) => {
   return null;
 };
 {
-  const stBody = `define("MPage",[],function(){return{entitySchemaName:"M",attributes:{"Dept":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN}},details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}},R2:{schemaName:"R2D",entitySchemaName:"C2",filter:{detailColumn:"m",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"R2",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"MainG",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainG"}},{operation:"insert",name:"PrintButton",parentName:"ProfileContainer",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"ProfileContainer",propertyName:"items",values:{}}],methods:{onA:function(){return this.get("x");},onB:function(){return this.get("y");}}};});${liveMethods("onA", "onB")}`;
+  const stBody = `define("MPage",[],function(){return{entitySchemaName:"M",attributes:{"Dept":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN}},details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}},R2:{schemaName:"R2D",entitySchemaName:"C2",filter:{detailColumn:"m",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"R2",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"MainG",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainG"}},{operation:"insert",name:"PrintButton",parentName:"ProfileContainer",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"ProfileContainer",propertyName:"items",values:{}}],methods:{onA:function(){return this.get("x");},onB:function(){return this.get("y");}}};});`;
   const PRINTABLE = { resolved: true, present: true, names: ["Invoice"] };
   const stManifest = (deliverableStatus, extra = {}) => ({ ...manifestOf(), schemas: [{ pkg: "P", body: stBody }],
     detailSchemas: { R1D: { entity: "C1", columns: ["Number"], editPage: false }, R2D: { entity: "C2", columns: ["Number"], editPage: false } }, childPageSchemas: {},
@@ -12208,7 +12204,8 @@ console.log("\n===== project conventions: every writer of a task file carries th
   check("ported as (parse): code spans are the symbols; without them the first word is, so prose after it is never a claim",
     () => portedSymbols("`usr.SetCanEditRequest`, `Helpers.format` — sends it on save").join() === "usr.SetCanEditRequest,Helpers.format"
       && portedSymbols("applyRights — called from the init handler").join() === "applyRights"
-      && portedSymbols("`not a symbol`").length === 0,
+      && portedSymbols("`applyRights()`; and `Helpers.format();`").join() === "applyRights,Helpers.format"
+      && portedSymbols("`not a symbol`").join() === "not a symbol",
     () => [portedSymbols("`usr.SetCanEditRequest`, `Helpers.format` — sends it on save"), portedSymbols("applyRights — called from the init handler")]);
   check("ported as (marker): the line shape matches `Check on stand` — a list bullet and bold are allowed", () =>
     PORTED_MARKER.test("- **Ported as (row 2):** `usr.X`") && !PORTED_MARKER.test("Ported as row 2: usr.X"));
@@ -12218,10 +12215,17 @@ console.log("\n===== project conventions: every writer of a task file carries th
     { unread: true, pageKey: "main", rows: [{ label: "x" }], notes: "Ported as (row 1): `nope`" },
   ] };
   const m = portedRowSymbols(set);
-  check("ported as (rows): each record lands on its row's verify key (the row's own page, else the task's), records for one row accumulate, and a row number outside the task or an unread task adds nothing",
-    () => m.size === 2 && m.get(verifyRowKey("main", "Handler — `setCanEditFieldsRaw`")).join() === "usr.SetCanEditFieldsRequest,applyRights"
+  check("ported as (rows): each record lands on its row's verify key (the row's own page, else the task's), a later line for a row replaces an earlier one, and a row number outside the task or an unread task adds nothing",
+    () => m.size === 2 && m.get(verifyRowKey("main", "Handler — `setCanEditFieldsRaw`")).join() === "applyRights"
       && m.get(verifyRowKey("child:Visa", "Handler — `onSaved`")).join() === "onVisaSaved",
     () => [...m]);
+  const label = "Handler — `setCanEditFieldsRaw`";
+  const repaired = portedRowSymbols({ tasks: [
+    { pageKey: "main", repairRound: "1", rows: [{ label }], notes: "Ported as (row 1): `usr.RealRequest`" },
+    { pageKey: "main", rows: [{ label }], notes: "Ported as (row 1): `usr.WrongRequest`" },
+  ] });
+  check("ported as (rows): a repair round's record replaces the plan task's, whichever task the folder lists first",
+    () => repaired.get(verifyRowKey("main", label)).join() === "usr.RealRequest", () => [...repaired]);
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, PORTED_SYMBOL } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -4402,23 +4402,30 @@ export function decidedRowKeys(set) {
 // symbols are written as code spans (`` `a`, `b` ``); without code spans the first word is the symbol, so prose
 // after it is never read as a claim.
 export const PORTED_MARKER = notesMarker("Ported as");
+// A word that is not a symbol is kept as written, so `--verify` names it instead of reading the row as unrecorded.
 export function portedSymbols(value) {
   const spans = [...String(value || "").matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
   const words = spans.length ? spans : [String(value || "").trim().split(/[\s,;]+/)[0]];
-  return words.filter((w) => PORTED_SYMBOL.test(w));
+  return words.map((w) => w.replace(/(\(\s*\))?[;.,:]*$/, "")).filter(Boolean);
 }
 // Every `Ported as` record of the folder, keyed like `decidedRowKeys` (`verifyRowKey(page, label)`) so `--verify`
-// finds it on the plan row the task row was cut from. A row number outside the task's rows names nothing.
+// finds it on the plan row the task row was cut from. A row number outside the task's rows names nothing. The LATEST
+// record for a row is the one read: the last line in a task, and a later repair round's over the plan task's — so
+// the correction `--verify` asks for replaces the claim it rejected instead of joining it.
 export function portedRowSymbols(set) {
   const out = new Map();
+  const round = new Map();
   for (const t of set?.tasks || []) {
     if (t.unread) continue;
+    const r = Number(t.repairRound) || 0;
     for (const [n, values] of notesMarkers(t.notes, PORTED_MARKER)) {
       const row = t.rows?.[n - 1];
       const page = row && (row.pageKey || t.pageKey);
       if (!page) continue;
       const key = verifyRowKey(page, row.label);
-      out.set(key, [...new Set([...(out.get(key) || []), ...values.flatMap(portedSymbols)])]);
+      if (round.has(key) && round.get(key) > r) continue;
+      round.set(key, r);
+      out.set(key, [...new Set(portedSymbols(values.at(-1)))]);
     }
   }
   return out;

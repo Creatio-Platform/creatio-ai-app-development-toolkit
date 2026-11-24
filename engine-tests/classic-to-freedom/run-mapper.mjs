@@ -7113,7 +7113,10 @@ check("category precedence: a body whose ONLY kind is save still categorises as 
 }; });`;
   const BASE_BODY = `define("DormPageBase", [], function() { return { entitySchemaName: "Deal", methods: {
     setCanEditFieldsRaw: function() { return true; } }, diff: [] }; });`;
-  const dorm = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
+  // A COMPLETE base chain (150+ methods): with an absent or possibly partial one a base override would look like
+  // the page's own method, so no row is dormant.
+  const FULL_SEED = [{ pkg: "BaseModulePageV2", body: `define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{${Array.from({ length: 150 }, (_, i) => `base${i}:function(){return ${i};}`).join(",")}}};});` }];
+  const dorm = runMigration({ entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
   const stub = (m) => dorm.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
   const rows = checklistGroups(dorm, {}).flatMap((g) => g.rows);
   const row = (m) => rows.find((r) => r.deliverableId === `method:${m}`);
@@ -7129,11 +7132,18 @@ check("category precedence: a body whose ONLY kind is save still categorises as 
   check("dormant (guard): a method with a declared trigger and a helper it calls are normal rows",
     () => !stub("onStageChanged").dormant && !stub("recalcTotals").dormant && !row("recalcTotals").na,
     () => [stub("onStageChanged"), stub("recalcTotals")]);
-  const over = runMigration({ entity: "Deal", schemas: [{ pkg: "B", body: BASE_BODY }, { pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
+  const over = runMigration({ entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "B", body: BASE_BODY }, { pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
   check("dormant (guard): a method that overrides a lower layer's method is a normal row — the base may call it",
     () => !over.changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw")?.dormant,
     () => over.changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw"));
-  const decided = { entity: "Deal", schemas: [{ pkg: "P", body: DORMANT_BODY }], deliverableStatus: { "main#method:setCanEditFieldsRaw": { status: "build" } } };
+  const doubt = (manifest) => runMigration(manifest, { baseDir: FIX }).changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw");
+  const MIXIN_BODY = DORMANT_BODY.replace('entitySchemaName: "Deal",', 'entitySchemaName: "Deal", mixins: { UsrRightsMixin: "Terrasoft.UsrRightsMixin" },');
+  check("dormant (guard): no base chain, a possibly partial one (under 150 methods) and a page mixing in another schema each keep the method a normal row",
+    () => [doubt({ entity: "Deal", schemas: [{ pkg: "P", body: DORMANT_BODY }] }),
+      doubt({ entity: "Deal", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }] }),
+      doubt({ entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "P", body: MIXIN_BODY }] })].every((s) => s && !s.dormant),
+    () => [doubt({ entity: "Deal", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }] })]);
+  const decided = { entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }], deliverableStatus: { "main#method:setCanEditFieldsRaw": { status: "build" } } };
   const decidedRun = runMigration(decided, { baseDir: FIX });
   const decidedRow = checklistGroups(decidedRun, checklistOpts(decided)).flatMap((g) => g.rows).find((r) => r.deliverableId === "method:setCanEditFieldsRaw");
   check("dormant: a `deliverableStatus` `build` entry turns a dormant row into a normal deliverable row, and the entry is valid (no status issue)",
@@ -7151,7 +7161,6 @@ check("category precedence: a body whose ONLY kind is save still categorises as 
 // like a derived one. These pin the evidence-only rule and each state the Body-does cell can take.
 const EVID_BODY = `define("EvidPage", [], function() { return {
   entitySchemaName: "Deal",
-  attributes: { A: { dependencies: [{ columns: ["A"], methodName: "onThingChanged" }] } },
   methods: {
     onThingChanged: function() { return this.Ext.isEmpty(this.get("A")) ? 1 : 2; },
     initSomething: function() { this.callParent(arguments); this.someUnknownApi(); },

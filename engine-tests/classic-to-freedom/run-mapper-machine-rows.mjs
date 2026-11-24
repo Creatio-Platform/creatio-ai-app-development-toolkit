@@ -96,6 +96,16 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
         && /nothing on the page sends it/.test(ev(unsent)) && /no handler calls `neverCalled`/.test(ev(uncalled))
         && /carries no `deps`/.test(ev(noDeps)) && /not among the page's `define\(\)` deps/.test(ev(undeclared)),
       () => [unsent, missing, uncalled, noDeps, undeclared, mixed]);
+    const platform = P(["crt.HandleViewModelInitRequest"]);
+    check("Ported as: a platform request a handler answers (`crt.HandleViewModelInitRequest`) is reached — the platform sends it",
+      () => st(platform) === "✅ Done" && /answers platform request/.test(ev(platform)), () => platform);
+    const trigPage = verifyCtx({ pages: { main: page({ handlers: HANDLERS }) } }, "main");
+    const fallThrough = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: trigContact, portedAs: ["usr.Invented"] }, trigPage);
+    const notSymbol = P(["not a symbol"]);
+    check("Ported as: a record that does not hold still lets the trigger branch close the row ✅; with nothing else closing it, the record's ⚠ is reported, and a word that is not a symbol is named as such",
+      () => st(fallThrough) === "✅ Done" && /branches on attribute `Contact`/.test(ev(fallThrough))
+        && notSymbol[0] === "⚠ verify" && /is not a request type, a page function or `Module.function`/.test(ev(notSymbol)),
+      () => [fallThrough, notSymbol]);
     const overDefOnly = P(["usr.SetCanEditFieldsRequest"], verifyCtx({ pages: { main: page({ handlers: PORTED + "\nfunction setCanEditFieldsRaw() {}" }) } }, "main"));
     check("Ported as: a valid record closes the row even when the page also carries an uncalled namesake",
       () => st(overDefOnly) === "✅ Done", () => overDefOnly);

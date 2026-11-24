@@ -4764,10 +4764,10 @@ function requestSent(src, viewConfigJson, request) {
 }
 const requestDeclared = (src, request) => new RegExp(String.raw`\brequest\s*:\s*["'\`]${reEsc(request)}["'\`]`).test(src);
 // What a `Ported as` line may name: a page function (`applyRights`) or a dotted symbol — a request type
-// (`usr.SetCanEditRequest`) or `Module.function`. The task parser reads symbols by this same grammar.
+// (`usr.SetCanEditRequest`) or `Module.function`. Anything else is named back as not a symbol.
 const IDENT = String.raw`[A-Za-z_$][\w$]*`;
-export const PORTED_SYMBOL = new RegExp(String.raw`^${IDENT}(?:\.${IDENT})?$`);
 const PAGE_FUNCTION = new RegExp(`^${IDENT}$`);
+const PLATFORM_REQUEST = /^crt\./;
 const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
 // Whether a handler calls `sym`, as a verdict; `from` names where the function lives when it is not on the page.
 const callVerdict = (code, sym, from = "") => (calledIn(code, sym)
@@ -4797,18 +4797,24 @@ function portedSymbolVerdict(sym, ctx, code) {
   // Memoized on the page ctx like `_codeOnly`: every dotted symbol of the page reads the same view config.
   const viewConfigJson = ctx._viewConfigJson ?? (ctx._viewConfigJson = JSON.stringify(entryObject(ctx.page)?.viewConfig ?? null));
   if (requestSent(src, viewConfigJson, sym)) return { ok: true, text: `the page sends request \`${esc(sym)}\`` };
-  if (requestDeclared(src, sym)) return { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
+  // A platform request (`crt.HandleViewModelInitRequest`, `crt.SaveRecordRequest`) is sent by the platform itself, so
+  // a handler that answers it is reached; a custom request is reached only when something on the page sends it.
+  if (requestDeclared(src, sym)) {
+    return PLATFORM_REQUEST.test(sym) ? { ok: true, text: `a handler answers platform request \`${esc(sym)}\`` }
+      : { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
+  }
   return moduleFunctionVerdict(sym, dotted[1], ctx, code);
 }
-// The build agent's `Ported as (row N): <symbol>` lines for this row, checked against the built page. Every named
-// symbol must hold: a claim that names one real port and one invented symbol is not a port.
+// The build agent's `Ported as (row N): <symbol>` lines for this row, checked against the built page: `{ verdict }`
+// when every named symbol holds (a claim naming one real port and one invented symbol is not a port), `{ failed }`
+// with the reason when one does not, null when the row carries no claim.
 function portedAsMatch(vk, ctx, code) {
   const syms = vk.portedAs || [];
   if (!syms.length) return null;
   const verdicts = syms.map((s) => portedSymbolVerdict(s, ctx, code));
   const label = syms.map((s) => `\`${esc(s)}\``).join(", ");
-  if (verdicts.every((v) => v.ok)) return ["✅ Done", `ported as ${label}: ${verdicts.map((v) => v.text).join("; ")}`, "ok"];
-  return ["⚠ verify", `\`Ported as\` names ${label}, which does not hold on the built page: ${verdicts.filter((v) => !v.ok).map((v) => v.text).join("; ")} — name the symbol the page actually reaches`, "unverified"];
+  if (verdicts.every((v) => v.ok)) return { verdict: ["✅ Done", `ported as ${label}: ${verdicts.map((v) => v.text).join("; ")}`, "ok"] };
+  return { failed: ["⚠ verify", `\`Ported as\` names ${label}, which does not hold on the built page: ${verdicts.filter((v) => !v.ok).map((v) => v.text).join("; ")} — name the symbol the page actually reaches`, "unverified"] };
 }
 export function resolveHandlerVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
@@ -4820,14 +4826,15 @@ export function resolveHandlerVk(vk, ctx) {
   const code = ctx._codeOnly ?? (ctx._codeOnly = codeOnly(src));
   // The build agent's own record of the port is read first: it names the symbol, and the check is whether the
   // page reaches it. Without one, a Classic name counts only when a handler CALLS it — a function that carries the
-  // Classic method's name and is never called ports nothing.
+  // Classic method's name and is never called ports nothing. A record that does not hold still lets the other
+  // checks close the row; it is reported only when none of them does.
   const ported = portedAsMatch(vk, ctx, code);
-  if (ported) return ported;
+  if (ported?.verdict) return ported.verdict;
   if (!HANDLER_NAME_DENY.has(vk.method) && calledIn(code, vk.method)) return ["✅ Done", `a handler calls \`${esc(vk.method)}\``, "ok"];
   if (vk.parent && calledIn(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler calls`, "ok"];
   const trigHit = handlerTriggerMatch(vk, src, code);
   if (trigHit) return trigHit;
-  return ["☐ confirm on-stand", handlerOpenText(vk, code), "skip"];
+  return ported?.failed || ["☐ confirm on-stand", handlerOpenText(vk, code), "skip"];
 }
 // What an unrecognised handler row asks for: the `Ported as` line naming the real port, or, for a port that is not
 // code at all (a declarative rule), a `Check on stand` line.

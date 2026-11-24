@@ -2269,8 +2269,12 @@ function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
 // occurs nowhere in the Classic sources beyond its own definition — so no `callback: this.onX`, no
 // `Ext.bind(this.onX)`, no `sandbox.subscribe(…, this.onX)`, no string naming it either; the call index alone sees
 // only `this.onX(…)` calls. Any doubt keeps a normal row: a body that could not be read, a method assigned from
-// another module, an override of a lower layer's method (the base may call it), or a source the count could not see.
-function isDormant(stub, m) {
+// another module, an override of a lower layer's method (the base may call it), a source the count could not see —
+// and a page whose base chain is absent or may be partial (an override would look like a page's own method) or that
+// mixes in another schema (the mixin may call it).
+function isDormant(stub, m, eff) {
+  const q = eff.seedQuality || {};
+  if (!q.seeded || q.looksSkeletal || q.possiblyPartial || (eff.mixins || []).length) return false;
   return !!m && m.referenced === false && (m.stack || []).length === 1 && !!m.facts && !stub.externalRef;
 }
 
@@ -2336,7 +2340,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
     if (stub.triggers.length) continue;
     const t = resolveInternalTrigger(stub.sourceMethod, callerIdx, byName);
     if (t) stub.triggers = [t];
-    else if (isDormant(stub, byName.get(stub.sourceMethod))) stub.dormant = true;
+    else if (isDormant(stub, byName.get(stub.sourceMethod), eff)) stub.dormant = true;
   }
   for (const stub of handlerStubs) needsDecision.push({ kind: "method", item: stub.sourceMethod, reason: methodReason(stub) });
 

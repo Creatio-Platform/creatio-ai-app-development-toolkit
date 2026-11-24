@@ -2242,6 +2242,7 @@ function mergeDetails(L, seed, details) {
 // strings and comments alike: a reference that cannot be told from a mention keeps the method a normal row. `null`
 // when some layer's source is not at hand.
 function nameReferenced(name, definitions, tagged) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
   const word = new RegExp(String.raw`(?<![\w$])${name.replaceAll("$", String.raw`\$`)}(?![\w$])`, "g");
   let total = 0;
   for (const { L } of tagged) {
