@@ -83,31 +83,33 @@ function browserExercise(tasks, declined = false) {
   return { unexercised: [...pages.values()].filter((p) => !p.exercised), capBreaches };
 }
 function browserSection({ unexercised, capBreaches }, pageName, answer) {
-  const L = [];
-  if (unexercised.length) {
-    const recorded = answer ? `\`${esc(answer)}\`` : "none — `worklog.md` has no `Browser:` line";
-    L.push(`## Not exercised in a browser (${unexercised.length})`, "",
-      "These pages were built and read back, but no build task opened them after its last save, so what only the"
-        + " running page shows — a render error, a rule that does not fire, a save that writes the wrong column — is"
-        + " unchecked. Open each one on the stand and go through its checks below.",
-      "", `Browser answer recorded for this run: ${recorded}.`, "");
-    for (const p of unexercised) {
-      L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`)`);
-      for (const t of p.tasks) {
-        for (const [n, text] of markers(t.notes, CHECK_MARKER)) {
-          L.push(`  - [${cell(t.group || t.id)}](${enc(t.file)}), row ${n}: ${cell(text)}`);
-        }
-      }
-    }
-  }
+  const L = unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [];
   if (capBreaches.length) {
     if (L.length) L.push("");
-    L.push(`## Browser checks over the cap of ${BROWSER_CHECK_CAP} (${capBreaches.length})`, "",
-      "A task opens the page once after its last save and once more only to confirm a fix; a third check is a"
-        + " save-check-fix loop. Read these tasks' notes for what each check answered.", "");
-    for (const b of capBreaches) L.push(`- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`);
+    L.push(...capBreachLines(capBreaches));
   }
   return L;
+}
+function unexercisedLines(unexercised, pageName, answer) {
+  const recorded = answer ? `\`${esc(answer)}\`` : "none — `worklog.md` has no `Browser:` line";
+  const L = [`## Not exercised in a browser (${unexercised.length})`, "",
+    "These pages were built and read back, but no build task opened them after its last save, so what only the"
+      + " running page shows — a render error, a rule that does not fire, a save that writes the wrong column — is"
+      + " unchecked. Open each one on the stand and go through its checks below.",
+    "", `Browser answer recorded for this run: ${recorded}.`, ""];
+  for (const p of unexercised) {
+    L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`)`);
+    for (const t of p.tasks) L.push(...checkOnStandLines(t));
+  }
+  return L;
+}
+const checkOnStandLines = (t) => [...markers(t.notes, CHECK_MARKER)]
+  .map(([n, text]) => `  - [${cell(t.group || t.id)}](${enc(t.file)}), row ${n}: ${cell(text)}`);
+function capBreachLines(capBreaches) {
+  return [`## Browser checks over the cap of ${BROWSER_CHECK_CAP} (${capBreaches.length})`, "",
+    "A task opens the page once after its last save and once more only to confirm a fix; a third check is a"
+      + " save-check-fix loop. Read these tasks' notes for what each check answered.", "",
+    ...capBreaches.map((b) => `- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`)];
 }
 function markers(notes, re) {
   const out = new Map();
@@ -735,6 +737,33 @@ function postponedUnbackedReasons(postponedRows, decisions) {
     + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
     + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`];
 }
+// THE VERDICT LADDER, text and colour from one place, first match wins: red, orange, yellow, green.
+function verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName }) {
+  if (!complete) {
+    // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
+    // hide a shortfall.
+    return { verdictColour: "red", verdict: `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}` };
+  }
+  if (unexercised.length) {
+    // Built is not exercised: the run closed every task, but some page was never opened after a save. Ranked above
+    // 🟡 because an unchecked page is work for a person now, a postponed row is work for later.
+    return { verdictColour: "orange", verdict: `🟠 **BUILT, NOT EXERCISED** — ${plural(unexercised.length, "page")} never`
+      + ` opened in a browser after its last save: ${unexercised.map((p) => pageName(p.pageKey)).join(", ")} — check them`
+      + ` on the stand (see the browser section)${postponedNote}${manualNote}` };
+  }
+  if (postponedRows.length) {
+    // The 🟡 wording names one decision + destination if every postponed row shares one (the common
+    // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
+    // section carries the full list; this line is the headline.
+    const count = postponedRows.length;
+    const grouped = postponedGroups(postponedRows);
+    const headline = grouped.length === 1
+      ? `${plural(count, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
+      : `${plural(count, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section`;
+    return { verdictColour: "yellow", verdict: `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}` };
+  }
+  return { verdictColour: "green", verdict: `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}` };
+}
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null, source = null }) {
   const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
@@ -774,29 +803,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const browserAnswer = dir ? readWorklogBrowser(dir) : null;
   const exercise = browserExercise(tasks, /^Browser: none\b/.test(browserAnswer || ""));
   const { unexercised } = exercise;
-  let verdict;
-  if (!complete) {
-    // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
-    // hide a shortfall.
-    verdict = `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}`;
-  } else if (unexercised.length) {
-    // Built is not exercised: the run closed every task, but some page was never opened after a save. Ranked above
-    // 🟡 because an unchecked page is work for a person now, a postponed row is work for later.
-    verdict = `🟠 **BUILT, NOT EXERCISED** — ${plural(unexercised.length, "page")} never opened in a browser after its`
-      + ` last save: ${unexercised.map((p) => pageName(p.pageKey)).join(", ")} — check them on the stand (see the browser`
-      + ` section)${postponedNote}${manualNote}`;
-  } else if (postponedCount) {
-    // The 🟡 wording names one decision + destination if every postponed row shares one (the common
-    // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
-    // section carries the full list; this line is the headline.
-    const grouped = postponedGroups(postponedRows);
-    const headline = grouped.length === 1
-      ? `${plural(postponedCount, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
-      : `${plural(postponedCount, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section`;
-    verdict = `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}`;
-  } else {
-    verdict = `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`;
-  }
+  const { verdict, verdictColour } = verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName });
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
@@ -820,10 +827,6 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
-  let verdictColour = "green";
-  if (!complete) verdictColour = "red";
-  else if (unexercised.length) verdictColour = "orange";
-  else if (postponedCount) verdictColour = "yellow";
   return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
     counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount,
       unexercised: unexercised.length, capBreaches: exercise.capBreaches.length } };

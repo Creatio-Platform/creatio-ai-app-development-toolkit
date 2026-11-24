@@ -3782,8 +3782,9 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
   const checked = { ...opts, refuseUnaccounted: true };
-  if (startId) checked.browserGate = browserGateFor(dir);
-  const set = startId ? startTask(dir, startId, result, checked, split) : syncTaskDir(dir, result, checked, split);
+  const set = startId
+    ? startTask(dir, startId, result, { ...checked, browserGate: browserGateFor(dir) }, split)
+    : syncTaskDir(dir, result, checked, split);
   if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
