@@ -39,6 +39,19 @@ const check = (name, cond, detail) => {
   if (detail !== undefined) { let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; } console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d))); }
 };
 
+// The rows of orchestrate-build.md 7.3 (what each sub-agent is handed), as [kind, recogniser, briefs, references]
+// cells. Empty when the step or its table moved, so every check that reads it also asserts the rows it expects.
+const handedRows = () => {
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  return (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4);
+};
+
 /* ---- a minimal in-memory ustar tar builder (no `tar` CLI, no committed binary fixture) ---- */
 const tarBlock = (name, size, prefix = "") => {
   const b = Buffer.alloc(512);
@@ -620,18 +633,6 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // Pipe converters (`$Attr | crt.InvertBooleanValue`) are not components either: the component index does not carry
   // them, so the ones the engine emits are listed here by name and checked the other way round below.
   const PIPE_CONVERTERS = new Set(["crt.InvertBooleanValue"]);
-// The rows of orchestrate-build.md 7.3 (what each sub-agent is handed), as [kind, recogniser, briefs, references]
-// cells. Empty when the step or its table moved, so every check that reads it also asserts the rows it expects.
-const handedRows = () => {
-  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
-  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
-  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
-  return (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
-    .split("\n")
-    .filter((l) => l.trimStart().startsWith("|"))
-    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
-    .filter((cells) => cells.length === 4);
-};
 // The browser-check reference exists to stop ONE measured loop: eight minutes of re-probing a page whose main
 // thread was blocked, where no script could ever have answered. The rule and the order are what the file is for,
 // so the doc lint holds it to both, and SKILL.md must actually send a builder there.
@@ -676,6 +677,10 @@ const handedRows = () => {
   check("orchestrate-build.md 7.3: every task kind that writes page code (page build, repair, whole migration, section dashboards) hands `page-code-architecture.md` as a brief to read whole",
     () => writers.length === 4 && writers.every((c) => c[2].includes("`./references/page-code-architecture.md`")),
     () => writers.map((c) => [c[0], c[2]]));
+  const wiring = handedRows().filter((c) => c[0].startsWith("Child page wiring"));
+  check("orchestrate-build.md 7.3: Child page wiring is NOT handed the contract — it writes the RelatedPage add-on, never page code",
+    () => wiring.length === 1 && !wiring[0][2].includes("page-code-architecture.md"),
+    () => wiring);
   check("build-page.md points a builder at the contract — the brief a builder opens first names the one that shapes its code",
     () => read("build-page.md").includes("`./references/page-code-architecture.md`"));
   check("build-task-execution.md's `writesTo:` rule says a page artifact includes the page's own logic module — the only place the brief defines what a task may write",

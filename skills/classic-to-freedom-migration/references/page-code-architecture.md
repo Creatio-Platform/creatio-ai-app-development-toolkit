@@ -1,7 +1,7 @@
 # Page code architecture
 
-Handed, with `./references/build-page.md`, to every page build and repair task: the shape of the code you
-write into a Freedom page. The clio guides own the mechanics and are not restated here:
+Handed, with `./references/build-page.md`, to every task kind that writes page code
+(`orchestrate-build.md` → 7.3): the shape of the code you write into a Freedom page. The clio guides own the mechanics and are not restated here:
 `page-schema/handlers` (the dispatch API, where `next` goes), `page-schema/shared-client-logic` (creating,
 importing and saving a client module) and `related-data/*` (lists and their filters).
 
@@ -61,17 +61,21 @@ function call in a custom request to give it a name.
   }
 }
 
-// Correct — the handler routes, the module holds the logic.
+// Correct — the same handler routes; the page's module (`orderPage`, from SCHEMA_ARGS) holds the logic.
 {
-  request: "crt.HandleViewModelAttributeChangeRequest",
+  request: "crt.HandleViewModelInitRequest",
   handler: async (request, next) => {
-    const result = await next?.handle(request);
-    if (request.attributeName === "PageParameters_Order") {
-      await orderPage.applyOrder(request.$context);   // orderPage = the page's module, from SCHEMA_ARGS
-    }
+    const result = await next?.handle(request);   // `next?.` as in the clio handlers guide; the call is not optional
+    await orderPage.init(request.$context);
     return result;
   }
 }
+// In the module: one shared helper, the independent reads together.
+//   const idOf = (v) => (v && typeof v === "object" ? v.value : v);
+//   async function init($context) {
+//     const [order, limits] = await Promise.all([readOrder($context), readLimits($context)]);
+//     …
+//   }
 ```
 
 ## A page that matches an earlier one

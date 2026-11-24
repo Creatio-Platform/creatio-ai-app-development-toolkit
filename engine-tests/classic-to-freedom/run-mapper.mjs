@@ -6696,6 +6696,28 @@ check("siblingOf: the Plan-vs-Done checklist carries a row for it, so the answer
       && /✅ Done/.test(rowOf({ [id]: rec }, { [id]: { convincing: true, why: "both pages import the module" } })),
     () => [rowOf({}, {}), rowOf({ [id]: rec }, {}), rowOf({ [id]: rec }, { [id]: { convincing: true } })]);
 }
+// `siblingOf` is the bundle's own fact: a typed page folded into the same run must not raise a second question.
+{
+  const pg = (n) => ({ pkg: "P", body: `define("${n}",[],function(){return{entitySchemaName:"X",diff:[]};});` });
+  const folded = runMigration({ ...sigBase, signals: FULL_SIGNALS, siblingOf: siblingArg,
+    typedPages: [{ schema: "XTypedPage" }], typedPageSchemas: { XTypedPage: { entity: "X", noParentTemplate: true, schemas: [pg("XTypedPage")] } } });
+  const hits = [];
+  const walk = (o) => {
+    if (!o || typeof o !== "object") return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (o.kind === "sibling-page") hits.push(o);
+    for (const [k, v] of Object.entries(o)) if (k !== "plan") walk(v);
+  };
+  walk(folded);
+  check("siblingOf: a folded typed page does not inherit it — the whole result carries the root's one sibling-page row and no other",
+    () => folded.typedPages?.[0]?.resolved === "fold" && siblingRows(folded).length === 1 && hits.length === 1,
+    () => ({ typed: folded.typedPages?.[0]?.resolved, hits: hits.length }));
+}
+check("siblingOf: a bare value (not an object) is reported as the wrong shape, not as a missing page",
+  () => ["UsrOrder_FormPage", ["UsrOrder_FormPage"]].every((v) => siblingRows(siblingRun(v)).length === 1
+    && /must be an object/.test(siblingRows(siblingRun(v))[0].reason) && !/no page/.test(siblingRows(siblingRun(v))[0].reason)));
+check("siblingOf: the SHARED MODULE answer tells the user it edits the earlier page",
+  /SHARED MODULE[^;]*edits UsrOrder_FormPage to import it/.test(siblingReason), () => siblingReason);
 const siblingBad = siblingRun({ folder: "migrations/OrderPage" });
 check("siblingOf: recorded without a page → still a row, saying what is missing — a malformed fact is never dropped in silence",
   siblingRows(siblingBad).length === 1 && /no page/i.test(siblingRows(siblingBad)[0].reason),

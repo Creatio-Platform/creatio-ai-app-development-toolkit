@@ -2899,6 +2899,10 @@ function mapWidgets(eff, opts = {}) {
 // Wording rule as for mapDedupOnSave: the reason is plain prose with no backticks (renderConfirmWorklist escapes it).
 function mapSiblingPage(siblingOf) {
   if (siblingOf == null) return [];
+  if (typeof siblingOf !== "object" || Array.isArray(siblingOf)) {
+    return [{ kind: "sibling-page", item: "siblingOf",
+      reason: "manifest.siblingOf must be an object with page, folder and reason (for example page set to the earlier Freedom page), not a bare value: rewrite it in that shape, or remove siblingOf." }];
+  }
   const text = (v) => (typeof v === "string" ? v.trim() : "");
   const page = text(siblingOf.page), folder = text(siblingOf.folder), why = text(siblingOf.reason);
   if (!page) {
@@ -2908,7 +2912,7 @@ function mapSiblingPage(siblingOf) {
   const from = folder ? ` (built by the migration in ${folder})` : "";
   const because = why ? ` Recorded because: ${why}.` : "";
   return [{ kind: "sibling-page", item: page,
-    reason: `This page matches ${page}${from}.${because} Ask the user which one applies: REUSE — open ${page} from this page's process steps and build nothing here, listing the rebinding and what differs (for example the buttons) for the user, never editing ${page} or the process without them; SHARED MODULE — move the shared logic into one client module that ${page} and this page both import; SEPARATE PAGE — build this page on its own. Whichever is chosen, never copy ${page}'s handlers into this page.` }];
+    reason: `This page matches ${page}${from}.${because} Ask the user which one applies: REUSE — open ${page} from this page's process steps and build nothing here, listing the rebinding and what differs (for example the buttons) for the user, never editing ${page} or the process without them; SHARED MODULE — move the shared logic into one client module that ${page} and this page both import, which edits ${page} to import it, an edit the user confirms with this answer; SEPARATE PAGE — build this page on its own. Whichever is chosen, never copy ${page}'s handlers into this page.` }];
 }
 
 // Moment 4b: the ON-SAVE DUPLICATE CHECK — a second on-stand signal, for the same reason `dcm` is one.
