@@ -25,6 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
+import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
@@ -3391,6 +3392,7 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
     // AC-7 covers every built page: the list page declares its own handlers, validators and converters.
     const listConventions = [...conventionRows(opts), ...listModuleRows(result, opts)];
     if (listConventions.length) groups.push(pageGroup(LIST_PAGE_KEY, "Project conventions", listConventions, opts));
+    groups.push(pageGroup(LIST_PAGE_KEY, "Code quality", codeQualityRows(opts), opts));
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY), opts));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
@@ -3467,6 +3469,8 @@ export function checklistGroups(result, opts = {}) {
   // The project's namespace, checked on every page that is built: a custom request, validator or converter outside
   // it is a blocking row until it is renamed or a decision accepts it.
   G("Project conventions", conventionRows(opts));
+  // The built page's code, measured: one row per rule of quality.mjs, blocking unless the rule is advisory.
+  G("Code quality", codeQualityRows(opts));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
@@ -4835,6 +4839,41 @@ export function resolveCardNativeVk(vk, ctx) {
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
 }
+// The code-quality rows of one page, one per rule. The thresholds and the constants modules' record ids travel in
+// the row itself, so the resolver needs nothing but the built root.
+function codeQualityRows(opts) {
+  const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
+  const constantsGuids = opts.constantsGuids || [];
+  const conventions = !!opts.projectConventions;
+  return QUALITY_ROW_RULES.map(({ rule, label, advisory }) => ({
+    deliverableId: `quality:${rule}`,
+    label: `[code-quality] ${rule} — ${label(thresholds)}`,
+    vk: { type: "quality", rule, thresholds, constantsGuids, conventions, advisory: !!advisory },
+  }));
+}
+const QUALITY_LISTED = 5;
+// A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
+// `manifest.qualityThresholds` — never a pass. An advisory one is noted.
+export function resolveQualityVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the page's code");
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its code cannot be checked", "missing"];
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids).get(ctx.pageKey);
+  if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
+  if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
+  const found = page.findings.filter((f) => f.rule === vk.rule);
+  const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
+    + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
+  const blocking = vk.advisory ? [] : found.filter((f) => !f.advisory);
+  const noted = found.filter((f) => vk.advisory || f.advisory);
+  const skipped = vk.rule === QUALITY_RULES.guidLiteral && !vk.conventions
+    ? "the constants-module check was skipped: the run recorded no `projectConventions`. " : "";
+  if (blocking.length) {
+    return ["⚠ verify", `${blocking.length} finding(s): ${listed(blocking)} — fix the code, or record a decision (\`--decide D<N>\`) that accepts it${blocking.some((f) => f.limit != null) ? ", or raise the limit in `manifest.qualityThresholds`" : ""}`, "unverified"];
+  }
+  if (noted.length) return ["ℹ noted", `${skipped}${noted.length} noted, not blocking: ${listed(noted)}`, "skip"];
+  if (skipped) return ["ℹ noted", skipped.trim(), "skip"];
+  return ["✅ Done", "none on the built page", "ok"];
+}
 // The list page's checked module rows: only the constants modules its own record ids map to (the section's define()
 // list is the list analyzer's, carried by the section's member worklist).
 function listModuleRows(result, opts) {
@@ -4876,7 +4915,7 @@ const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCou
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
 const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
-  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk]]);
+  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);

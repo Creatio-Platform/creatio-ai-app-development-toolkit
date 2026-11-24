@@ -28,6 +28,7 @@
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 //     "projectConventions": { resolved, requestPrefix, validatorPrefix?, converterPrefix?, helperModules, constantsModules, source, evidence, confirmedBy, conflict?, previous? }, // REQUIRED for `--plan`: the team's request namespace and modules (conventions.mjs); a verified `usr` fallback is a valid answer
 //     "constantsModules": { "<Module>": { "body": "<define(...) source>" }, … }, // the bodies of projectConventions.constantsModules — the plan maps every GUID it shows to its `Module.Path`
+//     "qualityThresholds": { maxFunctionLines?, maxNestedFunctionsPerHandler?, maxSequentialIndependentAwaits? }, // optional; overrides quality.mjs's DEFAULT_QUALITY_THRESHOLDS (60 / 3 / 2) for the `--verify` Code quality rows. Root only — every fold uses the root's
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
@@ -78,6 +79,7 @@ import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFile
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
+import { qualityThresholdsOf } from "./quality.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -176,7 +178,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
     // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
     // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedQualityThresholds: ctx.checklistOpts?.qualityThresholds, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -1133,6 +1135,10 @@ export function checklistOpts(manifest, opts = {}) {
     projectConventions: runConventionsOf(manifest, opts).conventions,
     // the ROOT run gates on them; a fold inherits facts the root already gated
     conventionsBlockers: opts.inheritedConventions ? [] : conventionFacts(manifest).issues,
+    // CODE QUALITY (quality.mjs) — the run's thresholds (the root manifest's, inherited by every fold) and the record
+    // ids the project's constants modules hold, which make a hard-coded copy of one a blocking finding.
+    qualityThresholds: opts.inheritedQualityThresholds || qualityThresholdsOf(manifest),
+    constantsGuids: [...(runConventionsOf(manifest, opts).guidIndex?.keys() || [])],
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
     placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
