@@ -70,7 +70,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, writesPage, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, browserAnswerOwed, readTimingsFile, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
@@ -3987,12 +3987,12 @@ function handoffCauses(result, dir, folder) {
       + " `Route:` line is the one read). Resolve the dispatch route first (orchestrate-build.md 7.0) and write it"
       + " there, so the fresh session dispatches every task the same way.");
   }
-  // The browser answer is a folder-level precondition too, for a folder that holds a page-writing task: without it
-  // every such task is refused, and a queue that still starts the reference cache would hand off a session whose
-  // first page `--start` is that refusal.
+  // The browser answer is a folder-level precondition too, while the folder still owes it (a page task yet to run,
+  // no page work begun): without it every such task is refused, and a queue that still starts the reference cache
+  // would hand off a session whose first page `--start` is that refusal.
   const browser = readWorklogBrowser(dir);
-  const writesAnyPage = fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && readTaskDir(dir).some((t) => writesPage(t.writesTo));
-  if (!browser && writesAnyPage) {
+  const owed = fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && browserAnswerOwed(readTaskDir(dir), readTimingsFile(dir).running);
+  if (!browser && owed) {
     causes.push(`worklog.md in ${folder} has no \`Browser:\` line naming one of ${BROWSER_ANSWERS.join(" · ")} (the`
       + " last `Browser:` line is the one read). Ask the browser question first (orchestrate-build.md 7.0b) and write the"
       + " answer there, so the fresh session never asks it again and no page task is refused.");

@@ -3557,6 +3557,17 @@ export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
+// PAGE WORK ALREADY BEGUN: a page-writing task has its clock running or has saved its page. The browser question belongs
+// before the first page task starts, so once page work has begun the gate has nothing left to hold — and a folder
+// whose page work began before the folder had a `Browser:` line keeps building rather than refusing mid-run.
+const PAGE_WORK_BEGUN = new Set([S_IN_PROGRESS, S_DONE, S_PARTIAL]);
+// `running` is the clock map of `timings.json`: a started task is `todo` on its file until its cells move.
+export const pageWorkBegun = (tasks, running = {}) => (tasks || []).some((t) => writesPage(t.writesTo)
+  && (PAGE_WORK_BEGUN.has(t.status) || Object.hasOwn(running || {}, t.id)));
+// The folder still owes the browser answer: a page-writing task is yet to run, and no page work has begun.
+export const browserAnswerOwed = (tasks, running = {}) =>
+  !pageWorkBegun(tasks, running) && (tasks || []).some((t) => writesPage(t.writesTo) && OPEN_LIFECYCLE.has(t.status));
+
 export function startBlocker(task, tasks, running = {}, { decisions = decisionIndex(tasks), browserGate = null } = {}) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
@@ -3572,7 +3583,9 @@ export function startBlocker(task, tasks, running = {}, { decisions = decisionIn
   // NO PAGE BUILD WITHOUT THE BROWSER ANSWER. A builder cannot ask the user, so the question its post-save check
   // depends on is asked before its dispatch. `browserGate` is set by the CLI, which reads `worklog.md`; a caller
   // that passes none is not gated.
-  if (browserGate && !browserGate.answer && writesPage(task.writesTo)) return { cause: HOLD_BROWSER, tasks: [] };
+  if (browserGate && !browserGate.answer && writesPage(task.writesTo) && !pageWorkBegun(tasks, running)) {
+    return { cause: HOLD_BROWSER, tasks: [] };
+  }
   const byId = new Map(tasks.map((x) => [x.id, x]));
   // THE QUEUE ORDER IS ENFORCED, not advised — a task built before its dependency reads answers that do not exist
   // yet: the child form its related list opens, the scaffolding it saves into, the `## Notes` the next chunk of

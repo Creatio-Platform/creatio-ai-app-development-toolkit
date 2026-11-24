@@ -17,13 +17,13 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
-  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
+  startBlocker, startableTasks, HOLD_BROWSER, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
-  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf,
+  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf, pageWorkBegun, browserAnswerOwed,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -6723,6 +6723,19 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     check("browser gate: with an answer recorded — `none` included — the same task starts and opens its clock",
       () => !answered.blockedByBrowser && answered.started?.id === page.id && !!readTimingsFile(da).running[page.id],
       () => ({ blockedByBrowser: answered.blockedByBrowser, started: answered.started?.id, running: readTimingsFile(da).running }));
+    // A folder whose page work began before it had a `Browser:` line: the gate has nothing left to hold.
+    const inFlight = readTaskDir(da);
+    const otherPage = inFlight.find((t) => writesPage(t.writesTo) && t.id !== page.id && t.status === "todo");
+    check("browser gate: once a page task is in progress or built, a missing `Browser:` line holds no other page task — a folder mid-build keeps building",
+      () => pageWorkBegun(inFlight) && !browserAnswerOwed(inFlight) && !!otherPage
+        && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } })?.cause !== HOLD_BROWSER,
+      () => ({ begun: pageWorkBegun(inFlight), other: otherPage?.id, blocker: otherPage && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } }) }));
+    const fresh = readTaskDir(d);
+    const closedPages = fresh.map((t) => (writesPage(t.writesTo) ? { ...t, status: "wont-do" } : t));
+    check("browserAnswerOwed: a fresh folder with page tasks owes the answer; one whose page tasks are all closed without building, or that has no page task, does not",
+      () => browserAnswerOwed(fresh) && !pageWorkBegun(fresh) && !browserAnswerOwed(closedPages)
+        && !browserAnswerOwed(fresh.filter((t) => !writesPage(t.writesTo))),
+      () => ({ fresh: browserAnswerOwed(fresh), closed: browserAnswerOwed(closedPages) }));
 
     // The same gate through the CLI: `worklog.md` of the migration folder is what the engine reads.
     const cd = path.join(tmp("browser-gate-cli"), "build-tasks");
@@ -6896,6 +6909,21 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     /no `Route:` line/, /7\.0/);
   refusalCase("no-browser", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", "")), {},
     /no `Browser:` line naming one of page-smoke · surface · none/, /7\.0b/);
+  {
+    // A folder sliced before it had a `Browser:` line, whose page work has already begun: the hand-off goes through.
+    const copy = path.join(tmp("cli-handoff-in-flight"), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    fs.writeFileSync(path.join(copy, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", ""));
+    const cdir = path.join(copy, "build-tasks");
+    const begun = readTaskDir(cdir).find((t) => writesPage(t.writesTo));
+    // Its page task's clock is running, recorded in the plain shape a folder from an earlier engine carries.
+    fs.writeFileSync(path.join(cdir, TIMINGS_FILE), JSON.stringify({ samples: [], running: { [begun.id]: AT(90) } }));
+    const res = cliFile(manifestPath, "--tasks", cdir, "--handoff");
+    check("--handoff: a folder whose page work began before it had a `Browser:` line is not refused for it — resume.md is written",
+      () => res.status === 0 && !/`Browser:`/.test(res.stdout || "") && fs.existsSync(path.join(copy, "resume.md")),
+      () => ({ running: readTimingsFile(cdir).running, status: res.status, out: (res.stdout || "").slice(0, 600) }));
+  }
   refusalCase("route-tbd", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent", "Route: TBD")), {},
     /no `Route:` line naming one of agent · codex · copilot · inline/, /7\.0/);
   {

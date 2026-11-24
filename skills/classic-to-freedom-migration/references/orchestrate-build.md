@@ -118,14 +118,20 @@ included, runs without asking. So the question is yours, asked before the first 
 2. A reply with `code: browser-consent-required` carries the question: put `browserConsent.question`
    to the user verbatim, with its `browserConsent.choices`, and add one sentence of your own: a
    "no" (`browser=none`) is remembered for the whole machine and turns `page-smoke` off for every
-   later run until the user changes it. Never answer it for them.
+   later run until the user changes it: a later call that passes `browser=existing` or
+   `browser=download` replaces it, and deleting `page-smoke-browser` from clio's settings brings the
+   question back. Never answer it for them.
 3. Call `page-smoke` again with the choice they picked (`browser`, and `browser-path` for
    `existing`). A reply with `success` means every builder's check will run.
-4. Write the outcome into `worklog.md` as ONE line, the user's words quoted:
-   - `Browser: page-smoke (user: "<their words>")` — `page-smoke` answered;
-   - `Browser: surface (user: "<their words>")` — the user wants the check driven in an agent browser
-     surface instead (the Chrome extension; the in-app pane asks for approval on every action, which
-     a builder cannot give);
+4. Write the outcome into `worklog.md` as ONE line, the user's words quoted and the evidence
+   beside them — the engine reads only this line, so the line says what backs it:
+   - `Browser: page-smoke (user: "<their words>"; page-smoke: success)` — the call of step 3
+     answered `success`;
+   - `Browser: surface (user: "<their words>"; surface: <what answered>)` — the user wants the check
+     driven in an agent browser surface instead (the Chrome extension; the in-app pane asks for
+     approval on every action, which a builder cannot give). Establish the surface first: its tools
+     must answer (the extension lists a connected browser). When none does, tell the user and ask
+     again; never record `surface` on the wish alone;
    - `Browser: none (user: "<their words>")` — the user declined. The run still builds, and every
      page ends unexercised: the result report says so (step 8).
 
@@ -138,7 +144,9 @@ included, runs without asking. So the question is yours, asked before the first 
    Record their words as the line; never write `none` for them.
 
 The engine reads the LAST `Browser:` line: until it names one of `page-smoke` · `surface` · `none`,
-`--next` withholds and `--start` refuses every task that writes a page. **One answer about one check
+`--next` withholds and `--start` refuses every task that writes a page, and `--handoff` refuses the
+folder. A folder whose page work has already begun (a page task in progress or built) is not held:
+the question belonged before its first page task, so ask it before the next one anyway. **One answer about one check
 is not this answer.** A user who says "I'll check this one myself" about one page has answered for
 that page; never write it as `Browser: none`, and never tell builders "do not run browser checks",
 unless the user confirms it holds for the whole run. A later change of mind is a new line.

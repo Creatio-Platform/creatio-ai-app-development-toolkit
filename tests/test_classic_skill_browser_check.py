@@ -300,5 +300,27 @@ class CheapEvidenceReferenceTests(unittest.TestCase):
         self.assertFalse(briefs, f"handed as a brief to read whole: {briefs}")
 
 
+class BrowserQuestionTests(unittest.TestCase):
+    """Step 7.0b asks the browser question once; the engine reads only the line it records."""
+
+    def setUp(self):
+        self.text = flat(section(read(ORCHESTRATE), "**7.0b The browser question", "**One answer about one check"))
+
+    def test_the_warning_says_how_a_machine_wide_no_is_reversed(self):
+        self.assertIn("passes `browser=existing` or `browser=download` replaces it", self.text)
+        self.assertIn("deleting `page-smoke-browser` from clio's settings", self.text)
+
+    def test_the_line_carries_its_evidence(self):
+        self.assertIn("`Browser: page-smoke (user: \"<their words>\"; page-smoke: success)`", self.text)
+        self.assertIn("`Browser: surface (user: \"<their words>\"; surface: <what answered>)`", self.text)
+
+    def test_surface_is_established_before_it_is_recorded(self):
+        self.assertIn("Establish the surface first", self.text)
+        self.assertIn("never record `surface` on the wish alone", self.text)
+
+    def test_a_folder_mid_build_is_not_held(self):
+        self.assertIn("A folder whose page work has already begun", self.text)
+
+
 if __name__ == "__main__":
     unittest.main()
