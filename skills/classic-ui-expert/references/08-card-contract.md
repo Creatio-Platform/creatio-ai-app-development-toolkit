@@ -138,11 +138,18 @@ Format — one numbered item per line, business-logic statement only, no citatio
 ```
 
 Numbering is per card, so a bare `AC-n` is valid only inside the card that defines it. Everywhere
-else in prose — another card, a plan, a worklog, code comments in a port — a criterion is cited
-card-qualified: `<card id>·AC-n` (e.g. `shared/C04·AC-16`). Two cards in different report files can
-both own an `AC-16`; an unqualified citation outside its card is ambiguous and therefore wrong.
+else in prose — another card, a plan, a task's Notes, `evidence.json`, a worklog — a criterion is
+cited card-qualified: `<card id>·AC-n` (e.g. `shared/C04·AC-16`). Two cards in different report files
+can both own an `AC-16`; an unqualified citation outside its card is ambiguous and therefore wrong.
 (The behaviour index's JSON entries keep bare `AC-n` in their `ac` arrays — each entry's sibling
 `card` field already scopes them.)
+
+**Shipped code cites nothing.** A port's schema bodies — handlers, validators, converters, request
+handlers, attributes — carry no card id, AC number, decision id or task id, not in a comment, a name
+or a string. Those ids belong to the migration's records and mean nothing to the developer who
+maintains the page afterwards. Link a handler to the criterion it satisfies in the plan row's
+*ported* marking, the task's Notes and the evidence record; a comment in the code says what the code
+does, in the code's own terms.
 
 Derivation rules:
 
