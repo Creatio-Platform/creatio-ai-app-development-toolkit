@@ -4597,6 +4597,79 @@ function handlerTriggerMatch(vk, src, code) {
   }
   return null;
 }
+// The index just past the `)` that closes the `(` at `open`, or -1 when the source ends first. Run over `codeOnly`
+// output, so a parenthesis inside a string or a comment is already blanked.
+function closingParen(code, open) {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === "(") depth++;
+    else if (code[i] === ")" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+// Is `name` CALLED in `code` (a `codeOnly` output)? `name(…)`, `this.name(…)` and `obj.name(…)` are calls;
+// `function name(…)` and the method shorthand `name(…) { … }` are definitions, and a function that is only defined
+// does nothing on the page. A dotted `name` (`Helpers.format`) matches its dotted call.
+function calledIn(code, name) {
+  const re = new RegExp(String.raw`(function\s+)?(?<![\w$])${reEsc(name).replaceAll(String.raw`\.`, String.raw`\s*\.\s*`)}\s*\(`, "g");
+  for (const m of code.matchAll(re)) {
+    if (m[1]) continue;
+    const end = closingParen(code, m.index + m[0].length - 1);
+    if (end >= 0 && /^\s*\{/.test(code.slice(end, end + 8))) continue;
+    return true;
+  }
+  return false;
+}
+// A request a page sends: a handler's `type: "<request>"` or an element's `request: "<request>"` in the view config.
+// A handler DECLARING it (`request: "<request>", handler: …`) only answers it, so the declaration alone is not a
+// sender.
+function requestSent(src, viewConfigJson, request) {
+  const lit = String.raw`["'\`]${reEsc(request)}["'\`]`;
+  return new RegExp(String.raw`\btype\s*:\s*${lit}`).test(src) || new RegExp(String.raw`"request"\s*:\s*${lit}`).test(viewConfigJson);
+}
+const requestDeclared = (src, request) => new RegExp(String.raw`\brequest\s*:\s*["'\`]${reEsc(request)}["'\`]`).test(src);
+const IDENT = String.raw`[A-Za-z_$][\w$]*`;
+const PAGE_FUNCTION = new RegExp(`^${IDENT}$`);
+const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
+// The page's declared `define()` dependencies, when the page entry carries them (`--built.pages[<key>].deps`, read
+// off the page's `body.js`). Null when absent: a module function's port cannot be checked without them.
+function pageDepsOf(page) {
+  const deps = entryObject(page)?.deps;
+  return Array.isArray(deps) ? new Set(deps.filter((d) => typeof d === "string")) : null;
+}
+// A dotted symbol that is not a request: a module function, reached when the page declares the module in its
+// `define()` deps and a handler calls `Module.fn(…)`. The module's own source is not read.
+function moduleFunctionVerdict(sym, module, ctx, code) {
+  const deps = pageDepsOf(ctx.page);
+  if (!deps) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
+  if (!deps.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
+  return calledIn(code, sym) ? { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
+}
+// One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
+// the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
+// a module function (`Module.fn`) a handler calls from a module the page declares in its `define()` deps.
+function portedSymbolVerdict(sym, ctx, code) {
+  const src = ctx.handlersSrc;
+  if (PAGE_FUNCTION.test(sym)) {
+    return calledIn(code, sym) ? { ok: true, text: `a handler calls \`${esc(sym)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
+  }
+  const dotted = DOTTED_SYMBOL.exec(sym);
+  if (!dotted) return { ok: false, text: `\`${esc(sym)}\` is not a request type, a page function or \`Module.function\`` };
+  const viewConfigJson = JSON.stringify(entryObject(ctx.page)?.viewConfig ?? null);
+  if (requestSent(src, viewConfigJson, sym)) return { ok: true, text: `the page sends request \`${esc(sym)}\`` };
+  if (requestDeclared(src, sym)) return { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
+  return moduleFunctionVerdict(sym, dotted[1], ctx, code);
+}
+// The build agent's `Ported as (row N): <symbol>` lines for this row, checked against the built page. Every named
+// symbol must hold: a claim that names one real port and one invented symbol is not a port.
+function portedAsMatch(vk, ctx, code) {
+  const syms = vk.portedAs || [];
+  if (!syms.length) return null;
+  const verdicts = syms.map((s) => portedSymbolVerdict(s, ctx, code));
+  const label = syms.map((s) => `\`${esc(s)}\``).join(", ");
+  if (verdicts.every((v) => v.ok)) return ["✅ Done", `ported as ${label}: ${verdicts.map((v) => v.text).join("; ")}`, "ok"];
+  return ["⚠ verify", `\`Ported as\` names ${label}, which does not hold on the built page: ${verdicts.filter((v) => !v.ok).map((v) => v.text).join("; ")} — name the symbol the page actually reaches`, "unverified"];
+}
 export function resolveHandlerVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
@@ -4605,14 +4678,26 @@ export function resolveHandlerVk(vk, ctx) {
   // comments + string literals blanked — for name/def matching. Memoized on the page ctx (verifyCtxFactory caches
   // one ctx per page key), so a page's handler rows strip the source once, not once per row.
   const code = ctx._codeOnly ?? (ctx._codeOnly = codeOnly(src));
-  if (!HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
-  if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
+  // The build agent's own record of the port is read first: it names the symbol, and the check is whether the
+  // page reaches it. Without one, a Classic name counts only when a handler CALLS it — a function that carries the
+  // Classic method's name and is never called ports nothing.
+  const ported = portedAsMatch(vk, ctx, code);
+  if (ported) return ported;
+  if (!HANDLER_NAME_DENY.has(vk.method) && calledIn(code, vk.method)) return ["✅ Done", `a handler calls \`${esc(vk.method)}\``, "ok"];
+  if (vk.parent && calledIn(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler calls`, "ok"];
   const trigHit = handlerTriggerMatch(vk, src, code);
   if (trigHit) return trigHit;
+  return ["☐ confirm on-stand", handlerOpenText(vk, code), "skip"];
+}
+// What an unrecognised handler row asks for: the `Ported as` line naming the real port, or, for a port that is not
+// code at all (a declarative rule), a `Check on stand` line.
+function handlerOpenText(vk, code) {
   const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
   const parentNote = vk.parent ? ` / \`${esc(vk.parent)}\`` : "";
   const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
-  return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
+  const definedOnly = !HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)
+    ? ` A handler defines \`${esc(vk.method)}\` but nothing calls it: a definition is not a port.` : "";
+  return `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote}.${definedOnly} Record the port as \`Ported as (row N): <symbol>\` — the request the page sends, or the page function or \`Module.function\` a handler calls; a port that is not code (a declarative rule) is confirmed on the stand with a \`Check on stand\` line`;
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
@@ -5233,6 +5318,12 @@ function withPagePeers(r, peers) {
   if (r.vk.type === "fields") return { ...r, vk: { ...r.vk, peers: p.fields } };
   return r.vk.type === "details" ? { ...r, vk: { ...r.vk, n: p.lists } } : r;
 }
+// The build agent's `Ported as (row N): <symbol>` record reaches a handler row's `vk`, keyed like `decidedKeys`
+// (`verifyRowKey`), so the resolver checks the named symbol against the built page.
+function withPortedAs(r, page, portedAs) {
+  const syms = r.vk?.type === "handler" ? portedAs?.get(verifyRowKey(page, r.label)) : null;
+  return syms?.length ? { ...r, vk: { ...r.vk, portedAs: syms } } : r;
+}
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null);
@@ -5256,13 +5347,13 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r0 of g.rows) {
-      const r = withPagePeers(r0, peers);
+      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
+      // `buildVerifyRow` applies inside.
+      const rowPage = r0.pageKey || g.pageKey || "main";
+      const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
       // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
       // evidence id is one the run publishes, and an evidence record under it is not an orphan.
       if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
-      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
-      // `buildVerifyRow` applies inside.
-      const rowPage = r.pageKey || g.pageKey || "main";
       if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;

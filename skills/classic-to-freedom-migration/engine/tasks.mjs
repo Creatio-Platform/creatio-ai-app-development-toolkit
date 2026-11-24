@@ -4246,6 +4246,36 @@ export function decidedRowKeys(set) {
   return keys;
 }
 
+// `Ported as (row N): <symbol>` — a build agent's record, under `## Notes`, of the symbol a row was ported as when
+// it is not the Classic method's own name: a request type the page sends (`usr.SetCanEditRequest`), a page
+// function a handler calls, or `Module.function`. `--verify` checks the symbol against the built page. Several
+// symbols are written as code spans (`` `a`, `b` ``); without code spans the first word is the symbol, so prose
+// after it is never read as a claim.
+export const PORTED_MARKER = /^[\s*>-]*Ported as \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
+const PORTED_SYMBOL = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$/;
+export function portedSymbols(value) {
+  const spans = [...String(value || "").matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
+  const words = spans.length ? spans : [String(value || "").trim().split(/[\s,;]+/)[0]];
+  return words.filter((w) => PORTED_SYMBOL.test(w));
+}
+// Every `Ported as` record of the folder, keyed like `decidedRowKeys` (`verifyRowKey(page, label)`) so `--verify`
+// finds it on the plan row the task row was cut from. A row number outside the task's rows names nothing.
+export function portedRowSymbols(set) {
+  const out = new Map();
+  for (const t of set?.tasks || []) {
+    if (t.unread) continue;
+    for (const line of String(t.notes || "").split(/\r?\n/)) {
+      const m = PORTED_MARKER.exec(line);
+      const row = m ? t.rows?.[Number(m[1]) - 1] : null;
+      const page = row && (row.pageKey || t.pageKey);
+      if (!page) continue;
+      const key = verifyRowKey(page, row.label);
+      out.set(key, [...new Set([...(out.get(key) || []), ...portedSymbols(m[2])])]);
+    }
+  }
+  return out;
+}
+
 // ---8<--- DECIDE / REVOKE: a person's answer to a question the plan raised ---8<---
 //
 // A whole-task scope decision — `wont-do` or `postponed` — is a PERSON's answer, and it reaches the ledger

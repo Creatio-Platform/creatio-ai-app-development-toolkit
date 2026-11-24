@@ -67,7 +67,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
+  applyDecision, revokeDecision, decidedRowKeys, portedRowSymbols, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
@@ -4725,12 +4725,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // `renderVerify` so those rows never become MISSING. When `--verify` runs without `--tasks`, no
     // registry exists — `decidedKeys` stays null and `renderVerify` falls back to the plan walk unchanged.
     let decidedKeys = null;
+    let portedAs = null;
     let preMergedSet = null;
     if (tasksMode) {
       try {
         preMergedSet = readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
-        if (preMergedSet && !preMergedSet.refused) decidedKeys = decidedRowKeys(preMergedSet);
-        else preMergedSet = null;
+        if (preMergedSet && !preMergedSet.refused) {
+          decidedKeys = decidedRowKeys(preMergedSet);
+          portedAs = portedRowSymbols(preMergedSet);
+        } else preMergedSet = null;
       } catch { /* folder unreadable — fall back to plan walk; the report leg will name the failure */ }
     }
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
@@ -4757,7 +4760,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else why = "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
       process.stderr.write(`migrate.mjs: reconcile verify mode = ${why}.\n`);
     }
-    verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2 }, built, decidedKeys);
+    verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2, portedAs }, built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
