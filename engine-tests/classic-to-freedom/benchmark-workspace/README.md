@@ -1,0 +1,71 @@
+# `MbMigrationBench`: a Classic test app for migration runs
+
+A small, synthetic Classic UI app for trying the `classic-to-freedom-migration` skill on a stand you
+own. Install it on a clean stand, migrate it, and compare the result before and after a toolkit
+change. It holds no customer data: every name, record and line of code here is made up.
+
+This folder is a clio workspace. The package source is `packages/MbMigrationBench/`. The tests under
+`engine-tests/` do not load it, and the release zip does not ship it.
+
+## What is in it
+
+The domain is "Service contracts": one section with a contract page, its details, and two sister
+document pages. Each part is there because migrations get it wrong:
+
+| Pattern | Where it is | What a migration has to handle |
+|---|---|---|
+| Package prefix that differs from the stand setting | Every schema is `Mb…`, every column `Mb…`; the stand's `SchemaNamePrefix` stays `Usr` | Generated names follow the package convention (`Mb…`, `mb.` for requests), not the stand setting |
+| Section with an edit page | `MbContractSection`, `MbContractPage`; registered in `SysModule` / `SysModuleEntity` / `SysModuleEdit` | List page and record page, both reachable from the app |
+| Detail registered on a base page | `MbBaseDocumentPage` adds the **History** tab and `MbDocumentLogDetail`; `MbContractPage` inherits them | A detail that the page's own layer never declares is still found and decided on |
+| Detail with summaries, quick filters and a menu | `MbContractItemDetail`: a "Total / Active items" label, the "Active only" and "Due in 30 days" toggles saved to the user profile, and a "Deactivate selected" menu item | Each feature gets a Freedom counterpart or an explicit decision |
+| Read-only detail | `MbContractPaymentDetail` (no add, edit, copy, delete or open) | The detail stays read-only |
+| Static disabled fields | `MbAmount` and `MbApproved` on the contract page, `MbTotal` on the item page, `MbIsPosted` on the document pages (`"enabled": false` in the diff) | Fields stay read-only |
+| Wizard-owned business rules | `businessRules` of `MbContractPage`: End date required when status is Active; Approval comment visible when approved; Start date editable only in Draft; Contact filtered by Customer | Each rule is migrated as a page rule or an entity rule, or listed as not migrated |
+| Code-owned rules | `rules` of `MbContractPage`: Customer and End date editable only while `MbCanEditFields` is true (false when the contract is Closed) | Read-only state driven by an attribute survives the migration |
+| Sister pages with shared logic | `MbDeliveryNotePage` and `MbReturnNotePage` both use `MbDocumentTotalsMixin` for the **Post** button | The shared logic stays shared, not copied into each page |
+| Page that writes data when it opens | `MbContractPage.mbAssignNumber` increments the `MbContractLastNumber` system setting when a new contract card opens | A browser check of the new-record page changes data; the migration has to say so |
+| Process page | `MbApproveContractProcessPage` (parent `BasePageProcessTemplate`) | The page is recognised as a process page |
+| Section action and selection | "Close selected contracts" in the section actions | The action is migrated or listed |
+
+Demo data ships with the package:
+
+- one account, "Northwind Demo Ltd";
+- two contacts: "Alex Demo" belongs to the account, "Sam Outsider" does not, so the Contact filter shows;
+- two contracts, "Annual service contract" (Active) and "Pilot contract" (Draft);
+- three items, one of them inactive;
+- two payments, one delivery note and one return note;
+- two log lines;
+- `MbContractLastNumber = 2`.
+
+## Install
+
+Use a clean stand with Classic UI available (the base Classic schemas such as `BaseSectionV2`
+must exist). From this folder:
+
+```bash
+clio push-workspace -e <environment>
+```
+
+The package installs locked (`InstallType 1`), like a package from a customer's archive. To edit
+it on the stand afterwards, install it with `--unlock`, and set the stand's `SchemaNamePrefix` to
+`Mb` while you edit, or new schemas get the `Usr` prefix.
+
+Open the section in Classic UI at `<stand>/0/Nui/ViewModule.aspx#SectionModuleV2/MbContractSection`.
+
+## Change it
+
+1. Install the package unlocked and set `SchemaNamePrefix` to `Mb` on the stand.
+2. Change the app on the stand.
+3. Export it back into this folder: `clio restore-workspace -e <environment>`.
+4. Keep only the `en-US` resource and data files (the workspace `.gitignore` drops the others).
+5. Delete `packages/MbMigrationBench/Files/app-descriptor.json` if the export wrote one: it pins the
+   platform version of the stand it came from.
+6. Set `SchemaNamePrefix` back to `Usr`.
+
+A schema without a parent (the mixin) must keep its full JSON `metadata.json`. The diff form that
+pages with a parent use fails to install for it.
+
+## Tested on
+
+Creatio 10.2.959 (MSSQL, .NET Framework). The package depends on `CrtBase`, `CrtNUI`,
+`CrtUIPlatform7x`, `CrtWizards7x` and `CrtProcessDesigner`.
