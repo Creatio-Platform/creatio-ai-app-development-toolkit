@@ -69,9 +69,10 @@ the work it judges fails the run's dispatch gate.
 
 The engine derives every id you rule on, and you never make one up. It keeps `evidence.json` and
 `judge.json` current with each id as a key from the first slice on, and never changes a value
-already filed. The ids come in five shapes: `<pageKey>#quality-gates` (the page-design
+already filed. The ids come in six shapes: `<pageKey>#quality-gates` (the page-design
 pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
-`list#listpage:<kind>:<item>` and `<pageKey>#datasource:<name>`, where `<pageKey>` is `main`,
+`list#listpage:<kind>:<item>`, `<pageKey>#datasource:<name>` and `<pageKey>#directive:D<N>` (one per
+user directive on that page), where `<pageKey>` is `main`,
 `list`, `child:<Entity>`, `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two
 pages would otherwise share a key). The record under an id holds:
 
@@ -83,6 +84,13 @@ pages would otherwise share a key). The record under an id holds:
 - `findings` — what the pass found and settled. It owes nobody a decision.
 - `findingsRaised` — what the pass found and did NOT fix. Only a non-empty list raises a finding;
   prose in this field raises nothing.
+
+A `#directive:D<N>` record is different: it holds `howFollowed` (how the page does what the user
+asked) and `components` (the elements that carry it), and the deliverable row quotes the user's words
+and the **expected** result on the page. Rule on the PAGE, not on the record's prose: read the built
+page and say whether it does what the expectation states. A page that does something else in its place
+— labels where the user asked for a Summaries component — is `convincing: false` however well the
+record argues for it; quote in `why` what the page shows instead.
 
 A record whose fields have the wrong shape is incomplete, and its row stays `⚠ verify` whatever you
 rule, so say so in `why` rather than blessing it. On a `#quality-gates` record, a raised finding is

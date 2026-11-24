@@ -70,7 +70,7 @@ migrations/<app-or-section-slug>/
     timings.json         # engine-written: the clock and the dispatch record `--start` opens per task
 ```
 
-**An answered ⚠ Confirm item is recorded in `decisions.md` like every other decision** — the question as the engine published it, the answer, who decided and when. Step 7 builds against that entry; an answer closes no `--verify` row on its own, the deliverable is still built and verified.
+**An answered ⚠ Confirm item is recorded in `decisions.md` like every other decision** — the question as the engine published it, the answer, who decided and when. Step 7 builds against that entry; an answer closes no `--verify` row on its own, the deliverable is still built and verified. A user's answer and a user's unprompted instruction carry provenance lines (`Kind:`, `Decided by:`, `Quote:` …), described under *Directives and answers* below.
 
 Use a stable slug, for example `gdpr-for-creatio`. Do not rename the folder mid-project.
 
@@ -124,7 +124,7 @@ Append-only. Every entry has a date.
 - plan approval, switch-over approval, package-placement decision, template choices that were not obvious, dropped artifacts with reason, and any re-approval after a scope change
 - one row/section per decision: date, decision, rationale, who approved, affected tasks
 - **the plan-approval entry names the plan VERSION** alongside the date and who approved. The build reads that entry as a precondition and refuses to run without a matching version — approving one plan does not authorise building another. At single-section scope this entry may be the file's only content.
-- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over every manifest key except `runDiagnostics` (the machine the plan was made on) — see "The plan version" in `engine/README.md` — so re-running the planner is not a new version to re-approve, while a changed manifest input is; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
+- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over every manifest key except `runDiagnostics` (the machine the plan was made on), plus the user directives in `decisions.md`, so adding or rewriting a directive after approval needs re-approval — see "The plan version" in `engine/README.md` — so re-running the planner is not a new version to re-approve, while a changed manifest input is; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
 
   ```
   **Plan version:** `plan-4f9c2ab17e03` — record THIS string in the `decisions.md` approval entry; …
@@ -265,6 +265,55 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 On the plan-approval entry `Plan version:` is required, beside a non-empty `Approved by:` in the same `## `
 entry, and its value is the `plan-<hash>` string `plan.md` prints, alone on the line — the build and `--handoff`
 compare it to `plan.md` exactly, so nothing may follow it there.
+
+#### Directives and answers — who decided, in whose words
+
+A `## D<N> — <title>` entry may carry provenance lines. The engine reads them (`engine/directives.mjs`); an entry
+without them is a plain decision and reads exactly as before.
+
+```markdown
+## D1 — Product totals use the Summaries component
+- Kind: directive
+- Decided by: user
+- Quote: "use the Summaries component"
+- Scope: main
+- Expectation: the products detail shows its totals in a crt.Summaries component, not in labels
+
+## D2 — The amount stays a decimal field
+- Kind: answer
+- Decided by: user
+- Quote: "<the user's reply, verbatim, in their language>"
+- Asked: How should the multi-currency amount look on the record page?
+
+## D3 — No amount recalculation in the background
+- Decided by: orchestrator
+- Rationale: <why you chose it without asking>
+```
+
+- **`Kind: directive`** — an instruction the user gave without being asked, in the first message or later. It
+  needs `Quote:`, `Scope:` (`run`, or the page keys the plan prints — `main`, `list`, `child:<Entity>`,
+  `typed:<Schema>`, `mini:<Schema>`, comma-separated) and `Expectation:` — ONE statement a judge can check
+  on the built page. The engine puts a filed + judged evidence pair under `<pageKey>#directive:D<N>` on every
+  page in scope, shows the directive in the plan's `### User directives` table and in every task file of
+  those pages. A directive whose scope names no published page makes the plan incomplete: it would reach no
+  builder.
+- **`Kind: answer`** — the user's reply to a question you asked, an answer outside the offered options
+  included. It needs `Quote:` and `Asked:`.
+- **`Decided by: user`** always needs `Quote:` — the user's words, not your summary of them. A choice the user
+  did not state in words is yours: record it `Decided by: orchestrator`. Never fold your own addition into the
+  user's entry; it is a new question before the build, or its own orchestrator entry.
+- **`Decided by: orchestrator`** entries are listed in the final report under *Decided without you*.
+- **An older entry** that carries only a free-text `Decided by:` (a person's name) and none of the other lines is
+  a plain decision and reads as before. Rewrite it in this format only when you add a quote or a kind to it.
+- **Record a directive when the user gives it.** The instructions in the first message go in before the first
+  `--plan --out`, so the plan the user approves already shows them. A directive kept only in your context
+  reaches no builder.
+- **Read the earlier folder first.** When an earlier migration folder exists for the same section, read its
+  `decisions.md` before planning: what the user decided there still holds unless they say otherwise, so ask
+  before departing from it.
+
+The plan is incomplete, and `--tasks` writes nothing, while any provenance line does not stand; the plan's
+banner names the entry and what is missing.
 
 ### worklog.md
 ```markdown
