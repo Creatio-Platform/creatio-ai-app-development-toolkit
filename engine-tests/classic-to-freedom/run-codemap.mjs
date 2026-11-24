@@ -67,9 +67,14 @@ console.log("— analysis of a clean body");
 const clean = analyzePageCode(CLEAN, VIEW_SENDS_OPEN_HISTORY);
 check("a clean body has no findings", () => findingCount(clean) === 0, () => findingPhrases(clean));
 check("a request a button sends is not reported", () => !clean.unsent.includes("usr.OpenHistory"));
-check("the same request without the button is reported", () => analyzePageCode(CLEAN, []).unsent.join() === "usr.OpenHistory");
+check("the same request with a view that has no button for it is reported", () => analyzePageCode(CLEAN, []).unsent.join() === "usr.OpenHistory");
+check("a handler that names its OWN request (a type check, a log line) does not count as sending it",
+  () => analyzePageCode(`[{ request: "usr.Self", handler: async (request, next) => { if (request.type === "usr.Self") { return 1; } return next?.handle(request); } }]`, []).unsent.join() === "usr.Self");
+check("without a viewConfig nobody knows what the buttons send: the unsent check is skipped and the map says so",
+  () => { const a = analyzePageCode(CLEAN); return a.sendsChecked === false && a.unsent.length === 0 && findingCount(a) === 0
+    && renderCodeMap(a, "P").includes("Requests sent from the view were not checked"); });
 check("a platform request is never reported as unsent", () => !relay.unsent.some((r) => r.startsWith("crt.")));
-check("an empty body has no handlers and no findings", () => { const a = analyzePageCode(""); return a.handlers.length === 0 && findingCount(a) === 0; });
+check("an empty body has no handlers and no findings", () => { const a = analyzePageCode("", []); return a.handlers.length === 0 && findingCount(a) === 0; });
 
 console.log("— input that cannot be read");
 check("a body that does not parse gives an error, not a throw", () => /does not parse/.test(analyzePageCode("[ { request: ").error || ""));
@@ -103,7 +108,7 @@ console.log("— the `Page code` row of --verify");
   };
   // The view carries the plan's one field, plus whatever sends a request; the table renders backticks as ˋ.
   const built = (handlers, extra = []) => ({ viewConfig: [{ name: "Notes", type: "crt.Input", control: "$Notes" }, ...extra], handlers, ...QG });
-  const line = (v) => (v.markdown.split("\n").find((l) => l.includes("| Page code — ")) || "").replace(/ˋ/g, "`");
+  const line = (v) => (v.markdown.split("\n").find((l) => l.includes("| Page code — ")) || "").replaceAll("ˋ", "`");
   const open = renderVerify(res, {}, built(RELAY));
   check("the relay body opens the row with every finding named, and the run is not complete", () => /⚠ verify/.test(line(open))
     && line(open).includes("`idOf` is defined in 3 handlers") && line(open).includes("`usr.RefreshTotals` is declared but nothing sends it")
@@ -116,6 +121,9 @@ console.log("— the `Page code` row of --verify");
     () => ({ row: line(decided), complete: decided.complete }));
   const broken = renderVerify(res, {}, built("[ { request: "));
   check("a body that does not parse holds the row with the reason", () => /⚠ verify/.test(line(broken)) && /does not parse/.test(line(broken)), () => line(broken));
+  const noView = renderVerify(res, {}, { ops: [{ name: "Notes", type: "crt.Input" }], handlers: CLEAN, ...QG });
+  check("handlers without a viewConfig close the row on what can be checked and say the view's requests were not",
+    () => /✅ Done/.test(line(noView)) && /not checked \(no viewConfig/.test(line(noView)), () => line(noView));
   const none = renderVerify(res, {}, { ops: [{ name: "Notes", type: "crt.Input" }], ...QG });
   check("no handler source in the payload leaves the row to confirm, never a failure", () => /☐ confirm on-stand/.test(line(none)) && none.complete === true,
     () => ({ row: line(none), complete: none.complete }));

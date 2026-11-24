@@ -631,11 +631,17 @@ check("renderTaskFile: the file STATES the one-sub-agent contract and the parall
     && /\*\*Depends on:\*\*/.test(SAMPLE_TEXT) && /Read their `## Notes` first/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
 // The writer OWNS the page's code, and the file it is handed is its brief (the task card).
-check("owner: a page task gives its writer the page's code to own — the old `Build ONLY what is listed` and the `sequential is not permission` wording are gone, a deliverable outside its rows is still a proposal under `## Notes`",
+check("owner: a page task gives its writer the page's code to own; it carries no `Build ONLY what is listed` or `sequential is not permission` wording, and a deliverable outside its rows is a proposal under `## Notes`",
   () => /you OWN this page's code/.test(SAMPLE_TEXT) && /yours to refactor/.test(SAMPLE_TEXT)
-    && /`Page code` row passes/.test(SAMPLE_TEXT) && /outside your rows .* is not yours to change/s.test(SAMPLE_TEXT)
+    && /`Page code` row passes/.test(SAMPLE_TEXT) && SAMPLE_TEXT.includes("outside your rows") && SAMPLE_TEXT.includes("is not yours to change")
     && !/Build ONLY what is listed/.test(SAMPLE_TEXT) && !/sequential is not permission/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT.split("\n").slice(18, 32).join("\n"));
+{
+  const ob = fs.readFileSync(path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "references", "orchestrate-build.md"), "utf8");
+  check("owner: orchestrate-build.md rule 2 hands the next task to a different sub-agent that takes the page over as its OWNER, sends post-build changes for one page as one dispatch, and carries no `Sequential is not an exception` wording",
+    () => /it is not a guest: it takes the\s+page over as its \*\*owner\*\*/.test(ob) && /one task per page per round/.test(ob)
+      && !/Sequential is not an exception/.test(ob));
+}
 check("owner: the next task on the page still goes to a DIFFERENT sub-agent, which takes the page over as its owner — the per-task check and the dispatch token stay",
   () => /The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner/.test(SAMPLE_TEXT)
     && /agentNonce/.test(SAMPLE_TEXT), () => SAMPLE_TEXT);
@@ -645,7 +651,7 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
   const card = carded.slice(carded.indexOf(TASK_CARD_HEADING), carded.indexOf("## Deliverables"));
   check("task card: a page task carries the card — its brief is this file and the spec section, NOT plan.md / decisions.md / worklog.md, and it runs the code map before and after it writes",
     () => card.startsWith(TASK_CARD_HEADING) && /Your brief is this file/.test(card)
-      && /Do not read `plan\.md`, `decisions\.md` or `worklog\.md`/.test(card)
+      && /Do not read `plan\.md`, `decisions\.md`, `worklog\.md` or the `customizations-\*` part files/.test(card)
       && card.includes(`node engine/codemap.mjs <file> --page ${SAMPLE.pageKey}`) && /One place per behaviour/.test(card),
     () => card);
   check("task card: the decisions in force are inline, verbatim, the plan's Adjustments included",
@@ -654,6 +660,20 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
   check("task card: an empty decisions file says none are recorded; a render without the map says they were not read, never that none exist",
     () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: new Map() }).includes("**Decisions in force:** none recorded.")
       && /\*\*Decisions in force:\*\* not read for this render/.test(SAMPLE_TEXT));
+  check("task card: the cited behaviour cards travel inline with their content, and the plan's ⚠ Confirm items and boundaries are pointed at in the table — no part-file read",
+    () => {
+      const rows = [
+        { label: "Handler — `onSaved`", group: "⚠ Custom methods worklist", vk: "handler",
+          behaviour: { card: "main/C03", ac: ["AC-1 saving keeps the owner"], whatItDoes: "Re-reads the owner after save.", useCase: "The user saves; the owner field refreshes." } },
+        { label: "[mixin] CompletenessMixin", group: "⚠ Confirm worklist", vk: null },
+        { label: "Dashboards", group: "Pages", vk: null, na: "another section owns it" },
+      ];
+      const text = renderTaskFile({ ...SAMPLE, rows }, { ...SET, cardDecisions: decisions });
+      const c = text.slice(text.indexOf(TASK_CARD_HEADING), text.indexOf("## Deliverables"));
+      return c.includes("- `main/C03` — does: Re-reads the owner after save. · use case: The user saves; the owner field refreshes. · acceptance: AC-1 saving keeps the owner")
+        && c.includes("1 ⚠ Confirm item(s)") && c.includes("1 plan boundary row(s)")
+        && c.includes("`customizations-*`") && !/read by its id in its part file/.test(c);
+    }, () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions }));
   check("task card: a read-only review task has no card — it owns no page code",
     () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes(TASK_CARD_HEADING));
   check("task card: the decisions ride on the task set itself, so every path that renders the set — sync, start, decide, revoke — writes the same card",
@@ -1764,6 +1784,29 @@ check("repair: an adopted repair file joins the WRITE CHAIN of the page it repai
     const lastBuild = m.tasks.findLast((x) => x.writesTo === t.writesTo && x.id !== t.id);
     return got.dependsOn.includes(lastBuild.id);
   }, () => "see the merged queue");
+check("repair: a repair task that writes a page carries the task card with the decisions in force, and no `Build ONLY what is listed` wording",
+  () => {
+    const dir = tmp("repair-card");
+    const opts = { ...OPTS, decisions: new Map([["D2", "Keep the Notes tab"]]) };
+    syncTaskDir(dir, RUN, opts);
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, opts);
+    const texts = res.written.filter((t) => String(t.writesTo).startsWith("page:")).map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+    fs.rmSync(dir, { recursive: true, force: true });
+    return texts.length > 0 && texts.every((x) => x.includes(TASK_CARD_HEADING) && x.includes("- `D2` — Keep the Notes tab")
+      && /Do not read `plan\.md`/.test(x) && !/Build ONLY what is listed/.test(x));
+  });
+// A run on the collapse line stays ONE build task (plus its review) with the `Page code` row in it: the row checks
+// code the other rows produce and weighs nothing.
+check("budget: a run at exactly `TASK_BUDGET.run` weight still collapses to one build task with the `Page code` row inside it",
+  () => {
+    const rows = checklistGroups(RUN, OPTS).flatMap((g) => g.rows);
+    const pc = rows.find((r) => r.vk?.type === "pagecode");
+    const base = buildTaskSet(RUN, OPTS);
+    const weight = base.tasks.filter((t) => t.writesTo).reduce((a, t) => a + (t.weight || 0), 0);
+    const atLine = buildTaskSet(RUN, { ...OPTS, taskBudget: { run: weight } });
+    const builds = atLine.tasks.filter((t) => t.writesTo);
+    return !!pc && weight > 0 && builds.length === 1 && builds[0].rows.some((r) => r.vk === "pagecode");
+  }, () => buildTaskSet(RUN, OPTS).tasks.map((t) => `${t.group}:${t.weight}:${t.writesTo}`));
 check("repair: syncRepairDir ADDS to the folder and never overwrites — the plan tasks are untouched, and re-verifying an UNCHANGED page opens no second round, because a round is an ATTEMPT and counting verify runs would burn the cap with nobody having run",
   () => {
     const dir = tmp("repair");

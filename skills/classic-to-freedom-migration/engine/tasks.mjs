@@ -550,6 +550,7 @@ function taskOf(chunk, order) {
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
     ...(r.subject ? { subject: r.subject } : {}),
+    ...(r.behaviour ? { behaviour: r.behaviour } : {}),
     ...statusFields(r),
   }));
   const task = {
@@ -1065,9 +1066,9 @@ function taskCardBlock(task, set = {}) {
   const pageArg = task.pageKey ? ` --page ${task.pageKey}` : "";
   const L = ["", TASK_CARD_HEADING, "",
     "- **Your brief is this file** and your page's section of the design spec (`refs/spec.md` when the reference"
-      + " cache exists, else `--spec`). Do not read `plan.md`, `decisions.md` or `worklog.md`: what they hold for"
-      + " this task is in this file. A behaviour card a row cites is read by its id in its part file, never the"
-      + " whole file.",
+      + " cache exists, else `--spec`). Do not read `plan.md`, `decisions.md`, `worklog.md` or the `customizations-*`"
+      + " part files: what they hold for this task is in this file.",
+    ...worklistLines(task.rows || []),
     "- **See the page's code before you write it.** Save the page's `get-page` response before your first write"
       + ` and after your last, and run \`node engine/codemap.mjs <file>${pageArg}\` (beside \`migrate.mjs\`) on`
       + " it. It lists the handlers, the helpers already defined and where, and what the `Page code` row will hold"
@@ -1078,13 +1079,39 @@ function taskCardBlock(task, set = {}) {
       + " you write. Either way, extend the handler the map lists for a request instead of adding a second one, and"
       + " move a part two handlers share into one helper.",
   ];
+  L.push(...behaviourLines(task.rows || []));
   const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
   if (!decisions) L.push("- **Decisions in force:** not read for this render — read `decisions.md` once, by heading.");
   else if (!decisions.length) L.push("- **Decisions in force:** none recorded.");
   else {
     L.push("- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
       + " also in its `Outcome` cell):");
-    for (const [id, title] of decisions) L.push(`  - \`${id}\` — ${String(title).replace(/\s+/g, " ").trim()}`);
+    for (const [id, title] of decisions) L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
+  }
+  return L;
+}
+
+// Where the plan's worklist for THIS task sits: its ⚠ Confirm items and its boundaries are rows of the table below.
+function worklistLines(rows) {
+  const confirms = rows.filter((r) => /Confirm/.test(String(r.group || "")) && !r.na).length;
+  const boundaries = rows.filter((r) => r.na).length;
+  if (!confirms && !boundaries) return [];
+  return [`- **The plan's worklist for these rows is in the table below:** ${confirms} ⚠ Confirm item(s) — answer each`
+    + ` on the stand before you build — and ${boundaries} plan boundary row(s), pre-filled \`not-applicable\` — the`
+    + " plan's own limit, never built."];
+}
+// The behaviour cards the task's rows cite, with their content: what the item does, its use case and its acceptance
+// criteria. A handler is ported against its card's criteria, so the card travels with the row that needs it.
+function behaviourLines(rows) {
+  const seen = new Map();
+  for (const r of rows) if (r.behaviour?.card && !seen.has(r.behaviour.card)) seen.set(r.behaviour.card, r.behaviour);
+  if (!seen.size) return [];
+  const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();
+  const L = ["- **Behaviour cards your rows cite** (from the step-5.1 analysis; port each against its criteria):"];
+  for (const [id, b] of seen) {
+    const parts = [b.whatItDoes && `does: ${one(b.whatItDoes)}`, b.useCase && `use case: ${one(b.useCase)}`,
+      b.ac?.length && `acceptance: ${b.ac.map(one).join("; ")}`].filter(Boolean);
+    L.push(`  - \`${id}\` — ${parts.join(" · ") || "no description recorded; the card id is all the analysis left"}`);
   }
   return L;
 }
@@ -2565,7 +2592,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
       rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
-        ...(r.subject ? { subject: r.subject } : {}), ...statusFields(r) })),
+        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...statusFields(r) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,

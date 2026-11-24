@@ -2740,9 +2740,14 @@ function writesField(h) {
 }
 // The primary behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing
 // one card in one task. Absent when the row cites no primary card; a body card alone joins no rows.
+// The row's behaviour card: its id (what a split keys a row by) and its content — what the item does, the use case
+// and the acceptance criteria — so the task card can hand the writer the card itself instead of a pointer into the
+// agent-written part file it came from.
 function cardField(x) {
-  const card = x.describedIn?.card;
-  return card ? { card } : {};
+  const d = x.describedIn;
+  if (!d?.card) return {};
+  const behaviour = { card: d.card, ac: d.ac || [], whatItDoes: d.whatItDoes || null, useCase: d.useCase || null };
+  return { card: d.card, behaviour };
 }
 // A section method the list analyzer already read: its effect is in the positioned list ops, so the row records
 // it and must NOT ask for a second build. Same shape as the folded-helper note beside it.
@@ -4560,11 +4565,14 @@ export function resolveHandlerVk(vk, ctx) {
 export function resolvePageCodeVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the page's handler code");
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
-  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass get-page's `bundle.handlers` to auto-check this", "skip"];
+  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
   // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
   const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
-  if (!findingCount(a)) return ["✅ Done", `${a.handlers.length} handler(s): none over ${MAX_FUNCTION_LINES} lines, no helper defined twice, every declared request is sent`, "ok"];
+  if (!findingCount(a)) {
+    const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
+    return ["✅ Done", `${a.handlers.length} handler(s): none over ${MAX_FUNCTION_LINES} lines, no helper defined twice, ${sends}`, "ok"];
+  }
   return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception`, "unverified"];
 }
 export function resolveVmAttrVk(vk, ctx) {

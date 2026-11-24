@@ -17,6 +17,9 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { getAcornParse, walkAstBounded, staticPropKey, isFnNode } from "./engine.mjs";
+// designspec.mjs imports this module for the verify row; neither module uses the other's exports while it loads,
+// so the cycle is safe, and the CLI below reads the page exactly the way `--verify` does.
+import { verifyCtx, esc } from "./designspec.mjs";
 
 // The limits the `Page code` verify row applies. A handler longer than this is several behaviours in one place —
 // the shape the relay produced — and a name defined in two handlers is a helper that should live once.
@@ -58,8 +61,10 @@ function handlerFacts(entry) {
     functions.push({ name: `${entry.request} › ${named.name}`, lines: linesOf(named.fn) });
   }) : { truncated: false };
   const lines = linesOf(entry.fn);
-  return { request: entry.request, lines, helpers: [...helpers].sort(), functions: [{ name: entry.request, lines }, ...functions],
-    literals, truncated: walk.truncated };
+  // A handler naming its OWN request (`request.type === "usr.X"`, a log line) does not send it.
+  if (entry.declared) literals.delete(entry.request);
+  return { request: entry.request, lines, helpers: [...helpers].sort((x, y) => x.localeCompare(y)),
+    functions: [{ name: entry.request, lines }, ...functions], literals, truncated: walk.truncated };
 }
 // The request names the view sends: `clicked: { request: "usr.X" }` and every other `request` value in the tree.
 function viewRequests(viewConfig) {
@@ -77,10 +82,12 @@ function viewRequests(viewConfig) {
 }
 
 // The analysis. `{ error }` when the source cannot be read as a handlers array; otherwise every fact the map and
-// the verify row report. Pure: no file system, no stand.
+// the verify row report. Pure: no file system, no stand. Without a `viewConfig` nobody knows what the buttons send,
+// so the unsent-request check is skipped (`sendsChecked: false`) rather than reporting every button's request.
 export function analyzePageCode(handlersSrc, viewConfig = null) {
   const text = String(handlersSrc ?? "").trim();
-  if (!text) return { handlers: [], duplicates: [], longFunctions: [], unsent: [] };
+  const sendsChecked = viewConfig != null;
+  if (!text) return { handlers: [], duplicates: [], longFunctions: [], unsent: [], sendsChecked };
   let expr;
   try { expr = getAcornParse()(`(${text}\n)`, { ecmaVersion: "latest", sourceType: "script", locations: true }).body[0]?.expression; }
   catch (e) { return { error: `the handler source does not parse: ${String(e?.message || e)}` }; }
@@ -95,8 +102,9 @@ export function analyzePageCode(handlersSrc, viewConfig = null) {
     handlers: handlers.map(({ request, lines, helpers }) => ({ request, lines, helpers })),
     duplicates: [...definedIn].filter(([, where]) => where.length > 1).map(([name, where]) => ({ name, handlers: where })),
     longFunctions: handlers.flatMap((h) => h.functions).filter((f) => f.lines > MAX_FUNCTION_LINES),
-    unsent: [...new Set(entries.filter((e) => e.declared).map((e) => e.request))]
-      .filter((r) => !r.startsWith(PLATFORM_PREFIX) && !sent.has(r)),
+    unsent: sendsChecked ? [...new Set(entries.filter((e) => e.declared).map((e) => e.request))]
+      .filter((r) => !r.startsWith(PLATFORM_PREFIX) && !sent.has(r)) : [],
+    sendsChecked,
   };
 }
 
@@ -120,6 +128,7 @@ export function renderCodeMap(a, pageKey = "page", escape = String) {
     n ? `**${n} finding(s) to clear before this task closes** — the \`Page code\` row of \`--verify\` checks the same:`
       : "**No findings** — the `Page code` row of `--verify` will pass on this body.",
     ...findingPhrases(a, escape).map((p) => `- ${p}`),
+    ...(a.sendsChecked ? [] : ["- Requests sent from the view were not checked: the input has no `viewConfig` — pass the saved get-page response, not the handler source alone."]),
     "", "## Handlers", "", "| # | Request | Lines | Helpers it defines |", "|---|---|---|---|"];
   a.handlers.forEach((h, i) => L.push(`| ${i + 1} | ${code(h.request)} | ${h.lines}${h.lines > MAX_FUNCTION_LINES ? " ⚠" : ""} | ${h.helpers.map(code).join(", ") || "—"} |`));
   if (a.duplicates.length) {
@@ -147,16 +156,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!file) stop("usage: node engine/codemap.mjs <saved get-page response | built.json | handler source> [--page <key>]");
   let raw;
   try { raw = fs.readFileSync(file, "utf8"); } catch (e) { stop(`cannot read '${file}': ${e.message}`); }
-  // Loaded after this module has finished evaluating (a promise, never a top-level await): designspec.mjs imports
-  // this module for the verify row, and awaiting it here would leave that cycle waiting on itself.
-  import("./designspec.mjs").then(({ verifyCtx, esc }) => {
-    // A built.json names its pages; anything else is ONE page, read the way verify reads a single-page payload.
-    const root = codeMapRoot(raw);
-    const ctx = verifyCtx(root, root?.pages ? pageKey : "main");
-    if (ctx.handlersSrc == null) stop(`no handler source for page \`${pageKey}\` in '${file}'`);
-    const a = analyzePageCode(ctx.handlersSrc, ctx.page?.viewConfig);
-    if (a.error) stop(a.error);
-    process.stdout.write(renderCodeMap(a, pageKey, esc));
-    process.exit(findingCount(a) ? 2 : 0);
-  });
+  // A built.json names its pages; anything else is ONE page, read the way verify reads a single-page payload.
+  const root = codeMapRoot(raw);
+  if (!root || typeof root !== "object") stop(`'${file}' holds no page: expected a get-page response, a built.json or handler source`);
+  const ctx = verifyCtx(root, root.pages ? pageKey : "main");
+  if (ctx.handlersSrc == null) stop(`no handler source for page \`${pageKey}\` in '${file}'`);
+  const a = analyzePageCode(ctx.handlersSrc, ctx.page?.viewConfig);
+  if (a.error) stop(a.error);
+  process.stdout.write(renderCodeMap(a, pageKey, esc));
+  process.exit(findingCount(a) ? 2 : 0);
 }

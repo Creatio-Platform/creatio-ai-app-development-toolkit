@@ -105,8 +105,9 @@ you.
 
 - Recover state from your own task file first — it names your deliverables and the plan rows they
   came from. A task that writes a page also carries a `## Task card`: the card, your rows and your
-  page's spec section are your brief, so you do not read `plan.md`, `decisions.md` or `worklog.md`,
-  and you run the code map the card names before your first write and after your last. A task
+  page's spec section are your brief, so you do not read `plan.md`, `decisions.md`, `worklog.md` or
+  the `customizations-*` part files (the behaviour cards your rows cite are in the card), and you run
+  the code map the card names before your first write and after your last. A task
   without a card reads only its part of the approved `plan.md`: `grep -n '^#' plan.md` finds your
   page's heading, and you read that section alone — never the whole plan. A `customizations-*`
   behaviour card your rows cite is read by its id the same way (`grep -n '<scope>/C03'` in the part
