@@ -25,6 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
+import { DIRECTIVE_REQUIRES, directiveCovers, RUN_SCOPE } from "./directives.mjs";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -1713,6 +1714,8 @@ function renderPlanBanners(result, opts) {
     ...result.statusIssues.map((x) => `> - ${esc(statusIssueText(x))}`), "");
   if ((result.noDeliverableIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.noDeliverableIssues.length} \`manifest.decisionsWithoutDeliverable\` item(s) cannot be applied:**`,
     ...result.noDeliverableIssues.map((x) => `> - ${esc(noDeliverableIssueText(x))}`), "");
+  if ((result.provenanceIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.provenanceIssues.length} \`decisions.md\` provenance problem(s):** correct the entry, then re-run \`migrate.mjs --plan\`.`,
+    ...result.provenanceIssues.map((x) => `> - ${esc(provenanceIssueText(x))}`), "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];
@@ -2277,7 +2280,7 @@ function renderPlanWith(result, opts) {
   const childMappings = renderChildMappings(childs, opts.targetPackage);
   // Rendered after every other section: the list names only the closed deliverables no line above printed.
   const wontDo = renderWontDoList(opts);
-  P.push(...childMappings, ...wontDo, "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
+  P.push(...childMappings, ...renderDirectivesSection(result), ...wontDo,"> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
 
@@ -2893,8 +2896,10 @@ function pageGroup(pageKey, title, rows, ctx = {}) {
 // ⚠ Confirm item — is closed by an evidence RECORD plus an independent judge verdict, not by prose in the Evidence
 // cell. The record is looked up by an id the ENGINE derives and publishes; the agent never invents one. Keep this
 // list complete — an id missing here reads to a builder as an id that does not exist, so it never gets filed.
-// FIVE shapes:
+// SIX shapes:
 //   `<pageKey>#quality-gates`            — the singleton per-page row (one per published page key)
+//   `<pageKey>#directive:D<N>`           — one per user directive whose scope names the page
+//                                          (see `directiveRows`)
 //   `<pageKey>#confirm:<kind>:<item>`    — one per ⚠ Confirm worklist item
 //   `<pageKey>#childpage`                — an unfolded child page (see `unresolvedChildGroups` below)
 //   `list#listpage:<kind>:<item>`        — one per list-page deliverable: `columns:set`, `filter:<name>`,
@@ -3420,8 +3425,69 @@ export function checklistGroups(result, opts = {}) {
   // ROOT SPLICE — only the page that owns the key `main` folds the tree, so a sub-page's own groups stay its own
   // (its grandchildren are reached by the recursive walk, not by nesting rows inside rows).
   groups.push(...rootSubPageGroups(result, isMain));
+  // After the splice, so every page key of the tree is present for a directive's scope to name.
+  if (isMain) spliceDirectiveRows(groups, result.directives, ctx);
   return groups;
 }
+
+// USER DIRECTIVES (decisions.md entries with `Kind: directive`). A directive is checked like the page-design pass:
+// two rows under ONE evidence id per page. The FILED row is the builder's — a record saying how the directive was
+// followed and which components carry it — and the routing puts it in the page's last build task, like the
+// design pass's filed row. The JUDGED row is the review's: a context that did not build the page rules on that
+// record against the built page. So a directive closes only when a builder says how it was followed AND someone
+// else agrees, and a builder who builds something else in its place leaves both rows open.
+export const directiveEvidenceId = (pageKey, id) => `${pageKey}#directive:${id}`;
+export const DIRECTIVE_FILED_PART = "filed";
+// The directive's id sits in a code span so the split's row key, which masks digits in prose, keeps `D7` and `D8`
+// apart.
+function directiveRows(pageKey, d) {
+  const id = directiveEvidenceId(pageKey, d.id);
+  const base = `User directive \`${d.id}\` — the user asked: “${esc(d.quote)}”. **Expected on this page:** ${esc(d.expectation)}.`;
+  const filedLabel = `${base} **This row: the builder FOLLOWED it** — a record under \`${esc(id)}\` says how`
+    + ` (\`howFollowed\`) and names the components that carry it (\`components\`). If the page cannot do what the user`
+    + " asked, leave this row `not-built — needs-decision` and write `Decision needed` under `## Notes`: never build"
+    + " something else in its place.";
+  const judgedLabel = `${base} **This row: INDEPENDENTLY JUDGED** — a reviewer who did not build the page checked it`
+    + " against the expectation above and found the record convincing.";
+  const extra = (part) => ({ deliverableId: `directive:${d.id}:${part}`, directive: { id: d.id } });
+  return [
+    evidenceRow(id, filedLabel, extra(DIRECTIVE_FILED_PART), { part: DIRECTIVE_FILED_PART, requires: DIRECTIVE_REQUIRES }),
+    evidenceRow(id, judgedLabel, extra("judged"), { part: "judged", requires: DIRECTIVE_REQUIRES }),
+  ];
+}
+// A directive missing its expectation or scope builds no row: the plan reports it as incomplete instead
+// (`provenanceIssues`), and a row asking a builder to meet an unstated expectation could never be judged.
+const buildableDirective = (d) => d && typeof d.expectation === "string" && d.expectation.trim() !== "" && d.scope?.length;
+// The directive rows join each page's `Quality gates` group, which the cut already splits into the builder's filed
+// half and the review's judged half.
+function spliceDirectiveRows(groups, directives, ctx) {
+  const list = (directives || []).filter(buildableDirective);
+  if (!list.length) return;
+  for (const key of publishedPageKeys(groups)) {
+    const rows = list.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d));
+    if (!rows.length) continue;
+    const add = pageGroup(key, "Quality gates", rows, ctx);
+    const gate = groups.find((g) => g.pageKey === key && (g.baseTitle || g.title) === "Quality gates");
+    if (gate) gate.rows.push(...add.rows);
+    else groups.push(add);
+  }
+}
+// The page keys a set of groups publishes, in emission order — what a directive's `Scope:` may name.
+export function publishedPageKeys(groups) {
+  return [...new Set((groups || []).map((g) => g.pageKey).filter(Boolean))];
+}
+// `### User directives` — every directive the user gave, quoted, with the expectation the build is held to and
+// the pages it applies to. In the plan the user approves, so a misread directive is caught before the build.
+function renderDirectivesSection(result) {
+  const list = result.directives || [];
+  if (!list.length) return [];
+  const where = (d) => (d.scope.includes(RUN_SCOPE) ? "every page" : d.scope.map((k) => "`" + esc(k) + "`").join(", ") || "—");
+  return ["", "### User directives", "",
+    "> The user's own instructions, quoted verbatim from `decisions.md`. Each one is checked on every page it names: the builder files how it was followed, and an independent judge rules on that record against the built page.", "",
+    "| Decision | The user's words | Expected on the built page | Pages |", "| --- | --- | --- | --- |",
+    ...list.map((d) => `| ${esc(d.id)} | “${esc(d.quote || "?")}” | ${esc(d.expectation || "<FILL: Expectation>")} | ${where(d)} |`), ""];
+}
+const provenanceIssueText = (x) => `\`${x.key}\` ${x.problem}`;
 
 // `--checklist` — the grouped Plan-vs-Done skeleton (all rows `☐ pending`), presented AFTER implementing. Not part
 // of `--plan`. The verified version is `--verify` below (SAME structure, Status auto-filled from the built page).
@@ -5017,6 +5083,7 @@ export function planGaps(result) {
   if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   if ((result?.statusIssues || []).length) g.push(`deliverableStatus INVALID (${result.statusIssues.map(statusIssueText).join("; ")})`);
   if ((result?.noDeliverableIssues || []).length) g.push(`decisionsWithoutDeliverable INVALID (${result.noDeliverableIssues.map(noDeliverableIssueText).join("; ")})`);
+  if ((result?.provenanceIssues || []).length) g.push(`decisions.md provenance INVALID (${result.provenanceIssues.map(provenanceIssueText).join("; ")})`);
   return g;
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.

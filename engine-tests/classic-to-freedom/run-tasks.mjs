@@ -33,6 +33,9 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { approvePlan } from "./_testkit.mjs";
+import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
+  from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
+import { isFiledGateRow } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -11628,6 +11631,193 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       () => ({ error: next.error?.message }));
     fs.rmSync(path.dirname(d), { recursive: true, force: true });
   }
+}
+
+/* ================================================================================================
+   USER DIRECTIVES AND DECISION PROVENANCE. A `## D<N>` entry in decisions.md may carry `Kind:`,
+   `Decided by:`, `Quote:`, `Asked:`, `Scope:` and `Expectation:` lines. A directive becomes a filed +
+   judged evidence pair on every page it names, reaches every builder of those pages through the task
+   file, counts as cited for the unaccounted-decisions gate, and closes only on a filed record AND a
+   convincing verdict. Entries decided by the orchestrator are listed in the final report.
+   ================================================================================================ */
+{
+  console.log("\n[user directives and decision provenance]");
+  const SUMMARIES = [
+    "# Decisions And Approvals",
+    "",
+    "## D1 — Product summaries use the Summaries component",
+    "- Kind: directive",
+    "- Decided by: user",
+    "- Quote: \"use the Summaries component\"",
+    "- Scope: main",
+    "- Expectation: the page shows its totals in a crt.Summaries component, not in labels",
+    "",
+    "## D2 — Amount stays a decimal",
+    "- **Kind:** answer",
+    "- **Decided by:** User",
+    "- **Quote:** «zostaw to pole jako liczbę dziesiętną»",
+    "- **Asked:** How should the multi-currency amount look?",
+    "",
+    "## D3 — No PrimaryAmount recalculation",
+    "- Decided by: orchestrator",
+    "- Rationale: follows from D2",
+    "",
+    "## D4 — Plan approved",
+    "- Approved by: test",
+    "",
+  ].join("\n");
+  const records = parseDecisionRecords(SUMMARIES);
+  const byId = new Map(records.map((r) => [r.id, r]));
+
+  check("directives (parse): heading entries are read in order with their provenance fields; quote marks and bold labels are formatting",
+    () => records.map((r) => r.id).join() === "D1,D2,D3,D4"
+      && byId.get("D1").fields.kind === "directive" && byId.get("D1").fields.quote === "use the Summaries component"
+      && byId.get("D2").fields.decidedBy === "user" && byId.get("D2").fields.quote === "zostaw to pole jako liczbę dziesiętną"
+      && byId.get("D2").fields.asked === "How should the multi-currency amount look?"
+      && byId.get("D3").fields.decidedBy === "orchestrator" && !("quote" in byId.get("D3").fields),
+    () => records);
+  check("directives (parse): an entry with no provenance lines is a plain decision, and a later non-D heading ends the entry",
+    () => {
+      const r = parseDecisionRecords("## D9 — Legacy\n- Decision: keep it\n## Notes\n- Quote: not D9's");
+      return r.length === 1 && Object.keys(r[0].fields).length === 0;
+    });
+  check("directives (parse): `Scope:` takes comma-separated page keys, backticks stripped",
+    () => scopeKeys("`main`, typed:Product ,list").join("|") === "main|typed:Product|list");
+  check("directives (provenance): a complete directive, a quoted answer, an orchestrator decision and a legacy entry raise no issue",
+    () => provenanceIssues(records, ["main", "list"]).length === 0,
+    () => provenanceIssues(records, ["main", "list"]));
+  {
+    const bad = parseDecisionRecords([
+      "## D1 — directive with nothing", "- Kind: directive", "- Decided by: user",
+      "## D2 — directive the orchestrator owns", "- Kind: directive", "- Decided by: orchestrator",
+      "- Quote: x", "- Scope: main", "- Expectation: y",
+      "## D3 — answer with no question", "- Kind: answer", "- Decided by: user", "- Quote: yes",
+      "## D4 — a user decision with no words", "- Decided by: user",
+      "## D5 — a directive for a page the plan does not have", "- Kind: directive", "- Decided by: user",
+      "- Quote: x", "- Scope: typed:Nope", "- Expectation: y",
+      "## D6 — typo in the values", "- Kind: directiv", "- Decided by: agent",
+    ].join("\n"));
+    const issues = provenanceIssues(bad, ["main", "list"]);
+    const of = (id) => issues.filter((i) => i.key === id).map((i) => i.problem).join(" / ");
+    check("directives (provenance): a directive needs a quote, an expectation and a scope",
+      () => /Quote/.test(of("D1")) && /Expectation/.test(of("D1")) && /Scope/.test(of("D1")), () => of("D1"));
+    check("directives (provenance): a directive or an answer recorded as the orchestrator's is refused — they are the user's own words",
+      () => /Decided by: user/.test(of("D2")), () => of("D2"));
+    check("directives (provenance): an answer needs the question it replies to",
+      () => /Asked/.test(of("D3")) && !/Quote/.test(of("D3")), () => of("D3"));
+    check("directives (provenance): `Decided by: user` with no quote is refused — a decision the user did not state is the orchestrator's",
+      () => /Quote/.test(of("D4")), () => of("D4"));
+    check("directives (provenance): a scope naming a page the plan does not publish is named, with the published keys",
+      () => /typed:Nope/.test(of("D5")) && /`main`/.test(of("D5")), () => of("D5"));
+    check("directives (provenance): an unknown `Kind:` or `Decided by:` value is named rather than read as a plain decision",
+      () => /directiv/.test(of("D6")) && /agent/.test(of("D6")), () => of("D6"));
+  }
+  check("directives (provenance): orchestratorDecisions lists only the entries the orchestrator decided",
+    () => orchestratorDecisions(records).map((d) => d.id).join() === "D3");
+
+  // A first message that named one component for the main page: one directive scoped to `main`.
+  const runD = runMigration(MANIFEST, { decisionRecords: records });
+  const groupsD = checklistGroups(runD, OPTS);
+  const dRows = groupsD.flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, group: g.baseTitle || g.title })))
+    .filter((r) => r.directive?.id === "D1");
+  check("directives (plan): a directive scoped to `main` publishes ONE evidence id with a filed and a judged row, in main's `Quality gates`, and on no other page",
+    () => dRows.length === 2 && dRows.every((r) => r.pageKey === "main" && r.group === "Quality gates" && r.id === "main#directive:D1")
+      && dRows.map((r) => r.vk.part).sort().join() === "filed,judged"
+      && dRows.every((r) => r.vk.requires.join() === "howFollowed,components")
+      && dRows.filter(isFiledGateRow).length === 1,
+    () => dRows.map((r) => ({ id: r.id, page: r.pageKey, group: r.group, part: r.vk?.part })));
+  check("directives (plan): the plan shows the user's words, the expectation and the pages in a `### User directives` table",
+    () => /### User directives/.test(runD.plan) && runD.plan.includes("“use the Summaries component”")
+      && runD.plan.includes("crt.Summaries component") && planGaps(runD).length === 0,
+    () => planGaps(runD));
+  check("directives (plan): a run without directives renders no section and no directive row",
+    () => !/### User directives/.test(RUN.plan) && !GROUPS.some((g) => g.rows.some((r) => r.directive)));
+  {
+    const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
+    const g = checklistGroups(runMigration(MANIFEST, { decisionRecords: everyPage }), OPTS);
+    const ids = new Set(g.flatMap((x) => x.rows.filter((r) => r.directive).map((r) => r.id)));
+    const keys = new Set(g.map((x) => x.pageKey));
+    check("directives (plan): `Scope: run` puts the pair on every page the plan publishes",
+      () => ids.size === keys.size && [...keys].every((k) => ids.has(`${k}#directive:D1`)), () => ({ ids: [...ids], keys: [...keys] }));
+  }
+  {
+    const lost = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: typed:Missing\n- Expectation: e");
+    const r = runMigration(MANIFEST, { decisionRecords: lost });
+    check("directives (plan): a directive whose scope names no published page is a plan gap — the plan says so and `--tasks` refuses",
+      () => planGaps(r).some((x) => /provenance INVALID/.test(x) && /typed:Missing/.test(x)) && /PLAN INCOMPLETE/.test(r.plan),
+      () => planGaps(r));
+  }
+
+  // Delivery: the builder of every task on `main` reads the directive; the filed row goes to a build task and the
+  // judged row to the review.
+  const setD = buildTaskSet(runD, OPTS);
+  const withRow = (id) => setD.tasks.filter((t) => t.rows.some((r) => r.deliverableId === id));
+  const filedIn = withRow("directive:D1:filed");
+  const judgedIn = withRow("directive:D1:judged");
+  check("directives (cut): the filed row lands in a build task of `main`, the judged row in the read-only review",
+    () => filedIn.length === 1 && filedIn[0].writesTo && !filedIn[0].writesTo.startsWith("review:")
+      && judgedIn.length === 1 && !judgedIn[0].writesTo,
+    () => ({ filed: filedIn.map((t) => [t.id, t.writesTo]), judged: judgedIn.map((t) => [t.id, t.writesTo]) }));
+  const mainTasks = setD.tasks.filter((t) => t.pageKey === "main" || t.rows.some((r) => r.pageKey === "main"));
+  const otherTasks = setD.tasks.filter((t) => !mainTasks.includes(t));
+  check("directives (cut): every task on `main` carries the directive in its file — the user's words and the expectation — and no task of another page does",
+    () => mainTasks.length > 0 && mainTasks.every((t) => {
+      const text = renderTaskFile(t, setD);
+      return text.includes("User directives") && text.includes("“use the Summaries component”") && text.includes("crt.Summaries component");
+    }) && otherTasks.every((t) => !renderTaskFile(t, setD).includes("User directives")),
+    () => ({ main: mainTasks.map((t) => t.id), other: otherTasks.map((t) => t.id) }));
+  check("directives (cut): a directive delivered to a task is cited — the unaccounted-decisions gate does not hold it",
+    () => {
+      const decisions = new Map([["D1", "Product summaries use the Summaries component"]]);
+      const delivered = TASKS_MODULE.unaccountedDecisions(decisions, { tasks: setD.tasks });
+      const notDelivered = TASKS_MODULE.unaccountedDecisions(decisions, { tasks: SET.tasks });
+      return delivered.length === 0 && notDelivered.map((d) => d.id).join() === "D1";
+    });
+
+  // Verification: the pair closes on a filed record AND a convincing verdict, and a rejected record stays open.
+  {
+    const id = "main#directive:D1";
+    const rowsFor = (built) => renderVerify(runD, OPTS, built).rows.filter((r) => r.id === id);
+    const rec = { howFollowed: "the products detail totals are a crt.Summaries with two items", components: ["ProductSummaries"] };
+    const none = rowsFor({});
+    const filedOnly = rowsFor({ evidence: { [id]: rec } });
+    const judged = rowsFor({ evidence: { [id]: rec }, judge: { [id]: { convincing: true, why: "crt.Summaries ProductSummaries is on the page" } } });
+    const rejected = rowsFor({ evidence: { [id]: rec }, judge: { [id]: { convincing: false, why: "the totals are eight labels" } } });
+    const labelsOnly = rowsFor({ evidence: { [id]: { components: ["Label1"] } } });
+    check("directives (verify): with no record both rows are open",
+      () => none.length === 2 && none.every((r) => r.outcome !== "ok"), () => none);
+    check("directives (verify): a filed record closes the filed row only; the judged row waits for a verdict",
+      () => filedOnly.filter((r) => r.outcome === "ok").length === 1, () => filedOnly);
+    check("directives (verify): a convincing verdict on a complete record closes both rows",
+      () => judged.every((r) => r.outcome === "ok"), () => judged);
+    check("directives (verify): a rejected record leaves the judged row MISSING with the judge's reason",
+      () => rejected.some((r) => r.outcome === "missing" && /eight labels/.test(r.evidence)), () => rejected);
+    check("directives (verify): a record that does not say how the directive was followed is incomplete",
+      () => labelsOnly.every((r) => r.outcome !== "ok"), () => labelsOnly);
+  }
+
+  // The final report names every choice the orchestrator made on its own.
+  {
+    const folder = tmp("directives-report");
+    const dir = path.join(folder, "build-tasks");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(folder, "decisions.md"), SUMMARIES);
+    const rep = renderFinalReport({ result: runD, verifyRes: renderVerify(runD, OPTS, {}), set: { tasks: [], planVersion: runD.planVersion }, dir }).markdown;
+    check("directives (report): `## Decided without you` lists each `Decided by: orchestrator` entry and nothing the user decided",
+      () => /## Decided without you \(1\)/.test(rep) && rep.includes("**D3** — No PrimaryAmount recalculation") && !rep.includes("**D1**"),
+      () => rep.split("\n").filter((l) => /Decided without|\*\*D\d/.test(l)));
+    const plain = tmp("directives-report-plain");
+    const dir2 = path.join(plain, "build-tasks");
+    fs.mkdirSync(dir2, { recursive: true });
+    fs.writeFileSync(path.join(plain, "decisions.md"), "## D1 — Legacy\n- Decision: keep it\n");
+    const rep2 = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: dir2 }).markdown;
+    check("directives (report): a decisions.md with no orchestrator entries adds no section",
+      () => !/Decided without you/.test(rep2));
+    fs.rmSync(folder, { recursive: true, force: true });
+    fs.rmSync(plain, { recursive: true, force: true });
+  }
+  check("directives (directivesOf): only `Kind: directive` entries are directives",
+    () => directivesOf(records).map((d) => d.id).join() === "D1");
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

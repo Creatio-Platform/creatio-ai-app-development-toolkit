@@ -252,10 +252,10 @@ publishes as a key and never changes or drops a value already filed, so the key 
 there when your task starts. Fill the value under that key — never type a key from a row's label,
 which is escaped for display, and never shorten or rename one.
 
-The ids come in five shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
+The ids come in six shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
 page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
-`list#listpage:<kind>:<item>` and
-`<pageKey>#datasource:<name>`, where `<pageKey>` is `main`, `list`, `child:<Entity>`,
+`list#listpage:<kind>:<item>`, `<pageKey>#datasource:<name>` and
+`<pageKey>#directive:D<N>` (one per user directive on that page), where `<pageKey>` is `main`, `list`, `child:<Entity>`,
 `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two pages would otherwise
 share a key). A record is complete only when its fields have the right shape:
 
@@ -269,6 +269,13 @@ share a key). A record is complete only when its fields have the right shape:
   (prose here raises nothing). On a `#quality-gates` record, a raised finding keeps the judged row
   open until `decisions.md` or `findings.md` names the record's exact id as a whole token — a
   verdict alone does not close it.
+
+A `#directive:D<N>` record takes two fields instead of `referencePage`: `howFollowed` (a non-blank
+string: how the page does what the user asked) and `components` (the elements that carry it). Your
+task file lists the user directives for its pages, with the user's words and the expected result: build
+to them in every task, not only the one holding the directive's rows. When the page cannot do what the
+user asked, do not build something else in its place — leave the directive's filed row `not-built —
+needs-decision` and write `Decision needed` under `## Notes`.
 
 A wrong shape — a blank page, a list that is empty or holds a non-string — is an incomplete record,
 and the row reads unverified whatever the judge rules.

@@ -70,7 +70,7 @@ migrations/<app-or-section-slug>/
     timings.json         # engine-written: the clock and the dispatch record `--start` opens per task
 ```
 
-**An answered ⚠ Confirm item is recorded in `decisions.md` like every other decision** — the question as the engine published it, the answer, who decided and when. Step 7 builds against that entry; an answer closes no `--verify` row on its own, the deliverable is still built and verified.
+**An answered ⚠ Confirm item is recorded in `decisions.md` like every other decision** — the question as the engine published it, the answer, who decided and when. Step 7 builds against that entry; an answer closes no `--verify` row on its own, the deliverable is still built and verified. A user's answer and a user's unprompted instruction carry provenance lines (`Kind:`, `Decided by:`, `Quote:` …), described under *Directives and answers* below.
 
 Use a stable slug, for example `gdpr-for-creatio`. Do not rename the folder mid-project.
 
@@ -265,6 +265,47 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 On the plan-approval entry `Plan version:` is required, beside a non-empty `Approved by:` in the same `## `
 entry, and its value is the `plan-<hash>` string `plan.md` prints, alone on the line — the build and `--handoff`
 compare it to `plan.md` exactly, so nothing may follow it there.
+
+#### Directives and answers — who decided, in whose words
+
+A `## D<N> — <title>` entry may carry provenance lines. The engine reads them (`engine/directives.mjs`); an entry
+without them is a plain decision and reads exactly as before.
+
+```markdown
+## D1 — Product totals use the Summaries component
+- Kind: directive
+- Decided by: user
+- Quote: "use the Summaries component"
+- Scope: main
+- Expectation: the products detail shows its totals in a crt.Summaries component, not in labels
+
+## D2 — The amount stays a decimal field
+- Kind: answer
+- Decided by: user
+- Quote: "<the user's reply, verbatim, in their language>"
+- Asked: How should the multi-currency amount look on the record page?
+
+## D3 — No amount recalculation in the background
+- Decided by: orchestrator
+- Rationale: <why you chose it without asking>
+```
+
+- **`Kind: directive`** — an instruction the user gave without being asked, in the first message or later. It
+  needs `Quote:`, `Scope:` (`run`, or the page keys the plan prints — `main`, `list`, `child:<Entity>`,
+  `typed:<Schema>`, `mini:<Schema>`, comma-separated) and `Expectation:` — ONE statement a reviewer can check
+  on the built page. The engine puts a filed + judged evidence pair under `<pageKey>#directive:D<N>` on every
+  page in scope, shows the directive in the plan's `### User directives` table and in every task file of
+  those pages. A directive whose scope names no published page makes the plan incomplete: it would reach no
+  builder.
+- **`Kind: answer`** — the user's reply to a question you asked, an answer outside the offered options
+  included. It needs `Quote:` and `Asked:`.
+- **`Decided by: user`** always needs `Quote:` — the user's words, not your summary of them. A choice the user
+  did not state in words is yours: record it `Decided by: orchestrator`. Never fold your own addition into the
+  user's entry; it is a new question before the build, or its own orchestrator entry.
+- **`Decided by: orchestrator`** entries are listed in the final report under *Decided without you*.
+
+The plan is incomplete, and `--tasks` writes nothing, while any provenance line does not stand; the plan's
+banner names the entry and what is missing.
 
 ### worklog.md
 ```markdown

@@ -28,6 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
+import { readDecisionRecords, orchestratorDecisions } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
@@ -549,6 +550,15 @@ const renderDestination = (d) => {
   if (ISSUE_KEY_RE.test(s)) return `[${cell(s)}](https://creatio.atlassian.net/browse/${encodeURIComponent(s)})`;
   return cell(s);
 };
+// Every decisions.md entry recorded `Decided by: orchestrator`: choices the agent made without asking the person who
+// owns the migration. Listed so that person can see each one and overturn it; a choice they never hear about is one
+// they cannot overturn.
+function decidedWithoutYouSection(entries) {
+  if (!entries.length) return [];
+  return [`## Decided without you (${entries.length})`, "",
+    "The agent made these choices itself (`Decided by: orchestrator` in `decisions.md`). Each is open to change: say so, and it becomes a question.", "",
+    ...entries.map((d) => `- **${esc(d.id)}** — ${esc(d.title || "?")}`)];
+}
 function carryOverSection(items, pageName) {
   if (!items.length) return [];
   const L = [`## Carry-over — postponed items (${items.length})`, "",
@@ -672,6 +682,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
+  const withoutYou = decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir || ".", ".."))));
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",
@@ -684,6 +695,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
     ...(carryOver.length ? ["", ...carryOver] : []),
+    ...(withoutYou.length ? ["", ...withoutYou] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),

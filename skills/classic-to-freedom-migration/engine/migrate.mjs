@@ -61,7 +61,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop } from "./designspec.mjs";
+  freedomRowActionsToDrop, publishedPageKeys } from "./designspec.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
@@ -3149,10 +3150,15 @@ export function runMigration(manifest, opts = {}) {
   out.translationsMissing = translationsMissing(manifest);
   // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
+  // The user's directives ride on the ROOT result, which every later mode re-derives its groups from, so the plan,
+  // the cut and `--verify` all carry the same directive rows.
+  const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
+  out.directives = directivesOf(decisionRecords);
   const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
   if (!opts.scopeSchema) {
     out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
     out.noDeliverableIssues = noDeliverableIssues(manifest.decisionsWithoutDeliverable, specOpts);
+    out.provenanceIssues = provenanceIssues(decisionRecords, publishedPageKeys(planGroups));
   }
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
@@ -3523,10 +3529,19 @@ function splitDriftLines(set) {
 // The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
 // migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
 // require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
-function planDecisions(outFile, tasksDir) {
-  if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
-  if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
+function planDecisionsFolder(outFile, tasksDir) {
+  if (tasksDir) return path.join(path.resolve(tasksDir), "..");
+  if (outFile) return path.dirname(path.resolve(outFile));
   return null;
+}
+function planDecisions(outFile, tasksDir) {
+  const folder = planDecisionsFolder(outFile, tasksDir);
+  return folder ? readDecisions(folder) : null;
+}
+// The provenance records of the same decisions.md, read from the same folder: the directives and who decided what.
+function planDecisionRecords(outFile, tasksDir) {
+  const folder = planDecisionsFolder(outFile, tasksDir);
+  return folder ? readDecisionRecords(folder) : [];
 }
 function planGapRefusal(result) {
   const gaps = planGaps(result);
@@ -4493,7 +4508,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   const decisions = planDecisions(outFile, tasksDir);
   const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionsOptional: !planMode && !tasksMode }); }
+  const decisionRecords = planDecisionRecords(outFile, tasksDir);
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
@@ -4796,7 +4812,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
   // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply, or a marker item that does not stand.
-  const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0;
+  // A decisions.md entry whose provenance does not stand (a user decision with no quote, a directive with no
+  // page to land on) is the same kind of planning input the plan cannot apply.
+  const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0
+    || (result.provenanceIssues || []).length > 0;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || statusBad || verifyIncomplete
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
