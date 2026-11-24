@@ -2885,6 +2885,7 @@ export function runMigration(manifest, opts = {}) {
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
+    siblingOf: manifest.siblingOf,            // an earlier migration built this page's twin — this bundle's own fact, never inherited by a fold
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
     registryUnindexedVersion: runRegistry.unindexedVersion || null, // a pinned platformVersion the vendored index does not know

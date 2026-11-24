@@ -582,6 +582,9 @@ export function mapToFreedom(eff, opts = {}) {
   // ---- Moment 4b: the on-save duplicate check — invisible in the page body, so driven by the on-stand signal ----
   mapDedupOnSave({ signals: opts.signals, ownSignals: opts.ownSignals, isChildPage }).forEach(d => needsDecision.push(d));
 
+  // ---- a page an EARLIER migration already built a twin of (`manifest.siblingOf`) — reuse, share or separate ----
+  mapSiblingPage(opts.siblingOf).forEach(d => needsDecision.push(d));
+
   // ---- image / photo components → a REAL crt.ImageInput element (view+viewModel+model diffs) ----
   const _img = mapImages(eff, ctx, F);
   const images = _img.images;
@@ -2906,6 +2909,25 @@ function mapWidgets(eff, opts = {}) {
 // Hence the wording rule this row must keep: it is a CHECK, never the claim "Freedom cannot do this". On a stand
 // where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
 // into a lie the day it does.
+// `manifest.siblingOf` — this page matches one an EARLIER migration already built: the user said so, or that
+// migration rebuilt a page with the same custom Classic parent. Nothing in the page body shows it, so it is a fact
+// the orchestrator records at discovery (references/manifest-conditional-inputs.md). Without the question the
+// second page was built as a copy of the first one's handlers, twice. The plan never picks: it asks.
+// Wording rule as for mapDedupOnSave: the reason is plain prose with no backticks (renderConfirmWorklist escapes it).
+function mapSiblingPage(siblingOf) {
+  if (siblingOf == null) return [];
+  const text = (v) => (typeof v === "string" ? v.trim() : "");
+  const page = text(siblingOf.page), folder = text(siblingOf.folder), why = text(siblingOf.reason);
+  if (!page) {
+    return [{ kind: "sibling-page", item: "siblingOf",
+      reason: "manifest.siblingOf is recorded with no page: name the earlier migrated page this one matches (and its migration folder), or remove siblingOf." }];
+  }
+  const from = folder ? ` (built by the migration in ${folder})` : "";
+  const because = why ? ` Recorded because: ${why}.` : "";
+  return [{ kind: "sibling-page", item: page,
+    reason: `This page matches ${page}${from}.${because} Ask the user which one applies: REUSE — open ${page} from this page's process steps and build nothing here, listing the rebinding and what differs (for example the buttons) for the user, never editing ${page} or the process without them; SHARED MODULE — move the shared logic into one client module that ${page} and this page both import; SEPARATE PAGE — build this page on its own. Whichever is chosen, never copy ${page}'s handlers into this page.` }];
+}
+
 function mapDedupOnSave(opts = {}) {
   // `opts.signals` is the RUN-level answer set, in which a bundle's OWN `manifest.signals` key already won the
   // merge (see runMigration/checklistOpts). `opts.ownSignals` is that bundle's own keys alone — the only way to

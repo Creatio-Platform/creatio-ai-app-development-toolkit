@@ -129,6 +129,32 @@ stands — "big / shared / view-only / follow-on" are still not skip reasons), a
 already ships a Freedom form, `reuseFreedomPage` is the better answer and wins. Widening the scope
 later is just dropping the key and supplying the schema — a re-plan, not a defect.
 
+## siblingOf — this page matches one an earlier migration built
+
+Record it at discovery when either holds:
+
+- the user says this page matches a page migrated before ("the same rules as page X", "the two pages
+  are identical except for the buttons");
+- an earlier migration folder in the project rebuilt a page with the same **custom** Classic parent
+  schema as this one. Platform templates (`BasePageV2`, `BasePageProcessTemplate`, …) do not count.
+
+```json
+"siblingOf": { "folder": "<earlier migration folder>", "page": "<the Freedom page it built>",
+               "reason": "<the user's words, or the shared parent schema>" }
+```
+
+The engine turns it into a `sibling-page` ⚠ Confirm that names the earlier page and offers three answers:
+
+- **reuse** the built page from this page's process steps, building nothing here;
+- move the shared logic into one **shared module** that both pages import;
+- build a **separate page**.
+
+Ask it like any decision and record the answer in `decisions.md`. Reuse never edits the earlier page or
+the process silently: the rebinding and the differences go to the user. A shared module changes the
+earlier page, so say that in the option. `page` is required: a `siblingOf` without one is reported as a
+malformed ⚠ item, never ignored. It is this bundle's own fact, and a fold does not inherit it. The code
+that follows each answer is `./references/page-code-architecture.md` → *A page that matches an earlier one*.
+
 ## warningDispositions — a remove or merge of a name nothing in the supplied chain defines
 
 A `remove` or a `merge` of a name nothing in the supplied chain defines (no layer and no seed

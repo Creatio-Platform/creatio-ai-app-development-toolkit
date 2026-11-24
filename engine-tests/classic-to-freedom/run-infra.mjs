@@ -657,6 +657,37 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => pageBuildRows);
 }
 
+// The page-code architecture contract exists because builders had no rule for the shape of page code: a 391-line
+// handler, a helper copied 8 times, a second page built as a copy of the first. A contract no builder is handed is
+// never read, so every task kind that writes page code must get it as a BRIEF (read whole), and the rules that
+// answer the measured facts must stay in it: several handlers per request run as a chain (stand check on 10.1/10.2),
+// so `next` is the rule, and a helper in the page factory body is deleted by a Designer save.
+{
+  const ref = "skills/classic-to-freedom-migration/references/";
+  const read = (p) => readFileSync(fileURLToPath(new URL("../../" + ref + p, import.meta.url)), "utf8");
+  const contract = read("page-code-architecture.md");
+  const orchestrate = read("orchestrate-build.md");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  const rows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n").filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4);
+  const writers = rows.filter((c) => /^(Page build|Repair round|Whole migration)/.test(c[0]));
+  check("orchestrate-build.md 7.3: every task kind that writes page code (page build, repair, whole migration) hands `page-code-architecture.md` as a brief to read whole",
+    () => writers.length === 3 && writers.every((c) => c[2].includes("`./references/page-code-architecture.md`")),
+    () => writers.map((c) => [c[0], c[2]]));
+  check("build-page.md points a builder at the contract — the brief a builder opens first names the one that shapes its code",
+    () => read("build-page.md").includes("`./references/page-code-architecture.md`"));
+  check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next`, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
+    () => /every handler calls `next`/.test(contract) && /Never in the page factory body/.test(contract)
+      && /Designer save deletes it/.test(contract) && /part of the page artifact/.test(contract)
+      && /sibling-page/.test(contract) && /Copying the earlier page/.test(contract),
+    () => contract.split("\n").filter((l) => /^## |next|factory|artifact/.test(l)).slice(0, 12));
+  check("page-code-architecture.md links the clio guides that own the mechanics instead of restating them",
+    () => ["page-schema/handlers", "page-schema/shared-client-logic", "related-data/*"].every((g) => contract.includes(g)));
+}
+
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
