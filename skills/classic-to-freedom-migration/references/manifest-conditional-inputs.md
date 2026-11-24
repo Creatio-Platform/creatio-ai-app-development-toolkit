@@ -155,6 +155,11 @@ earlier page, so say that in the option. `page` is required: a `siblingOf` witho
 malformed ⚠ item, never ignored. It is this bundle's own fact, and a fold does not inherit it. The code
 that follows each answer is `./references/page-code-architecture.md` → *A page that matches an earlier one*.
 
+The row closes like every ⚠ Confirm row: the build files an evidence record under
+`<pageKey>#confirm:sibling-page:<page>` (`referencePage` = the earlier page, `components` = the modules the
+answer built or imports, or the earlier page itself for reuse, `findings` = the answer and its `decisions.md`
+entry), and the page's judge rules on it.
+
 ## warningDispositions — a remove or merge of a name nothing in the supplied chain defines
 
 A `remove` or a `merge` of a name nothing in the supplied chain defines (no layer and no seed

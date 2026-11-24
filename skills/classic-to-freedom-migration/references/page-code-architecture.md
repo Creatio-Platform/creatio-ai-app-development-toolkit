@@ -50,6 +50,18 @@ function call in a custom request to give it a name.
 ## Example
 
 ```js
+// Incorrect — breaks rules 1, 2 and 5: a nested helper, the logic inline, no `next`, reads in sequence.
+{
+  request: "crt.HandleViewModelInitRequest",
+  handler: async (request) => {
+    const idOf = (v) => (v && typeof v === "object" ? v.value : v);
+    const order = await readOrder(request.$context);
+    const limits = await readLimits(request.$context);
+    // …and 120 more lines
+  }
+}
+
+// Correct — the handler routes, the module holds the logic.
 {
   request: "crt.HandleViewModelAttributeChangeRequest",
   handler: async (request, next) => {
@@ -62,6 +74,9 @@ function call in a custom request to give it a name.
 }
 ```
 
+## A page that matches an earlier one
+
 A page with a `sibling-page` ⚠ Confirm follows the user's answer: reuse builds nothing, a shared module is
-imported by both pages, a separate page gets its own module. Copying the earlier page's handlers or names
-is none of these.
+imported by both pages, a separate page gets its own module. A shared module belongs to this page's artifact;
+importing it into the earlier page is a change the user confirms with the answer, never a silent edit.
+Copying the earlier page's handlers or names is none of these.

@@ -6683,6 +6683,19 @@ const siblingLabels = checklistGroups(siblingSet, checklistOpts({ ...sigBase, si
 check("siblingOf: the Plan-vs-Done checklist carries a row for it, so the answer is reported, not just asked",
   siblingLabels.some((l) => /sibling-page/.test(l) && /UsrOrder_FormPage/.test(l)),
   () => siblingLabels.filter((l) => /Confirm|sibling/i.test(l)));
+// The answer closes the row the way every ⚠ Confirm row closes (manifest-conditional-inputs.md → siblingOf): an
+// evidence record under its id, then an independent judge. A record nobody judged keeps it open.
+{
+  const id = "main#confirm:sibling-page:UsrOrder_FormPage";
+  const page = { viewConfig: { items: [] }, parentSchemaName: "T", schemaUId: "11111111-1111-4111-8111-111111111111" };
+  const rec = { referencePage: "UsrOrder_FormPage", components: ["UsrOrderFormPageModule"], findings: ["SHARED MODULE chosen by the user"] };
+  const rowOf = (evidence, judge) => renderVerify(siblingSet, {}, { pages: { main: page }, evidence, judge })
+    .markdown.split("\n").find((l) => /\[sibling-page\]/.test(l)) || "";
+  check("siblingOf: the answer closes the row — open with no record, still open with an unjudged record, ✅ Done once the record is judged convincing",
+    () => !/✅ Done/.test(rowOf({}, {})) && /NOT judged/.test(rowOf({ [id]: rec }, {}))
+      && /✅ Done/.test(rowOf({ [id]: rec }, { [id]: { convincing: true, why: "both pages import the module" } })),
+    () => [rowOf({}, {}), rowOf({ [id]: rec }, {}), rowOf({ [id]: rec }, { [id]: { convincing: true } })]);
+}
 const siblingBad = siblingRun({ folder: "migrations/OrderPage" });
 check("siblingOf: recorded without a page → still a row, saying what is missing — a malformed fact is never dropped in silence",
   siblingRows(siblingBad).length === 1 && /no page/i.test(siblingRows(siblingBad)[0].reason),

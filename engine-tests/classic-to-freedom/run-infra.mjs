@@ -671,17 +671,27 @@ const handedRows = () => {
   const ref = "skills/classic-to-freedom-migration/references/";
   const read = (p) => readFileSync(fileURLToPath(new URL("../../" + ref + p, import.meta.url)), "utf8");
   const contract = read("page-code-architecture.md");
-  const writers = handedRows().filter((c) => /^(Page build|Repair round|Whole migration)/.test(c[0]));
-  check("orchestrate-build.md 7.3: every task kind that writes page code (page build, repair, whole migration) hands `page-code-architecture.md` as a brief to read whole",
-    () => writers.length === 3 && writers.every((c) => c[2].includes("`./references/page-code-architecture.md`")),
+  // Child page wiring is deliberately NOT a writer: it writes the RelatedPage add-on (`wiring:<…>`), never a page body.
+  const writers = handedRows().filter((c) => /^(Page build|Repair round|Whole migration|Section dashboards)/.test(c[0]));
+  check("orchestrate-build.md 7.3: every task kind that writes page code (page build, repair, whole migration, section dashboards) hands `page-code-architecture.md` as a brief to read whole",
+    () => writers.length === 4 && writers.every((c) => c[2].includes("`./references/page-code-architecture.md`")),
     () => writers.map((c) => [c[0], c[2]]));
   check("build-page.md points a builder at the contract — the brief a builder opens first names the one that shapes its code",
     () => read("build-page.md").includes("`./references/page-code-architecture.md`"));
+  check("build-task-execution.md's `writesTo:` rule says a page artifact includes the page's own logic module — the only place the brief defines what a task may write",
+    () => /`writesTo:` names the one artifact[\s\S]{0,400}includes the page's own logic module, `<SchemaPrefix><Page>Module`/.test(read("build-task-execution.md")));
+  const headings = contract.split("\n").filter((l) => l.startsWith("#"));
   check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next`, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
     () => /every handler calls `next`/.test(contract) && /Never in the page factory body/.test(contract)
       && /Designer save deletes it/.test(contract) && /part of the page artifact/.test(contract)
       && /sibling-page/.test(contract) && /Copying the earlier page/.test(contract),
-    () => contract.split("\n").filter((l) => /^## |next|factory|artifact/.test(l)).slice(0, 12));
+    () => headings);
+  // manifest-conditional-inputs.md → siblingOf points here BY HEADING, and references are looked up by `grep -n '^#'`.
+  check("page-code-architecture.md has the heading the siblingOf section points to, and shows an incorrect as well as a correct example",
+    () => headings.includes("## A page that matches an earlier one")
+      && read("manifest-conditional-inputs.md").includes("`./references/page-code-architecture.md` → *A page that matches an earlier one*")
+      && /\/\/ Incorrect/.test(contract) && /\/\/ Correct/.test(contract),
+    () => headings);
   check("page-code-architecture.md links the clio guides that own the mechanics instead of restating them",
     () => ["page-schema/handlers", "page-schema/shared-client-logic", "related-data/*"].every((g) => contract.includes(g)));
 }
