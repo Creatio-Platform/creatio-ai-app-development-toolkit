@@ -194,9 +194,10 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => /☐ confirm on-stand/.test(rowLine(notBuilt.markdown, R.functionTooLong)) && /no code to check/.test(rowLine(notBuilt.markdown, R.functionTooLong))
       && kindOf(notBuilt, R.functionTooLong) === "info",
     () => rowLine(notBuilt.markdown, R.functionTooLong));
+  // The Evidence cell goes through esc(), which renders a backtick as U+02CB; the pattern accepts either.
   const unparsable = renderVerify(result, opts, built("[ {"));
   check("verify: an unparsable handlers section blocks every Code quality row and names the section",
-    () => /⚠ verify/.test(rowLine(unparsable.markdown, R.functionTooLong)) && /ˋhandlersˋ could not be parsed/.test(rowLine(unparsable.markdown, R.functionTooLong)) && !unparsable.complete,
+    () => /⚠ verify/.test(rowLine(unparsable.markdown, R.functionTooLong)) && /[`ˋ]handlers[`ˋ] could not be parsed/.test(rowLine(unparsable.markdown, R.functionTooLong)) && !unparsable.complete,
     () => rowLine(unparsable.markdown, R.functionTooLong));
   const noBundle = renderVerify(result, opts, { pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate", viewConfig: { items: [] } } } });
   check("verify: a bundle without code sections cannot be checked — the rows are confirm-on-stand, never a silent ✅",
