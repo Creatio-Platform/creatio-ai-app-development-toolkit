@@ -1015,8 +1015,6 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
 export const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
-  // a summaries question a user directive already answered: the Detail features block states what is built
-  "detail-summaries-directed",
   // Imperative MEMBERS have their own worklist (⚠ Other declared logic), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
   ...IMPERATIVE_MEMBER_KINDS,
@@ -1175,6 +1173,8 @@ function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
 // deviation), then a row per quick filter, multi-select change, row styling and summaries; then the details a
 // customer or vendor template layer declares. Each row names the Freedom target, so nothing a Classic user could do
 // with a list disappears without a row saying so.
+// The kind of a summaries question; a directive that answers it removes it and records itself on the surface.
+export const SUMMARIES_KIND = "detail-summaries";
 const MENU_ITEM_FREEDOM = "hide it on the Freedom list's menu";
 function detailMenuRows(name, menu) {
   const rows = [];
@@ -1191,14 +1191,15 @@ function detailFilterRow(name, q) {
   return [name, `Quick filter (${q.kind}) \`${esc(q.attribute)}\``, `\`getFilters\` reads \`${esc(q.attribute)}\`${cols}${kept}`,
     `\`${LIST_FILTER_TYPE}\` \`${esc(q.element)}\` bound to the list's \`filterAttributes\`; any literal filter of the same \`getFilters\` stays a data-source filter`];
 }
-function summariesTarget(cs, item) {
-  const directed = (cs.needsDecision || []).find((n) => n.kind === "detail-summaries-directed" && n.item === item);
-  return directed ? `\`crt.Summaries\` / \`crt.SummaryItem\` (user directive ${esc(directed.directive)})` : "⚠ Decision needed — `crt.Summaries`, or plain labels as Classic had";
-}
+const summariesTarget = (directive) => (directive
+  ? `\`crt.Summaries\` / \`crt.SummaryItem\` (user directive ${esc(directive)})`
+  : "⚠ Decision needed — `crt.Summaries`, or plain labels as Classic had");
+// A related list's display name in the plan's tables.
+export const detailName = (d) => esc(d.caption || d.detailSchema || d.entity || "detail");
 export function detailFeatureRows(cs) {
   const rows = [];
   for (const d of cs.details || []) {
-    const name = esc(d.caption || d.detailSchema || d.entity || "detail");
+    const name = detailName(d);
     const f = d.features;
     if (!f) { rows.push([name, "—", "detail schema not bundled — what users can do with it is unknown", "⚠ bundle the detail schema (`manifest.detailSchemas`)"]); continue; }
     rows.push(...detailMenuRows(name, f.toolsMenu));
@@ -1206,20 +1207,14 @@ export function detailFeatureRows(cs) {
     if (f.multiSelect === "off") rows.push([name, "Multi-select", "switched off (`isMultiSelectVisible`)", "build the list without multi-select"]);
     if (f.multiSelect === "conditional") rows.push([name, "Multi-select", "conditional (`isMultiSelectVisible` overridden)", "⚠ carry the condition as Freedom state"]);
     if (f.rowStyling) rows.push([name, "Row styling", "`prepareResponseCollectionItem` sets `customStyle`", "⚠ no declarative analog — decide: a conditional row style, or Won't do"]);
-    if (f.summaries) rows.push([name, "Summaries", "summary module", summariesTarget(cs, detailItemLabel(d))]);
+    if (f.summaries) rows.push([name, "Summaries", "summary module", summariesTarget(f.summariesDirective)]);
   }
-  const bar = (cs.needsDecision || []).find((n) => /^detail-summaries/.test(n.kind) && !(cs.details || []).some((d) => detailItemLabel(d) === n.item));
-  if (bar) rows.push([esc(bar.item), "Summaries", "labels in a summary container of the page", summariesTarget(cs, bar.item)]);
+  if (cs.summaryBar) rows.push([esc(cs.summaryBar.container), "Summaries", "labels in a summary container of the page", summariesTarget(cs.summaryBar.directive)]);
   for (const d of cs.inheritedDetails || []) {
     rows.push([esc(d.schemaName || d.key), "Inherited detail", `declared by the template layer \`${esc(d.layer)}\``, "⚠ inherited — decide (⚠ Confirm `[detail-inherited]`)"]);
   }
   return rows;
 }
-// The label the mapper's decisions name a detail by (caption · entity, else the schema) — see `detailLabel` there.
-const detailItemLabel = (d) => {
-  const base = d.caption || d.detailSchema || d.entity || "detail";
-  return d.caption && d.entity ? `${base} · ${d.entity}` : base;
-};
 function renderDetailFeaturesBlock(cs) {
   const rows = detailFeatureRows(cs);
   if (!rows.length) return [];
@@ -4682,7 +4677,7 @@ function detailFeatureCheckRows(cs) {
   const rows = [];
   for (const d of cs.details || []) {
     for (const q of d.features?.quickFilters || []) {
-      rows.push({ deliverableId: `detail-filter:${q.element}`, label: `Detail quick filter \`${esc(q.element)}\` (${esc(q.kind)}, \`${esc(q.attribute)}\`) on ${esc(d.caption || d.detailSchema || d.entity || "detail")}`,
+      rows.push({ deliverableId: `detail-filter:${q.element}`, label: `Detail quick filter \`${esc(q.element)}\` (${esc(q.kind)}, \`${esc(q.attribute)}\`) on ${detailName(d)}`,
         vk: { type: "detailfilter", n: 1, names: [q.element] } });
     }
   }
@@ -4691,22 +4686,6 @@ function detailFeatureCheckRows(cs) {
   const readOnly = (cs.viewConfigDiff || []).filter((o) => isField(o) && o.values?.readOnlyStatic).map((o) => o.name);
   if (readOnly.length) rows.push({ deliverableId: "fields-readonly-static", label: `Fields read-only in Classic built read-only × ${readOnly.length}`, vk: { type: "readonly", n: readOnly.length, names: readOnly } });
   return rows;
-}
-// A DETAIL quick filter: the same two halves as a list-page filter (name AND type), read off the form page.
-function resolveDetailFilterVk(vk, ctx) {
-  const want = [...new Set(vk.names || [])];
-  if (ctx.entryAbsent) return absentEntry(ctx, `the detail quick filter ${want.join(", ")}`);
-  if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so ${want.join(", ")} does not exist`, "missing"];
-  const byName = new Map(ctx.ops.filter((o) => o.name).map((o) => [o.name, o.type || ""]));
-  const missing = want.filter((n) => !byName.has(n));
-  const wrongType = want.filter((n) => byName.has(n) && byName.get(n) !== LIST_FILTER_TYPE);
-  if (wrongType.length) {
-    const built = wrongType.map((n) => `${esc(String(n))} is built as \`${esc(byName.get(n) || "an untyped component")}\``).join(", ");
-    return ["❌ MISSING", `${built}, not \`${LIST_FILTER_TYPE}\` — the user's filter control is gone; a plain field or a fixed filter does not replace it`, "missing"];
-  }
-  if (!missing.length) return ["✅ Done", `${want.join(", ")} present on the built page as \`${LIST_FILTER_TYPE}\` (matched BY NAME + TYPE)`, "ok"];
-  if (ctx.ops.length && !byName.size) return ["⚠ verify", `identity NOT checked — the built page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
-  return ["❌ MISSING", `NO ${missing.map((n) => esc(String(n))).join(", ")} on the built page — the related list is short this quick filter`, "missing"];
 }
 // A field Classic made read-only must be read-only on the built page. A field that is absent is the Fields row's
 // failure, not this one's, so it reads unverified here.
@@ -4728,27 +4707,33 @@ function resolveRowToolbarVk(vk, ctx) {
   if (declared >= vk.n) return ["✅ Done", `${declared} list(s) declare \`rowToolbarItems\` (expected ${vk.n})`, "ok"];
   return ["❌ MISSING", `${declared} of ${vk.n} list(s) declare \`rowToolbarItems\` — a list with changed row actions shows the standard ones`, "missing"];
 }
-const VK_DETAIL_FEATURES = new Map([["detailfilter", resolveDetailFilterVk], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk]]);
 // A filter row needs BOTH halves: the element name AND `crt.QuickFilter`. Name alone closed on any component that
 // happened to carry the name — and the control IS the deliverable here, which is why the unit publishes the type.
-function resolveListFilterVk(vk, ctx) {
+// The same check serves the list page's filter bar and a related list's quick filter on the form page; only the words
+// that name the surface differ.
+const FILTER_SURFACE = {
+  list: { page: "list page", short: "the registry filter bar is short this filter", lost: "the filter bar needs the quick-filter control, not a field with the same name" },
+  detail: { page: "page", short: "the related list is short this quick filter", lost: "the user's filter control is gone; a plain field or a fixed filter does not replace it" },
+};
+function resolveQuickFilterVk(vk, ctx, surface) {
+  const w = FILTER_SURFACE[surface];
   const want = [...new Set(vk.names || [])];
   if (!want.length) return ["⚠ verify", "no expected filter element was published — nothing to match against", "unverified"];
   if (ctx.entryAbsent) return absentEntry(ctx, `the quick filter ${want.join(", ")}`);
-  if (ctx.page === false) return ["❌ MISSING", `the list page is reported as NOT BUILT, so ${want.join(", ")} does not exist`, "missing"];
+  if (ctx.page === false) return ["❌ MISSING", `the ${w.page} is reported as NOT BUILT, so ${want.join(", ")} does not exist`, "missing"];
   const byName = new Map(ctx.ops.filter((o) => o.name).map((o) => [o.name, o.type || ""]));
   const missing = want.filter((n) => !byName.has(n));
   // Present under the right name but the WRONG type is its own failure, and it must not read as absent: the element
   // is there, so the repair is to change its type rather than to add a filter.
   const wrongType = want.filter((n) => byName.has(n) && byName.get(n) !== LIST_FILTER_TYPE);
-  if (!missing.length && !wrongType.length) return ["✅ Done", `${want.join(", ")} present on the built list page as \`${LIST_FILTER_TYPE}\` (matched BY NAME + TYPE)`, "ok"];
+  if (!missing.length && !wrongType.length) return ["✅ Done", `${want.join(", ")} present on the built ${w.page} as \`${LIST_FILTER_TYPE}\` (matched BY NAME + TYPE)`, "ok"];
   // An op list with no names at all cannot answer identity — that is a payload problem, not a build defect.
-  if (ctx.ops.length && !byName.size) return ["⚠ verify", `identity NOT checked — the built list page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
+  if (ctx.ops.length && !byName.size) return ["⚠ verify", `identity NOT checked — the built ${w.page} returned ${ctx.ops.length} component(s) but NOT ONE carries an element name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
   if (wrongType.length) {
     const built = wrongType.map((n) => esc(String(n)) + " is built as `" + esc(byName.get(n) || "an untyped component") + "`").join(", ");
-    return ["❌ MISSING", `${built}, not \`${LIST_FILTER_TYPE}\` — the filter bar needs the quick-filter control, not a field with the same name`, "missing"];
+    return ["❌ MISSING", `${built}, not \`${LIST_FILTER_TYPE}\` — ${w.lost}`, "missing"];
   }
-  return ["❌ MISSING", `NO ${missing.map((n) => esc(String(n))).join(", ")} on the built list page — the registry filter bar is short this filter`, "missing"];
+  return ["❌ MISSING", `NO ${missing.map((n) => esc(String(n))).join(", ")} on the built ${w.page} — ${w.short}`, "missing"];
 }
 const VK_LIST = new Set(["listcolumns", "listfilter"]);
 const VK_PLACEMENT = new Set(["placement"]);
@@ -4764,7 +4749,7 @@ const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan �
 const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
 
 // ===== the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
-const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+export const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 // Comments and string/template literals blanked, so a method name that appears only in prose cannot close a row.
 // Approximate (template ${} expressions are blanked too) — a false negative there is the safe direction (⚠, not ✅).
 const codeOnly = (s) => String(s)
@@ -5037,12 +5022,12 @@ export function resolveModuleDepVk(vk, ctx) {
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
-const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
+const VK_BY_TYPE = new Map([["detailfilter", (vk, ctx) => resolveQuickFilterVk(vk, ctx, "detail")], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk],
+  ["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
-  if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
-  if (VK_DETAIL_FEATURES.has(vk.type)) return VK_DETAIL_FEATURES.get(vk.type)(vk, ctx);
+  if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveQuickFilterVk(vk, ctx, "list");
   for (const [set, fn] of VK_CATEGORY) if (set.has(vk.type)) return fn(vk, ctx);
   const direct = VK_BY_TYPE.get(vk.type);
   return direct ? direct(vk, ctx) : unknownVk();
@@ -5098,8 +5083,9 @@ function pushWalkNode(node, out) {
   const caption = opCaption(node);
   const request = opRequest(node);
   // `readonly` (either spelling) and a declared `rowToolbarItems` are what the Detail features rows measure.
-  const readonly = node.readonly === true || node.readOnly === true || node.values?.readonly === true || node.values?.readOnly === true;
-  const rowToolbar = Array.isArray(node.rowToolbarItems) || Array.isArray(node.values?.rowToolbarItems);
+  const props = { ...node.values, ...node };
+  const readonly = props.readonly === true || props.readOnly === true;
+  const rowToolbar = Array.isArray(props.rowToolbarItems);
   out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}),
     ...(caption ? { caption } : {}), ...(request ? { request } : {}), ...(readonly ? { readonly } : {}), ...(rowToolbar ? { rowToolbar } : {}) });
 }

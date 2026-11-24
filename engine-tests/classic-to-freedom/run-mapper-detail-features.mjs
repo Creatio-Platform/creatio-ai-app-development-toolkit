@@ -7,8 +7,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { detectAddMode, scanDetailFeatures, detailQuickFilters, DETAIL_FEATURE_SCAN_FNS, attachDetailFeatureDecisions,
-  applySummariesDirective, SUMMARIES_DIRECTED_KIND } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { detectAddMode, scanDetailFeatures, classifyDetailFilters, DETAIL_FEATURE_SCAN_FNS, attachDetailFeatureDecisions,
+  applySummariesDirective } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, resolveVk, verifyCtx, renderDesignSpec, detailFeatureRows } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { GROUP_PHASE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 
@@ -51,6 +51,13 @@ const DATE_BODY = `define("ActiveProductDetail",[],function(){return{entitySchem
 const FIXED_BODY = `define("FixedDetail",[],function(){return{entitySchemaName:"Req",methods:{getFilters:function(){var f=this.callParent(arguments);
   f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));
   f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Owner",this.get("MasterRecordId")));return f;}}};});`;
+// One literal filter and one the user drives, in the same getFilters.
+const MIXED_BODY = `define("MixedDetail",[],function(){return{entitySchemaName:"Req",
+  attributes:{"OnDate":{dataValueType:Terrasoft.DataValueType.DATE}},
+  methods:{initData:function(){this.$OnDate=new Date();this.callParent(arguments);},
+    getFilters:function(){var f=this.callParent(arguments);
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",this.$OnDate));return f;}}};});`;
 const PLAIN_BODY = `define("PlainDetail",[],function(){return{entitySchemaName:"Note",methods:{}};});`;
 const SUMMARY_BODY = `define("SumDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return true;}},
   mixins:{GroupEdit:"Terrasoft.RecordsGroupEditing"}};});`;
@@ -77,6 +84,13 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => detailOf(fixed, "FixedDetail").addMode?.fixedFilters === true && (detailOf(fixed, "FixedDetail").features?.quickFilters || []).length === 0
       && /FIXED list filters on Category, Owner/.test(fixed.plan),
     () => ({ addMode: detailOf(fixed, "FixedDetail").addMode, features: detailOf(fixed, "FixedDetail").features }));
+  const mixed = run("MixedDetail", "Req", MIXED_BODY);
+  const mixedDetail = detailOf(mixed, "MixedDetail");
+  check("detail features: a getFilters with one literal and one user-driven filter keeps BOTH halves — a quick filter on EndDate and a fixed filter on Category",
+    () => mixedDetail.features.quickFilters.map((q) => `${q.attribute}:${q.columns.join("+")}`).join(",") === "OnDate:EndDate"
+      && mixedDetail.addMode?.fixedFilters === true && mixedDetail.addMode.filterCols.join(",") === "Category"
+      && /FIXED list filters on Category/.test(mixed.plan),
+    () => ({ addMode: mixedDetail.addMode, quick: mixedDetail.features.quickFilters }));
 
   // AC 2 — a date filter is a quick filter on its columns; a filter kept in the profile raises the persistence question.
   const date = run("ActiveProductDetail", "ActiveProduct", DATE_BODY);
@@ -95,26 +109,33 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => sum.changeSet.needsDecision.some((n) => n.kind === "detail-summaries" && /improvement over Classic, not parity/.test(n.reason))
       && features(sum).some((l) => /\| Summaries \|/.test(l) && /Decision needed/.test(l)),
     () => features(sum));
-  const directed = { changeSet: { needsDecision: sum.changeSet.needsDecision.map((n) => ({ ...n })), details: sum.changeSet.details } };
+  // A copy of the summaries run's change set, so each directive below starts from the open question.
+  const copyOfSum = () => ({ changeSet: { needsDecision: sum.changeSet.needsDecision.map((n) => ({ ...n })),
+    details: sum.changeSet.details.map((d) => ({ ...d, features: d.features && { ...d.features } })) } });
+  const directed = copyOfSum();
   applySummariesDirective([directed], [{ id: "D1", quote: "use the summaries component", expectation: "summaries built as crt.Summaries", scope: ["main"] }]);
   const dRows = detailFeatureRows(directed.changeSet).filter((r) => r[1] === "Summaries");
-  check("detail features: a user directive for summaries turns the question into an instruction naming the directive",
+  check("detail features: a user directive for summaries removes the question and the Summaries row names the directive",
     () => !directed.changeSet.needsDecision.some((n) => n.kind === "detail-summaries")
-      && directed.changeSet.needsDecision.some((n) => n.kind === SUMMARIES_DIRECTED_KIND && n.directive === "D1")
+      && directed.changeSet.details.find((d) => d.detailSchema === "SumDetail")?.features?.summariesDirective === "D1"
       && dRows.length === 1 && /crt\.Summaries.*user directive D1/.test(dRows[0][3]),
     () => ({ decisions: directed.changeSet.needsDecision.map((n) => n.kind), dRows }));
-  const unrelated = { changeSet: { needsDecision: sum.changeSet.needsDecision.map((n) => ({ ...n })) } };
+  const unrelated = copyOfSum();
   applySummariesDirective([unrelated], [{ id: "D2", quote: "hide what Classic did not have", expectation: "Freedom-only elements hidden", scope: ["main"] }]);
-  check("detail features: a directive about something else leaves the summaries question open",
-    () => unrelated.changeSet.needsDecision.some((n) => n.kind === "detail-summaries"));
+  const declined = copyOfSum();
+  applySummariesDirective([declined], [{ id: "D3", quote: "no summaries please", expectation: "keep the labels, no summaries component", scope: ["main"] }]);
+  check("detail features: a directive about something else, or one that declines summaries, leaves the summaries question open",
+    () => unrelated.changeSet.needsDecision.some((n) => n.kind === "detail-summaries")
+      && declined.changeSet.needsDecision.some((n) => n.kind === "detail-summaries"));
   const bar = { details: [], needsDecision: [], viewConfigDiff: [
     { name: "SummaryItemsContainer", parentName: "Header", values: { type: "crt.FlexContainer" } },
     { name: "TotalLabel", parentName: "SummaryItemsContainer", values: { type: "crt.Label" } },
     { name: "SumLabel", parentName: "SummaryItemsContainer", values: { type: "crt.Label" } }] };
   attachDetailFeatureDecisions(bar);
-  check("detail features: labels in a summary container of the page (a Classic summary bar) → one `detail-summaries` Decision needed for the bar",
+  check("detail features: labels in a summary container of the page (a Classic summary bar) → one `detail-summaries` Decision needed and a Summaries row for the bar",
     () => bar.needsDecision.length === 1 && bar.needsDecision[0].kind === "detail-summaries" && bar.needsDecision[0].item === "SummaryItemsContainer"
-      && /2 labels/.test(bar.needsDecision[0].reason),
+      && /2 labels/.test(bar.needsDecision[0].reason) && bar.summaryBar?.container === "SummaryItemsContainer"
+      && detailFeatureRows(bar).some((r) => r[0] === "SummaryItemsContainer" && /Decision needed/.test(r[3])),
     () => bar.needsDecision);
 
   // AC 4 — the standard tools menu is one line; a change to it is a row.
@@ -136,8 +157,10 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => dateRows);
 
   // AC 6 — a detail a vendor template layer declares is "inherited — decide"; one from the platform base is not.
-  const vendorSeed = [...CLEAN_SEED, { pkg: "VendorBasePage/VendorPkg", body: `define("VendorBasePage",[],function(){return{details:{Log:{schemaName:"VendorLogDetail",entitySchemaName:"ChangeLog"}},diff:[{operation:"insert",name:"Log",parentName:"ChangesHistoryTab",propertyName:"items",values:{itemType:2}}]};});` }];
-  const platformSeed = [...CLEAN_SEED, { pkg: "BaseRecordPage/CrtUIPlatform7x", body: `define("BaseRecordPage",[],function(){return{details:{Log:{schemaName:"PlatformLogDetail",entitySchemaName:"ChangeLog"}},diff:[{operation:"insert",name:"Log",parentName:"ChangesHistoryTab",propertyName:"items",values:{itemType:2}}]};});` }];
+  // A template layer above the clean seed that declares a change-log detail on the history tab.
+  const layerSeed = (pkg, schema, detail) => [...CLEAN_SEED, { pkg, body: `define("${schema}",[],function(){return{details:{Log:{schemaName:"${detail}",entitySchemaName:"ChangeLog"}},diff:[{operation:"insert",name:"Log",parentName:"ChangesHistoryTab",propertyName:"items",values:{itemType:2}}]};});` }];
+  const vendorSeed = layerSeed("VendorBasePage/VendorPkg", "VendorBasePage", "VendorLogDetail");
+  const platformSeed = layerSeed("BaseRecordPage/CrtUIPlatform7x", "BaseRecordPage", "PlatformLogDetail");
   const vendor = runMigration({ entity: "X", seed: vendorSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   const platform = runMigration({ entity: "X", seed: platformSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   const inh = vendor.changeSet.needsDecision.find((n) => n.kind === "detail-inherited");
@@ -203,11 +226,11 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   const src = DETAIL_FEATURE_SCAN_FNS.map((f) => f.toString()).join("\n");
   const unboundedRun = /\[\\s\\S\][*+]|\.[*+]/g;
   check("ReDoS (structural): the detail feature scan has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` / `.*` / `.+` run, and detectAddMode reaches its quick-filter half",
-    () => DETAIL_FEATURE_SCAN_FNS.length >= 5 && detectAddMode.toString().includes("detailQuickFilters") && !src.match(unboundedRun),
+    () => DETAIL_FEATURE_SCAN_FNS.length >= 5 && detectAddMode.toString().includes("classifyDetailFilters") && !src.match(unboundedRun),
     () => src.match(unboundedRun));
   const unit = "getFilters: function(){ this.$A; this.get(\"B\"); saveUserProfile(); getRecordRightsSetupMenuItem: function(){ " + "z".repeat(60) + "\n";
   const adversarial = unit.repeat(6000);
-  const t0 = Date.now(); scanDetailFeatures(adversarial); detailQuickFilters(adversarial); const ms = Date.now() - t0;
+  const t0 = Date.now(); scanDetailFeatures(adversarial); classifyDetailFilters(adversarial); detectAddMode(adversarial); const ms = Date.now() - t0;
   check(`ReDoS (timing): the detail feature scan on ~${Math.round(adversarial.length / 1024)}KB of unterminated overrides stays linear — ${ms}ms`,
     () => adversarial.length > 500 * 1024 && ms < 5000, () => ({ ms }));
 }

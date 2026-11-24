@@ -815,6 +815,8 @@ const freedomRequest = (elementName, prefix) => `${prefix}.${elementName}Clicked
 // against its enclosing function, and this one closes over nothing in `mapFields`.
 const islandOf = (own) => (own.groups?.length ? own.groups[0].name : null);
 
+// Classic's STATIC read-only signals on a field: the diff disables it (`enabled: false`) or marks it `readonly: true`.
+const staticReadOnly = (f) => f.enabled === false || f.readonly === true;
 function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   const hiddenAncestor = (own.groups || []).find((g) => g.visible === false || g.visible === "dynamic");
   let vis = f.visible !== false;
@@ -1030,7 +1032,7 @@ function mapFields(ctx, containers) {
     // A field the page's own Classic diff disables (`enabled: false`) or marks `readonly` is read-only there for every
     // record; built editable it lets users change what Classic never let them. `readOnlyStatic` is plan-only metadata
     // that names the source, so the plan and `--verify` can hold the built field to it.
-    if (f.enabled === false || f.readonly === true) { values.readOnly = true; values.readOnlyStatic = true; }
+    if (staticReadOnly(f)) { values.readOnly = true; values.readOnlyStatic = true; }
     applyHintTip(values, f, col);
     return values;
   };
@@ -1095,7 +1097,6 @@ function mapFields(ctx, containers) {
   // looks the same. Such a field stays editable and is named, with its writing methods, in one folded
   // `field-attribute-computed` decision, unless an attribute `dependencies` entry lists X in its columns (the classic
   // "the user edits X and the page reacts" wiring, which settles it as an input). The writer map is built once.
-  const staticReadOnly = (f) => f.enabled === false || f.readonly === true;
   const computedAttrFields = [];
   let attrWriters = null;
   const attributeWriters = (col) => {
@@ -1762,9 +1763,6 @@ function mapDetails(ctx, containers, profileRegion) {
       caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null,
       ...(settings ? { element: d.key, connections: settings.connections } : {}),
       ...(d.parent ? {} : { unplaced: true }) });
-    // A feature detail Classic declares but never places is not shown there: building it adds a surface the user
-    // never had, so it waits for their approval like any unplaced detail.
-    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat.feature));
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1782,8 +1780,7 @@ function mapDetails(ctx, containers, profileRegion) {
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
         reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     }
-    if (!d.parent) needsDecision.push(unplacedDetailDecision(d));
-    else if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+    if (d.parent && !tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent}' unresolved) — confirm target tab` });
     // editability lives in the detail's OWN config. When bundled (dinfo), the INLINE-EDITABLE-GRID case is read
     // from the grid config (buildCustomDetail → `editable`); any other bundled detail is a standard related list
@@ -1834,6 +1831,9 @@ function mapDetails(ctx, containers, profileRegion) {
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
+    // A detail Classic declares but never places is not shown there: building it, a standard feature included, adds a
+    // surface the user never had, so it waits for their approval.
+    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat?.feature));
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
       const decided = featureStatus(withheldIds(feat.feature, d.schemaName || d.key));
       needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
