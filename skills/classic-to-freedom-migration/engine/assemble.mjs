@@ -32,8 +32,8 @@ export const JUDGE_FILE = "judge.json";
 // The on-stand keys the BUILD agent records rather than reads (see reads.mjs). Merged into `reachability`, so a
 // row whose value no read can produce still has a way to close.
 export const RECORDED_FILE = "recorded.json";
-// The provenance field's shape, in ONE place: the drop-sweep here applies the same test the payload guard will.
-// migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
+// The provenance field's shape (defined once, in conventions.mjs): the drop-sweep here applies the same test the
+// payload guard will. migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export { GUID_RE };
 
 // `meta.json` nests everything under `page`; a caller that copied only that block is accepted too, because the
