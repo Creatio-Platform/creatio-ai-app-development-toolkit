@@ -42,6 +42,10 @@ These eight rules are non-negotiable. Everything else in this skill serves them.
    Collapsing, merging, or simplifying "for simplicity" is a plan deviation to **propose to the
    user**, never to apply silently. When unsure whether the plan is right, ask — do not quietly do
    something smaller.
+   **(c) An improvement beyond Classic parity defaults to **no**.** A tooltip, a dropdown, summaries or
+   any other element Classic did not have is built only when the user asked for it (a directive) or
+   answered yes to it in ⚠ Confirm. Offering one is fine; building it by default is a plan deviation, and
+   so is answering a parity question with an improvement.
 8. **UI/UX guidelines are mandatory when you BUILD, not optional.** Whenever you create or edit a Freedom UI page while implementing the approved plan (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring the page body and apply its rules (layout/containers, component choice, `colSpan`/gaps, `caption` vs `title`, island/card settings, lookups, fields, tooltips, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components). This is the same guideline the plan's **Quality gates** checklist row verifies after the build; this rule makes it a **before-build** gate too, so page bodies are authored to it in the first place rather than only reviewed afterward. It binds **whoever builds** — the five tools named above ARE the definition of "build" — and it binds at BOTH points; running only the save-time review is exactly how the gate gets skipped. (This is a **page-design** guideline — distinct from the clio build `get-guidance` contracts you read to write the schema.)
 
 > **Rules 7 and 8 bind whoever writes to the stand.** From step 7 that is a build sub-agent, one per task, so the

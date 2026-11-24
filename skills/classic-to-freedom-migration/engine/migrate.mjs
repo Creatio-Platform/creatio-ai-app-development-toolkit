@@ -1445,6 +1445,52 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
   }
 }
 
+// The questions a detail's feature inventory leaves for the user. A quick filter that Classic kept in the user's
+// profile may lose that memory, since no guidance states that `crt.QuickFilter` keeps it; summaries are an
+// improvement over Classic, never parity. Both are asked, not decided by a builder in a note. Exported for the goldens.
+export function attachDetailFeatureDecisions(changeSet) {
+  for (const d of (changeSet.details || [])) {
+    const f = d.features;
+    if (!f) continue;
+    const label = detailLabel(d);
+    for (const q of f.quickFilters.filter((x) => x.persisted)) {
+      changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
+        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. No guidance confirms that \`crt.QuickFilter\` keeps its state between visits. Decide: accept that the filter resets on every visit, or keep it with a custom profile read and write` });
+    }
+    if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
+  }
+  const bar = pageSummaryBar(changeSet.viewConfigDiff);
+  if (bar) changeSet.needsDecision.push(summariesDecision(`The page's summary bar '${bar.container}' (${bar.labels} label${plural(bar.labels)})`, bar.container));
+}
+// Classic shows summaries as a summary module or as labels laid out in a container; the Freedom summary components
+// aggregate and format them, which is more than Classic did, so they are the user's choice unless a directive gave it.
+const SUMMARIES_KIND = "detail-summaries";
+export const SUMMARIES_DIRECTED_KIND = "detail-summaries-directed";
+function summariesDecision(what, item) {
+  return { kind: SUMMARIES_KIND, item,
+    reason: `${what} shows summaries in Classic. \`crt.Summaries\` / \`crt.SummaryItem\` is an improvement over Classic, not parity. Decide: build them as \`crt.Summaries\`, or keep plain labels as Classic had` };
+}
+// A container of the page whose name says summary and that holds labels: the custom summary bar of a Classic page.
+function pageSummaryBar(ops) {
+  const list = ops || [];
+  const containers = new Set(list.filter((o) => /summar/i.test(o.name || "") && !/Label$/.test(o.values?.type || "")).map((o) => o.name));
+  const labels = list.filter((o) => /Label$/.test(o.values?.type || "") && (containers.has(o.parentName) || /summar/i.test(o.name || ""))).length;
+  return containers.size && labels ? { container: [...containers][0], labels } : null;
+}
+// A user directive that asks for summaries settles the question: the summaries decisions of every page it reaches
+// become instructions, not questions. Exported for the goldens.
+export function applySummariesDirective(results, directives) {
+  const d = (directives || []).find((x) => /crt\.Summar|\bsummar/i.test(`${x.quote} ${x.expectation}`));
+  if (!d) return;
+  for (const r of results) {
+    for (const n of (r?.changeSet?.needsDecision || []).filter((x) => x.kind === SUMMARIES_KIND)) {
+      n.kind = SUMMARIES_DIRECTED_KIND;
+      n.directive = d.id;
+      n.reason = `${n.item}: summaries are built as \`crt.Summaries\` / \`crt.SummaryItem\`, as user directive ${d.id} asks`;
+    }
+  }
+}
+
 function addMechanismDecision(am, label) {
   const parts = describeAddMode(am);
   const guidance = addModeGuidance(am);
@@ -2173,6 +2219,133 @@ export function scanRowActions(body) {
 export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, stringEnd, braceBody,
   memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions];
 
+// ---- THE DETAIL FEATURE INVENTORY ------------------------------------------------------------------------------
+// What users can do with a detail besides reading its columns: its tools menu, quick filters, multi-select, row
+// styling and summaries. Each one is a Classic member of the detail body (the layer union, like the row-action
+// scan), and each one either reaches the plan as a row or is lost without anyone deciding it.
+// The standard tools-menu items of `BaseGridDetailV2`, by the getter that adds each one.
+export const TOOLS_MENU_ITEMS = [["Sort", "getGridSortMenuItem"], ["Column setup", "getGridSettingsMenuItem"],
+  ["Export to Excel", "getExportToExcelFileMenuItem"], ["Import", "getDataImportMenuItem"], ["Switch grid mode", "getSwitchGridModeMenuItem"],
+  ["Access rights", "getRecordRightsSetupMenuItem"], ["Change log", "getRecordChangeLogMenuItem"],
+  ["Change log settings", "getObjectChangeLogSettingsMenuItem"], ["Row colour settings", "getGridColorizeSettingsMenuItem"]];
+// The members that switch a standard tools-menu item off by returning `false`.
+const TOOLS_MENU_VISIBILITY = [["Export to Excel", "getExportToExcelMenuVisibility"], ["Export to Excel", "getExportToFileActionVisibility"],
+  ["Quick filter button", "getShowQuickFilterButton"]];
+const STANDARD_MENU_GETTERS = new Set([...TOOLS_MENU_ITEMS, ...ROW_ACTION_GETTERS].map(([, g]) => g));
+// A call that writes a value to the user's profile. A filter whose toggle reaches one keeps its state between visits.
+const PROFILE_SAVE = /\b(?:saveFiltersToProfile|saveUserProfile|saveProfile\w{0,30}|setProfile\w{0,30}|saveToProfile)\b/g;
+const PROFILE_WINDOW = 600;
+
+// The most-derived override's code (comments and literals blanked), or `null` when the member is not overridden or
+// cannot be read. `raw` keeps the literals, for a scan that reads the attribute names a body passes as strings.
+function lastMemberCode(body, name, spans, raw = false) {
+  const starts = memberValueStarts(body, name, spans);
+  if (!starts.length) return null;
+  const start = starts.at(-1);
+  if (!raw) return memberValue(body, start);
+  const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(body.slice(start, start + 400));
+  const text = fm ? braceBody(body, start + fm[0].length - 1) : null;
+  return text == null ? null : { empty: false, code: text };
+}
+
+// Whether the most-derived override returns only `false`. A tools-menu getter or a visibility member written that way
+// switches its item off as surely as one returning nothing.
+function returnsOnlyFalse(body, name, spans) {
+  const v = lastMemberCode(body, name, spans);
+  return !!v && /^returnfalse;?$/.test(v.code.replace(/\s/g, ""));
+}
+
+// The tools-menu deviations from the standard `BaseGridDetailV2` menu: items removed (a getter that returns nothing or
+// `false`), items hidden (a visibility member that returns `false`), items an `addToolsButtonMenuItems` override adds,
+// and whether that override could not be read. No deviation at all is the standard menu, kept.
+function toolsMenuDeviations(body, spans) {
+  const removed = TOOLS_MENU_ITEMS
+    .filter(([, g]) => getterReturnsNothing(body, g, spans) === true || returnsOnlyFalse(body, g, spans)).map(([item]) => item);
+  const hidden = [...new Set(TOOLS_MENU_VISIBILITY.filter(([, m]) => returnsOnlyFalse(body, m, spans)).map(([item]) => item))]
+    .filter((item) => !removed.includes(item));
+  const override = memberValueStarts(body, "addToolsButtonMenuItems", spans).length ? lastMemberCode(body, "addToolsButtonMenuItems", spans) : undefined;
+  const added = override ? [...new Set([...override.code.matchAll(/\bthis\.(get\w{1,60}MenuItem)\s{0,5}\(/g)].map((m) => m[1]))]
+    .filter((g) => !STANDARD_MENU_GETTERS.has(g)) : [];
+  // Group editing ("Edit selected records") comes from a mixin, not from a getter: its presence adds the item. The
+  // mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so the raw text is read, comments included.
+  if (/\bRecordsGroupEditing\b/.test(body)) added.push("Edit selected records");
+  return { removed, hidden, added, unreadable: override === null };
+}
+
+// Multi-select as the detail declares it: `off` when `isMultiSelectVisible` returns nothing or `false`, `conditional`
+// for any other override, `null` for the standard behaviour.
+function multiSelectMode(body, spans) {
+  if (!memberValueStarts(body, "isMultiSelectVisible", spans).length) return null;
+  if (getterReturnsNothing(body, "isMultiSelectVisible", spans) === true || returnsOnlyFalse(body, "isMultiSelectVisible", spans)) return "off";
+  return "conditional";
+}
+
+// The attribute names a filter body reads: `this.$Name` and `this.get("Name")`.
+const ATTRIBUTE_READ = /this\.\$(\w{1,80})|this\.get\(\s{0,5}["'](\w{1,80})["']\s{0,5}\)/g;
+// Whether a control or a method of the detail changes the attribute: an element of the detail diff named after it or
+// bound to it, or an assignment (`this.$Name = …`, `this.set("Name", …)`). An attribute nothing in the detail changes
+// (the master record's id, say) narrows the list the same way on every visit — a fixed filter, not a quick one.
+function changedInDetail(body, attr) {
+  const name = reEscape(attr);
+  return new RegExp(String.raw`["']?name["']?\s{0,5}:\s{0,5}["']${name}["']`).test(body)
+    || new RegExp(String.raw`["']?bindTo["']?\s{0,5}:\s{0,5}["']${name}["']`).test(body)
+    || new RegExp(String.raw`this\.\$${name}\s{0,5}=(?!=)`).test(body)
+    || new RegExp(String.raw`this\.set\(\s{0,5}["']${name}["']`).test(body);
+}
+const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+
+// The kind of control a quick filter needs, read off the attribute's declared data type.
+function filterKind(body, attr) {
+  const m = new RegExp(String.raw`["']?${reEscape(attr)}["']?\s{0,5}:\s{0,5}\{[^{}]{0,400}?DataValueType\.(\w{1,30})`).exec(body);
+  const type = m ? m[1] : null;
+  if (/^(?:DATE|DATE_TIME|TIME)$/.test(type || "")) return "date";
+  if (type === "BOOLEAN") return "toggle";
+  return "value";
+}
+
+// Whether the detail saves the attribute to the user's profile: a profile-saving call within a short window of the
+// attribute's name, as in a toggle handler that flips the attribute and then saves the filters.
+function persistedInProfile(body, attr) {
+  const name = new RegExp(String.raw`\b${reEscape(attr)}\b`);
+  for (const m of body.matchAll(PROFILE_SAVE)) {
+    if (name.test(body.slice(Math.max(0, m.index - PROFILE_WINDOW), m.index + PROFILE_WINDOW))) return true;
+  }
+  return false;
+}
+
+// The detail's QUICK FILTERS: each attribute the most-derived `getFilters` reads that a control or a method of the
+// detail changes. The filtered columns are the ones whose filter value is that attribute; a filter built in a helper
+// method leaves the list empty. A `getFilters` that reads no such attribute holds fixed filters only.
+export function detailQuickFilters(body, spans = literalSpans(body)) {
+  const filters = lastMemberCode(body, "getFilters", spans, true);
+  if (!filters) return [];
+  const attrs = [...new Set([...filters.code.matchAll(ATTRIBUTE_READ)].map((m) => m[1] || m[2]))];
+  const valueArgs = [...filters.code.matchAll(/ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["'](\w{1,80})["']\s{0,10},\s{0,10}([^)]{0,200})\)/g)];
+  return attrs.filter((a) => changedInDetail(body, a)).map((attribute) => ({
+    attribute,
+    kind: filterKind(body, attribute),
+    columns: valueArgs.filter((m) => new RegExp(String.raw`\b${reEscape(attribute)}\b`).test(m[2])).map((m) => m[1]),
+    persisted: persistedInProfile(body, attribute),
+  }));
+}
+
+// The whole inventory of one detail body. Every key is always present, so a reader never type-checks it.
+export function scanDetailFeatures(body) {
+  const text = String(body || "");
+  const spans = literalSpans(text);
+  const styling = lastMemberCode(text, "prepareResponseCollectionItem", spans);
+  return {
+    toolsMenu: toolsMenuDeviations(text, spans),
+    quickFilters: detailQuickFilters(text, spans),
+    multiSelect: multiSelectMode(text, spans),
+    rowStyling: !!styling && /\bcustomStyle\b/.test(styling.code),
+    summaries: /\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/.test(codeOnly(text)),
+  };
+}
+// Every function of the feature scan, for the structural ReDoS golden.
+export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, returnsOnlyFalse, toolsMenuDeviations, multiSelectMode, changedInDetail,
+  filterKind, persistedInProfile, detailQuickFilters, scanDetailFeatures];
+
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
 // rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
@@ -2206,8 +2379,10 @@ export function detectAddMode(body) {
   const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
   const clickM = customAction ? /getButtonMenuItem\s*\(\s*\{[\s\S]{0,200}?Click\s*:\s*\{[^}]*bindTo["']\s*:\s*["'](\w+)["']/.exec(body) : null;
   // FIXED list filters — a getFilters override adding column filters. Capture the directly-filtered columns
-  // (ComparisonType.<X>, "Col" and createColumnInFilterWithParameters("Col", …)).
-  const fixedFilters = /\bgetFilters\s*:/.test(body) && /createColumn(?:In)?Filter\w*/.test(body);
+  // (ComparisonType.<X>, "Col" and createColumnInFilterWithParameters("Col", …)). A getFilters that reads an attribute
+  // the user changes is a QUICK filter instead (`detailQuickFilters`): reproducing it as a fixed data-source filter
+  // would take the control away from the user.
+  const fixedFilters = /\bgetFilters\s*:/.test(body) && /createColumn(?:In)?Filter\w*/.test(body) && !detailQuickFilters(body).length;
   const filterCols = fixedFilters ? [...new Set([
     ...[...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
     ...[...body.matchAll(/createColumnInFilterWithParameters\s*\(\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
@@ -2272,6 +2447,7 @@ function detailSchemaRecord(e, scanText, p) {
     // inferred — an invented section name in a sentence the user is asked to approve is worse than no name.
     ownSection: (typeof eObj.ownSection === "string" && eObj.ownSection.trim()) ? eObj.ownSection.trim() : null,
     addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
+    features: scanDetailFeatures(scanText), // tools menu, quick filters, multi-select, row styling, summaries — across ALL layers
     error: p.error || null,
     astDiagnostics: p.astDiagnostics || [],
   };
@@ -2940,6 +3116,7 @@ export function runMigration(manifest, opts = {}) {
     featureStatus: (ids) => withheldFeatureStatus({ ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) }, ids, withheldPageKey(opts)),
   });
   attachDetailAddModes(changeSet, detailSchemas);
+  attachDetailFeatureDecisions(changeSet);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
   // carries them. Hand-appending them to the plan's `Adjustments` did not survive a re-run: `--plan --out` rewrites
   // the file, so the only link from a worklist row to the behaviour that describes it was lost on every regenerate.
@@ -3214,6 +3391,7 @@ export function runMigration(manifest, opts = {}) {
   // them: a directive changes what the plan builds.
   const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
   out.directives = directivesOf(decisionRecords);
+  applySummariesDirective([out, ...folded], out.directives);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds, out.directives);
   out.translationsMissing = translationsMissing(manifest);

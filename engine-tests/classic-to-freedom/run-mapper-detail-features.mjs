@@ -1,0 +1,213 @@
+// DETAIL FEATURES. A related list is more than its columns: users filter it with a toggle or a date, export it,
+// edit selected rows, see coloured rows and summaries. These checks hold every one of those to a plan row with a
+// Freedom target, the questions it raises to ⚠ Confirm, the details a customer or vendor template layer declares to
+// an "inherited — decide" row, an unplaced detail to an approval row, a field Classic made read-only to a read-only
+// build, and the built page to `--verify`.
+// Imported and run by `run-mapper.mjs`, which hands it its `check` and the shared fixtures so the tally stays one number.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { detectAddMode, scanDetailFeatures, detailQuickFilters, DETAIL_FEATURE_SCAN_FNS, attachDetailFeatureDecisions,
+  applySummariesDirective, SUMMARIES_DIRECTED_KIND } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { checklistGroups, resolveVk, verifyCtx, renderDesignSpec, detailFeatureRows } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { GROUP_PHASE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+const SKILL_MD = path.join(DIR, "../../skills/classic-to-freedom-migration/SKILL.md");
+
+// A record page with one tab holding the given details, and an optional extra diff.
+const page = (details, extraDiff = "") => `define("XPage",[],function(){return{entitySchemaName:"X",details:${details},diff:[`
+  + `{operation:"insert",name:"T",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true}},`
+  + `{operation:"insert",name:"D",parentName:"T",propertyName:"items",values:{itemType:2}}${extraDiff}]};});`;
+const oneDetail = (schema, entity) => `{D:{schemaName:"${schema}",entitySchemaName:"${entity}",filter:{detailColumn:"X",masterColumn:"Id"}}}`;
+
+// A toggle the user flips, saved to the profile: the "only active rows" switch of a limits list.
+const TOGGLE_BODY = `define("LimitDetail",[],function(){return{entitySchemaName:"Limit",
+  attributes:{"IsActiveOnly":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}},
+  methods:{
+    init:function(){this.loadFiltersFromProfile();this.callParent(arguments);},
+    onActiveOnlyButtonClick:function(){this.$IsActiveOnly=!this.$IsActiveOnly;this.saveFiltersToProfile();this.reloadGridData();},
+    getFilters:function(){var filters=this.callParent(arguments);if(this.$IsActiveOnly){this.addActiveFilter(filters);}return filters;},
+    addActiveFilter:function(filters){filters.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",new Date()));}
+  },
+  diff:[{operation:"insert",name:"ActiveOnlyButton",parentName:"Detail",propertyName:"tools",values:{itemType:5,click:{bindTo:"onActiveOnlyButtonClick"}}}]};});`;
+// A date the user picks in the list's tools; the rows active on that date are shown. Plus coloured rows and a tools
+// menu without its access-rights item.
+const DATE_BODY = `define("ActiveProductDetail",[],function(){return{entitySchemaName:"ActiveProduct",
+  attributes:{"OnDate":{"dataValueType":Terrasoft.DataValueType.DATE,"type":Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN}},
+  methods:{
+    initData:function(){this.$OnDate=new Date();this.on("change:OnDate",this.reloadGridData,this);this.callParent(arguments);},
+    prepareResponseCollectionItem:function(item){this.callParent(arguments);if(!this.Ext.isEmpty(item.$Comment)){item.customStyle={"background":"#eeeeee"};}},
+    getFilters:function(){var filters=this.callParent(arguments);if(this.$OnDate){var g=this.Terrasoft.createFilterGroup();
+      g.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.GREATER_OR_EQUAL,"EndDate",this.$OnDate));
+      g.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.LESS_OR_EQUAL,"StartDate",this.$OnDate));
+      g.addItem(filters);filters=g;}return filters;},
+    getRecordRightsSetupMenuItem:Terrasoft.emptyFn,
+    getExportToExcelMenuVisibility:function(){return false;},
+    isMultiSelectVisible:function(){return false;}
+  },
+  diff:[{operation:"insert",name:"OnDate",parentName:"Detail",propertyName:"tools",index:0,values:{markerValue:"OnDate"}}]};});`;
+// Fixed filters only: every value is a literal or a constant, nothing the user changes.
+const FIXED_BODY = `define("FixedDetail",[],function(){return{entitySchemaName:"Req",methods:{getFilters:function(){var f=this.callParent(arguments);
+  f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));
+  f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Owner",this.get("MasterRecordId")));return f;}}};});`;
+const PLAIN_BODY = `define("PlainDetail",[],function(){return{entitySchemaName:"Note",methods:{}};});`;
+const SUMMARY_BODY = `define("SumDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return true;}},
+  mixins:{GroupEdit:"Terrasoft.RecordsGroupEditing"}};});`;
+
+export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta }) {
+  const run = (schema, entity, body, extra = {}) => runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: extra.page || page(oneDetail(schema, entity)) }],
+    detailSchemas: { [schema]: { body, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS, ...(extra.manifest || {}) });
+  const detailOf = (r, schema) => r.changeSet.details.find((d) => d.detailSchema === schema);
+  const features = (r) => r.plan.split("\n").filter((l) => l.startsWith("| ") && /Tools menu|Quick filter|Multi-select|Row styling|Summaries|Inherited detail/.test(l));
+
+  // AC 1 — a toggle the user flips is a quick filter, not a fixed filter.
+  const toggle = run("LimitDetail", "Limit", TOGGLE_BODY);
+  const tq = detailOf(toggle, "LimitDetail")?.features?.quickFilters || [];
+  check("detail features: a getFilters toggle the user flips → one quick filter (toggle), kept in the profile, element named after the detail",
+    () => tq.length === 1 && tq[0].attribute === "IsActiveOnly" && tq[0].kind === "toggle" && tq[0].persisted === true && tq[0].element === "DQuickFilterByIsActiveOnly",
+    () => tq);
+  check("detail features: the toggle is NOT read as a fixed filter — no `FIXED list filters` instruction for that detail, and a `crt.QuickFilter` row in the plan",
+    () => detailOf(toggle, "LimitDetail").addMode?.fixedFilters !== true && !/FIXED list filters/.test(toggle.plan)
+      && features(toggle).some((l) => /Quick filter \(toggle\) `IsActiveOnly`/.test(l) && /`crt\.QuickFilter` `DQuickFilterByIsActiveOnly`/.test(l)),
+    () => ({ addMode: detailOf(toggle, "LimitDetail").addMode, rows: features(toggle) }));
+  const fixed = run("FixedDetail", "Req", FIXED_BODY);
+  check("detail features: a getFilters with literal values only (and the master record id) stays a FIXED filter, with no quick filter",
+    () => detailOf(fixed, "FixedDetail").addMode?.fixedFilters === true && (detailOf(fixed, "FixedDetail").features?.quickFilters || []).length === 0
+      && /FIXED list filters on Category, Owner/.test(fixed.plan),
+    () => ({ addMode: detailOf(fixed, "FixedDetail").addMode, features: detailOf(fixed, "FixedDetail").features }));
+
+  // AC 2 — a date filter is a quick filter on its columns; a filter kept in the profile raises the persistence question.
+  const date = run("ActiveProductDetail", "ActiveProduct", DATE_BODY);
+  const dq = detailOf(date, "ActiveProductDetail")?.features?.quickFilters || [];
+  check("detail features: a date the user picks in the list's tools → a date quick filter on EndDate and StartDate, not kept in the profile",
+    () => dq.length === 1 && dq[0].attribute === "OnDate" && dq[0].kind === "date" && dq[0].columns.join(",") === "EndDate,StartDate" && dq[0].persisted === false,
+    () => dq);
+  check("detail features: only the filter Classic kept in the profile raises `detail-filter-persistence`",
+    () => toggle.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence" && /IsActiveOnly/.test(n.item) && /resets on every visit/.test(n.reason))
+      && !date.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence"),
+    () => toggle.changeSet.needsDecision.filter((n) => n.kind === "detail-filter-persistence"));
+
+  // AC 3 — summaries are a decision, unless a user directive already asked for them.
+  const sum = run("SumDetail", "Line", SUMMARY_BODY);
+  check("detail features: a detail with a summary module → a `detail-summaries` Decision needed and a Summaries row that says so",
+    () => sum.changeSet.needsDecision.some((n) => n.kind === "detail-summaries" && /improvement over Classic, not parity/.test(n.reason))
+      && features(sum).some((l) => /\| Summaries \|/.test(l) && /Decision needed/.test(l)),
+    () => features(sum));
+  const directed = { changeSet: { needsDecision: sum.changeSet.needsDecision.map((n) => ({ ...n })), details: sum.changeSet.details } };
+  applySummariesDirective([directed], [{ id: "D1", quote: "use the summaries component", expectation: "summaries built as crt.Summaries", scope: ["main"] }]);
+  const dRows = detailFeatureRows(directed.changeSet).filter((r) => r[1] === "Summaries");
+  check("detail features: a user directive for summaries turns the question into an instruction naming the directive",
+    () => !directed.changeSet.needsDecision.some((n) => n.kind === "detail-summaries")
+      && directed.changeSet.needsDecision.some((n) => n.kind === SUMMARIES_DIRECTED_KIND && n.directive === "D1")
+      && dRows.length === 1 && /crt\.Summaries.*user directive D1/.test(dRows[0][3]),
+    () => ({ decisions: directed.changeSet.needsDecision.map((n) => n.kind), dRows }));
+  const unrelated = { changeSet: { needsDecision: sum.changeSet.needsDecision.map((n) => ({ ...n })) } };
+  applySummariesDirective([unrelated], [{ id: "D2", quote: "hide what Classic did not have", expectation: "Freedom-only elements hidden", scope: ["main"] }]);
+  check("detail features: a directive about something else leaves the summaries question open",
+    () => unrelated.changeSet.needsDecision.some((n) => n.kind === "detail-summaries"));
+  const bar = { details: [], needsDecision: [], viewConfigDiff: [
+    { name: "SummaryItemsContainer", parentName: "Header", values: { type: "crt.FlexContainer" } },
+    { name: "TotalLabel", parentName: "SummaryItemsContainer", values: { type: "crt.Label" } },
+    { name: "SumLabel", parentName: "SummaryItemsContainer", values: { type: "crt.Label" } }] };
+  attachDetailFeatureDecisions(bar);
+  check("detail features: labels in a summary container of the page (a Classic summary bar) → one `detail-summaries` Decision needed for the bar",
+    () => bar.needsDecision.length === 1 && bar.needsDecision[0].kind === "detail-summaries" && bar.needsDecision[0].item === "SummaryItemsContainer"
+      && /2 labels/.test(bar.needsDecision[0].reason),
+    () => bar.needsDecision);
+
+  // AC 4 — the standard tools menu is one line; a change to it is a row.
+  const plain = run("PlainDetail", "Note", PLAIN_BODY);
+  check("detail features: an untouched tools menu is ONE `standard` line, and nothing else for that detail",
+    () => features(plain).length === 1 && /Tools menu \| standard \(`BaseGridDetailV2`\) \| kept/.test(features(plain)[0]),
+    () => features(plain));
+  const dateRows = features(date);
+  check("detail features: an emptied access-rights getter and an Export visibility member returning false are each a tools-menu row",
+    () => dateRows.some((l) => /Tools menu: Access rights \| removed/.test(l)) && dateRows.some((l) => /Tools menu: Export to Excel \| hidden/.test(l))
+      && !dateRows.some((l) => /Tools menu \| standard/.test(l)),
+    () => dateRows);
+  check("detail features: the group-editing mixin is an added tools-menu item (Edit selected records)",
+    () => features(sum).some((l) => /Tools menu: \+ Edit selected records/.test(l)), () => features(sum));
+
+  // AC 5 — multi-select and row styling each get a row.
+  check("detail features: multi-select switched off and coloured rows are each a row with a Freedom target",
+    () => dateRows.some((l) => /Multi-select \| switched off/.test(l)) && dateRows.some((l) => /Row styling \| `prepareResponseCollectionItem` sets `customStyle`/.test(l)),
+    () => dateRows);
+
+  // AC 6 — a detail a vendor template layer declares is "inherited — decide"; one from the platform base is not.
+  const vendorSeed = [...CLEAN_SEED, { pkg: "VendorBasePage/VendorPkg", body: `define("VendorBasePage",[],function(){return{details:{Log:{schemaName:"VendorLogDetail",entitySchemaName:"ChangeLog"}},diff:[{operation:"insert",name:"Log",parentName:"ChangesHistoryTab",propertyName:"items",values:{itemType:2}}]};});` }];
+  const platformSeed = [...CLEAN_SEED, { pkg: "BaseRecordPage/CrtUIPlatform7x", body: `define("BaseRecordPage",[],function(){return{details:{Log:{schemaName:"PlatformLogDetail",entitySchemaName:"ChangeLog"}},diff:[{operation:"insert",name:"Log",parentName:"ChangesHistoryTab",propertyName:"items",values:{itemType:2}}]};});` }];
+  const vendor = runMigration({ entity: "X", seed: vendorSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const platform = runMigration({ entity: "X", seed: platformSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const inh = vendor.changeSet.needsDecision.find((n) => n.kind === "detail-inherited");
+  check("detail features: a detail declared by a vendor template layer → `detail-inherited` decide row naming the layer, with no recommendation",
+    () => inh?.item === "VendorLogDetail" && inh.layer === "VendorBasePage/VendorPkg" && /Inherited — decide/.test(inh.reason)
+      && !/recommend/i.test(inh.reason) && features(vendor).some((l) => /VendorLogDetail \| Inherited detail/.test(l)),
+    () => ({ inh, rows: features(vendor) }));
+  check("detail features: a detail declared by a platform template layer stays context — no decide row",
+    () => !platform.changeSet.needsDecision.some((n) => n.kind === "detail-inherited") && (platform.changeSet.inheritedDetails || []).length === 0,
+    () => platform.changeSet.inheritedDetails);
+
+  // AC 7 — a Files detail Classic never placed is an approval row, not a new Attachments tab.
+  const files = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body:
+    `define("XPage",[],function(){return{entitySchemaName:"X",details:{Files:{schemaName:"FileDetailV2",entitySchemaName:"XFile",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const fileFeature = files.changeSet.standardFeatures.find((s) => s.classicDetail === "FileDetailV2");
+  check("detail features: an unplaced Files detail → `detail-unplaced` approval naming Attachments, its Layout row says it waits for approval",
+    () => fileFeature?.unplaced === true && files.changeSet.needsDecision.some((n) => n.kind === "detail-unplaced" && n.item === "FileDetailV2" && n.feature === "Attachments")
+      && files.plan.split("\n").some((l) => /⚠ unplaced/.test(l) && /not shown in Classic — build only on approval/.test(l)),
+    () => ({ fileFeature, rows: files.plan.split("\n").filter((l) => /unplaced/.test(l)) }));
+
+  // AC 8 — a field the page's own diff disables is read-only, and --verify holds the built field to it.
+  const ro = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body:
+    `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Amount",enabled:false}},{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const amount = ro.changeSet.viewConfigDiff.find((o) => o.name === "Amount");
+  check("detail features: a field with a static `enabled: false` in the page diff → read-only, and the Layout Rule cell says it came from Classic",
+    () => amount?.values?.readOnly === true && amount.values.readOnlyStatic === true
+      && ro.changeSet.viewConfigDiff.find((o) => o.name === "Name")?.values?.readOnly !== true
+      && ro.plan.split("\n").some((l) => /\| Amount \|/.test(l) && /read-only \(static in Classic\)/.test(l)),
+    () => ({ amount: amount?.values, rows: ro.plan.split("\n").filter((l) => /Amount/.test(l)) }));
+  const roRow = checklistGroups(ro, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "readonly");
+  const builtPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", viewConfig: { items } } } }, "main");
+  check("detail features: --verify fails a statically read-only field built EDITABLE, and passes it built read-only",
+    () => roRow?.vk.names.join(",") === "Amount"
+      && resolveVk(roRow.vk, builtPage([{ type: "crt.NumberInput", name: "Amount" }]))[0] === "❌ MISSING"
+      && resolveVk(roRow.vk, builtPage([{ type: "crt.NumberInput", name: "Amount", readonly: true }]))[0] === "✅ Done",
+    () => roRow);
+
+  // AC 9 — --verify: a detail quick filter must be a crt.QuickFilter under the published name.
+  const fRow = checklistGroups(toggle, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "detailfilter");
+  check("detail features: --verify fails a detail quick filter built as a plain input or missing, and passes it built as `crt.QuickFilter`",
+    () => fRow?.vk.names[0] === "DQuickFilterByIsActiveOnly"
+      && resolveVk(fRow.vk, builtPage([{ type: "crt.Checkbox", name: "DQuickFilterByIsActiveOnly" }]))[0] === "❌ MISSING"
+      && resolveVk(fRow.vk, builtPage([{ type: "crt.DataGrid", name: "DGrid" }]))[0] === "❌ MISSING"
+      && resolveVk(fRow.vk, builtPage([{ type: "crt.QuickFilter", name: "DQuickFilterByIsActiveOnly" }]))[0] === "✅ Done",
+    () => fRow);
+  const groupTitles = checklistGroups(date, {}).map((g) => g.baseTitle || g.title);
+  check("detail features: the checklist carries a `Form — Detail features` group, and the build orders it after the layout and coverage",
+    () => groupTitles.includes("Form — Detail features") && GROUP_PHASE.get("Form — Detail features") > GROUP_PHASE.get("Form — Coverage (verified)"),
+    () => groupTitles);
+  check("detail features: a detail whose schema was not bundled says its inventory is unknown instead of claiming the standard menu",
+    () => detailFeatureRows({ details: [{ caption: "Lines", features: null }] }).some((r) => /not bundled/.test(r[2])));
+  check("detail features: the design spec renders the block under the form Layout",
+    () => /#### Detail features/.test(renderDesignSpec(date, {})));
+
+  // AC 10 — the skill prompt keeps improvements beyond parity at "no" by default.
+  const skill = fs.readFileSync(SKILL_MD, "utf8");
+  check("detail features: SKILL.md says an improvement beyond Classic parity (tooltips, dropdowns, summaries) defaults to no",
+    () => /beyond Classic parity[^\n]{0,200}default(?:s)? to \*\*no\*\*/i.test(skill));
+
+  // AC 11 — the new scans stay linear.
+  const src = DETAIL_FEATURE_SCAN_FNS.map((f) => f.toString()).join("\n");
+  const unboundedRun = /\[\\s\\S\][*+]|\.[*+]/g;
+  check("ReDoS (structural): the detail feature scan has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` / `.*` / `.+` run, and detectAddMode reaches its quick-filter half",
+    () => DETAIL_FEATURE_SCAN_FNS.length >= 5 && detectAddMode.toString().includes("detailQuickFilters") && !src.match(unboundedRun),
+    () => src.match(unboundedRun));
+  const unit = "getFilters: function(){ this.$A; this.get(\"B\"); saveUserProfile(); getRecordRightsSetupMenuItem: function(){ " + "z".repeat(60) + "\n";
+  const adversarial = unit.repeat(6000);
+  const t0 = Date.now(); scanDetailFeatures(adversarial); detailQuickFilters(adversarial); const ms = Date.now() - t0;
+  check(`ReDoS (timing): the detail feature scan on ~${Math.round(adversarial.length / 1024)}KB of unterminated overrides stays linear — ${ms}ms`,
+    () => adversarial.length > 500 * 1024 && ms < 5000, () => ({ ms }));
+}

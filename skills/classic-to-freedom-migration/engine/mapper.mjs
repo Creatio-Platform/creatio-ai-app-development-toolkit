@@ -569,6 +569,9 @@ export function mapToFreedom(eff, opts = {}) {
   const D = mapDetails(ctx, containers, F.profileRegion);
   D.needsDecision.forEach(d => needsDecision.push(d));
   D.accountedFor.forEach(a => accountedFor.add(a));
+  // details a customer or vendor template layer declares: not this page's own, yet part of what its users saw
+  const inheritedDetails = inheritedLayerDetails(eff.details);
+  inheritedDetails.forEach((d) => needsDecision.push(inheritedDetailDecision(d)));
 
   // ---- embedded profile cards (linked-record blocks) → the Freedom side profile ----
   const _pc = mapProfileCards(ctx);
@@ -641,6 +644,8 @@ export function mapToFreedom(eff, opts = {}) {
     standardFeatures: D.standardFeatures,
     // standard features the run has no evidence to build (see `withheldFeature`): a Layout row each, nothing built.
     withheldFeatures: D.withheldFeatures,
+    // details declared by a customer or vendor template layer (not the platform base): an "inherited — decide" row each
+    inheritedDetails,
     // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
     // compact-profile component wired by `referenceColumn`, or the read-only-fields island fallback.
     profileCards,
@@ -1022,6 +1027,10 @@ function mapFields(ctx, containers) {
     }
     values.typeLabel = fieldTypeLabel(col, meta, c);
     applyFieldTypeMeta(values, col, c, meta);
+    // A field the page's own Classic diff disables (`enabled: false`) or marks `readonly` is read-only there for every
+    // record; built editable it lets users change what Classic never let them. `readOnlyStatic` is plan-only metadata
+    // that names the source, so the plan and `--verify` can hold the built field to it.
+    if (f.enabled === false || f.readonly === true) { values.readOnly = true; values.readOnlyStatic = true; }
     applyHintTip(values, f, col);
     return values;
   };
@@ -1751,7 +1760,11 @@ function mapDetails(ctx, containers, profileRegion) {
     }
     standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null,
       caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null,
-      ...(settings ? { element: d.key, connections: settings.connections } : {}) });
+      ...(settings ? { element: d.key, connections: settings.connections } : {}),
+      ...(d.parent ? {} : { unplaced: true }) });
+    // A feature detail Classic declares but never places is not shown there: building it adds a surface the user
+    // never had, so it waits for their approval like any unplaced detail.
+    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat.feature));
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1769,8 +1782,9 @@ function mapDetails(ctx, containers, profileRegion) {
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
         reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     }
-    if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
-      reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
+    if (!d.parent) needsDecision.push(unplacedDetailDecision(d));
+    else if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+      reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent}' unresolved) — confirm target tab` });
     // editability lives in the detail's OWN config. When bundled (dinfo), the INLINE-EDITABLE-GRID case is read
     // from the grid config (buildCustomDetail → `editable`); any other bundled detail is a standard related list
     // whose add/edit/delete happens through the child EDIT PAGE (surfaced next as `detail-editpage`), so there is
@@ -1795,6 +1809,9 @@ function mapDetails(ctx, containers, profileRegion) {
       texts: detailTexts,
       columns: dinfo?.columns?.length ? dinfo.columns : null,
       editable,
+      // what users can do with the list besides its columns; null when the detail's schema was not bundled
+      features: detailFeaturesOf(d, dinfo),
+      ...(d.parent ? {} : { unplaced: true }),
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
@@ -1831,6 +1848,43 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   for (const entry of bySig.values()) emitDetail(entry);
   return { details, standardFeatures, withheldFeatures, needsDecision, accountedFor, carriedMethods };
+}
+
+// THE DETAIL FEATURE INVENTORY on the mapped detail: the body scan (`scanDetailFeatures`) plus the page element each
+// quick filter becomes. The element name is published so `--verify` can find the built control by name and type.
+// null when the detail's schema was not bundled: the inventory is then unknown, not empty.
+function detailFeaturesOf(d, dinfo) {
+  const f = dinfo?.features;
+  if (!f) return null;
+  const owner = d.key || d.schemaName || "Detail";
+  return { ...f, quickFilters: (f.quickFilters || []).map((q) => ({ ...q, element: `${owner}QuickFilterBy${q.attribute}` })) };
+}
+
+// A detail Classic declares but never places on the page (no diff item puts it in a tab) is not shown to its users.
+// Nothing is built or dropped on the engine's say-so, a blanket hide rule included: the user approves either way.
+function unplacedDetailDecision(d, feature = null) {
+  const what = feature ? `the ${feature} detail '${d.schemaName || d.key}'` : `detail '${d.schemaName || d.key}'`;
+  return { kind: "detail-unplaced", item: d.schemaName || d.key, ...(feature ? { feature } : {}),
+    reason: `${what} is declared on the Classic page but placed in no tab, so its users never saw it. Approve one: build it (name the tab) or Won't do. Nothing is built for it until the user answers` };
+}
+
+// The packages of the Creatio platform itself. A template layer from any other package (a customer's or a vendor's)
+// carries details its users saw on this page, so each becomes a plan row instead of silent context. A layer whose
+// `pkg` names no package (`Schema` rather than `Schema/Package`) cannot be told apart and stays context.
+const PLATFORM_PACKAGE = /^(?:Crt\w*|Base|NUI|UIv2|Platform\w*|Core|Terrasoft\w*)$/i;
+const layerPackage = (pkg) => { const s = String(pkg || ""); const at = s.indexOf("/"); return at < 0 ? null : s.slice(at + 1).trim() || null; };
+const nonPlatformLayer = (pkg) => { const p = layerPackage(pkg); return !!p && !PLATFORM_PACKAGE.test(p); };
+function inheritedLayerDetails(details) {
+  return (details || []).filter((d) => d.fromTemplate && (d.provenance || []).some(nonPlatformLayer))
+    .map((d) => ({ key: d.key, schemaName: d.schemaName || null, entity: d.entitySchemaName || null,
+      layer: (d.provenance || []).filter(nonPlatformLayer).at(-1) }));
+}
+// No recommendation either way: whether a vendor's or a customer's inherited detail still belongs on the page is the
+// user's call, and a recommendation is the answer they would give without reading the question.
+function inheritedDetailDecision(d) {
+  const name = d.schemaName || d.key;
+  return { kind: "detail-inherited", item: name, layer: d.layer,
+    reason: `detail '${name}'${d.entity ? ` (over '${d.entity}')` : ""} comes from the template layer '${d.layer}', not from the page's own schema, and Classic users saw it on this page. Inherited — decide: build it as a related list (name the tab) or Won't do` };
 }
 
 // A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and

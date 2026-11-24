@@ -185,7 +185,8 @@ function rowsForFields(fields, regionOf) {
     // Intrinsic field state only; business rules (required/visibility conditions) live in the Logic table. The Rule
     // cell carries `hidden` (a client `visible:false`) beside `read-only` so the `classic-layout` mode reproduces the Classic
     // status, not just the position. `required` is deliberately absent — it is a rule, never a field-intrinsic value.
-    const rule = [v.readOnly ? "read-only" : null, v.visible === false ? "hidden" : null].filter(Boolean).join(" · ") || DASH;
+    const ro = v.readOnlyStatic ? "read-only (static in Classic)" : "read-only";
+    const rule = [v.readOnly ? ro : null, v.visible === false ? "hidden" : null].filter(Boolean).join(" · ") || DASH;
     // COMPACT per-field marker — the full cross-datasource recipe is printed ONCE under the Layout table (see
     // `linkedFieldsNote`), not repeated verbatim on every linked field (it was ~5× the same paragraph on a page).
     const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
@@ -219,10 +220,12 @@ function rowsForDetails(details, tabRegion) {
       // mechanics, not plan content.
       editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
-    const add = [cols, editNote, rowActionsNote(d.addMode), detailTextsNote(d)].filter(Boolean).join(" · ") || DASH;
+    const add = [unplacedNote(d), cols, editNote, rowActionsNote(d.addMode), detailTextsNote(d)].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
 }
+// A detail Classic declares but never places: the Layout row stays, and says it waits for the user's approval.
+const unplacedNote = (d) => (d.unplaced ? "⚠ not shown in Classic — build only on approval (⚠ Confirm `[detail-unplaced]`)" : null);
 // Where a related list's title comes from and the texts its detail shows, as page keys with their en-US text.
 function detailTextsNote(d) {
   const title = d.captionKey ? `title \`${esc(d.captionKey)}\` ← ${esc(d.captionSource || "?")}` : "⚠ no Classic title — see ⚠ Confirm";
@@ -287,7 +290,7 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : null;
     const noteCell = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
-    const add = [noteCell, isList ? detailTextsNote(s) : null, connectionsNote(s)].filter(Boolean).join(" · ") || DASH;
+    const add = [unplacedNote(s), noteCell, isList ? detailTextsNote(s) : null, connectionsNote(s)].filter(Boolean).join(" · ") || DASH;
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.caption || s.feature), type, src, DASH, add] };
   });
 }
@@ -1012,6 +1015,8 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
 export const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
+  // a summaries question a user directive already answered: the Detail features block states what is built
+  "detail-summaries-directed",
   // Imperative MEMBERS have their own worklist (⚠ Other declared logic), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
   ...IMPERATIVE_MEMBER_KINDS,
@@ -1165,6 +1170,65 @@ function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
   return out;
 }
 
+// ---- DETAIL FEATURES — what users can do with each related list besides reading its columns ----
+// One block per page: for every related list, one line for its tools menu (the standard menu kept, or each
+// deviation), then a row per quick filter, multi-select change, row styling and summaries; then the details a
+// customer or vendor template layer declares. Each row names the Freedom target, so nothing a Classic user could do
+// with a list disappears without a row saying so.
+const MENU_ITEM_FREEDOM = "hide it on the Freedom list's menu";
+function detailMenuRows(name, menu) {
+  const rows = [];
+  for (const item of menu.removed) rows.push([name, `Tools menu: ${esc(item)}`, "removed (its getter returns nothing)", MENU_ITEM_FREEDOM]);
+  for (const item of menu.hidden) rows.push([name, `Tools menu: ${esc(item)}`, "hidden (its visibility member returns `false`)", MENU_ITEM_FREEDOM]);
+  for (const item of menu.added) rows.push([name, `Tools menu: + ${esc(item)}`, "added by the detail", "⚠ build as a custom list action, or Won't do"]);
+  if (menu.unreadable) rows.push([name, "Tools menu", "`addToolsButtonMenuItems` overridden in a form the engine cannot read", "⚠ read that Classic member and build the same menu"]);
+  if (!rows.length) rows.push([name, "Tools menu", "standard (`BaseGridDetailV2`)", "kept — the Freedom list's standard menu"]);
+  return rows;
+}
+function detailFilterRow(name, q) {
+  const cols = q.columns.length ? ` on ${q.columns.map((c) => "`" + esc(c) + "`").join(", ")}` : "";
+  const kept = q.persisted ? "; kept in the user's profile (⚠ Confirm `[detail-filter-persistence]`)" : "";
+  return [name, `Quick filter (${q.kind}) \`${esc(q.attribute)}\``, `\`getFilters\` reads \`${esc(q.attribute)}\`${cols}${kept}`,
+    `\`${LIST_FILTER_TYPE}\` \`${esc(q.element)}\` bound to the list's \`filterAttributes\`; any literal filter of the same \`getFilters\` stays a data-source filter`];
+}
+function summariesTarget(cs, item) {
+  const directed = (cs.needsDecision || []).find((n) => n.kind === "detail-summaries-directed" && n.item === item);
+  return directed ? `\`crt.Summaries\` / \`crt.SummaryItem\` (user directive ${esc(directed.directive)})` : "⚠ Decision needed — `crt.Summaries`, or plain labels as Classic had";
+}
+export function detailFeatureRows(cs) {
+  const rows = [];
+  for (const d of cs.details || []) {
+    const name = esc(d.caption || d.detailSchema || d.entity || "detail");
+    const f = d.features;
+    if (!f) { rows.push([name, "—", "detail schema not bundled — what users can do with it is unknown", "⚠ bundle the detail schema (`manifest.detailSchemas`)"]); continue; }
+    rows.push(...detailMenuRows(name, f.toolsMenu));
+    rows.push(...f.quickFilters.map((q) => detailFilterRow(name, q)));
+    if (f.multiSelect === "off") rows.push([name, "Multi-select", "switched off (`isMultiSelectVisible`)", "build the list without multi-select"]);
+    if (f.multiSelect === "conditional") rows.push([name, "Multi-select", "conditional (`isMultiSelectVisible` overridden)", "⚠ carry the condition as Freedom state"]);
+    if (f.rowStyling) rows.push([name, "Row styling", "`prepareResponseCollectionItem` sets `customStyle`", "⚠ no declarative analog — decide: a conditional row style, or Won't do"]);
+    if (f.summaries) rows.push([name, "Summaries", "summary module", summariesTarget(cs, detailItemLabel(d))]);
+  }
+  const bar = (cs.needsDecision || []).find((n) => /^detail-summaries/.test(n.kind) && !(cs.details || []).some((d) => detailItemLabel(d) === n.item));
+  if (bar) rows.push([esc(bar.item), "Summaries", "labels in a summary container of the page", summariesTarget(cs, bar.item)]);
+  for (const d of cs.inheritedDetails || []) {
+    rows.push([esc(d.schemaName || d.key), "Inherited detail", `declared by the template layer \`${esc(d.layer)}\``, "⚠ inherited — decide (⚠ Confirm `[detail-inherited]`)"]);
+  }
+  return rows;
+}
+// The label the mapper's decisions name a detail by (caption · entity, else the schema) — see `detailLabel` there.
+const detailItemLabel = (d) => {
+  const base = d.caption || d.detailSchema || d.entity || "detail";
+  return d.caption && d.entity ? `${base} · ${d.entity}` : base;
+};
+function renderDetailFeaturesBlock(cs) {
+  const rows = detailFeatureRows(cs);
+  if (!rows.length) return [];
+  return ["#### Detail features", "",
+    "> What users can do with each related list besides reading its columns. A row marked ⚠ is decided in ⚠ Confirm or built as it says; the standard tools menu is one line.", "",
+    "| Detail | Feature | Classic | Freedom |", "| --- | --- | --- | --- |",
+    ...rows.map((r) => `| ${r.join(" | ")} |`), ""];
+}
+
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const section = result.section || null;
@@ -1241,7 +1305,7 @@ export function renderDesignSpec(result, opts = {}) {
   // `logicOnly` — render JUST the behaviour (Business rules / ⚠ Custom methods / ⚠ Other declared logic
   // / ⚠ Confirm), NOT the form-page Layout. Used for a formless INLINE-GRID child: it has no form page, so a Layout
   // table (empty, or listing grid-only bits) would misdescribe it — its logic IS the deliverable to port.
-  if (!opts.logicOnly) L.push(...renderFormLayoutBlock(entity, opts, order, byRegion, cs));
+  if (!opts.logicOnly) L.push(...renderFormLayoutBlock(entity, opts, order, byRegion, cs), ...renderDetailFeaturesBlock(cs));
 
   L.push(...renderLogicSection(cs));
 
@@ -3442,6 +3506,7 @@ export function checklistGroups(result, opts = {}) {
   G("Form — Base-field overrides", (cs.baseFieldOverrides || [])
     .map((o) => ({ deliverableId: `field-override:${o.field}`, label: `Base field \`${esc(o.field)}\` — ${esc(o.change)}` })));
   G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf, pageKey));
+  G("Form — Detail features", detailFeatureCheckRows(cs));
   // Form — Business rules: business rules folded to a count. Form — Custom methods: ONE row per handler (the
   // dropped-in-prose case). Split into two groups to MIRROR the plan's two behaviour sections. Agent-confirmed.
   const ruleItems = [];
@@ -4610,6 +4675,60 @@ function resolveListColumnsVk(vk, ctx) {
   const named = missing.slice(0, 8).map((c) => `${esc(String(c.name))} (\`${esc(String(c.code))}\`)`).join(", ");
   return ["❌ MISSING", `${want.length - missing.length}/${want.length} expected columns present — missing: ${named}${overflow}`, "missing"];
 }
+// The machine rows of the Detail features block: each detail quick filter must be a `crt.QuickFilter` under the name
+// the plan published, each field Classic made read-only must be built read-only, and a related list whose Classic
+// row actions changed must declare its row toolbar. Every other row of the block is a decision or a build note.
+function detailFeatureCheckRows(cs) {
+  const rows = [];
+  for (const d of cs.details || []) {
+    for (const q of d.features?.quickFilters || []) {
+      rows.push({ deliverableId: `detail-filter:${q.element}`, label: `Detail quick filter \`${esc(q.element)}\` (${esc(q.kind)}, \`${esc(q.attribute)}\`) on ${esc(d.caption || d.detailSchema || d.entity || "detail")}`,
+        vk: { type: "detailfilter", n: 1, names: [q.element] } });
+    }
+  }
+  const toolbars = (cs.details || []).filter((d) => d.addMode?.rowActionsRemoved?.length || d.addMode?.customAction).length;
+  if (toolbars) rows.push({ deliverableId: "detail-row-toolbar", label: `Related lists with changed row actions declare \`rowToolbarItems\` × ${toolbars}`, vk: { type: "rowtoolbar", n: toolbars } });
+  const readOnly = (cs.viewConfigDiff || []).filter((o) => isField(o) && o.values?.readOnlyStatic).map((o) => o.name);
+  if (readOnly.length) rows.push({ deliverableId: "fields-readonly-static", label: `Fields read-only in Classic built read-only × ${readOnly.length}`, vk: { type: "readonly", n: readOnly.length, names: readOnly } });
+  return rows;
+}
+// A DETAIL quick filter: the same two halves as a list-page filter (name AND type), read off the form page.
+function resolveDetailFilterVk(vk, ctx) {
+  const want = [...new Set(vk.names || [])];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the detail quick filter ${want.join(", ")}`);
+  if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so ${want.join(", ")} does not exist`, "missing"];
+  const byName = new Map(ctx.ops.filter((o) => o.name).map((o) => [o.name, o.type || ""]));
+  const missing = want.filter((n) => !byName.has(n));
+  const wrongType = want.filter((n) => byName.has(n) && byName.get(n) !== LIST_FILTER_TYPE);
+  if (wrongType.length) {
+    const built = wrongType.map((n) => `${esc(String(n))} is built as \`${esc(byName.get(n) || "an untyped component")}\``).join(", ");
+    return ["❌ MISSING", `${built}, not \`${LIST_FILTER_TYPE}\` — the user's filter control is gone; a plain field or a fixed filter does not replace it`, "missing"];
+  }
+  if (!missing.length) return ["✅ Done", `${want.join(", ")} present on the built page as \`${LIST_FILTER_TYPE}\` (matched BY NAME + TYPE)`, "ok"];
+  if (ctx.ops.length && !byName.size) return ["⚠ verify", `identity NOT checked — the built page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
+  return ["❌ MISSING", `NO ${missing.map((n) => esc(String(n))).join(", ")} on the built page — the related list is short this quick filter`, "missing"];
+}
+// A field Classic made read-only must be read-only on the built page. A field that is absent is the Fields row's
+// failure, not this one's, so it reads unverified here.
+function resolveReadonlyVk(vk, ctx) {
+  const want = [...new Set(vk.names || [])];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the read-only fields ${want.join(", ")}`);
+  const byName = new Map(ctx.ops.filter((o) => o.name).map((o) => [o.name, o]));
+  const editable = want.filter((n) => byName.has(n) && byName.get(n).readonly !== true);
+  if (editable.length) return ["❌ MISSING", `${editable.map((n) => esc(String(n))).join(", ")} built EDITABLE — Classic made ${editable.length > 1 ? "them" : "it"} read-only for every record`, "missing"];
+  const absent = want.filter((n) => !byName.has(n));
+  if (absent.length) return ["⚠ verify", `${absent.map((n) => esc(String(n))).join(", ")} not found on the built page — the Fields row reports it; read-only not checked`, "unverified"];
+  return ["✅ Done", `${want.length} field(s) built read-only, as in Classic`, "ok"];
+}
+// A related list whose Classic row actions changed must declare its row toolbar (`rowToolbarItems`), or the built list
+// shows the standard actions Classic took away.
+function resolveRowToolbarVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' row toolbars");
+  const declared = ctx.ops.filter((o) => o.rowToolbar).length;
+  if (declared >= vk.n) return ["✅ Done", `${declared} list(s) declare \`rowToolbarItems\` (expected ${vk.n})`, "ok"];
+  return ["❌ MISSING", `${declared} of ${vk.n} list(s) declare \`rowToolbarItems\` — a list with changed row actions shows the standard ones`, "missing"];
+}
+const VK_DETAIL_FEATURES = new Map([["detailfilter", resolveDetailFilterVk], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk]]);
 // A filter row needs BOTH halves: the element name AND `crt.QuickFilter`. Name alone closed on any component that
 // happened to carry the name — and the control IS the deliverable here, which is why the unit publishes the type.
 function resolveListFilterVk(vk, ctx) {
@@ -4923,6 +5042,7 @@ const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolveP
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
+  if (VK_DETAIL_FEATURES.has(vk.type)) return VK_DETAIL_FEATURES.get(vk.type)(vk, ctx);
   for (const [set, fn] of VK_CATEGORY) if (set.has(vk.type)) return fn(vk, ctx);
   const direct = VK_BY_TYPE.get(vk.type);
   return direct ? direct(vk, ctx) : unknownVk();
@@ -4977,8 +5097,11 @@ function pushWalkNode(node, out) {
   // `caption` and `clicked.request` identify a menu item whose element name does not spell its action.
   const caption = opCaption(node);
   const request = opRequest(node);
+  // `readonly` (either spelling) and a declared `rowToolbarItems` are what the Detail features rows measure.
+  const readonly = node.readonly === true || node.readOnly === true || node.values?.readonly === true || node.values?.readOnly === true;
+  const rowToolbar = Array.isArray(node.rowToolbarItems) || Array.isArray(node.values?.rowToolbarItems);
   out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}),
-    ...(caption ? { caption } : {}), ...(request ? { request } : {}) });
+    ...(caption ? { caption } : {}), ...(request ? { request } : {}), ...(readonly ? { readonly } : {}), ...(rowToolbar ? { rowToolbar } : {}) });
 }
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
