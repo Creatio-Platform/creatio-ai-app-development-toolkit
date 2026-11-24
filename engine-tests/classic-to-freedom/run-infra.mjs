@@ -39,6 +39,19 @@ const check = (name, cond, detail) => {
   if (detail !== undefined) { let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; } console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d))); }
 };
 
+// The rows of orchestrate-build.md 7.3 (what each sub-agent is handed), as [kind, recogniser, briefs, references]
+// cells. Empty when the step or its table moved, so every check that reads it also asserts the rows it expects.
+const handedRows = () => {
+  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
+  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
+  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
+  return (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("|"))
+    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
+    .filter((cells) => cells.length === 4);
+};
+
 /* ---- a minimal in-memory ustar tar builder (no `tar` CLI, no committed binary fixture) ---- */
 const tarBlock = (name, size, prefix = "") => {
   const b = Buffer.alloc(512);
@@ -642,19 +655,50 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
   // A builder is handed exactly the files its 7.3 row names, so a SKILL.md mention alone never reaches it: the
   // page-build row itself must hand the reference, in the look-up column and not as a brief to read whole.
-  const orchestrate = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/orchestrate-build.md", import.meta.url)), "utf8");
-  const stepStart = orchestrate.indexOf("**7.3 What each sub-agent is handed.**");
-  const stepEnd = stepStart < 0 ? -1 : orchestrate.indexOf("**7.4 ", stepStart);
-  const pageBuildRows = (stepStart < 0 || stepEnd < 0 ? "" : orchestrate.slice(stepStart, stepEnd))
-    .split("\n")
-    .filter((l) => l.trimStart().startsWith("|"))
-    .map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()))
-    .filter((cells) => cells.length === 4 && cells[0].startsWith("Page build"));
+  const pageBuildRows = handedRows().filter((cells) => cells[0].startsWith("Page build"));
   check("orchestrate-build.md 7.3: the page-build row hands `freedom-ui-browser-check.md` as a reference to look up, not as a brief — the row is what a builder is given, so a reference it does not name is never opened",
     () => pageBuildRows.length === 1
       && pageBuildRows[0][3].includes("`./references/freedom-ui-browser-check.md`")
       && !pageBuildRows[0][2].includes("freedom-ui-browser-check.md"),
     () => pageBuildRows);
+}
+
+// The page-code architecture contract exists because builders had no rule for the shape of page code: a 391-line
+// handler, a helper copied 8 times, a second page built as a copy of the first. A contract no builder is handed is
+// never read, so every task kind that writes page code must get it as a BRIEF (read whole), and the rules that
+// answer the measured facts must stay in it: several handlers per request run as a chain (stand check on 10.1/10.2),
+// so `next` is the rule, and a helper in the page factory body is deleted by a Designer save.
+{
+  const ref = "skills/classic-to-freedom-migration/references/";
+  const read = (p) => readFileSync(fileURLToPath(new URL("../../" + ref + p, import.meta.url)), "utf8");
+  const contract = read("page-code-architecture.md");
+  // Child page wiring is deliberately NOT a writer: it writes the RelatedPage add-on (`wiring:<…>`), never a page body.
+  const writers = handedRows().filter((c) => /^(Page build|Repair round|Whole migration|Section dashboards)/.test(c[0]));
+  check("orchestrate-build.md 7.3: every task kind that writes page code (page build, repair, whole migration, section dashboards) hands `page-code-architecture.md` as a brief to read whole",
+    () => writers.length === 4 && writers.every((c) => c[2].includes("`./references/page-code-architecture.md`")),
+    () => writers.map((c) => [c[0], c[2]]));
+  const wiring = handedRows().filter((c) => c[0].startsWith("Child page wiring"));
+  check("orchestrate-build.md 7.3: Child page wiring is NOT handed the contract — it writes the RelatedPage add-on, never page code",
+    () => wiring.length === 1 && !wiring[0][2].includes("page-code-architecture.md"),
+    () => wiring);
+  check("build-page.md points a builder at the contract — the brief a builder opens first names the one that shapes its code",
+    () => read("build-page.md").includes("`./references/page-code-architecture.md`"));
+  check("build-task-execution.md's `writesTo:` rule says a page artifact includes the page's own logic module — the only place the brief defines what a task may write",
+    () => /`writesTo:` names the one artifact[\s\S]{0,400}includes the page's own logic module, `<SchemaPrefix><Page>Module`/.test(read("build-task-execution.md")));
+  const headings = contract.split("\n").filter((l) => l.startsWith("#"));
+  check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next`, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
+    () => /every handler calls `next`/.test(contract) && /Never in the page factory body/.test(contract)
+      && /Designer save deletes it/.test(contract) && /part of the page artifact/.test(contract)
+      && /sibling-page/.test(contract) && /Copying the earlier page/.test(contract),
+    () => headings);
+  // manifest-conditional-inputs.md → siblingOf points here BY HEADING, and references are looked up by `grep -n '^#'`.
+  check("page-code-architecture.md has the heading the siblingOf section points to, and shows an incorrect as well as a correct example",
+    () => headings.includes("## A page that matches an earlier one")
+      && read("manifest-conditional-inputs.md").includes("`./references/page-code-architecture.md` → *A page that matches an earlier one*")
+      && /\/\/ Incorrect/.test(contract) && /\/\/ Correct/.test(contract),
+    () => headings);
+  check("page-code-architecture.md links the clio guides that own the mechanics instead of restating them",
+    () => ["page-schema/handlers", "page-schema/shared-client-logic", "related-data/*"].every((g) => contract.includes(g)));
 }
 
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
