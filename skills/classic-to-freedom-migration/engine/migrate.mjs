@@ -76,7 +76,7 @@ import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
-import { conventionsOf, projectConventionsIssues, constantsGuidIndex } from "./conventions.mjs";
+import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -565,7 +565,7 @@ function sectionChangeSetOf(manifest, opts, sectionEff) {
     entityColumns: manifest.entityColumns || {},
     resources: strings.resources,
     resourceStrings: strings.resourceStrings,
-    requestPrefix: runConventionsOf(manifest, opts)?.requestPrefix,
+    requestPrefix: runConventionsOf(manifest, opts).conventions?.requestPrefix,
   });
 }
 // ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
@@ -1027,9 +1027,9 @@ export function placementIssues(manifest) {
   return issues;
 }
 const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
-// The run's project conventions: this bundle's own block, else the one the ROOT manifest recorded (a fold's child
-// bundle carries none). null when neither is resolved — the mapper then names requests in the engine default.
-const runConventionsOf = (manifest, opts = {}) => conventionsOf(manifest) || opts.inheritedConventions || null;
+// The run's project-conventions facts (`conventionFacts`: the block, its blockers, the GUID index): the ROOT
+// manifest's, inherited WHOLE by every fold — a fold's child bundle carries neither the block nor the module bodies.
+const runConventionsOf = (manifest, opts = {}) => opts.inheritedConventions || conventionFacts(manifest);
 const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
 // `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
 // target package and the host decision are required. The ONE source for both the gate above and the keys the
@@ -1118,9 +1118,9 @@ export function checklistOpts(manifest, opts = {}) {
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
     // PROJECT CONVENTIONS (conventions.mjs) — gated like placement, and inherited by every fold like the signals.
-    projectConventions: runConventionsOf(manifest, opts),
-    conventionsBlockers: projectConventionsIssues(manifest),
-    constantsGuidIndex: constantsGuidIndex(manifest),
+    projectConventions: runConventionsOf(manifest, opts).conventions,
+    // the ROOT run gates on them; a fold inherits facts the root already gated
+    conventionsBlockers: opts.inheritedConventions ? [] : conventionFacts(manifest).issues,
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
     placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
@@ -2897,7 +2897,7 @@ export function runMigration(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
-    requestPrefix: runConventions?.requestPrefix, // the project's request namespace (projectConventions); the engine default when none is recorded
+    requestPrefix: runConventions.conventions?.requestPrefix, // the project's request namespace (projectConventions); the engine default when none is recorded
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
@@ -3176,10 +3176,11 @@ export function runMigration(manifest, opts = {}) {
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  // What the builders port from, for the plan's record-id table: the mapped change sets and the Classic bodies.
-  const guidSources = specOpts.projectConventions ? [JSON.stringify(out.changeSet || {}), JSON.stringify(out.listChangeSet || {}),
-    ...(Array.isArray(manifest.schemas) ? manifest.schemas : []).map((e) => { try { return bodyOf(e); } catch { return ""; } })] : [];
-  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics, guidSources });
+  // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
+  // constants module holds. `recordIdsUsed` touches no source when the index is empty — every fold, most runs.
+  const recordIds = recordIdsUsed(runConventions.guidIndex, [out.changeSet, out.listChangeSet,
+    () => (Array.isArray(manifest.schemas) ? manifest.schemas : []).map(bodyOf)]);
+  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics, recordIds });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }

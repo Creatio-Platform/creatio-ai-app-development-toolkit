@@ -609,6 +609,10 @@ function artifactRows(groups, B) {
 // task folder can always be matched against the plan that was approved rather than the plan that exists now.
 // `groups` is a parameter so a caller that already derived them — `taskSetFor`, which then checks the cut
 // against them — does not walk the plan twice for one answer.
+// The run-level fields every task set and every task file carries: the plan version an approval names, and the
+// project conventions approved with that plan (the block each build and fix task file shows). ONE place, so the
+// next run-level field cannot be added to some writers and missed at others.
+const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null });
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -662,9 +666,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   const tasks = chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) }));
   return {
     entity: result.entity || null,
-    planVersion: result.planVersion || null,
-    // the project conventions approved with the plan — every build and fix task file carries them
-    projectConventions: result.projectConventions || null,
+    ...runHeader(result),
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -1183,7 +1185,7 @@ export function renderTaskFile(task, set = {}) {
     ...oneAgentBlock(task),
     "",
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
-    ...conventionsTaskLines(set.projectConventions),
+    ...conventionsTaskLines(set.projectConventions, cell),
     ENGINE_BODY_HEADING,
     "",
     "<!-- ENGINE-OWNED except the `Outcome` column, which is YOURS and is carried across re-runs. -->",
@@ -2538,9 +2540,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   }, B).map((c, i) => taskOf(c, i + 1));
   return {
     entity: result.entity || null,
-    planVersion: result.planVersion || null,
-    // the project conventions approved with the plan — every build and fix task file carries them
-    projectConventions: result.projectConventions || null,
+    ...runHeader(result),
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2857,7 +2857,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode, projectConventions: result.projectConventions || null }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { ...runHeader(result), reconcileMode }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4115,7 +4115,7 @@ function mintDeclared(dir, result, decls, written) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, projectConventions: result.projectConventions || null }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { ...runHeader(result), reconcileMode }));
     written.push(task);
   }
 }

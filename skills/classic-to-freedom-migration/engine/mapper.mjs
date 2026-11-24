@@ -2143,7 +2143,7 @@ function mapImperativeMembers(eff, cols, pageAttributes = new Set()) {
   // what nothing else does, and listing it here as well states the same member twice.
   const ownRow = new Set([...client(eff.mixins).flatMap(mixinCovers), ...(eff.referencedModules || [])]);
   const deps = moduleDeps.filter((n) => !INERT_MODULE_RX.test(n) && !ownRow.has(n));
-  if (deps.length) needsDecision.push({ kind: "module-dep", item: deps.join(", "),
+  if (deps.length) needsDecision.push({ kind: "module-dep", item: deps.join(", "), modules: deps,
     reason: `the page declares ${deps.length} further define() dependenc(ies) with no row of their own — constants/enum modules hold the lookup GUIDs its rules compare against, and utility modules hold logic it calls. Confirm what each contributes to the page and where it goes in Freedom; a dependency whose contribution you cannot name is an unresolved thread` });
 
   return { needsDecision };

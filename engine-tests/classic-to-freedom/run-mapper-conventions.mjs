@@ -168,8 +168,9 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
   // the bundle readers, on get-page's SOURCE strings and on parsed values
   check("bundle readers: deps from the source string or a list; requests, validators and converters from source or parsed shapes",
     () => bundleDeps({ deps: '["a", "B"]' }).join() === "a,B" && bundleDeps({ deps: ["x"] }).join() === "x" && bundleDeps({}) === null
-      && bundleCustomNames({ handlers: [{ request: "dw.A" }], validators: { "dw.V": {} }, converters: '{"dw.C": {}}' }).validator.has("dw.V")
-      && foreignNames(bundleCustomNames({ handlers: "[{request: 'zz.Q'}]" }), { requestPrefix: "dw", validatorPrefix: "dw", converterPrefix: "dw" })[0]?.name === "zz.Q");
+      && bundleCustomNames({ validators: { "dw.V": {} }, converters: '{"dw.C": {}}' }, JSON.stringify([{ request: "dw.A" }])).request.has("dw.A")
+      && bundleCustomNames({ validators: { "dw.V": {} } }, null).validator.has("dw.V") && bundleCustomNames({}, null) === null
+      && foreignNames(bundleCustomNames({}, "[{request: 'zz.Q'}]"), { request: "dw", validator: "dw", converter: "dw" })[0]?.name === "zz.Q");
 
   // AC 9 — the hard-coded literal is gone from the mapper.
   check("conventions: no `usr.` literal remains in mapper.mjs",

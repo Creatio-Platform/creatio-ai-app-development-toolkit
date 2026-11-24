@@ -24,23 +24,25 @@
 //   }
 //   "constantsModules": { "WorkJsConstants": { "body": "<define(...) source>" } | "<define(...) source>" }
 //
-// Pure: no I/O. migrate.mjs gates on `projectConventionsIssues`, designspec.mjs renders and verifies.
-import { parseDefineModule } from "./engine.mjs";
+// Pure: no I/O. migrate.mjs resolves the facts once per run (`conventionFacts`) and gates `--plan` on their issues;
+// designspec.mjs renders and verifies; tasks.mjs copies the block into every task file.
+import { parseDefineModule, staticPropKey } from "./engine.mjs";
 
 // The namespace every Creatio page defaulted to before a project said otherwise.
 export const DEFAULT_REQUEST_PREFIX = "usr";
 // The platform's own namespace: reserved, never a project's.
-export const PLATFORM_NAMESPACE = "crt";
-export const CONVENTION_SOURCES = Object.freeze(["freedom-pages", "schema-prefix", "sys-setting", "fallback"]);
-export const CONFIRMED_BY = Object.freeze(["plan", "user"]);
+const PLATFORM_NAMESPACE = "crt";
+const CONVENTION_SOURCES = Object.freeze(["freedom-pages", "schema-prefix", "sys-setting", "fallback"]);
+const CONFIRMED_BY = Object.freeze(["plan", "user"]);
 // The three kinds of custom name a page declares, each with its own prefix key.
 export const NAME_KINDS = Object.freeze(["request", "validator", "converter"]);
 const PREFIX_KEY = Object.freeze({ request: "requestPrefix", validator: "validatorPrefix", converter: "converterPrefix" });
 const NAMESPACE_RX = /^[A-Za-z][A-Za-z0-9]*$/;
-// A whole-string record id (assemble.mjs keeps the same shape; not imported, to keep this module free of the
-// reads/assemble import chain that leads back into designspec.mjs).
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A whole-string record id. The engine's one copy: assemble.mjs re-exports it.
+export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const GUID_IN_TEXT = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
+// Local, not imported: migrate.mjs and reads.mjs keep their own, and both sit above this module in the imports.
 const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const blank = (v) => typeof v !== "string" || v.trim() === "";
 // `dw`, `dw.` and ` dw ` are one namespace.
@@ -67,6 +69,8 @@ export function conventionsOf(manifest) {
     previous: previousOf(raw.previous),
   };
 }
+// The prefix per kind of name, `{ request, validator, converter }` — the shape `--verify` checks against.
+export const prefixesOf = (c) => Object.fromEntries(NAME_KINDS.map((k) => [k, c[PREFIX_KEY[k]]]));
 // `{ ns: count }`, kept only when it names at least two namespaces — one namespace is no conflict.
 function conflictOf(v) {
   if (!isObj(v)) return null;
@@ -84,7 +88,7 @@ function previousOf(v) {
   };
 }
 // What differs between the earlier migration's record and this run's, as readable phrases (empty = same).
-export function previousDifferences(c) {
+function previousDifferences(c) {
   const p = c?.previous;
   if (!p) return [];
   const out = [];
@@ -100,22 +104,34 @@ export function previousDifferences(c) {
   return out;
 }
 
+// ---- the run's facts: the block, its blockers and the GUID index, resolved ONCE per manifest ----
+//
+// One object, so the three can never come from two different sources: the root run resolves it and every fold
+// inherits it whole (a fold's child bundle carries neither the block nor the module bodies). Memoized on the
+// manifest object, because `checklistOpts` is rebuilt several times per CLI command and each constants module is
+// a full parse.
+const FACTS = new WeakMap();
+export function conventionFacts(manifest) {
+  if (!isObj(manifest)) return { conventions: null, issues: [NOT_RESOLVED], guidIndex: new Map() };
+  if (!FACTS.has(manifest)) FACTS.set(manifest, resolveFacts(manifest));
+  return FACTS.get(manifest);
+}
+function resolveFacts(manifest) {
+  const c = conventionsOf(manifest);
+  if (!c) return { conventions: null, issues: [NOT_RESOLVED], guidIndex: new Map() };
+  const modules = c.constantsModules.map((name) => readModule(manifest.constantsModules, name));
+  return {
+    conventions: c,
+    issues: [...prefixIssues(c), ...recordIssues(c, manifest.projectConventions), ...questionIssues(c), ...modules.flatMap(moduleIssue)],
+    guidIndex: guidIndexOf(modules),
+  };
+}
+// The gate's blockers and the GUID index, by manifest — the facts above, for a caller holding a manifest.
+export const projectConventionsIssues = (manifest) => conventionFacts(manifest).issues;
+export const constantsGuidIndex = (manifest) => conventionFacts(manifest).guidIndex;
+
 const NOT_RESOLVED = "projectConventions not resolved — record it in manifest.projectConventions as { \"resolved\": true, \"requestPrefix\", \"helperModules\", \"constantsModules\", \"source\", \"evidence\", \"confirmedBy\" } (a verified fallback to `usr` is a valid answer; \"never checked\" is not)";
 
-// The gate. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the CLI gates `--plan` on
-// it exactly like placement. An unresolved block is reported alone: a rule evaluated over a missing fact would
-// only invent a verdict.
-export function projectConventionsIssues(manifest) {
-  const c = conventionsOf(manifest);
-  if (!c) return [NOT_RESOLVED];
-  const raw = manifest.projectConventions;
-  return [
-    ...prefixIssues(c),
-    ...recordIssues(c, raw),
-    ...questionIssues(c),
-    ...moduleBodyIssues(c, manifest.constantsModules),
-  ];
-}
 function prefixIssues(c) {
   const issues = [];
   for (const kind of NAME_KINDS) {
@@ -153,24 +169,17 @@ function questionIssues(c) {
   }
   return issues;
 }
-function moduleBodyIssues(c, bodies) {
-  const issues = [];
-  for (const name of c.constantsModules) {
-    const src = moduleBody(bodies, name);
-    if (src == null) {
-      issues.push(`constants module '${name}' has no body in manifest.constantsModules — fetch it with get-client-unit-schema and add it as { "${name}": { "body": "<source>" } }, so the plan can map its ids`);
-      continue;
-    }
-    const parsed = parseDefineModule(src);
-    if (parsed.error) issues.push(`constants module '${name}' cannot be read: ${parsed.error}`);
-  }
-  return issues;
+// One declared constants module, read and parsed once: `{ name, parsed }`, or `{ name, missing: true }`.
+function readModule(bodies, name) {
+  const v = isObj(bodies) && Object.hasOwn(bodies, name) ? bodies[name] : null;
+  let src = null;
+  if (typeof v === "string") src = v;
+  else if (isObj(v) && typeof v.body === "string") src = v.body;
+  return src == null ? { name, missing: true } : { name, parsed: parseDefineModule(src) };
 }
-function moduleBody(bodies, name) {
-  if (!isObj(bodies) || !Object.hasOwn(bodies, name)) return null;
-  const v = bodies[name];
-  if (typeof v === "string") return v;
-  return isObj(v) && typeof v.body === "string" ? v.body : null;
+function moduleIssue(m) {
+  if (m.missing) return [`constants module '${m.name}' has no body in manifest.constantsModules — fetch it with get-client-unit-schema and add it as { "${m.name}": { "body": "<source>" } }, so the plan can map its ids`];
+  return m.parsed.error ? [`constants module '${m.name}' cannot be read: ${m.parsed.error}`] : [];
 }
 
 // ---- the GUID index: every id a constants module holds, by its `Module.Path` ----
@@ -179,16 +188,11 @@ function moduleBody(bodies, name) {
 // ids. The path is the chain of property names from the module's return value: `WorkJsConstants.Status.New`.
 // A variable the return value does not reach is still read, under its own name, so an id held only there is not
 // lost. Nothing is evaluated; only literals count.
-export function constantsGuidIndex(manifest) {
-  const c = conventionsOf(manifest);
+function guidIndexOf(modules) {
   const index = new Map();
-  if (!c) return index;
-  for (const name of c.constantsModules) {
-    const src = moduleBody(manifest.constantsModules, name);
-    if (src == null) continue;
-    const parsed = parseDefineModule(src);
-    if (parsed.error) continue;
-    for (const { guid, path } of moduleGuids(name, parsed)) {
+  for (const m of modules) {
+    if (m.missing || m.parsed.error) continue;
+    for (const { guid, path } of moduleGuids(m.name, m.parsed)) {
       const list = index.get(guid) || [];
       if (!list.includes(path)) list.push(path);
       index.set(guid, list);
@@ -216,11 +220,6 @@ function factoryVars(factory) {
   }
   return vars;
 }
-function propertyKey(p) {
-  if (p.computed) return p.key?.type === "Literal" ? String(p.key.value) : null;
-  if (p.key?.type === "Identifier") return p.key.name;
-  return p.key?.type === "Literal" ? String(p.key.value) : null;
-}
 function walkValue(node, path, st) {
   if (!node || st.seen.has(node)) return;
   if (node.type === "Identifier") {
@@ -234,7 +233,7 @@ function walkValue(node, path, st) {
   st.seen.add(node);
   if (node.type === "ObjectExpression") {
     for (const p of node.properties) {
-      const key = p.type === "Property" ? propertyKey(p) : null;
+      const key = p.type === "Property" ? staticPropKey(p) : null;
       if (key != null) walkValue(p.value, [...path, key], st);
     }
   } else if (node.type === "ArrayExpression") {
@@ -242,11 +241,23 @@ function walkValue(node, path, st) {
   }
 }
 
-// Every GUID in a text, lower-cased, in first-seen order. The plan's GUID table is built from the plan itself, so
-// "every GUID the plan uses" is literally what the reader sees.
-const GUID_IN_TEXT = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-export function guidsInText(text) {
-  return [...new Set((String(text ?? "").match(GUID_IN_TEXT) || []).map((g) => g.toLowerCase()))];
+// The record ids the builders will meet that a declared constants module holds, `[{ guid, paths }]` in first-seen
+// order. `sources` are what they port from: the mapped change sets (walked as values — the rule conditions and
+// filters compare against ids the plan tables never print) and the Classic bodies (scanned as text). A source may
+// be a thunk, so an expensive one (reading the bodies) runs only when needed. Empty, and no source is touched, when
+// the index is empty.
+export function recordIdsUsed(guidIndex, sources) {
+  const found = new Set();
+  if (!guidIndex?.size) return [];
+  const take = (s) => { for (const m of s.matchAll(GUID_IN_TEXT)) { const g = m[0].toLowerCase(); if (guidIndex.has(g)) found.add(g); } };
+  const walk = (v) => {
+    if (typeof v === "function") walk(v());
+    else if (typeof v === "string") take(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  sources.forEach(walk);
+  return [...found].map((guid) => ({ guid, paths: guidIndex.get(guid) }));
 }
 
 // ---- reading a BUILT page (the `--built` entry: get-page's merged bundle) ----
@@ -267,19 +278,15 @@ export function bundleDeps(entry) {
 const QUALIFIED_NAME = /^([A-Za-z][A-Za-z0-9]*)\.[A-Za-z_$][\w$]*$/;
 // The custom names a built page declares, per kind: handler requests (plus the `clicked` requests its elements
 // fire), validator and converter registrations. null when the bundle carries none of the three sources.
-export function bundleCustomNames(entry, ops = []) {
-  if (!entry || (entry.handlers == null && entry.validators == null && entry.converters == null)) return null;
+// `handlersSrc` is verifyCtx's own normalization of `entry.handlers` (source text either way).
+export function bundleCustomNames(entry, handlersSrc, ops = []) {
+  if (!entry || (handlersSrc == null && entry.validators == null && entry.converters == null)) return null;
   const names = { request: new Set(), validator: new Set(), converter: new Set() };
-  for (const r of handlerRequests(entry.handlers)) names.request.add(r);
+  for (const m of String(handlersSrc ?? "").matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)) names.request.add(m[1]);
   for (const o of ops) if (typeof o.request === "string") names.request.add(o.request);
   for (const n of registeredNames(entry.validators)) names.validator.add(n);
   for (const n of registeredNames(entry.converters)) names.converter.add(n);
   return names;
-}
-function handlerRequests(h) {
-  if (h == null) return [];
-  if (Array.isArray(h)) return h.map((x) => x?.request).filter((r) => typeof r === "string");
-  return [...String(h).matchAll(/\brequest\s*:\s*["']([^"']+)["']/g)].map((m) => m[1]);
 }
 // The keys of a validators/converters registration object: `{ "dw.Positive": { … } }`.
 function registeredNames(v) {
@@ -287,16 +294,14 @@ function registeredNames(v) {
   if (isObj(v)) return Object.keys(v);
   return [...String(v).matchAll(/["']([A-Za-z][A-Za-z0-9]*\.[A-Za-z_$][\w$]*)["']\s*:/g)].map((m) => m[1]);
 }
-// The names outside the confirmed namespace, `[{ kind, name }]`. `crt.` is the platform's and always allowed.
-export function foreignNames(names, c) {
+// The names outside the confirmed namespace, `[{ kind, name }]`. `prefixes` is `prefixesOf(conventions)`; `crt.`
+// is the platform's and always allowed.
+export function foreignNames(names, prefixes) {
   const out = [];
   for (const kind of NAME_KINDS) {
-    const allowed = c[PREFIX_KEY[kind]];
     for (const name of names[kind]) {
-      const m = QUALIFIED_NAME.exec(name);
-      if (!m) continue;
-      const ns = m[1];
-      if (ns.toLowerCase() === PLATFORM_NAMESPACE || ns === allowed) continue;
+      const ns = QUALIFIED_NAME.exec(name)?.[1];
+      if (!ns || ns.toLowerCase() === PLATFORM_NAMESPACE || ns === prefixes[kind]) continue;
       out.push({ kind, name });
     }
   }
@@ -305,11 +310,8 @@ export function foreignNames(names, c) {
 
 // ---- rendering: the plan section and the block every build/fix task carries ----
 //
-// One line of stand- or agent-supplied text, made inert for a Markdown table cell: no line break, no pipe, no
-// backtick (the values are wrapped in code spans by the caller).
-const cell = (v) => String(v ?? "").replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|").replace(/`/g, "'").trim();
-const code = (v) => `\`${cell(v)}\``;
-const moduleList = (list) => (list.length ? list.map(code).join(", ") : "none");
+// `esc` is the caller's own cell escaper (designspec's `esc` for the plan, tasks' `cell` for a task file), so
+// agent- and stand-supplied text gets exactly the protection every other cell of that document gets.
 const SOURCE_TEXT = Object.freeze({
   "freedom-pages": "custom requests in the existing Freedom pages of the target packages",
   "schema-prefix": "the name prefix of the team's own schemas",
@@ -317,81 +319,73 @@ const SOURCE_TEXT = Object.freeze({
   "fallback": "verified fallback — no project namespace found",
 });
 const CONFIRMED_TEXT = Object.freeze({ plan: "the plan approval", user: "the user's answer" });
+const writer = (esc) => {
+  const code = (v) => `\`${esc(v)}\``;
+  return { code, list: (l) => (l.length ? l.map(code).join(", ") : "none") };
+};
 
-// The plan's `### Project conventions` section. `guidIndex` is `constantsGuidIndex(manifest)`, `planText` the plan
-// rendered so far, `sourceTexts` what the builders port from (the mapped change set, the Classic bodies). Listed:
-// every record id the plan text shows, and every id the sources use that a declared constants module holds — the
-// rule conditions and Classic methods compare against ids the plan tables never print.
-export function conventionsPlanLines(c, guidIndex, planText, sourceTexts = []) {
+// The plan's `### Project conventions` section. `recordIds` is `recordIdsUsed(…)`.
+export function conventionsPlanLines(c, recordIds, esc) {
   if (!c) return ["### Project conventions", "- ⚠ not resolved — see the ⛔ banner at the top of this plan", ""];
-  const L = [
+  const w = writer(esc);
+  return [
     "### Project conventions",
     "Approved with this plan. Every build and fix task carries this block, and it overrides any generic guidance that names `usr.` as the namespace.",
     "",
     "| Convention | Value |",
     "|---|---|",
-    `| Request prefix | ${code(c.requestPrefix + ".")} |`,
-    `| Validator prefix | ${code(c.validatorPrefix + ".")} |`,
-    `| Converter prefix | ${code(c.converterPrefix + ".")} |`,
-    `| Helper modules | ${moduleList(c.helperModules)} |`,
-    `| Constants modules | ${moduleList(c.constantsModules)} |`,
-    `| Decided by | ${SOURCE_TEXT[c.source] || cell(c.source)} — ${cell(c.evidence)} |`,
-    `| Confirmed by | ${CONFIRMED_TEXT[c.confirmedBy] || cell(c.confirmedBy)} |`,
+    `| Request prefix | ${w.code(c.requestPrefix + ".")} |`,
+    `| Validator prefix | ${w.code(c.validatorPrefix + ".")} |`,
+    `| Converter prefix | ${w.code(c.converterPrefix + ".")} |`,
+    `| Helper modules | ${w.list(c.helperModules)} |`,
+    `| Constants modules | ${w.list(c.constantsModules)} |`,
+    `| Decided by | ${SOURCE_TEXT[c.source] || esc(c.source)} — ${esc(c.evidence)} |`,
+    `| Confirmed by | ${CONFIRMED_TEXT[c.confirmedBy] || esc(c.confirmedBy)} |`,
     "",
-    ...conflictLines(c),
-    ...previousLines(c),
-    ...guidLines(guidIndex, planGuids(guidIndex, planText, sourceTexts)),
+    ...conflictLines(c, w),
+    ...previousLines(c, w, esc),
+    ...recordIdLines(recordIds, w),
   ];
-  return L;
 }
-function conflictLines(c) {
+function conflictLines(c, w) {
   if (!c.conflict) return [];
-  const counts = c.conflict.map(([ns, n]) => `${code(ns + ".")} × ${n}`).join(", ");
+  const counts = c.conflict.map(([ns, n]) => `${w.code(ns + ".")} × ${n}`).join(", ");
   return c.confirmedBy === "user"
-    ? [`> **Namespace conflict, answered by the user:** the target packages use ${counts}; this migration uses ${code(c.requestPrefix + ".")}.`, ""]
+    ? [`> **Namespace conflict, answered by the user:** the target packages use ${counts}; this migration uses ${w.code(c.requestPrefix + ".")}.`, ""]
     : [`> ⚠ **Question for the user — namespace conflict:** the target packages use ${counts}. Which one does this migration use? Record the answer with \`confirmedBy: "user"\` and re-run \`--plan\`.`, ""];
 }
-function previousLines(c) {
+function previousLines(c, w, esc) {
   if (!c.previous) return [];
-  const where = c.previous.folder ? ` (${code(c.previous.folder)})` : "";
+  const where = c.previous.folder ? ` (${w.code(c.previous.folder)})` : "";
   const diff = previousDifferences(c);
   if (!diff.length) return [`- **Earlier migration${where}:** the same conventions — reused without a question.`, ""];
-  const was = `${code(c.previous.requestPrefix + ".")}, helpers ${moduleList(c.previous.helperModules)}, constants ${moduleList(c.previous.constantsModules)}`;
+  const was = `${w.code(c.previous.requestPrefix + ".")}, helpers ${w.list(c.previous.helperModules)}, constants ${w.list(c.previous.constantsModules)}`;
   const verdict = c.confirmedBy === "user"
     ? "the user chose the values in the table above."
     : "⚠ **Question for the user:** keep the earlier values or take this run's? Record the answer with `confirmedBy: \"user\"` and re-run `--plan`.";
-  return [`- **Earlier migration${where}:** ${was} — differs (${cell(diff.join("; "))}); ${verdict}`, ""];
+  return [`- **Earlier migration${where}:** ${was} — differs (${esc(diff.join("; "))}); ${verdict}`, ""];
 }
-function planGuids(guidIndex, planText, sourceTexts) {
-  const shown = guidsInText(planText);
-  const used = guidsInText(sourceTexts.join("\n")).filter((g) => guidIndex?.has(g));
-  return [...new Set([...shown, ...used])];
-}
-function guidLines(guidIndex, guids) {
-  if (!guids.length) return ["No record id appears in this plan.", ""];
-  const L = ["#### Record ids in this plan", "", "Reference each through its constants module (add the module to the page's SCHEMA_DEPS and use the named value) — never paste the GUID.", "",
-    "| Record id | Constants path |", "|---|---|"];
-  for (const g of guids) {
-    const paths = guidIndex?.get(g) || [];
-    L.push(`| ${code(g)} | ${paths.length ? paths.map(code).join(" · ") : "⚠ not in a declared constants module"} |`);
-  }
-  L.push("");
-  return L;
+function recordIdLines(recordIds, w) {
+  if (!recordIds.length) return ["No record id from a declared constants module appears in this plan's sources.", ""];
+  return ["#### Record ids in this plan", "", "Reference each through its constants module (add the module to the page's SCHEMA_DEPS and use the named value) — never paste the GUID.", "",
+    "| Record id | Constants path |", "|---|---|",
+    ...recordIds.map(({ guid, paths }) => `| ${w.code(guid)} | ${paths.map(w.code).join(" · ")} |`), ""];
 }
 
 // The block every build and fix task file carries, so a builder that reads only its task still follows the
 // project. Empty when the run recorded no conventions.
-export function conventionsTaskLines(c) {
+export function conventionsTaskLines(c, esc) {
   if (!c) return [];
+  const w = writer(esc);
   return [
     "## Project conventions",
     "",
     "<!-- ENGINE-OWNED: the conventions approved with the plan. They override any generic guidance that names `usr.`. -->",
     "",
-    `- **Custom requests:** name them ${code(c.requestPrefix + ".<Name>Request")} — never \`usr.\` unless that is the prefix here.`,
-    `- **Validators / converters:** ${code(c.validatorPrefix + ".")} / ${code(c.converterPrefix + ".")}.`,
-    `- **Helper modules:** ${moduleList(c.helperModules)} — reuse what they already provide instead of writing it again.`,
-    `- **Constants modules:** ${moduleList(c.constantsModules)} — reference existing record ids through them: add the module to the page's SCHEMA_DEPS and use the named value; never paste a GUID. The plan's *Project conventions* section maps each id to its path.`,
+    `- **Custom requests:** name them \`${esc(c.requestPrefix)}.<Name>Request\` — never \`usr.\` unless that is the prefix here.`,
+    `- **Validators / converters:** ${w.code(c.validatorPrefix + ".")} / ${w.code(c.converterPrefix + ".")}.`,
+    `- **Helper modules:** ${w.list(c.helperModules)} — reuse what they already provide instead of writing it again.`,
+    `- **Constants modules:** ${w.list(c.constantsModules)} — reference existing record ids through them: add the module to the page's SCHEMA_DEPS and use the named value; never paste a GUID. The plan's *Project conventions* section maps each id to its path.`,
     "- Freedom pages CAN import these client-unit modules: list the module in SCHEMA_DEPS and take it as a factory argument.",
     "",
   ];

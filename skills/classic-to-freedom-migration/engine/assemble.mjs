@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { READS_DIR, READS_INDEX_FILE } from "./reads.mjs";
+import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
@@ -33,7 +34,7 @@ export const JUDGE_FILE = "judge.json";
 export const RECORDED_FILE = "recorded.json";
 // The provenance field's shape, in ONE place: the drop-sweep here applies the same test the payload guard will.
 // migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
-export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export { GUID_RE };
 
 // `meta.json` nests everything under `page`; a caller that copied only that block is accepted too, because the
 // difference is one level of nesting and refusing it would be a rule about typing, not about content.

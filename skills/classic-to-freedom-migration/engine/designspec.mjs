@@ -24,7 +24,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
-import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, NAME_KINDS } from "./conventions.mjs";
+import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -2238,10 +2238,7 @@ function renderPlanWith(result, opts) {
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
   P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check"), "");
-  // Project conventions — filled in at the end, once every line that can show a record id is rendered: its GUID
-  // table is read off the plan itself, so "every id the plan uses" is exactly what the reader sees.
-  const conventionsAt = P.length;
-  P.push(CONVENTIONS_SLOT);
+  P.push(...conventionsPlanLines(opts.projectConventions, opts.recordIds || [], esc));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -2285,11 +2282,8 @@ function renderPlanWith(result, opts) {
   // Rendered after every other section: the list names only the closed deliverables no line above printed.
   const wontDo = renderWontDoList(opts);
   P.push(...childMappings, ...wontDo, "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
-  P.splice(conventionsAt, 1, ...conventionsPlanLines(opts.projectConventions, opts.constantsGuidIndex, P.join("\n"), opts.guidSources));
   return P.join("\n");
 }
-// A placeholder line, replaced before the plan is joined (see renderPlanWith).
-const CONVENTIONS_SLOT = "\u0000project-conventions\u0000";
 
 // Shared grouped Plan-vs-Done structure. BOTH `--checklist` (pre, all `☐ pending`) and `--verify` (post, Status
 // AUTO-FILLED from the built page) render THIS same structure, so the close-gate looks EXACTLY like the grouped
@@ -2775,7 +2769,7 @@ function memberWorklistRows(cs, opts = {}) {
 // or a decision records why this page does not need it. Everything else (platform and utility modules) stays one
 // informational row, as before.
 function moduleDepRows(d, conventions) {
-  const deps = String(d.item).split(",").map((x) => x.trim()).filter(Boolean);
+  const deps = Array.isArray(d.modules) ? d.modules : String(d.item).split(",").map((x) => x.trim()).filter(Boolean);
   const role = new Map([
     ...(conventions?.helperModules || []).map((m) => [m, "helper module"]),
     ...(conventions?.constantsModules || []).map((m) => [m, "constants module"]),
@@ -4737,7 +4731,7 @@ export function resolveCardNativeVk(vk, ctx) {
 function conventionRows(opts) {
   const c = opts.projectConventions;
   if (!c) return [];
-  const prefixes = Object.fromEntries(NAME_KINDS.map((k) => [k, c[`${k}Prefix`]]));
+  const prefixes = prefixesOf(c);
   const shown = [...new Set(Object.values(prefixes))].map((p) => `\`${esc(p)}.\``).join(" / ");
   return [{ deliverableId: "conventions:namespace", label: `Custom requests, validators and converters use the project namespace ${shown}`,
     vk: { type: "namespace", prefixes } }];
@@ -4748,8 +4742,7 @@ export function resolveNamespaceVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the page's custom names");
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its names cannot be checked", "missing"];
   if (!ctx.customNames) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the namespace", "skip"];
-  const c = Object.fromEntries(NAME_KINDS.map((k) => [`${k}Prefix`, vk.prefixes?.[k]]));
-  const foreign = foreignNames(ctx.customNames, c);
+  const foreign = foreignNames(ctx.customNames, vk.prefixes || {});
   const total = NAME_KINDS.reduce((n, k) => n + ctx.customNames[k].size, 0);
   if (!foreign.length) return ["✅ Done", `${total} request/validator/converter name(s) on the built page, none outside the project namespace`, "ok"];
   return ["⚠ verify", `outside the project namespace: ${foreign.map((f) => `${f.kind} \`${esc(f.name)}\``).join(", ")} — rename it, or record a decision (\`--decide D<N>\`) that accepts it`, "unverified"];
@@ -5011,7 +5004,7 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
     // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
     // read for the project-conventions rows; null when the bundle did not carry them.
     deps: bundleDeps(entry),
-    customNames: bundleCustomNames(entry, ops),
+    customNames: bundleCustomNames(entry, handlersSrc, ops),
     containers: pageContainersOf(page),
     // the frozen reconcile mode (from the task folder, or null). Only `classic-layout` turns on the EXTRA-field
     // check in resolveFieldsByIdentity: a field CONTROL on the built page that is not in the plan is a base field
