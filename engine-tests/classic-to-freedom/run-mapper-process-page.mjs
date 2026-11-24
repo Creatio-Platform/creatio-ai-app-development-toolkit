@@ -216,6 +216,39 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
     () => /✅ Done/.test(twoRow([true, false])) && /❌ MISSING.*UsrReturnProcess.*validate: true/.test(twoRow([true, true])),
     () => [twoRow([true, false]), twoRow([true, true])]);
 
+  // The stand check of a button that behaves differently by step is judged per press, against the step it ran in.
+  const standRow = (pressedList) => rowOf(renderVerify(twoRun, checklistOpts(manifest(twoSteps, closePage)),
+    { ...twoBuilt([true, false]), processStandCheck: { pressed: pressedList } }).markdown, "Stand check");
+  const press = (outcome, step) => ({ button: CANCEL, outcome, ...(step ? { process: step[0], element: step[1] } : {}) });
+  const saved = { button: "SaveButton", outcome: "completed" };
+  check("process page: a per-step button pressed without naming its step keeps the stand row open",
+    () => /⚠ verify.*record the .process. and .element. of each press/.test(standRow([saved, press("completed")])), () => standRow([saved, press("completed")]));
+  check("process page: a per-step button that leaves a step with the wrong outcome is ❌",
+    () => /❌ MISSING.*UsrDeliveryProcess.*should leave the step completed/.test(standRow([saved, press("open", ["UsrDeliveryProcess", "CheckDelivery"])])));
+  check("process page: a per-step button pressed in each step with that step's outcome passes",
+    () => /✅ Done/.test(standRow([saved, press("completed", ["UsrDeliveryProcess", "CheckDelivery"]), press("completed", ["UsrReturnProcess", "CheckReturn"])])));
+  const bothComplete = { processPage: { stepsResolved: true, steps: [
+    { ...STEP, buttons: [{ tag: "ClosePage", performClosePage: true, performSaveData: true }] },
+    { process: "UsrReturnProcess", element: "CheckReturn", consent: "approved", buttons: [{ tag: "ClosePage", performClosePage: true }] }] } };
+  check("process page: a per-step button that completes in every step is planned with no `clicked` request",
+    () => /`Button-340d4888d1c244b4b1096eb51e8072f2` with no `clicked` request; selected as completing only in the steps/.test(runMigration(manifest(bothComplete, closePage)).plan));
+  const closeRunVerify = (request) => rowOf(renderVerify(closeRun, checklistOpts(manifest({}, closePage)),
+    { ...built({ cancelRequest: request }), processSteps: [] }).markdown, "[process button] Cancel");
+  check("process page: a button that only closes the page but declares another request, or none, must use crt.ClosePageRequest",
+    () => /⚠ verify.*must close the page with.*crt\.ClosePageRequest/.test(closeRunVerify("crt.CancelRecordChangesRequest"))
+      && /⚠ verify.*must close the page with.*no request/.test(closeRunVerify(undefined)), () => [closeRunVerify("crt.CancelRecordChangesRequest"), closeRunVerify(undefined)]);
+  check("process page: an approved step the build could not re-point (no describe-business-process entry) is not done",
+    () => /⚠ verify.*pass .describe-business-process./.test(rowOf(verify(built({ processSteps: [] })), "[process step]")),
+    () => rowOf(verify(built({ processSteps: [] })), "[process step]"));
+  const keptClose = PAGE.replace(/,\s*\{\s*"operation": "remove",\s*"name": "Button-3a8ac667899d4aa68021a07eb1c7c49c"\s*\}/, "");
+  const keptRun = runMigration(manifest({}, keptClose));
+  check("process page: a kept Classic template Close maps onto the Freedom template's CloseButton",
+    () => keptClose !== PAGE && keptRun.processPage.buttons.find((b) => b.tag === "ClosePage")?.freedom === "CloseButton",
+    () => keptRun.processPage.buttons);
+  const withMini = runMigration(manifest({ addRecordMiniPage: { schema: "UsrDeliveryMiniPage" },
+    miniPageSchemas: { UsrDeliveryMiniPage: { schemas: [{ pkg: "P", body: 'define("UsrDeliveryMiniPage",[],function(){return{entitySchemaName:"",diff:[]};});' }], seed: CLEAN_SEED } } }));
+  check("process page: no add-record mini page is folded or planned, even when the manifest names one",
+    () => withMini.miniPage === null && !/### Mini page|Mini page \(quick-add\)/.test(withMini.plan), () => withMini.miniPage);
   // `--verify --from` composes the payload from the migration folder: the process side comes from process.json.
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "process-page-"));
   try {

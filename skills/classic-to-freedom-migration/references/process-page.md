@@ -95,7 +95,9 @@ The `Process page` rows of `--verify` read, besides the page itself, two fields 
 
 - `--built.processSteps` — `describe-business-process` of each re-pointed step:
   `[{ "process", "element", "page", "active", "buttons": [{ "name", "validate" }] }]`;
-- `--built.processStandCheck` — the stand check: `{ "pressed": [{ "button": "<Freedom button>", "outcome": "completed" | "open" }] }`.
+- `--built.processStandCheck` — the stand check: `{ "pressed": [{ "button": "<Freedom button>", "outcome": "completed" | "open", "process", "element" }] }`.
+  `process` / `element` name the step the press ran in; they are required for a button whose behaviour differs by
+  step, which is judged per press against that step's element.
 
 | Row | ✅ when |
 | --- | --- |

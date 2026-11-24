@@ -2903,6 +2903,10 @@ function processPageOfRun(manifest, opts, { seedTemplate, schemas, eff }) {
   return processPageInfo({ template, pageName: schemas.at(-1)?.moduleName, items: eff.items, methods: eff.methods, manifest });
 }
 
+const processPageBlockersOf = (processPage) => processPage?.issues || [];
+// A process page is opened by its process step: it has no section, so no add-record mini page is folded for it.
+const miniPageNameOf = (processPage, mpDecl, secMpName) => (processPage ? null : resolveMiniPageName(mpDecl, secMpName));
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
   const bodyOf = (e) => readSchemaBody(e, baseDir);
@@ -3086,7 +3090,7 @@ export function runMigration(manifest, opts = {}) {
   const secMpName = sectionSchemas.map((l) => l.addRecordMiniPage).find((v) => typeof v === "string");
   const secMpExists = !!secMpName || sectionSchemas.some((l) => l.addRecordMiniPage === true);
   const mpDecl = manifest.addRecordMiniPage; // {schema}|"name"|false|undefined
-  const mpName = resolveMiniPageName(mpDecl, secMpName);
+  const mpName = miniPageNameOf(processPage, mpDecl, secMpName);
   const miniPageVerified = mpDecl !== undefined || secMpExists; // explicit {schema}/false, or the section body names one
   const miniPage = foldMiniPage(mpName, mpDecl, manifest.miniPageSchemas || {}, foldCtx);
   const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
@@ -3219,7 +3223,7 @@ export function runMigration(manifest, opts = {}) {
   // grandchild's already sit in its child's. The root's plan is the one approved, so it lists the whole tree's.
   const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
   out.processPage = processPage;
-  out.processPageBlockers = processPage ? processPage.issues : [];
+  out.processPageBlockers = processPageBlockersOf(processPage);
   out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
     ...folded.flatMap((f) => f.conventionsBlockers || [])])];
   // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared

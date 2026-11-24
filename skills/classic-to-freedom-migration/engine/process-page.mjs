@@ -43,8 +43,11 @@ const COMPLETING_REQUESTS = Object.freeze(["crt.SaveRecordRequest", "crt.ClosePa
 export const CLOSE_PAGE_REQUEST = "crt.ClosePageRequest";
 // The Freedom form templates' own save button: the runtime shows it on every page opened from a process step.
 const FREEDOM_SAVE_BUTTON = "SaveButton";
-// The Classic template's own save button: template-owned with the `SaveData` tag; its element id is the fallback.
+// The Classic template's own save and close buttons: template-owned with the `SaveData` / `ClosePage` tag; their
+// element ids are the fallback. They map onto the Freedom template's own buttons.
 const CLASSIC_TEMPLATE_SAVE_BUTTON = "Button-be6148b819154a0791eaee8f1635d859";
+const CLASSIC_TEMPLATE_CLOSE_BUTTON = "Button-3a8ac667899d4aa68021a07eb1c7c49c";
+const FREEDOM_CLOSE_BUTTON = "CloseButton";
 
 const isStr = (v) => typeof v === "string" && v.trim() !== "";
 const plainObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
@@ -115,8 +118,12 @@ function behaviourOf(handler, tag, steps) {
 
 // The Freedom element a Classic process button becomes: the template save button for the Classic template's save
 // button, otherwise the button itself under its Classic name.
-const isTemplateSave = (item) => (item.templateOwned && item.tag === "SaveData") || item.name === CLASSIC_TEMPLATE_SAVE_BUTTON;
-const freedomNameOf = (item) => (isTemplateSave(item) ? FREEDOM_SAVE_BUTTON : item.name);
+const isTemplateButton = (item, tag, id) => (item.templateOwned && item.tag === tag) || item.name === id;
+function freedomNameOf(item) {
+  if (isTemplateButton(item, "SaveData", CLASSIC_TEMPLATE_SAVE_BUTTON)) return FREEDOM_SAVE_BUTTON;
+  if (isTemplateButton(item, "ClosePage", CLASSIC_TEMPLATE_CLOSE_BUTTON)) return FREEDOM_CLOSE_BUTTON;
+  return item.name;
+}
 
 // A button whose click the template does not route but which may still end the step: it sits among the template's
 // process buttons, or its handler calls the template's process API.
@@ -182,12 +189,15 @@ const SOURCE_TEXT = {
 const behaviourText = (b) => BEHAVIOUR_TEXT[b] || b;
 const buttonSourceText = (s) => SOURCE_TEXT[s] || s;
 const expectedValidate = (behaviour) => behaviour === PROCESS_BEHAVIOUR.COMPLETE_SAVE;
-function freedomMappingText(b) {
-  const name = code(b.freedom);
+function perStepMappingText(b, name) {
+  const request = behavioursOf(b).has(PROCESS_BEHAVIOUR.CLOSE_OPEN) ? `with ${code(CLOSE_PAGE_REQUEST)}` : "with no `clicked` request";
+  return `${name} ${request}; selected as completing only in the steps whose \`Buttons\` complete it, each with its own \`validate\``;
+}
+function freedomMappingText(b, esc) {
+  const name = code(esc(b.freedom));
   if (b.behaviour === PROCESS_BEHAVIOUR.UNKNOWN)
-    return `decide from ${code(b.handler)}'s body whether it completes the step (with or without saving) or only closes the page, and record the decision`;
-  if (b.source === "element-per-step")
-    return `${name} with ${code(CLOSE_PAGE_REQUEST)}; selected as completing only in the steps whose \`Buttons\` complete it, each with its own \`validate\``;
+    return `decide from ${code(esc(b.handler))}'s body whether it completes the step (with or without saving) or only closes the page, and record the decision`;
+  if (b.source === "element-per-step") return perStepMappingText(b, name);
   if (b.behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN)
     return `${name} with ${code(CLOSE_PAGE_REQUEST)}; NOT selected as completing in the process element`;
   const validate = expectedValidate(b.behaviour) ? "true" : "false";
@@ -203,7 +213,7 @@ function stepCall(s) {
 }
 function buttonRow(b, esc) {
   const tag = b.tag ? code(esc(b.tag)) : "—";
-  return `| ${esc(b.caption || b.classic)} (${code(esc(b.classic))}) | ${tag} | ${behaviourText(b.behaviour)} | ${buttonSourceText(b.source)} | ${freedomMappingText(b)} |`;
+  return `| ${esc(b.caption || b.classic)} (${code(esc(b.classic))}) | ${tag} | ${behaviourText(b.behaviour)} | ${buttonSourceText(b.source)} | ${freedomMappingText(b, esc)} |`;
 }
 function stepsPlanLines(info, esc) {
   if (!info.stepsResolved) return ["- ⚠ not recorded — ask the user which processes and steps open this page (see the ⛔ banner)", ""];
@@ -291,7 +301,9 @@ function stepSelectionProblem(vk, s, esc) {
   if (behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN) return sel ? `${where} selects it as completing — the step would end where Classic kept it open` : null;
   if (!sel) return `${where} does not select it as completing — the step never ends from this button`;
   const want = expectedValidate(behaviour);
-  return sel.validate === want ? null : `${where} selects it with \`validate: ${sel.validate}\`, Classic ${want ? "validated" : "did not validate"}`;
+  if (sel.validate === want) return null;
+  const classic = want ? "validated" : "did not validate";
+  return `${where} selects it with \`validate: ${sel.validate}\`, Classic ${classic}`;
 }
 
 // One process button: on the page with the right request, and selected in every re-pointed step as that step's
@@ -337,22 +349,33 @@ function resolveProcessStepVk(vk, ctx, { esc }) {
   if (step.active === false) return [VERIFY, `re-pointed to ${code(esc(step.page))} in a version that is not active — activate it`, "unverified"];
   return [DONE, `re-pointed to ${code(esc(step.page))} in the active version`, "ok"];
 }
-// The outcome the stand check expects from a button: null when its steps differ (the outcome depends on the step
-// the instance ran in) or when its behaviour is undecided.
-function expectedOutcome(b) {
-  const all = behavioursOf(b);
-  if (all.size > 1 || all.has(PROCESS_BEHAVIOUR.UNKNOWN)) return null;
-  return all.has(PROCESS_BEHAVIOUR.CLOSE_OPEN) ? "open" : "completed";
+const outcomeFor = (behaviour) => (behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN ? "open" : "completed");
+const differsByStep = (b) => behavioursOf(b).size > 1;
+// One button's presses against the outcome Classic had. A button whose behaviour differs by step is judged per press,
+// against the step that press ran in, so each press names its `process` and `element`.
+function pressProblems(b, presses, esc) {
+  const name = code(esc(b.freedom));
+  if (!presses.length) return { open: `${name} not pressed` };
+  if (b.behaviour === PROCESS_BEHAVIOUR.UNKNOWN) return { open: `${name}'s behaviour is not decided yet` };
+  if (!differsByStep(b)) {
+    const want = outcomeFor(b.behaviour);
+    return presses.every((p) => p.outcome === want) ? {} : { wrong: `${name} should leave the step ${want}` };
+  }
+  const unplaced = presses.filter((p) => !p.process || !p.element);
+  if (unplaced.length) return { open: `${name} behaves differently by step — record the \`process\` and \`element\` of each press` };
+  const wrong = presses.filter((p) => p.outcome !== outcomeFor(stepBehaviour(b, p)));
+  if (!wrong.length) return {};
+  return { wrong: wrong.map((p) => `${name} in ${code(esc(p.process))} / ${code(esc(p.element))} should leave the step ${outcomeFor(stepBehaviour(b, p))}`).join("; ") };
 }
 // The stand check: every button pressed from the process step, with the outcome Classic had.
 function resolveProcessStandVk(vk, ctx, { esc }) {
   const recorded = Array.isArray(ctx.root?.processStandCheck?.pressed) ? ctx.root.processStandCheck.pressed : [];
   const pressed = recorded.filter((p) => p && typeof p === "object");
-  const outcomeOf = (b) => pressed.find((p) => p.button === b.freedom)?.outcome;
-  const notPressed = vk.buttons.filter((b) => outcomeOf(b) === undefined);
-  if (notPressed.length) return [VERIFY, `built, not exercised — open the page from its process step and press ${notPressed.map((b) => code(esc(b.freedom))).join(", ")}; record each outcome in \`--built.processStandCheck\``, "unverified"];
-  const wrong = vk.buttons.filter((b) => expectedOutcome(b) !== null && outcomeOf(b) !== expectedOutcome(b));
-  if (wrong.length) return [MISSING, wrong.map((b) => `${code(esc(b.freedom))} should leave the step ${expectedOutcome(b)}`).join("; "), "missing"];
+  const results = vk.buttons.map((b) => pressProblems(b, pressed.filter((p) => p.button === b.freedom), esc));
+  const wrong = results.map((r) => r.wrong).filter(Boolean);
+  if (wrong.length) return [MISSING, wrong.join("; "), "missing"];
+  const open = results.map((r) => r.open).filter(Boolean);
+  if (open.length) return [VERIFY, `built, not exercised — open the page from its process step and press each button; record each outcome in \`--built.processStandCheck\` (${open.join("; ")})`, "unverified"];
   return [DONE, `${vk.buttons.length} button(s) pressed from the process step, each with its Classic outcome`, "ok"];
 }
 // `[type, (vk, ctx, { absentEntry, esc }) => verdict]` — designspec registers them and hands in its own helpers.
