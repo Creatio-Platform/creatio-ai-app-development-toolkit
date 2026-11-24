@@ -142,8 +142,9 @@ else in prose — another card, a plan, a task's Notes, a worklog — a criterio
 card-qualified: `<card id>·AC-n` (e.g. `shared/C04·AC-16`). Two cards in different report files can
 both own an `AC-16`; an unqualified citation outside its card is ambiguous and therefore wrong.
 (The behaviour index's JSON entries keep bare `AC-n` in their `ac` arrays — each entry's sibling
-`card` field already scopes them, and so does a plan row's Evidence cell, whose **Described in**
-cell names the card.)
+`card` field already scopes them. A migration's Plan-vs-Done Evidence cell may also use bare `AC-n`
+when the row's deliverable is described by exactly one card: the plan's **Described in** cell for that
+handler or member names it.)
 
 **Shipped code cites nothing.** A port's schema bodies — handlers, validators, converters, request
 handlers, attributes — carry no card id, AC number, decision id or task id, not in a comment, a name

@@ -198,8 +198,11 @@ page handler is client-side: it fires on a UI save in the browser, not on an ODa
 of that save is its captured `UpdateQuery` (the columns it wrote); where a behaviour writes data, read
 the record back and check the mapped values; a detail's link shows in its captured `SelectQuery` filter
 — each with one value change per AC, as `build-task-execution.md` → *Evidence, cheapest first* says.
-The AC lines go in the Evidence cell, where a bare `AC-n` is scoped by the row's **Described in**
-card; in the task's Notes cite them card-qualified (`<card id>·AC-n`). The page's code
+The AC lines go in the checklist row's Evidence cell. A bare `AC-n` there is read against one card:
+the row's **Deliverable** names the handler or member, and that item's row in the plan's
+`⚠ Custom methods` / `⚠ Other declared logic` table names the card in its **Described in** cell.
+When that cell names more than one card, or in the task's Notes, cite card-qualified
+(`<card id>·AC-n`). The page's code
 carries no card id, AC number, decision id or task id — not in a comment, a name or a string
 (`classic-ui-expert` → `08-card-contract.md`, *Shipped code cites nothing*).
 
@@ -223,12 +226,16 @@ let canEdit = false;
 try {
   const status = await readStatus(request);          // null when the record cannot be read
   canEdit = status != null && editableStatuses.includes(status);
-  if (status == null) await showMessage(request, "LockCheckNoDataMessage");
+  if (status == null) await showLockMessage(request, "NoData");
 } catch (e) {
-  await showMessage(request, "LockCheckFailedMessage");
+  await showLockMessage(request, "CheckFailed");
 }
 request.$context.CanEditFields = canEdit;
 ```
+
+`readStatus`, `setCanEditFieldsByStatus` and `showLockMessage` are stand-ins, not platform APIs:
+show the message the way the page shows any other dialog or notification, with its text a
+localizable resource string.
 
 The rule covers lock and permission flags only. Any other read — a tooltip, a counter, a
 default value — may still fail without blocking the page. Test the closed path as one of the row's
@@ -236,16 +243,18 @@ ACs: one record in a status the lock does not allow is enough to show that the f
 setting up a user without read rights is not required.
 
 **A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
-verified only when a record that MUST match it comes back. A record that must NOT match and does
-not come back is better still, but only when one already exists on the stand — never create a
-record for it. Pick the controls from the filter's own rule (for a date range: one record inside the
-range, one just outside it). Each of these
-leaves the row **unverified**, reported as `⚠ Partial — unverified` with its reason, never `✅ Done`:
+verified only when a record that MUST match it comes back, and — for each AC that says a record
+must NOT be shown — when an existing record that must not match does not come back. Pick the
+controls from the filter's own rule (for a date range: one record inside the range, one just
+outside it). Each of these leaves the row **unverified**, reported as `⚠ Partial — unverified` with its reason, never `✅ Done`:
 
 - the query returns 0 rows — an empty result proves nothing about a filter, it is what a wrong
   operator returns too;
 - the query fails (a SQL or request error);
-- the stand has no record that should match, so no positive control exists.
+- the stand has no record that should match, so no positive control exists;
+- the card has a negative AC ("an expired record must NOT be shown") and the stand has no record
+  that must not match — that AC gets no Evidence line, and the row is `⚠ Partial` naming it. Do not
+  create a record to fill the gap.
 
 The row's Evidence line names the control records (their ids or display values) and what each
 returned: `✅ Done — AC-2 inside range → returned; just after the end date → not returned`.
