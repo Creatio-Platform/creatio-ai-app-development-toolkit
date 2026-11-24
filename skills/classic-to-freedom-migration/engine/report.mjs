@@ -128,6 +128,43 @@ export function readDecisions(migrationDir) {
   } catch { /* same */ }
   return out;
 }
+// THE TEXT under each decision, keyed like `readDecisions`: the lines below a `D<N>` heading up to the next heading,
+// and the lines of a numbered `### Adjustments` item up to the next item. A table or plain-line decision has only
+// its title, so it has no entry here. The task card hands this text to a writer that is told not to read the files.
+export function readDecisionTexts(migrationDir) {
+  const out = new Map();
+  const collect = (lines, startOf, isEnd) => {
+    let id = null, body = [];
+    const flush = () => { if (id && body.some((l) => l.trim())) out.set(id, body.join("\n").trim()); };
+    for (const line of lines) {
+      const start = startOf(line);
+      if (start) { flush(); id = start; body = []; continue; }
+      if (isEnd(line)) { flush(); id = null; body = []; continue; }
+      if (id) body.push(line);
+    }
+    flush();
+  };
+  const heading = (l) => /^#{1,4}\s/.test(l);
+  try {
+    const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
+    collect(text.split(/\r?\n/), (l) => { const h = /^#{1,4}\s+D(\d+)\b/.exec(l); return h ? `D${h[1]}` : null; }, heading);
+  } catch { /* no decisions file — the card then carries titles only */ }
+  try {
+    const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
+    const at = plan.search(/^###\s+Adjustments/m);
+    if (at >= 0) {
+      const lines = plan.slice(at).split(/\r?\n/).slice(1);
+      collect(lines, (l) => { const m = /^(\d+)\. +\*\*[^*\n]+\*\*/.exec(l); return m ? `Adjustment ${m[1]}` : null; }, heading);
+      // An Adjustments item's first line is its title AND its text: keep that line as the start of the body.
+      for (const m of plan.slice(at).matchAll(/^(\d+)\. +\*\*([^*\n]+)\*\*([^\n]*)$/gm)) {
+        const rest = m[3].replace(/^[\s—–:.-]+/, "").trim();
+        const key = `Adjustment ${m[1]}`;
+        if (rest) out.set(key, [rest, out.get(key)].filter(Boolean).join("\n"));
+      }
+    }
+  } catch { /* same */ }
+  return out;
+}
 // The decision references a reason carries: `D4`, `D18 user decision`, `Adjustment 2`. `resolved` is what the
 // files say those are; `missing` is a reference nothing recorded.
 // A citation is LOAD-BEARING unless it is an incidental comparison/example ("like D3", "similar to D3", "as in
