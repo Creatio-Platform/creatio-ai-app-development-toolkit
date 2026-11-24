@@ -11808,6 +11808,53 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
   }
 }
 
+console.log("\n===== project conventions: every writer of a task file carries the block =====");
+
+// The plan cut, the split cut, a repair round and a minted task are four different writers; each must hand the
+// run's conventions to `renderTaskFile`, or a builder that reads only its own task never sees the namespace.
+{
+  const CONV = { requestPrefix: "ab", validatorPrefix: "ab", converterPrefix: "ab", helperModules: ["AbClientHelperModule"],
+    constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "ab. on 7 requests", confirmedBy: "plan", conflict: null, previous: null };
+  const RUN_C = { ...RUN, projectConventions: CONV };
+  const carries = (text) => /## Project conventions/.test(text) && /the `ab\.` namespace/.test(text) && /`ab\.<Element>Clicked`/.test(text) && /`AbConstants`/.test(text)
+    && text.indexOf("## Project conventions") < text.indexOf("## Deliverables");
+  const taskFiles = (dir) => fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+  check("conventions: the split cut carries the run's conventions into every task file it renders",
+    () => { const set = buildTaskSetFromSplit(RUN_C, FULL_SPLIT, OPTS); return set.projectConventions === CONV && set.tasks.every((t) => carries(renderTaskFile(t, set))); });
+  check("conventions: a repair round's task files carry the block (syncRepairDir)",
+    () => {
+      const dir = tmp("conv-repair");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, OPTS);
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+        return repairs.length > 0 && repairs.every(carries) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: a minted (orchestrator-declared) task file carries the block (addTasks)",
+    () => {
+      const dir = tmp("conv-mint");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = addTasks(dir, RUN_C, DECL, OPTS);
+        return !(res.problems || []).length && taskFiles(dir).some((t) => /orch-render-blocker/.test(t)) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: the block sits above the task card, so a sync that re-renders a repair file's card (from its heading to the deliverables) keeps the conventions",
+    () => {
+      const dir = tmp("conv-card");
+      try {
+        const d1 = { ...OPTS, decisions: new Map([["D1", "First decision"]]) };
+        syncTaskDir(dir, RUN_C, d1);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, d1);
+        syncTaskDir(dir, RUN_C, { ...OPTS, decisions: new Map([["D1", "First decision"], ["D2", "Later decision"]]) });
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8")).filter((t) => t.includes(TASK_CARD_HEADING));
+        const ordered = (t) => t.indexOf("## Project conventions") < t.indexOf(TASK_CARD_HEADING) && t.indexOf(TASK_CARD_HEADING) < t.indexOf("## Deliverables");
+        return repairs.length > 0 && repairs.every((t) => carries(t) && ordered(t) && t.includes("`D2` — Later decision"));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+}
+
 /* ================================================================================================
    USER DIRECTIVES AND DECISION PROVENANCE. A `## D<N>` entry in decisions.md may carry `Kind:`,
    `Decided by:`, `Quote:`, `Asked:`, `Scope:` and `Expectation:` lines. A directive becomes a filed +
