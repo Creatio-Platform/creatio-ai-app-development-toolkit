@@ -1,4 +1,4 @@
-// PROJECT CONVENTIONS (ENG-107272). A customer team named its requests `dw.`, imported its own helper module and
+// PROJECT CONVENTIONS. A customer team named its requests `dw.`, imported its own helper module and
 // kept every record id in constants modules; the migration wrote `usr.` requests and pasted raw GUIDs, because
 // nothing the analysis found could reach a builder. These checks hold the carrier end to end: the `--plan` gate,
 // the mapper's request names, the plan section and its record-id table, every task file, and the `--verify` rows.
