@@ -266,12 +266,12 @@ const writesToOf = (artifact) =>
 // ---8<--- THE BUDGET: how much work one sub-agent is handed ---8<---
 
 // DECLARED, not hard-coded at the call site, because these are calibration and calibration changes with evidence.
-// The unit is nominal build effort. A chunk was first sized to one sitting (40, about half an hour); ENG-107286
-// doubled it, because every extra task on one page is a fresh context that re-reads the briefs and the page before
-// it writes a line, and the measured cost of that relay was larger than the cost of a long sitting: one big page
-// had 11–15 writers, each starting at ~100k tokens, and a page built by one builder cost 16M tokens against 118M
-// for its relay-built neighbour. What a longer sitting costs when a session is lost is the open number; the
-// follow-up measurement on a live run decides whether 80 stays. Override per run with `opts.taskBudget`.
+// The unit is nominal build effort; a chunk is about two sittings (one sitting is roughly 40, half an hour). Every
+// extra task on one page is a fresh context that reads the briefs and the page before it writes a line, and on a
+// measured run that relay cost more than a long sitting does: a big page had 11–15 writers, each starting at ~100k
+// tokens, and a page built by one builder cost 16M tokens against 118M for a relay-built neighbour. What a longer
+// sitting costs when a session is lost is not measured; a live run decides whether 80 holds. Override per run with
+// `opts.taskBudget`.
 export const TASK_BUDGET = {
   chunk: 80,        // max weight in one task
   // A WHOLE RUN worth no more than this is ONE build task plus ONE review, not one task per artifact. The
@@ -280,8 +280,7 @@ export const TASK_BUDGET = {
   // last one just read. Measured: a 31-row section (write weight 60) came out as six tasks — reference cache,
   // scaffolding, two page builds, two reviews — whose five sub-agents cost 4.5M weighted tokens, of which the
   // cache alone was 0.78M for work no second builder read.
-  // Set when a chunk was 40, so it handed a single sub-agent two sittings' work as the lesser cost; at `chunk: 80`
-  // it is one chunk. A chunk boundary buys protection only when another task writes the same artifact afterwards;
+  // Equal to one chunk. A chunk boundary buys protection only when another task writes the same artifact afterwards;
   // a collapsed run has no such task, so an agent that runs long is re-dispatched against a folder of two files
   // rather than against a chain of six. At 60 the smoke section sat exactly on the line, which is not a
   // calibration; 80 is the round number above it that still leaves every measured multi-page plan (the smallest
@@ -1049,9 +1048,9 @@ function endWithOneBlankLine(text) {
   return text.length - end >= 3 ? `${text.slice(0, end)}\n\n` : text;
 }
 
-// THE TASK CARD (ENG-107286). A page is written by one task after another, each a fresh context, and each of
-// those contexts used to rebuild its picture of the run by re-reading the plan, the decisions and the worklog —
-// the measured run read its 139 KB plan 35 times — and still built beside code it never saw. The card puts what
+// THE TASK CARD. A page is written by one task after another, each a fresh context. Without a card each of those
+// contexts rebuilds its picture of the run from the plan, the decisions and the worklog — a measured run read its
+// 139 KB plan 35 times — and still builds beside code it never saw. The card puts what
 // the writer needs into the file it is handed: where its brief ends, how to see the page's code before it writes,
 // and the decisions in force, verbatim from decisions.md (titles, plus the plan's Adjustments). Only on a task
 // that writes a page: a review or the reference cache has no page code to own. `set.cardDecisions` is the

@@ -614,7 +614,7 @@ check("renderTaskFile: the file STATES the one-sub-agent contract and the parall
     && SAMPLE_TEXT.includes("`" + SAMPLE.writesTo + "`") && /no other task may be running against this artifact/.test(SAMPLE_TEXT)
     && /\*\*Depends on:\*\*/.test(SAMPLE_TEXT) && /Read their `## Notes` first/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
-// ENG-107286 — the writer OWNS the page's code, and the file it is handed is its brief (the task card).
+// The writer OWNS the page's code, and the file it is handed is its brief (the task card).
 check("owner: a page task gives its writer the page's code to own — the old `Build ONLY what is listed` and the `sequential is not permission` wording are gone, a deliverable outside its rows is still a proposal under `## Notes`",
   () => /you OWN this page's code/.test(SAMPLE_TEXT) && /yours to refactor/.test(SAMPLE_TEXT)
     && /`Page code` row passes/.test(SAMPLE_TEXT) && /outside your rows .* is not yours to change/s.test(SAMPLE_TEXT)
@@ -8780,7 +8780,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
-  // `3ea0cd8a` moved once, deliberately: the page's `Page code` row (ENG-107286) joined that task — a row added.
+  // `3ea0cd8a` carries the page's `Page code` row, so its digest covers that row as well.
   const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "2e621853" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
@@ -10605,7 +10605,7 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
         && JSON.stringify(snapOf(dir)) === JSON.stringify(closedSnap),
       () => ({ status: remedied.status, out: remedied.stdout.slice(0, 400), rows: closedLists.map(([, n]) => [closed?.rows[n - 1]?.outcome, closedMap.get(n)]) }));
     const written = fs.readFileSync(path.join(dir, FILE), "utf8");
-    check("task card (ENG-107286): a folder synced by the CLI with decisions.md in place writes the decisions in force into the task file — the writer does not re-read decisions.md",
+    check("task card: a folder synced by the CLI with decisions.md in place writes the decisions in force into the task file — the writer does not re-read decisions.md",
       () => written.includes("## Task card") && written.includes("- `D3` — not carried over"),
       () => written.slice(written.indexOf("## Task card"), written.indexOf("## Deliverables")));
     fs.rmSync(base, { recursive: true, force: true });
