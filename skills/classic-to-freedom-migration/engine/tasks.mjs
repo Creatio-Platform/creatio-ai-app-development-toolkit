@@ -1049,6 +1049,44 @@ function endWithOneBlankLine(text) {
   return text.length - end >= 3 ? `${text.slice(0, end)}\n\n` : text;
 }
 
+// THE TASK CARD (ENG-107286). A page is written by one task after another, each a fresh context, and each of
+// those contexts used to rebuild its picture of the run by re-reading the plan, the decisions and the worklog —
+// the measured run read its 139 KB plan 35 times — and still built beside code it never saw. The card puts what
+// the writer needs into the file it is handed: where its brief ends, how to see the page's code before it writes,
+// and the decisions in force, verbatim from decisions.md (titles, plus the plan's Adjustments). Only on a task
+// that writes a page: a review or the reference cache has no page code to own. `set.cardDecisions` is the
+// decisions map the caller read (`readDecisions`); without it the card says none were read rather than none exist.
+export const TASK_CARD_HEADING = "## Task card";
+function taskCardBlock(task, set = {}) {
+  const writes = String(task.writesTo || "");
+  if (!writes.startsWith("page:") && writes !== ARTIFACT_WHOLE) return [];
+  const pageArg = task.pageKey ? ` --page ${task.pageKey}` : "";
+  const L = ["", TASK_CARD_HEADING, "",
+    "- **Your brief is this file** and your page's section of the design spec (`refs/spec.md` when the reference"
+      + " cache exists, else `--spec`). Do not read `plan.md`, `decisions.md` or `worklog.md`: what they hold for"
+      + " this task is in this file. A behaviour card a row cites is read by its id in its part file, never the"
+      + " whole file.",
+    "- **See the page's code before you write it.** Save the page's `get-page` response before your first write"
+      + ` and after your last, and run \`node engine/codemap.mjs <file>${pageArg}\` (beside \`migrate.mjs\`) on`
+      + " it. It lists the handlers, the helpers already defined and where, and what the `Page code` row will hold"
+      + " you to: reuse a helper it lists, never paste a second copy. Clear its findings on code you touched;"
+      + " finding none is part of done.",
+    "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
+      + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
+      + " you write. Either way, extend the handler the map lists for a request instead of adding a second one, and"
+      + " move a part two handlers share into one helper.",
+  ];
+  const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
+  if (!decisions) L.push("- **Decisions in force:** not read for this render — read `decisions.md` once, by heading.");
+  else if (!decisions.length) L.push("- **Decisions in force:** none recorded.");
+  else {
+    L.push("- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
+      + " also in its `Outcome` cell):");
+    for (const [id, title] of decisions) L.push(`  - \`${id}\` — ${String(title).replace(/\s+/g, " ").trim()}`);
+  }
+  return L;
+}
+
 // THE ONE-SUB-AGENT CONTRACT, stated in the file the sub-agent is handed rather than only in the orchestrator's
 // instructions — the file is the prompt, so the rule that binds the reader has to be in it. The write ordering and
 // the nonce are both here because both are checkable afterwards: `writesTo` says what may not run beside this, and
@@ -1059,9 +1097,10 @@ function oneAgentBlock(task) {
     L.push(`- **Writes:** \`${task.writesTo}\` — no other task may be running against this artifact. A task with a`
       + " DIFFERENT `writesTo` (or an empty one) may run beside this one; one with the same must not."
       // "No other task may be RUNNING against this artifact" is satisfied by one agent taking a page's chunks one
-      // after another, so the sequential case is stated rather than left to be inferred.
-      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent — sequential is not permission to keep"
-      + " this one; finishing yours and picking up the next chunk of the same page is the violation.");
+      // after another, so the sequential case is stated rather than left to be inferred. The next agent is a fresh
+      // context, but it is not a guest: it takes the page over as its owner, from the code map (see the task card).
+      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner;"
+      + " do not pick up the next chunk of the same page yourself.");
   } else {
     L.push("- **Writes:** nothing — read-only. It may run beside any task it does not depend on.");
   }
@@ -1174,8 +1213,11 @@ export function renderTaskFile(task, set = {}) {
       "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
       "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
     ] : [
-      "> One task of an APPROVED migration plan. Build ONLY what is listed here — a deliverable that looks wrong is a",
-      "> proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+      "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
+      "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
+      "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
+      "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
+      "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
     ]),
     "",
     `- **Page key:** \`${task.pageKey}\``,
@@ -1184,6 +1226,7 @@ export function renderTaskFile(task, set = {}) {
     ...outcomeBlock(task.kind === REPAIR_KIND),
     ...markersBlock(),
     ...oneAgentBlock(task),
+    ...taskCardBlock(task, set),
     "",
     ENGINE_BODY_HEADING,
     "",
@@ -2856,7 +2899,8 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode,
+      cardDecisions: opts.decisions instanceof Map ? opts.decisions : null }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4785,6 +4829,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
     // reads off the clocks. The parent's own clock is untouched — `partial` already settled it, and `done` is the
     // same side of `SETTLED`.
     resolvePartials(merged);
+    merged.cardDecisions = opts.decisions instanceof Map ? opts.decisions : null;
     persistTaskSet(dir, merged);
   } catch (e) {
     const refusal = ledgerRefusal(e);

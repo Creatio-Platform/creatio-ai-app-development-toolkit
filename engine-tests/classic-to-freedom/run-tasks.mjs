@@ -614,6 +614,33 @@ check("renderTaskFile: the file STATES the one-sub-agent contract and the parall
     && SAMPLE_TEXT.includes("`" + SAMPLE.writesTo + "`") && /no other task may be running against this artifact/.test(SAMPLE_TEXT)
     && /\*\*Depends on:\*\*/.test(SAMPLE_TEXT) && /Read their `## Notes` first/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
+// ENG-107286 — the writer OWNS the page's code, and the file it is handed is its brief (the task card).
+check("owner: a page task gives its writer the page's code to own — the old `Build ONLY what is listed` and the `sequential is not permission` wording are gone, a deliverable outside its rows is still a proposal under `## Notes`",
+  () => /you OWN this page's code/.test(SAMPLE_TEXT) && /yours to refactor/.test(SAMPLE_TEXT)
+    && /`Page code` row passes/.test(SAMPLE_TEXT) && /outside your rows .* is not yours to change/s.test(SAMPLE_TEXT)
+    && !/Build ONLY what is listed/.test(SAMPLE_TEXT) && !/sequential is not permission/.test(SAMPLE_TEXT),
+  () => SAMPLE_TEXT.split("\n").slice(18, 32).join("\n"));
+check("owner: the next task on the page still goes to a DIFFERENT sub-agent, which takes the page over as its owner — the per-task check and the dispatch token stay",
+  () => /The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner/.test(SAMPLE_TEXT)
+    && /agentNonce/.test(SAMPLE_TEXT), () => SAMPLE_TEXT);
+{
+  const decisions = new Map([["D4", "Hide every element the Classic page did not have"], ["Adjustment 1", "Keep the Notes tab"]]);
+  const carded = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions });
+  const card = carded.slice(carded.indexOf("## Task card"), carded.indexOf("## Deliverables"));
+  check("task card: a page task carries the card — its brief is this file and the spec section, NOT plan.md / decisions.md / worklog.md, and it runs the code map before and after it writes",
+    () => card.startsWith("## Task card") && /Your brief is this file/.test(card)
+      && /Do not read `plan\.md`, `decisions\.md` or `worklog\.md`/.test(card)
+      && card.includes(`node engine/codemap.mjs <file> --page ${SAMPLE.pageKey}`) && /One place per behaviour/.test(card),
+    () => card);
+  check("task card: the decisions in force are inline, verbatim, the plan's Adjustments included",
+    () => card.includes("- `D4` — Hide every element the Classic page did not have") && card.includes("- `Adjustment 1` — Keep the Notes tab"),
+    () => card);
+  check("task card: an empty decisions file says none are recorded; a render without the map says they were not read, never that none exist",
+    () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: new Map() }).includes("**Decisions in force:** none recorded.")
+      && /\*\*Decisions in force:\*\* not read for this render/.test(SAMPLE_TEXT));
+  check("task card: a read-only review task has no card — it owns no page code",
+    () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes("## Task card"));
+}
 check("renderTaskFile: a read-only task says so instead of naming an artifact — a review that claimed a `writesTo` would block every task that shares its page for no reason",
   () => {
     const review = taskAt(SET, "child:C1", "Quality gates");
@@ -10577,6 +10604,10 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
         && closedLists.every(([, n]) => closed.rows[n - 1].outcome === "wont-do — not carried over (D3)" && closedMap.get(n) === "D3=")
         && JSON.stringify(snapOf(dir)) === JSON.stringify(closedSnap),
       () => ({ status: remedied.status, out: remedied.stdout.slice(0, 400), rows: closedLists.map(([, n]) => [closed?.rows[n - 1]?.outcome, closedMap.get(n)]) }));
+    const written = fs.readFileSync(path.join(dir, FILE), "utf8");
+    check("task card (ENG-107286): a folder synced by the CLI with decisions.md in place writes the decisions in force into the task file — the writer does not re-read decisions.md",
+      () => written.includes("## Task card") && written.includes("- `D3` — not carried over"),
+      () => written.slice(written.indexOf("## Task card"), written.indexOf("## Deliverables")));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
