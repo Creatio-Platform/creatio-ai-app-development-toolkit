@@ -1,5 +1,5 @@
-define("UsrOrderPage", ["WorkJsConstants", "Dw8xClientHelperModule", "BusinessRuleModule", "css!UsrOrderPageCSS"],
-	function(WorkJsConstants, Dw8xClientHelperModule, BusinessRuleModule) {
+define("UsrOrderPage", ["AbConstants", "AbClientHelperModule", "BusinessRuleModule", "css!UsrOrderPageCSS"],
+	function(AbConstants, AbClientHelperModule, BusinessRuleModule) {
 		return {
 			entitySchemaName: "UsrOrder",
 			diff: [
@@ -50,7 +50,7 @@ define("UsrOrderPage", ["WorkJsConstants", "Dw8xClientHelperModule", "BusinessRu
 			},
 			methods: {
 				onApplyClick: function() {
-					this.set("Status", { value: WorkJsConstants.OrderStatus.Approved });
+					this.set("Status", { value: AbConstants.OrderStatus.Approved });
 				}
 			}
 		};

@@ -10,19 +10,19 @@
 //
 //   "projectConventions": {
 //     "resolved": true,
-//     "requestPrefix": "dw",                  // the namespace custom requests use (`dw.SomethingRequest`)
-//     "validatorPrefix": "dw",                // optional; defaults to requestPrefix
-//     "converterPrefix": "dw",                // optional; defaults to requestPrefix
-//     "helperModules": ["Dw8xClientHelperModule"],   // modules the team's Freedom pages import for shared logic
-//     "constantsModules": ["WorkJsConstants"],       // modules that hold the ids of existing records
+//     "requestPrefix": "ab",                  // the namespace custom requests use (`ab.SomethingRequest`)
+//     "validatorPrefix": "ab",                // optional; defaults to requestPrefix
+//     "converterPrefix": "ab",                // optional; defaults to requestPrefix
+//     "helperModules": ["AbClientHelperModule"],   // modules the team's Freedom pages import for shared logic
+//     "constantsModules": ["AbConstants"],       // modules that hold the ids of existing records
 //     "source": "freedom-pages" | "schema-prefix" | "sys-setting" | "fallback",   // which detection step decided
-//     "evidence": "dw. — 7 requests on Page_PackageDelivery",
+//     "evidence": "ab. — 7 requests on Page_OrderDelivery",
 //     "confirmedBy": "plan" | "user",         // "user" once the user answered a conflict or a change
-//     "conflict": { "dw": 7, "usr": 2 },      // optional; request counts per namespace when detection disagreed
-//     "previous": { "folder": "<earlier migration folder>", "requestPrefix": "dw", "helperModules": [...],
+//     "conflict": { "ab": 7, "usr": 2 },      // optional; request counts per namespace when detection disagreed
+//     "previous": { "folder": "<earlier migration folder>", "requestPrefix": "ab", "helperModules": [...],
 //                   "constantsModules": [...] }   // optional; what the latest earlier migration recorded
 //   }
-//   "constantsModules": { "WorkJsConstants": { "body": "<define(...) source>" } | "<define(...) source>" }
+//   "constantsModules": { "AbConstants": { "body": "<define(...) source>" } | "<define(...) source>" }
 //
 // Pure: no I/O. migrate.mjs resolves the facts once per run (`conventionFacts`) and gates `--plan` on their issues;
 // designspec.mjs renders and verifies; tasks.mjs copies the block into every task file.
@@ -45,12 +45,12 @@ const GUID_IN_TEXT = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // Local, not imported: migrate.mjs and reads.mjs keep their own, and both sit above this module in the imports.
 const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const blank = (v) => typeof v !== "string" || v.trim() === "";
-// `dw`, `dw.` and ` dw ` are one namespace.
+// `ab`, `ab.` and ` ab ` are one namespace.
 export const normalizePrefix = (v) => (typeof v === "string" ? v.trim().replace(/\.+$/, "") : "");
 const nameList = (v) => (Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()))] : []);
 
 // The recorded block, normalized; null when there is none to read. Missing validator/converter prefixes take the
-// request prefix, because a project that names its requests `dw.` names its validators the same way unless it
+// request prefix, because a project that names its requests `ab.` names its validators the same way unless it
 // shows otherwise.
 export function conventionsOf(manifest) {
   const raw = manifest?.projectConventions;
@@ -137,7 +137,7 @@ function prefixIssues(c) {
   for (const kind of NAME_KINDS) {
     const key = PREFIX_KEY[kind];
     const v = c[key];
-    if (!NAMESPACE_RX.test(v)) issues.push(`projectConventions.${key} '${v}' is not a namespace — letters and digits only, no dot (\`dw\`, not \`dw.X\`)`);
+    if (!NAMESPACE_RX.test(v)) issues.push(`projectConventions.${key} '${v}' is not a namespace — letters and digits only, no dot (\`ab\`, not \`ab.X\`)`);
     else if (v.toLowerCase() === PLATFORM_NAMESPACE) issues.push(`projectConventions.${key} is '${PLATFORM_NAMESPACE}' — that namespace is the platform's own; a project's custom ${kind}s never use it`);
   }
   if (c.source === "fallback" && c.requestPrefix !== DEFAULT_REQUEST_PREFIX) {
@@ -148,7 +148,7 @@ function prefixIssues(c) {
 function recordIssues(c, raw) {
   const issues = [];
   if (!CONVENTION_SOURCES.includes(c.source)) issues.push(`projectConventions.source '${c.source ?? "(unset)"}' is not one of ${CONVENTION_SOURCES.join(" / ")}`);
-  if (!c.evidence) issues.push("projectConventions.evidence is empty — say what decided the prefix (e.g. \"dw. — 7 requests on Page_PackageDelivery\", or \"no custom requests; SchemaNamePrefix = Usr\")");
+  if (!c.evidence) issues.push("projectConventions.evidence is empty — say what decided the prefix (e.g. \"ab. — 7 requests on Page_OrderDelivery\", or \"no custom requests; SchemaNamePrefix = Usr\")");
   if (!CONFIRMED_BY.includes(c.confirmedBy)) issues.push(`projectConventions.confirmedBy '${c.confirmedBy ?? "(unset)"}' is not one of ${CONFIRMED_BY.join(" / ")}`);
   for (const key of ["helperModules", "constantsModules"]) {
     if (raw[key] !== undefined && !Array.isArray(raw[key])) issues.push(`projectConventions.${key} is not a list of module names`);
@@ -185,7 +185,7 @@ function moduleIssue(m) {
 // ---- the GUID index: every id a constants module holds, by its `Module.Path` ----
 //
 // A constants module returns (directly or through a local variable) a tree of objects whose leaves are record
-// ids. The path is the chain of property names from the module's return value: `WorkJsConstants.Status.New`.
+// ids. The path is the chain of property names from the module's return value: `AbConstants.Status.New`.
 // A variable the return value does not reach is still read, under its own name, so an id held only there is not
 // lost. Nothing is evaluated; only literals count.
 function guidIndexOf(modules) {
@@ -288,7 +288,7 @@ export function bundleCustomNames(entry, handlersSrc, ops = []) {
   for (const n of registeredNames(entry.converters)) names.converter.add(n);
   return names;
 }
-// The keys of a validators/converters registration object: `{ "dw.Positive": { … } }`.
+// The keys of a validators/converters registration object: `{ "ab.Positive": { … } }`.
 function registeredNames(v) {
   if (v == null) return [];
   if (isObj(v)) return Object.keys(v);

@@ -1,9 +1,9 @@
 # Project conventions (step 4.2)
 
-A customer team names its custom requests in its own namespace (`dw.`, not `usr.`), keeps shared logic in
+A customer team names its custom requests in its own namespace (`ab.`, not `usr.`), keeps shared logic in
 helper modules and keeps the ids of existing records (statuses, types) in constants modules. A migration that
 ignores this produces pages that work and still do not belong to the project: `usr.` requests beside the team's
-`dw.` ones, a helper re-implemented inline, record ids pasted as raw GUIDs. Record the conventions as facts in
+`ab.` ones, a helper re-implemented inline, record ids pasted as raw GUIDs. Record the conventions as facts in
 `manifest.projectConventions`; the engine gates `--plan` on them exactly like `placement`, prints them in the
 plan's `### Project conventions` section, copies them into every build and fix task file and checks them in
 `--verify`.
@@ -19,9 +19,9 @@ Read only the target package and its **direct** customer-package dependencies (n
 1. **Existing Freedom pages.** For each Freedom page of those packages (`list-pages`), `get-page` and read
    `ownBodySummary.handlerRequests`. Every name outside `crt.` counts for its namespace (the part before the
    first dot). The majority namespace is the prefix; `source: "freedom-pages"`, evidence names the count and
-   the page (`"dw. — 7 requests on Page_PackageDelivery"`).
+   the page (`"ab. — 7 requests on Page_OrderDelivery"`).
 2. **The team's schema name prefix.** No custom request found: the prefix the team's own schemas carry in those
-   packages (`Dw*` → `dw`); `source: "schema-prefix"`.
+   packages (`Ab*` → `ab`); `source: "schema-prefix"`.
 3. **The `SchemaNamePrefix` system setting**, lower-cased (`get-sys-setting SchemaNamePrefix`, `Usr` → `usr`);
    `source: "sys-setting"`.
 4. **Fallback** `usr`; `source: "fallback"`. A verified fallback is a valid answer — say in `evidence` what you
@@ -31,7 +31,7 @@ Validators and converters take the same prefix unless those pages register them 
 (`validatorPrefix` / `converterPrefix`).
 
 **A conflict is the only case that asks the user a separate question:** step 1 finds more than one custom
-namespace, or step 1 disagrees with step 2. Record the counts in `conflict` (`{ "dw": 7, "usr": 2 }`); the plan
+namespace, or step 1 disagrees with step 2. Record the counts in `conflict` (`{ "ab": 7, "usr": 2 }`); the plan
 prints one question with them and stays ⛔ until you record the user's answer as `confirmedBy: "user"`.
 Otherwise the conventions are approved with the plan (`confirmedBy: "plan"`).
 
@@ -60,20 +60,20 @@ earlier migration, read the `### Project conventions` table of the newest earlie
 ```json
 "projectConventions": {
   "resolved": true,
-  "requestPrefix": "dw",
-  "helperModules": ["Dw8xClientHelperModule"],
-  "constantsModules": ["WorkJsConstants"],
+  "requestPrefix": "ab",
+  "helperModules": ["AbClientHelperModule"],
+  "constantsModules": ["AbConstants"],
   "source": "freedom-pages",
-  "evidence": "dw. — 7 requests on Page_PackageDelivery",
+  "evidence": "ab. — 7 requests on Page_OrderDelivery",
   "confirmedBy": "plan",
-  "previous": { "folder": "<earlier migration folder>", "requestPrefix": "dw",
-                "helperModules": ["Dw8xClientHelperModule"], "constantsModules": ["WorkJsConstants"] }
+  "previous": { "folder": "<earlier migration folder>", "requestPrefix": "ab",
+                "helperModules": ["AbClientHelperModule"], "constantsModules": ["AbConstants"] }
 },
-"constantsModules": { "WorkJsConstants": { "body": "<define(...) source>" } }
+"constantsModules": { "AbConstants": { "body": "<define(...) source>" } }
 ```
 
 `validatorPrefix`, `converterPrefix`, `conflict` and `previous` are optional. A prefix is a bare namespace
-(`dw`, not `dw.X`); `crt` is the platform's and is refused.
+(`ab`, not `ab.X`); `crt` is the platform's and is refused.
 
 ## What the engine does with it
 
