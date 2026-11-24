@@ -82,7 +82,7 @@ const C1_BUNDLE = { entity: "C1", seed: SEED,
 //                                              payload moves, which is the drift a label-only digest missed;
 //   `bulk` adds many fields and handlers      → the `page:main` bucket outgrows the budget, so the chunking path
 //                                              is exercised instead of the monolithic one.
-const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
+const mainBody = ({ extraChild, extraField, renameField, bulk, handlers }) => {
   const dets = ['R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}}'];
   const items = ['{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}}'];
   if (extraChild) {
@@ -97,8 +97,10 @@ const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
   }
   // Handlers are the heaviest row kind per unit, so a handful of them is what pushes a bucket over the budget
   // without needing a page body so large it stops resembling a real one.
-  const methods = bulk
-    ? ",methods:{" + Array.from({ length: 8 }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
+  // `handlers` sets their number for a page whose weight is mostly handlers, the shape of a big custom form page.
+  const methodCount = handlers ?? (bulk ? 8 : 0);
+  const methods = methodCount
+    ? ",methods:{" + Array.from({ length: methodCount }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
     : "";
   return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]${methods}};});`;
 };
@@ -175,6 +177,20 @@ const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === page
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
 const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
+
+// The budget: a chunk is two sittings, so a big page is written by about half as many fresh contexts as at one
+// sitting per chunk, and a page within one chunk is still written by one.
+{
+  // A page whose weight is mostly handlers (30 of them, about a big custom form page with ~20 handlers and ~40 rules).
+  const BIG = manifestOf({ bulk: 2, handlers: 30 });
+  const bigRun = runMigration(BIG);
+  const atOneSitting = tasksOn(buildTaskSet(bigRun, { ...optsOf(BIG), taskBudget: { chunk: 40 } }), "page:main").length;
+  const now = tasksOn(buildTaskSet(bigRun, optsOf(BIG)), "page:main").length;
+  check("budget: a big handler-heavy page is cut into at most half the tasks one sitting per chunk gave it, and still more than one",
+    () => TASK_BUDGET.chunk === 80 && atOneSitting >= 4 && now > 1 && now * 2 <= atOneSitting, () => ({ atOneSitting, now }));
+  check("budget: a page within one chunk stays ONE task", () => tasksOn(SET, "page:main").length === 1,
+    () => tasksOn(SET, "page:main").map((t) => t.id));
+}
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
 // The user's approval of the plan a manifest renders, recorded in the migration folder above `dir` — `--tasks`,
 // `--start` and `--route` write nothing without it. The version is computed once per manifest.
