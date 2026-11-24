@@ -26,6 +26,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
+import { isFiledGateRow } from "./split.mjs";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -3455,19 +3456,19 @@ function directiveRows(pageKey, d) {
 // EVERY FILED ROW COMES BEFORE EVERY JUDGED ROW. A split claims a group's rows in order (`@Quality gates[n]` takes
 // the next n unclaimed), so the page's last writer claims the first `1 + N` rows (the design pass's filed row and
 // one per directive) and the review claims the rest. Interleaved pairs could not be cut by a group claim at all.
-const isFiledPart = (r) => r.vk?.part === DIRECTIVE_FILED;
+// "Filed" is `isFiledGateRow`, the same test the split counts the claim with.
 function spliceDirectiveRows(groups, directives, ctx) {
   if (!directives?.length) return;
   const gates = new Map(groups.filter((g) => (g.baseTitle || g.title) === "Quality gates").map((g) => [g.pageKey, g]));
   for (const key of publishedPageKeys(groups)) {
-    const added = pageGroup(key, "Quality gates",
-      directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d)), ctx).rows;
-    if (!added.length) continue;
+    const add = pageGroup(key, "Quality gates",
+      directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d)), ctx);
+    if (!add.rows.length) continue;
     const gate = gates.get(key);
-    const rows = [...(gate?.rows || []), ...added];
-    const ordered = [...rows.filter(isFiledPart), ...rows.filter((r) => !isFiledPart(r))];
+    const rows = [...(gate?.rows || []), ...add.rows];
+    const ordered = [...rows.filter(isFiledGateRow), ...rows.filter((r) => !isFiledGateRow(r))];
     if (gate) gate.rows = ordered;
-    else groups.push({ ...pageGroup(key, "Quality gates", [], ctx), rows: ordered });
+    else groups.push({ ...add, rows: ordered });
   }
 }
 // The page keys a set of groups publishes, in emission order — what a directive's `Scope:` may name.

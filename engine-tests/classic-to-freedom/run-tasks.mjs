@@ -11739,7 +11739,7 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     () => dRows.map((r) => ({ id: r.id, page: r.pageKey, group: r.group, part: r.vk?.part })));
   {
     const gate = groupsD.find((g) => g.pageKey === "main" && (g.baseTitle || g.title) === "Quality gates");
-    const parts = gate.rows.map((r) => `${r.deliverableId}`);
+    const parts = gate.rows.map((r) => r.deliverableId);
     check("directives (plan): main's `Quality gates` lists every filed row before every judged row, so `@Quality gates[2]` claims exactly the two filed rows",
       () => parts.join() === "quality:ran,directive:D1:filed,quality:judged,directive:D1:judged", () => parts);
   }
