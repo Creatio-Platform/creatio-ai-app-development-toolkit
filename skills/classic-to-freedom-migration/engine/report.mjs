@@ -52,12 +52,12 @@ export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*
 // number decides the verdict; the prose is not judged, only quoted beside each exercised page in the result report,
 // so a person reads what the builder says each check answered instead of trusting a typed number. null when the
 // task wrote no such line, which the verdict counts as 0.
-const BROWSER_CHECKS = /^[\s*>-]*Browser checks[\s:*]*(\d+)(.*)$/i;
+const BROWSER_CHECKS = /^[\s*>-]*Browser checks[\s:*]*(\d+)/i;
 function browserChecksLine(notes) {
   let found = null;
   for (const line of String(notes || "").split(/\r?\n/)) {
     const m = BROWSER_CHECKS.exec(line);
-    if (m) found = { n: Number(m[1]), text: m[2].trim().replace(/^[—–-]+/, "").trim() };
+    if (m) found = { n: Number(m[1]), text: line.slice(m[0].length).trim().replace(/^[—–-]+/, "").trim() };
   }
   return found;
 }
