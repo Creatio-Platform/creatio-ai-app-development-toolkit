@@ -589,17 +589,18 @@ check("entity-filter: static filter marked complete + NOT in the folded line",
 // list of the object. The plan states that on the rule and asks the user once per page before anything is built.
 {
   const scope = efcs.needsDecision.filter((n) => n.kind === "object-wide-scope");
-  check("object-wide scope: every entity rule is marked object-scoped and its note names the entity",
+  check("object-wide scope: every entity rule names the object it reaches and says it applies on all its pages",
     () => efcs.entityBusinessRules.length === 2
-      && efcs.entityBusinessRules.every((r) => r.scope === "object" && /applies on ALL pages and lists of X/.test(r.note)),
-    () => efcs.entityBusinessRules.map((r) => [r.scope, r.note]));
+      && efcs.entityBusinessRules.every((r) => r.entity === "X" && /applies on ALL pages and lists of the object/.test(r.note)),
+    () => efcs.entityBusinessRules.map((r) => [r.entity, r.note]));
   check("object-wide scope: ONE folded decision per page, fixed item, naming every filtered lookup",
     () => scope.length === 1 && scope[0].item === "entity business rules"
       && /\bLk\b/.test(scope[0].reason) && /\bSt\b/.test(scope[0].reason),
     () => scope);
   check("object-wide scope: the decision tells the agent to name the other pages and what a refusal means",
     () => /list-pages/.test(scope[0]?.reason) && /ALL pages and lists of X/.test(scope[0]?.reason)
-      && /not migrated — add manually: Freedom page rules have no lookup filter/.test(scope[0]?.reason),
+      && /not migrated — add manually: Freedom page rules have no lookup filter/.test(scope[0]?.reason)
+      && /`wont-do`/.test(scope[0]?.reason) && /--decide D<N> --wont-do/.test(scope[0]?.reason),
     () => scope[0]?.reason);
   const spec = renderDesignSpec({ entity: "X", changeSet: efcs });
   check("object-wide scope: the plan's rule row carries the label and ⚠ Confirm carries the folded row",

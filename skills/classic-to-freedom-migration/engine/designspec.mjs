@@ -582,6 +582,8 @@ function pageRuleRows(cs) {
 // entity/lookup filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
 // The target cell names the object an entity rule reaches, so the approver sees it is not limited to this page.
 function entityFilterRows(cs) {
+  const entity = (cs.entityBusinessRules || []).find((r) => r.entity)?.entity;
+  const target = `entity business rule — applies on ALL pages of ${entity ? `\`${esc(entity)}\`` : "the object"}`;
   const filtBy = {};
   for (const r of cs.entityBusinessRules || []) { filtBy[r.targetAttribute] ||= []; filtBy[r.targetAttribute].push(r); }
   return Object.entries(filtBy).map(([attr, rs]) => {
@@ -589,8 +591,6 @@ function entityFilterRows(cs) {
     const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
     const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
     const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
-    const entity = rs.find((r) => r.entity)?.entity;
-    const target = entity ? `entity business rule — applies on ALL pages of \`${esc(entity)}\`` : "entity business rule — applies on ALL pages of the object";
     return [`${esc(attr)} lookup`, `Filter · ${esc(attr)}`, effc, target];
   });
 }
@@ -3161,7 +3161,7 @@ const relatedPageQuery = (entity, pkg) =>
   `\`get-related-page-addon\` (through \`clio-run\`) with \`entity-schema-name\` = \`${esc(entity)}\` and \`package-name\` = ${pkg ? "`" + esc(pkg) + "`" : "the plan's target package"}`;
 function childWiringLabel(c, pkg) {
   const where = pkg ? `in \`${esc(pkg)}\`` : "in the target package";
-  return `Related list "${esc(c.via)}" opens ${childWiringPageText(c)} on Add and on open-record — the RelatedPage add-on for \`${esc(c.entity)}\` ${where} names that page as its default (and as its add page, when it has a separate one); until then the list opens nothing built here. The add-on is object-wide: every list, section and lookup of \`${esc(c.entity)}\` opens that page, so an existing default or add entry naming another page is moved only on the user's answer.`;
+  return `Related list "${esc(c.via)}" opens ${childWiringPageText(c)} on Add and on open-record — the RelatedPage add-on for \`${esc(c.entity)}\` ${where} names that page as its default (and as its add page, when it has a separate one); until then the list opens nothing built here. The add-on is object-wide: move an existing default or add entry naming another page only on the user's answer.`;
 }
 function childWiringRow(c, pkg) {
   const kind = childWiringKind(c);
