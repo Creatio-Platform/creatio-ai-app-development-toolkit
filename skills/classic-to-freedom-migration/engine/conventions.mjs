@@ -45,8 +45,9 @@ const GUID_IN_TEXT = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // Local, not imported: migrate.mjs and reads.mjs keep their own, and both sit above this module in the imports.
 const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const blank = (v) => typeof v !== "string" || v.trim() === "";
-// `ab`, `ab.` and ` ab ` are one namespace.
-export const normalizePrefix = (v) => (typeof v === "string" ? v.trim().replace(/\.+$/, "") : "");
+// `ab`, `ab.`, ` Ab ` and `AB` are one namespace: recorded lower-case, as the reference tells the agent to write it
+// (a `SchemaNamePrefix` of `Usr` is the namespace `usr`), so the mapper emits and `--verify` reads the same spelling.
+export const normalizePrefix = (v) => (typeof v === "string" ? v.trim().replace(/\.+$/, "").toLowerCase() : "");
 const nameList = (v) => (Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()))] : []);
 
 // The recorded block, normalized; null when there is none to read. Missing validator/converter prefixes take the
@@ -202,11 +203,10 @@ function guidIndexOf(modules) {
 }
 function moduleGuids(name, parsed) {
   const vars = factoryVars(parsed.factory);
-  const out = [];
-  const seen = new Set();
-  walkValue(parsed.returned, [name], { vars, out, seen });
-  for (const [varName, node] of vars) if (!seen.has(node)) walkValue(node, [name, varName], { vars, out, seen });
-  return out;
+  const st = { vars, out: [], onPath: new Set(), reached: new Set() };
+  walkValue(parsed.returned, [name], st);
+  for (const [varName, node] of vars) if (!st.reached.has(node)) walkValue(node, [name, varName], st);
+  return st.out;
 }
 // The factory's top-level `var`/`let`/`const` declarators with an object or array initializer.
 function factoryVars(factory) {
@@ -220,8 +220,10 @@ function factoryVars(factory) {
   }
   return vars;
 }
+// `onPath` holds the nodes on the CURRENT path only, so a self-reference terminates while one object exposed under
+// two keys (`{ OrderStatus: s, Status: s }`) is indexed under both paths — every candidate the plan must list.
 function walkValue(node, path, st) {
-  if (!node || st.seen.has(node)) return;
+  if (!node || st.onPath.has(node)) return;
   if (node.type === "Identifier") {
     if (st.vars.has(node.name)) walkValue(st.vars.get(node.name), path, st);
     return;
@@ -230,7 +232,8 @@ function walkValue(node, path, st) {
     if (typeof node.value === "string" && GUID_RE.test(node.value)) st.out.push({ guid: node.value.toLowerCase(), path: path.join(".") });
     return;
   }
-  st.seen.add(node);
+  st.onPath.add(node);
+  st.reached.add(node);
   if (node.type === "ObjectExpression") {
     for (const p of node.properties) {
       const key = p.type === "Property" ? staticPropKey(p) : null;
@@ -239,6 +242,7 @@ function walkValue(node, path, st) {
   } else if (node.type === "ArrayExpression") {
     node.elements.forEach((el, i) => walkValue(el, [...path, String(i)], st));
   }
+  st.onPath.delete(node);
 }
 
 // The record ids the builders will meet that a declared constants module holds, `[{ guid, paths }]` in first-seen
@@ -275,18 +279,22 @@ export function bundleDeps(entry) {
   } catch { /* not JSON — read the quoted names below */ }
   return [...String(v).matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
 }
-const QUALIFIED_NAME = /^([A-Za-z][A-Za-z0-9]*)\.[A-Za-z_$][\w$]*$/;
 // The custom names a built page declares, per kind: handler requests (plus the `clicked` requests its elements
-// fire), validator and converter registrations. null when the bundle carries none of the three sources.
+// fire), validator and converter registrations. A kind whose source the bundle did not carry is null — "not
+// provided", never "provided and empty" — and the whole result is null when none of the three is there.
 // `handlersSrc` is verifyCtx's own normalization of `entry.handlers` (source text either way).
 export function bundleCustomNames(entry, handlersSrc, ops = []) {
   if (!entry || (handlersSrc == null && entry.validators == null && entry.converters == null)) return null;
-  const names = { request: new Set(), validator: new Set(), converter: new Set() };
-  for (const m of String(handlersSrc ?? "").matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)) names.request.add(m[1]);
-  for (const o of ops) if (typeof o.request === "string") names.request.add(o.request);
-  for (const n of registeredNames(entry.validators)) names.validator.add(n);
-  for (const n of registeredNames(entry.converters)) names.converter.add(n);
-  return names;
+  let request = null;
+  if (handlersSrc != null) {
+    request = new Set([...String(handlersSrc).matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)].map((m) => m[1]));
+    for (const o of ops) if (typeof o.request === "string") request.add(o.request);
+  }
+  return {
+    request,
+    validator: entry.validators == null ? null : new Set(registeredNames(entry.validators)),
+    converter: entry.converters == null ? null : new Set(registeredNames(entry.converters)),
+  };
 }
 // The keys of a validators/converters registration object: `{ "ab.Positive": { … } }`.
 function registeredNames(v) {
@@ -294,14 +302,16 @@ function registeredNames(v) {
   if (isObj(v)) return Object.keys(v);
   return [...String(v).matchAll(/["']([A-Za-z][A-Za-z0-9]*\.[A-Za-z_$][\w$]*)["']\s*:/g)].map((m) => m[1]);
 }
-// The names outside the confirmed namespace, `[{ kind, name }]`. `prefixes` is `prefixesOf(conventions)`; `crt.`
-// is the platform's and always allowed.
+// The names outside the confirmed namespace, `[{ kind, name }]`. `prefixes` is `prefixesOf(conventions)`. The
+// namespace is the text before the FIRST dot (`ab.Order.Approve` is in `ab`), compared without case; a name with no
+// namespace at all is outside it. `crt.` is the platform's and always allowed. A kind not provided is skipped.
 export function foreignNames(names, prefixes) {
   const out = [];
   for (const kind of NAME_KINDS) {
-    for (const name of names[kind]) {
-      const ns = QUALIFIED_NAME.exec(name)?.[1];
-      if (!ns || ns.toLowerCase() === PLATFORM_NAMESPACE || ns === prefixes[kind]) continue;
+    for (const name of names[kind] || []) {
+      const dot = name.indexOf(".");
+      const ns = dot > 0 ? name.slice(0, dot).toLowerCase() : "";
+      if (ns === PLATFORM_NAMESPACE || (ns && ns === String(prefixes[kind] ?? "").toLowerCase())) continue;
       out.push({ kind, name });
     }
   }

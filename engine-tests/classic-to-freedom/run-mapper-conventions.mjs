@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { projectConventionsIssues, constantsGuidIndex, conventionsOf, bundleDeps, bundleCustomNames, foreignNames,
   DEFAULT_REQUEST_PREFIX } from "../../skills/classic-to-freedom-migration/engine/conventions.mjs";
-import { verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { syncTaskDir, renderTaskFile } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 
 export function runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS,
@@ -175,4 +176,66 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
   // AC 9 — the hard-coded literal is gone from the mapper.
   check("conventions: no `usr.` literal remains in mapper.mjs",
     () => !/usr\./.test(fs.readFileSync(path.join(ENGINE_DIR, "mapper.mjs"), "utf8")));
+
+  // One case for a namespace: a prefix copied as `AB` (or `Usr` from SchemaNamePrefix) is the namespace `ab`, so
+  // the requests the mapper emits and the names --verify accepts agree.
+  const upper = runMigration(manifest({ ...DW, requestPrefix: "AB" }), { baseDir: dir });
+  check("conventions: a prefix recorded in another case is the same namespace — emitted lower-case, and `Ab.X` on the page is not foreign",
+    () => upper.conventionsBlockers.length === 0 && upper.changeSet.requestHandlers.every((h) => h.request === "ab.ApplyButtonClicked")
+      && foreignNames({ request: new Set(["Ab.Go", "AB.Stop"]), validator: new Set(), converter: new Set() }, { request: "ab", validator: "ab", converter: "ab" }).length === 0,
+    () => upper.changeSet.requestHandlers);
+  check("conventions: the namespace is the text before the FIRST dot — `ab.Order.Approve` is in it, `zz.Order.Approve` and a name with no namespace are not",
+    () => foreignNames({ request: new Set(["ab.Order.Approve", "zz.Order.Approve", "NoNamespace"]), validator: null, converter: null }, { request: "ab" })
+      .map((f) => f.name).join() === "zz.Order.Approve,NoNamespace");
+  const handlersOnly = renderVerify(ab, opts, { pages: { main: page({ handlers: '[{ request: "ab.ApplyButtonClicked" }]', deps: "[]" }) } });
+  check("verify: a bundle that carries handlers but no validators/converters cannot claim them clean — the namespace row is confirm-on-stand, naming what is missing",
+    () => /confirm on-stand/.test(rowLine(handlersOnly.markdown, NS_ROW)) && /validators \/ converters/.test(rowLine(handlersOnly.markdown, NS_ROW)),
+    () => rowLine(handlersOnly.markdown, NS_ROW));
+
+  // AC 8 — one constants object exposed under two return keys: both paths are candidates.
+  const aliasIdx = constantsGuidIndex({ projectConventions: { ...DW, constantsModules: ["AliasConstants"] }, constantsModules: { AliasConstants:
+    'define("AliasConstants", [], function() { var s = { Done: "7d7d7d7d-0000-4000-8000-000000000007" }; return { OrderStatus: s, Status: s }; });' } });
+  check("conventions: an object exposed under two return keys is indexed under BOTH paths",
+    () => (aliasIdx.get("7d7d7d7d-0000-4000-8000-000000000007") || []).join() === "AliasConstants.OrderStatus.Done,AliasConstants.Status.Done",
+    () => Object.fromEntries(aliasIdx));
+
+  // AC 8 — a decision closes a per-module row, like the namespace row.
+  const modLabel = "[module-dep] AbConstants — project constants module: import it in the page's SCHEMA_DEPS";
+  const modDecided = renderVerify(ab, opts, { pages: { main: page({ handlers: "[]", validators: "{}", converters: "{}", deps: "[]" }) } }, new Set([verifyRowKey("main", modLabel)]));
+  check("verify: a D<N> decision recorded on a per-module row closes it although the page does not import the module",
+    () => !/⚠ verify/.test(rowLine(modDecided.markdown, MOD_ROW)) && (modDecided.decided || []).some((d) => MOD_ROW.test(d.label || JSON.stringify(d))),
+    () => ({ row: rowLine(modDecided.markdown, MOD_ROW), decided: modDecided.decided }));
+  check("conventions: the informational rest row keeps the aggregate's own id, so the plan's member line and earlier statuses still address it",
+    () => /module-dep:AbConstants, AbClientHelperModule, BusinessRuleModule/.test(JSON.stringify(rowIds(ab, opts))),
+    () => rowIds(ab, opts));
+
+  // AC 7 / AC 8 through the REAL payload path: get-page's bundle.json → assembleBuilt → built.json → --verify.
+  const asDir = fs.mkdtempSync(path.join(os.tmpdir(), "conv-assemble-"));
+  try {
+    const w = (f, v) => fs.writeFileSync(path.join(asDir, f), typeof v === "string" ? v : JSON.stringify(v));
+    fs.mkdirSync(path.join(asDir, "reads"));
+    w("reads/index.json", { version: 1, reads: [{ kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+      { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" }] });
+    w("reads/01-meta-main.json", { page: { schemaName: "UsrOrder_FormPage", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrSU", parentSchemaName: "PageWithTabsFreedomTemplate" } });
+    w("reads/02-bundle-main.json", { name: "UsrOrder_FormPage", viewConfig: [], handlers: '[{ request: "usr.ApplyButtonClicked" }]',
+      deps: '["@creatio-devkit/common","AbConstants"]', validators: "{}", converters: "{}" });
+    const { built } = assembleBuilt(asDir);
+    const viaFile = renderVerify(ab, opts, built);
+    check("verify via assembleBuilt: deps, handlers, validators and converters reach built.json — the namespace row blocks on `usr.`, the module row closes on the imported AbConstants",
+      () => /⚠ verify/.test(rowLine(viaFile.markdown, NS_ROW)) && /✅ Done/.test(rowLine(viaFile.markdown, MOD_ROW)),
+      () => [rowLine(viaFile.markdown, NS_ROW), rowLine(viaFile.markdown, MOD_ROW), Object.keys(built.pages?.main || {})]);
+  } finally { fs.rmSync(asDir, { recursive: true, force: true }); }
+
+  // AC 1 — a fold (a child page opened from a detail) inherits the root's conventions: its own bundle carries none.
+  const child = { schemas: [{ pkg: "CH", body: 'define("CH",[],function(){return{entitySchemaName:"CH",diff:[{operation:"insert",name:"GF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"GF"}},{operation:"insert",name:"GF2",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"GF2"}},{operation:"insert",name:"GoBtn",parentName:"ProfileContainer",propertyName:"items",values:{itemType:5,caption:{bindTo:"Resources.Strings.GoCaption"},click:{bindTo:"onGo"}}}],methods:{onGo:function(){}}};});' }],
+    seed: CLEAN_SEED, resources: { GoCaption: "Go" } };
+  const withChild = runMigration({ ...manifest(DW), schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"UsrOrder",diff:[{operation:"insert",name:"PT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"PD",parentName:"PT",values:{itemType:2}}],details:{PD:{schemaName:"CHDetail",entitySchemaName:"CH",filter:{detailColumn:"X",masterColumn:"Id"}}}};});' }],
+    childPageSchemas: { CH: child, CHPage: child } }, { baseDir: dir });
+  const childSpec = (withChild.childPages || []).map((c) => c.spec || "").join("\n");
+  check("conventions: a child page folded from a detail names its requests in the ROOT's prefix, and the root alone gates",
+    () => /ab\.GoBtnClicked/.test(childSpec) && !/usr\.GoBtnClicked/.test(withChild.plan) && withChild.conventionsBlockers.length === 0,
+    () => ({ blockers: withChild.conventionsBlockers, spec: childSpec.split("\n").filter((l) => /GoBtn/.test(l)) }));
 }
+
+// The deliverable ids of every row a run publishes.
+const rowIds = (result, opts) => checklistGroups(result, opts).flatMap((g) => (g.rows || g.items || []).map((r) => r.deliverableId)).filter(Boolean);

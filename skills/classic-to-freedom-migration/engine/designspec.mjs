@@ -2780,7 +2780,9 @@ function moduleDepRows(d, conventions) {
     ...cardField(d), vk: { type: "moduledep", module: m } }));
   if (rest.length) {
     const item = rest.join(", ");
-    rows.push({ deliverableId: memberId({ kind: d.kind, item }), label: `[module-dep] ${esc(item)}`, ...cardField(d),
+    // The aggregate's OWN id (`memberId(d)`, every dependency), not one rebuilt from the rest: the plan's member
+    // line and a `deliverableStatus` entry recorded before the split both address the row by it.
+    rows.push({ deliverableId: memberId(d), label: `[module-dep] ${esc(item)}`, ...cardField(d),
       info: "Classic define() dependencies outside the project's declared helper and constants modules — their contribution is carried by the handlers and rules that used them" });
   }
   return rows;
@@ -4743,9 +4745,12 @@ export function resolveNamespaceVk(vk, ctx) {
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its names cannot be checked", "missing"];
   if (!ctx.customNames) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the namespace", "skip"];
   const foreign = foreignNames(ctx.customNames, vk.prefixes || {});
+  const missing = NAME_KINDS.filter((k) => !ctx.customNames[k]);
+  if (foreign.length) return ["⚠ verify", `outside the project namespace: ${foreign.map((f) => `${f.kind} \`${esc(f.name)}\``).join(", ")} — rename it, or record a decision (\`--decide D<N>\`) that accepts it`, "unverified"];
+  // A kind the bundle did not carry was never read, so "none outside" cannot be claimed for it.
+  if (missing.length) return ["☐ confirm on-stand", `the bundle carries no ${missing.map((k) => `${k}s`).join(" / ")} — pass get-page's \`bundle.json\` whole to check them; the names it did carry are all in the project namespace`, "skip"];
   const total = NAME_KINDS.reduce((n, k) => n + ctx.customNames[k].size, 0);
-  if (!foreign.length) return ["✅ Done", `${total} request/validator/converter name(s) on the built page, none outside the project namespace`, "ok"];
-  return ["⚠ verify", `outside the project namespace: ${foreign.map((f) => `${f.kind} \`${esc(f.name)}\``).join(", ")} — rename it, or record a decision (\`--decide D<N>\`) that accepts it`, "unverified"];
+  return ["✅ Done", `${total} request/validator/converter name(s) on the built page, none outside the project namespace`, "ok"];
 }
 // A declared project module the Classic page used: the built page imports it, or a decision says why it does not.
 export function resolveModuleDepVk(vk, ctx) {

@@ -11630,5 +11630,39 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
   }
 }
 
+console.log("\n===== project conventions: every writer of a task file carries the block =====");
+
+// The plan cut, the split cut, a repair round and a minted task are four different writers; each must hand the
+// run's conventions to `renderTaskFile`, or a builder that reads only its own task never sees the namespace.
+{
+  const CONV = { requestPrefix: "ab", validatorPrefix: "ab", converterPrefix: "ab", helperModules: ["AbClientHelperModule"],
+    constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "ab. on 7 requests", confirmedBy: "plan", conflict: null, previous: null };
+  const RUN_C = { ...RUN, projectConventions: CONV };
+  const carries = (text) => /## Project conventions/.test(text) && /`ab\.<Name>Request`/.test(text) && /`AbConstants`/.test(text)
+    && text.indexOf("## Project conventions") < text.indexOf("## Deliverables");
+  const taskFiles = (dir) => fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+  check("conventions: the split cut carries the run's conventions into every task file it renders",
+    () => { const set = buildTaskSetFromSplit(RUN_C, FULL_SPLIT, OPTS); return set.projectConventions === CONV && set.tasks.every((t) => carries(renderTaskFile(t, set))); });
+  check("conventions: a repair round's task files carry the block (syncRepairDir)",
+    () => {
+      const dir = tmp("conv-repair");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, OPTS);
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+        return repairs.length > 0 && repairs.every(carries) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: a minted (orchestrator-declared) task file carries the block (addTasks)",
+    () => {
+      const dir = tmp("conv-mint");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = addTasks(dir, RUN_C, DECL, OPTS);
+        return !(res.problems || []).length && taskFiles(dir).some((t) => /orch-render-blocker/.test(t)) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
