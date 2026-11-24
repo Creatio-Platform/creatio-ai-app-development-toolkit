@@ -14,6 +14,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes, carriesComponent } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason, DORMANT_REASON } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { parseDecisionRecords } from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -15981,6 +15982,63 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   () => ["PDS_Job", "PDS_Owner"].map((c) => resolveVk({ type: "listcolumns", n: 1, columns: [{ name: "Job", code: "PDS_Job" }] },
     recCtxOf({ viewConfig: { items: [{ name: "JobField", type: "crt.ComboBox", control: "$PDS_Job" },
       { name: LIST_GRID, type: "crt.DataGrid", columns: [{ id: c, code: c }] }] } })).slice(0, 2)));
+
+// A business-rule attribute the USER accepted as built another way (`built-elsewhere` on their own decision) is
+// not reported missing; the same status on an orchestrator's decision closes nothing and is a plan-level issue.
+{
+  const DECISIONS_MD = [
+    "## D4 — Keep the support-unit filter in code",
+    "- Kind: answer", "- Decided by: user", "- Quote: \"leave that filter in the handler, it is fine\"", "- Asked: Rebuild the ParentSupportUnit filter as a business rule?",
+    "## D5 — Calendar rule as an entity rule",
+    "- Decided by: orchestrator",
+    "## D6 — Legacy note", "- Decision: nothing",
+  ].join("\n");
+  const records = parseDecisionRecords(DECISIONS_MD);
+  const decisions = new Map(records.map((r) => [r.id, r.title]));
+  const su = JSON.parse(verifyManifest);
+  const withStatus = (status) => ({ ...su, deliverableStatus: status });
+  const run = (m) => runMigration(m, { baseDir: DIR, decisions, decisionRecords: records });
+  const ruleRowOf = (res, m) => checklistGroups(res, checklistOpts(m)).flatMap((g) => g.rows).find((r) => r.vk?.type === "rule");
+  const userM = withStatus({ "main#business-rule:ParentSupportUnit": { status: "built-elsewhere", decision: "D4" } });
+  const userRun = run(userM);
+  const userRow = ruleRowOf(userRun, userM);
+  check("rules (built-elsewhere): a `built-elsewhere` entry on the user's own decision closes that rule attribute — the row's vk carries it with the quote, in the plan run and in a later mode that re-derives the groups from the manifest alone",
+    () => !(userRun.statusIssues || []).length && userRow.vk.decided?.ParentSupportUnit?.decision === "D4"
+      && userRow.vk.decided.ParentSupportUnit.quote === "leave that filter in the handler, it is fine",
+    () => ({ issues: userRun.statusIssues, vk: userRow?.vk }));
+  const names = userRow.vk.names;
+  const governs = (attr) => ({ name: `BusinessRule_${attr}`, condition: {}, actions: [{ type: "make-required", items: [`${attr}Field`] }] });
+  const built = (rules) => verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: { count: rules.length, rules } } } }, "main");
+  const others = names.filter((n) => n !== "ParentSupportUnit");
+  const allBuilt = resolveRuleVk(userRow.vk, built(others.map(governs)));
+  const oneShort = resolveRuleVk(userRow.vk, built(others.slice(1).map(governs)));
+  check("rules (built-elsewhere): the decided attribute is not counted missing — the other rules built read ✅ and quote the decision; a shortfall names only the attributes still owed",
+    () => allBuilt[2] === "ok" && /built another way on the user's decision: ParentSupportUnit \(D4: “leave that filter in the handler, it is fine”\)/.test(allBuilt[1])
+      && oneShort[2] === "unverified" && new RegExp(`missing: ${others[0]}`).test(oneShort[1]) && !/missing:[^;]*ParentSupportUnit/.test(oneShort[1]),
+    () => [names, allBuilt, oneShort]);
+  const onlyDecided = resolveRuleVk({ type: "rule", n: 1, names: ["ParentSupportUnit"], decided: userRow.vk.decided }, built([]));
+  check("rules (built-elsewhere): a row whose every attribute was built another way on the user's decision is ✅ on the decisions alone; a page reported NOT BUILT is still ❌",
+    () => onlyDecided[2] === "ok"
+      && resolveRuleVk({ type: "rule", n: 1, names: ["ParentSupportUnit"], decided: userRow.vk.decided }, verifyCtx({ pages: { main: false } }, "main"))[2] === "missing",
+    () => onlyDecided);
+  const orchM = withStatus({ "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D5" } });
+  const orchRun = run(orchM);
+  const plainM = withStatus({ "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D6" } });
+  const plainRun = run(plainM);
+  check("rules (built-elsewhere): the same status on an orchestrator's decision, or on an entry with no provenance, closes nothing — the attribute stays expected and the plan reports a `deliverableStatus` issue",
+    () => [[orchRun, orchM], [plainRun, plainM]].every(([r, m]) => !ruleRowOf(r, m).vk.decided
+        && (r.statusIssues || []).some((x) => x.key === "main#business-rule:Calendar" && x.kind === "decision" && /not the user's own decision/.test(x.problem))
+        && planGaps(r).some((g) => /deliverableStatus INVALID/.test(g))),
+    () => [orchRun.statusIssues, plainRun.statusIssues]);
+  const badAttr = run(withStatus({ "main#business-rule:Nope": { status: "built-elsewhere", decision: "D4" } }));
+  const badStatus = run(withStatus({ "main#business-rule:Calendar": { status: "wont-do", decision: "D4" } }));
+  const misplaced = run(withStatus({ "main#business-rules": { status: "built-elsewhere", decision: "D4" } }));
+  check("rules (built-elsewhere): an attribute the page's rules do not name, another status on a rule attribute, and `built-elsewhere` on a whole deliverable are each a named issue",
+    () => badAttr.statusIssues?.[0]?.kind === "unknown-id" && badAttr.statusIssues[0].valid.includes("main#business-rule:Calendar")
+      && badStatus.statusIssues?.[0]?.kind === "status" && misplaced.statusIssues?.[0]?.kind === "status"
+      && /business-rule attribute/.test(misplaced.statusIssues[0].problem),
+    () => [badAttr.statusIssues, badStatus.statusIssues, misplaced.statusIssues]);
+}
 
 // T7 — the same two legs end to end through `migrate.mjs --verify`, on the gate-clean SupportUnit manifest. Its
 // expected names are read from the plan it produces, and every built element is named so that it CANNOT match by

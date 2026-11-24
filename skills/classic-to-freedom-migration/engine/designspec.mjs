@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
-import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
+import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -2788,13 +2788,20 @@ export const childPageId = (c) => `child-page:${c.via || c.entity}`;
 export const NATIVE_CARD_ACTIONS_ID = "card-actions:native";
 export const STATUS_WONT_DO = "wont-do";
 export const STATUS_BUILD = "build";
+// One business-rule target attribute the user accepted as built another way (in code, as an entity rule), on their
+// own decision: `<pageKey>#business-rule:<Attribute>` → `{ status: "built-elsewhere", decision: "D<N>" }`. The
+// page's rule row stops counting that attribute as missing; whether the other build meets the decision is judged
+// against the decision itself, not here.
+export const STATUS_BUILT_ELSEWHERE = "built-elsewhere";
+export const RULE_ATTR_PREFIX = "business-rule:";
+export const ruleAttrId = (attr) => `${RULE_ATTR_PREFIX}${attr}`;
 // The kinds of `manifest.deliverableStatus` issue; `related` lists the deliverables that need a status of their own.
 export const STATUS_ISSUE = Object.freeze({ unknownId: "unknown-id", status: "status", engineClosed: "engine-closed", decision: "decision", related: "related", twice: "twice", otherPage: "other-page" });
 const isReusedChild = (c) => typeof c?.reuseFreedomPage === "string" && !!c.reuseFreedomPage;
 // The context a status is resolved in: the run's opts (the manifest entries, `isChildPage`, the host mode, the
 // decisions.md titles) plus the on-stand signals.
 function statusCtx(result, opts) {
-  return { ...opts, signals: result?.signals ?? opts?.signals };
+  return { ...opts, signals: result?.signals ?? opts?.signals, decisionProvenance: opts?.decisionProvenance ?? result?.decisionProvenance };
 }
 const CHILD_ACTION_REASON = "standard card action on a child edit page — the page has no section-level menu and the template ships its own controls";
 const PAGES_ONLY_REASON = "`placement.sectionHost.mode = pages-only-no-menu` — no section is registered, so no section entry or list page is built";
@@ -3355,6 +3362,24 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
   return { listConfirmOnMain, sectionLogicKey };
 }
 
+// The page's business-rules row. A target attribute the user accepted as built another way rides in `vk.decided`
+// (attribute → `{ decision, quote }`), so `--verify` stops counting it as missing and quotes the decision instead.
+function businessRulesRow(ruleN, ruleIds, pageKey, ctx) {
+  const decided = rulesBuiltElsewhere(pageKey, ruleIds, ctx);
+  return { deliverableId: "business-rules", label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds, ...(decided ? { decided } : {}) } };
+}
+// The `built-elsewhere` entries that close one of `attrs` on this page, each on the user's own decision; null when
+// none does. An entry that cannot stand (another status, an orchestrator's decision) closes nothing and is reported
+// by the plan's `deliverableStatus` check instead.
+function rulesBuiltElsewhere(pageKey, attrs, ctx) {
+  const out = {};
+  for (const attr of attrs) {
+    const e = ctx.deliverableStatus?.[statusKey(pageKey, ruleAttrId(attr))];
+    const user = e?.status === STATUS_BUILT_ELSEWHERE ? userDecision(ctx.decisionProvenance, e.decision) : null;
+    if (user) out[attr] = { decision: e.decision, quote: user.quote };
+  }
+  return Object.keys(out).length ? out : null;
+}
 export function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
@@ -3392,7 +3417,7 @@ export function checklistGroups(result, opts = {}) {
     ...(cs.pageBusinessRules || []).map((r) => r.element),
     ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
   ].filter(Boolean))];
-  if (ruleN) ruleItems.push({ deliverableId: "business-rules", label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  if (ruleN) ruleItems.push(businessRulesRow(ruleN, ruleIds, pageKey, ctx));
   G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
@@ -4119,7 +4144,23 @@ function builtRuleTokens(built, elementColumn) {
     return new Set(forms);
   });
 }
+// The attributes the user accepted as built another way, quoted: `Amount (D4: “keep it in code”)`.
+function decidedRuleText(decided) {
+  return Object.entries(decided).map(([a, d]) => `${esc(a)} (${esc(d.decision)}: “${esc(d.quote)}”)`).join(", ");
+}
+// A rule row whose every attribute the user accepted as built another way closes on those decisions alone; one
+// with attributes left is matched on them, and its text names the ones the decisions closed.
 export function resolveRuleVk(vk, ctx) {
+  const decided = vk.decided || {};
+  // A page nobody read, or one reported NOT BUILT, answers for every rule the same way it does without decisions.
+  if (ctx.entryAbsent || ctx.page === false) return resolveOpenRules(vk, ctx);
+  const closed = Object.keys(decided).length ? `; built another way on the user's decision: ${decidedRuleText(decided)}` : "";
+  const open = [...new Set(vk.names || [])].filter((n) => !Object.hasOwn(decided, n));
+  if (closed && !open.length) return ["✅ Done", `every expected business-rule target attribute was built another way on the user's decision: ${decidedRuleText(decided)}`, "ok"];
+  const [mark, ev, ...rest] = resolveOpenRules({ ...vk, names: open }, ctx);
+  return [mark, ev + closed, ...rest];
+}
+function resolveOpenRules(vk, ctx) {
   const want = [...new Set(vk.names || [])];
   if (!want.length) return ["⚠ verify", "no expected business-rule identity was published — nothing to match against", "unverified"];
   // D6 tri-state + R5's not-checkable, in this order: no page entry = nobody fetched the page (⚠ unverified);

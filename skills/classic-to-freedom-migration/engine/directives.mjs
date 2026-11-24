@@ -164,6 +164,23 @@ export function directivesOf(records) {
 export const directiveCovers = (directive, pageKey) =>
   directive.scope.includes(RUN_SCOPE) || directive.scope.includes(pageKey);
 
+// Who decided each entry, and in what words: `{ D<N>: { decidedBy, quote } }` for the entries that carry either
+// line, as a plain object so it rides on a run result the way the directives do. An entry without provenance is
+// absent, which reads as "not the user's own words".
+export function provenanceById(records) {
+  const out = {};
+  for (const r of records || []) {
+    const f = r.fields || {};
+    if (!blank(f.decidedBy) || !blank(f.quote)) out[r.id] = { decidedBy: f.decidedBy || "", quote: f.quote || "" };
+  }
+  return out;
+}
+// The user's own decision `id`: `Decided by: user` with the quote of their words, or null.
+export function userDecision(provenance, id) {
+  const p = provenance && Object.hasOwn(provenance, id) ? provenance[id] : null;
+  return p?.decidedBy === DECIDED_BY_USER && !blank(p.quote) ? p : null;
+}
+
 // The entries the orchestrator decided on its own. The final report lists them, so the user sees every choice
 // that was made without asking them.
 export function orchestratorDecisions(records) {

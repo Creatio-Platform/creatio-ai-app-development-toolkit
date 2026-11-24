@@ -30,6 +30,7 @@
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 //     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
+//                        // `"<pageKey>#business-rule:<Attribute>": { status: "built-elsewhere", decision: "D<N>" }` closes one business-rule target attribute the user accepted as built another way; D<N> needs `Decided by: user` and a `Quote:`
 //     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry or this list
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
@@ -59,10 +60,10 @@ import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop, publishedPageKeys } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues } from "./directives.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
@@ -173,7 +174,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
     // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
     // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, decisionProvenance: ctx.checklistOpts?.decisionProvenance, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -877,17 +878,32 @@ function validIdsOf(page, rows) {
 }
 function entryProblems(key, entry, byKey, rows, opts) {
   const e = entry && typeof entry === "object" ? entry : {};
-  const row = byKey.get(key);
   const page = key.includes("#") ? key.slice(0, key.indexOf("#")) : "";
+  if (key.slice(page.length + 1).startsWith(RULE_ATTR_PREFIX)) return ruleEntryProblems(key, e, page, rows, opts);
+  const row = byKey.get(key);
   if (!row) return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no deliverable of this plan", valid: validIdsOf(page, rows) }];
-  if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, kind: STATUS_ISSUE.status, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
+  if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, kind: STATUS_ISSUE.status, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`) — \`${STATUS_BUILT_ELSEWHERE}\` addresses one business-rule attribute, \`<pageKey>#${RULE_ATTR_PREFIX}<Attribute>\``, valid: [] }];
   const closedBy = row.na || engineStatusReason(row, opts);
   if (closedBy) return [{ key, kind: STATUS_ISSUE.engineClosed, problem: `is already closed by the engine: ${closedBy}`, valid: [] }];
   if (e.status === STATUS_BUILD) return [];
   return decisionProblems(key, e.decision, opts);
 }
-function decisionProblems(key, decision, { decisions, decisionsOptional }) {
-  if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${STATUS_WONT_DO}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
+// A `built-elsewhere` entry: one business-rule target attribute of the page, built another way (in code, as an
+// entity rule) on the USER's decision. The decision must resolve and carry `Decided by: user` with the quote of
+// their words — a choice the orchestrator made cannot close a rule the plan owes.
+function ruleEntryProblems(key, e, page, rows, opts) {
+  const attrs = rows.filter((r) => r.pageKey === page && r.vk?.type === "rule").flatMap((r) => r.vk.names || []);
+  if (!attrs.includes(key.slice(page.length + 1 + RULE_ATTR_PREFIX.length))) {
+    return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no business-rule target attribute of this page", valid: attrs.map((a) => statusKey(page, ruleAttrId(a))) }];
+  }
+  if (e.status !== STATUS_BUILT_ELSEWHERE) return [{ key, kind: STATUS_ISSUE.status, problem: `a business-rule attribute takes \`${STATUS_BUILT_ELSEWHERE}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
+  const resolved = decisionProblems(key, e.decision, opts, STATUS_BUILT_ELSEWHERE);
+  if (resolved.length || (!opts.decisions && opts.decisionsOptional)) return resolved;
+  return userDecision(opts.decisionProvenance, e.decision) ? [] : [{ key, kind: STATUS_ISSUE.decision,
+    problem: `\`${e.decision}\` is not the user's own decision — \`${STATUS_BUILT_ELSEWHERE}\` needs a decisions.md entry with \`Decided by: user\` and the \`Quote:\` of their words`, valid: [] }];
+}
+function decisionProblems(key, decision, { decisions, decisionsOptional }, status = STATUS_WONT_DO) {
+  if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${status}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
   if (!decisions && decisionsOptional) return [];
   if (!decisions) return [{ key, kind: STATUS_ISSUE.decision, problem: `no decisions.md was read, so \`${decision}\` cannot be resolved — plan with \`--out\` into the migration folder that holds decisions.md`, valid: [] }];
   if (!decisions.has(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${decision}\` does not resolve to an entry in decisions.md — add it there first`, valid: [] }];
@@ -1101,6 +1117,10 @@ export function checklistOpts(manifest, opts = {}) {
     // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
     deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
     decisions: opts.decisions instanceof Map ? opts.decisions : null,
+    // Who decided each decisions.md entry (`Decided by:` and `Quote:`), read once at the root and handed to every
+    // fold: a `built-elsewhere` rule status stands only on the user's own decision.
+    // Null when this call read no decisions.md, so the root result's copy is used instead.
+    decisionProvenance: opts.decisionProvenance || (opts.decisionRecords ? provenanceById(opts.decisionRecords) : null),
     decisionsOptional: opts.decisionsOptional === true,
     // Root-only, like the plan's `### Won't do` list it is printed in.
     decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
@@ -3160,6 +3180,9 @@ export function runMigration(manifest, opts = {}) {
   // them: a directive changes what the plan builds.
   const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
   out.directives = directivesOf(decisionRecords);
+  // Rides on the root result too, so a mode that re-derives the groups from `checklistOpts(manifest)` alone (the cut,
+  // `--verify`) closes the same rule attributes the plan did.
+  if (!opts.scopeSchema) out.decisionProvenance = specOpts.decisionProvenance;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf, out.directives);
   out.translationsMissing = translationsMissing(manifest);
