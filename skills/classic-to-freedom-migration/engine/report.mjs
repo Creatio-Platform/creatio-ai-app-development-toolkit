@@ -61,18 +61,22 @@ export function browserChecksOf(notes) {
 }
 // The cap a task's browser checks are held to: the second only confirms a fix the first one found.
 const BROWSER_CHECK_CAP = 2;
+// A task that saved something on its page: closed `done`, or `partial` with part of it built. One closed
+// `wont-do` / `not-applicable` saved nothing, and a `postponed` one has not built yet, so neither owes a check.
+const BUILT_STATUSES = new Set([S_DONE, S_PARTIAL]);
 // WHICH BUILT PAGES A BROWSER CHECK EXERCISED. A page is the artifact its page-writing tasks write; it is exercised
 // when at least one of them reports a check. A run can be complete and still have pages nobody opened after a save,
-// and those pages are what a person has to check by hand.
-function browserExercise(tasks) {
+// and those pages are what a person has to check by hand. Under `Browser: none` the user declined the check for the
+// run, so no built page counts as exercised whatever its notes say.
+function browserExercise(tasks, declined = false) {
   const pages = new Map();
   const capBreaches = [];
   for (const t of tasks) {
-    if (!writesPage(t.writesTo)) continue;
+    if (!writesPage(t.writesTo) || !BUILT_STATUSES.has(t.status)) continue;
     const n = browserChecksOf(t.notes) ?? 0;
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
     const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
-    page.exercised ||= n > 0;
+    page.exercised ||= n > 0 && !declined;
     page.tasks.push(t);
     pages.set(t.writesTo, page);
   }
@@ -767,7 +771,8 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const postponedCount = postponedRows.length;
   const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
-  const exercise = browserExercise(tasks);
+  const browserAnswer = dir ? readWorklogBrowser(dir) : null;
+  const exercise = browserExercise(tasks, /^Browser: none\b/.test(browserAnswer || ""));
   const { unexercised } = exercise;
   let verdict;
   if (!complete) {
@@ -796,7 +801,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
-  const browser = browserSection(exercise, pageName, unexercised.length && dir ? readWorklogBrowser(dir) : null);
+  const browser = browserSection(exercise, pageName, browserAnswer);
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",

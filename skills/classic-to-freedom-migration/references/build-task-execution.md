@@ -289,7 +289,7 @@ whole file.
 **Report the count.** Every task that saved a page writes one line under `## Notes`, verbatim in
 this shape: `Browser checks: N — <what each check answered>`, e.g. `Browser checks: 2 — 1: loads
 clean, Owner populated, Visa detail filtered by Id, <card id>·AC-2 UpdateQuery wrote Status; 2: confirms the
-Status caption fix`. A `page-smoke` call counts as a check. Write the line even when you opened
+Status caption fix`. A `page-smoke` call or a runtime render check counts as a check. Write the line even when you opened
 nothing (`Browser checks: 0 — <why>`): N=0 is valid only under `Browser: none`, or when the check
 could not run (a `page-smoke` refusal, a page that would not open), and the reason says which —
 never because the `get-page` read-backs looked right, which read back the saved schema, not the

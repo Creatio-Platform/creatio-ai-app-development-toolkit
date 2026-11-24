@@ -5866,6 +5866,22 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /Browser: none \(user: "I will check the pages myself"\)/.test(noneRep.markdown),
       () => noneRep.markdown.slice(noneRep.markdown.indexOf("## Not exercised")));
   }
+  const nothingBuilt = exercisedRep([pageTask("w-a", "main", "Browser checks: 1 — loads clean"),
+    { ...pageTask("w-b", "child:C1", ""), status: "wont-do" }, { ...pageTask("w-c", "child:C2", ""), status: "not-applicable" },
+    { ...pageTask("w-d", "child:C3", ""), status: "postponed" }], tmp("result-report-nothing-built"));
+  check("exercised: a page whose only task closed wont-do, not-applicable or postponed built nothing, so it never turns the run 🟠",
+    () => nothingBuilt.counts.unexercised === 0 && !/🟠/.test(nothingBuilt.markdown) && !/Not exercised in a browser/.test(nothingBuilt.markdown),
+    () => nothingBuilt.markdown.split("\n")[2]);
+  {
+    const dbase = tmp("result-report-browser-declined");
+    const ddir = path.join(dbase, "build-tasks");
+    fs.mkdirSync(ddir, { recursive: true });
+    fs.writeFileSync(path.join(dbase, "worklog.md"), "Browser: none (user: \"no browser\")\n");
+    const declinedRep = exercisedRep([pageTask("d-a", "main", "Browser checks: 1 — opened it anyway")], ddir);
+    check("not exercised: under `Browser: none` a built page counts as unexercised even when its task reports a check — the user declined the check for the run",
+      () => declinedRep.verdictColour === "orange" && declinedRep.counts.unexercised === 1,
+      () => declinedRep.markdown.split("\n")[2]);
+  }
   const overCap = exercisedRep([pageTask("o-a", "main", "Browser checks: 4 — loads; fix; fix again; fix again")], tmp("result-report-cap"));
   check("cap: a task reporting more than two browser checks is listed as a cap breach — a warning, so the verdict stays 🟢",
     () => overCap.verdictColour === "green" && /Browser checks over the cap of 2/.test(overCap.markdown) && /o-a/.test(overCap.markdown)
@@ -6681,13 +6697,18 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     check("browser gate: `startTask` with a gate and no answer REFUSES a page-writing task, names its artifact and opens NO clock",
       () => noAnswer.started === null && noAnswer.blockedByBrowser === page.writesTo && !readTimingsFile(d).running[page.id],
       () => ({ started: noAnswer.started, blockedByBrowser: noAnswer.blockedByBrowser, running: readTimingsFile(d).running }));
-    const answered = startTask(d, page.id, RUN, { ...OPTS, browserGate: { answer: "Browser: none" } }, null, AT(2));
-    check("browser gate: with an answer recorded — `none` included — the same task is not held by the gate",
-      () => !answered.blockedByBrowser, () => answered.blockedByBrowser);
     const cacheStart = startTask(d, cache.id, RUN, { ...OPTS, browserGate: { answer: null } }, null, AT(3));
     check("browser gate: a task that writes no page (the reference cache) starts with no answer recorded",
       () => !cacheStart.blockedByBrowser && cacheStart.started?.id === cache.id,
       () => ({ blockedByBrowser: cacheStart.blockedByBrowser, started: cacheStart.started?.id }));
+    // A folder of its own for the answered start, with the page task's dependencies closed the way a run closes them.
+    const da = path.join(tmp("browser-gate-answered"), "build-tasks");
+    syncTaskDir(da, RUN, OPTS);
+    clearDepsOf(da, page.id, RUN, OPTS, 2);
+    const answered = startTask(da, page.id, RUN, { ...OPTS, browserGate: { answer: "Browser: none" } }, null, AT(40));
+    check("browser gate: with an answer recorded — `none` included — the same task starts and opens its clock",
+      () => !answered.blockedByBrowser && answered.started?.id === page.id && !!readTimingsFile(da).running[page.id],
+      () => ({ blockedByBrowser: answered.blockedByBrowser, started: answered.started?.id, running: readTimingsFile(da).running }));
 
     // The same gate through the CLI: `worklog.md` of the migration folder is what the engine reads.
     const cd = path.join(tmp("browser-gate-cli"), "build-tasks");
@@ -6705,10 +6726,19 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
       () => new RegExp(`\\[${pageId}\\] — writes .*no \`Browser:\` line yet`).test(nextHeld.stdout || "")
         && !new RegExp(`--start "?${pageId}`).test(nextHeld.stdout || ""),
       () => (nextHeld.stdout || "").slice(0, 1200));
+    fs.writeFileSync(path.join(path.dirname(cd), "worklog.md"), "# Worklog\n\nRoute: agent\n");
+    const hoManifest = path.join(path.dirname(cd), "manifest.json");
+    fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
+    const handoffHeld = cliFileApproved(hoManifest, "--tasks", cd, "--handoff");
+    check("browser gate (CLI): `--handoff` withholds the page task too — a fresh session would otherwise resume on a refusal",
+      () => new RegExp(`\\[${pageId}\\] — writes .*no \`Browser:\` line yet`).test(handoffHeld.stdout || "")
+        && !fs.existsSync(path.join(path.dirname(cd), "resume.md")),
+      () => (handoffHeld.stdout || "").slice(0, 1200));
     recordBrowserAnswer(cd, "page-smoke");
+    clearDepsOf(cd, pageId, RUN, OPTS, 50);
     const passed = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
-    check("browser gate (CLI): with `Browser: page-smoke` recorded in worklog.md, the browser gate does not hold that task",
-      () => !/`Browser:`/.test(`${passed.stdout || ""}${passed.stderr || ""}`),
+    check("browser gate (CLI): with `Browser: page-smoke` recorded in worklog.md and its dependencies closed, `--start` exits 0 and opens the task's clock",
+      () => passed.status === 0 && /DISPATCH TOKEN/.test(passed.stdout || "") && !!readTimingsFile(cd).running[pageId],
       () => `${passed.stdout || ""}${passed.stderr || ""}`.slice(0, 600));
   }
   {
