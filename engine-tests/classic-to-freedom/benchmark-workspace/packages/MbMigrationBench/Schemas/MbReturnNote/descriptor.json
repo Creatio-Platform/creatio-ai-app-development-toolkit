@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "05fbe3c8-335f-461d-90ae-f67ee8c02152",
+    "Name": "MbReturnNote",
+    "ModifiedOnUtc": "\/Date(1795500250000)\/",
+    "Parent": {
+      "UId": "1bab9dcf-17d5-49f8-9536-8e0064f1dce0",
+      "Name": "BaseEntity"
+    },
+    "ManagerName": "EntitySchemaManager",
+    "Caption": "Return note",
+    "DependsOn": []
+  }
+}

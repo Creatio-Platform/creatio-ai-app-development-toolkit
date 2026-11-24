@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+    "Name": "MbReturnNotePage",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "221a75e8-fcf0-59e8-9884-be048a186a77",
+      "Name": "MbBaseDocumentPage"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Return note edit page",
+    "DependsOn": []
+  }
+}

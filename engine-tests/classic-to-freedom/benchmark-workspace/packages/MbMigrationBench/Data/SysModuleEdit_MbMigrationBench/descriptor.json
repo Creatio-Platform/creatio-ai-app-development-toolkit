@@ -1,0 +1,70 @@
+﻿{
+  "Descriptor": {
+    "UId": "9b2eaf60-3091-4637-96a6-5ab8db9b38ba",
+    "Name": "SysModuleEdit_MbMigrationBench",
+    "ModifiedOnUtc": "\/Date(1795500739000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "24666f2d-049f-4867-ae2c-db681c40c001",
+      "Name": "SysModuleEdit"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "55132174-2b96-4e0a-830c-b8e952b12c45",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "PageCaption",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "a19bf4bf-e22b-49b5-b6e0-918ff6290020",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "ActionKindCaption",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "c53035ba-426a-4b98-a5fa-2d2966b2c908",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "UseModuleDetails",
+        "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"
+      },
+      {
+        "ColumnUId": "ca35057b-1338-4316-9d6f-8c35f98f5db5",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "Position",
+        "DataTypeValueUId": "6b6b74e2-820d-490e-a017-2b73d4ccf2b0"
+      },
+      {
+        "ColumnUId": "f14f9a76-5ad3-47f9-b175-b7648b7bd340",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "ActionKindName",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "f7b189f1-06c6-4b54-bb04-eaf91625177f",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "SysModuleEntity",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "fcd5ccc3-2a7a-4a9d-b8b8-e78f76efe747",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "CardSchemaUId",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      }
+    ]
+  }
+}

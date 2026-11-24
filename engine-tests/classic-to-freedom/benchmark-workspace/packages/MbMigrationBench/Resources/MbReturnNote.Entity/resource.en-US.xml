@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Return note" />
+			<Item Name="Columns.MbAmount.Caption" Value="Amount" />
+			<Item Name="Columns.MbContract.Caption" Value="Contract" />
+			<Item Name="Columns.MbDate.Caption" Value="Date" />
+			<Item Name="Columns.MbIsPosted.Caption" Value="Posted" />
+			<Item Name="Columns.MbName.Caption" Value="Name" />
+			<Item Name="Columns.MbNumber.Caption" Value="Number" />
+			<Item Name="Columns.MbReason.Caption" Value="Return reason" />
+			<Item Name="EventsProcessSchema.Caption" Value="Business process" />
+		</Items>
+	</Group>
+</Resources>

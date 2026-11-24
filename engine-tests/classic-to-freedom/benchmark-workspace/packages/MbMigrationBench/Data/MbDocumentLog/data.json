@@ -1,0 +1,44 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0008-4b8e-9c3a-5d6e7f8a9ba1"
+        },
+        {
+          "SchemaColumnUId": "25a802c9-1632-4dec-9705-ed32d2a69d6a",
+          "Value": "0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b81"
+        },
+        {
+          "SchemaColumnUId": "5d697923-4c61-4271-a18e-0f399e7058c5",
+          "Value": "Posted document D-0001"
+        },
+        {
+          "SchemaColumnUId": "7d98be4d-e023-4ad6-a306-00e1f77a0f11",
+          "Value": "MbDeliveryNote"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0008-4b8e-9c3a-5d6e7f8a9ba2"
+        },
+        {
+          "SchemaColumnUId": "25a802c9-1632-4dec-9705-ed32d2a69d6a",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51"
+        },
+        {
+          "SchemaColumnUId": "5d697923-4c61-4271-a18e-0f399e7058c5",
+          "Value": "Contract approved"
+        },
+        {
+          "SchemaColumnUId": "7d98be4d-e023-4ad6-a306-00e1f77a0f11",
+          "Value": "MbContract"
+        }
+      ]
+    }
+  ]
+}

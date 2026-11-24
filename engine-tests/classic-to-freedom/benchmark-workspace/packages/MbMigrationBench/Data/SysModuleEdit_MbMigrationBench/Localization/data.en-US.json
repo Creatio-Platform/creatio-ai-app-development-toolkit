@@ -1,0 +1,80 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "ColumnName": "Id",
+          "Value": "0d4f6a10-0001-4b8e-9c3a-5d6e7f8a9b11"
+        },
+        {
+          "SchemaColumnUId": "55132174-2b96-4e0a-830c-b8e952b12c45",
+          "ColumnName": "PageCaption",
+          "Value": "Contract"
+        },
+        {
+          "SchemaColumnUId": "a19bf4bf-e22b-49b5-b6e0-918ff6290020",
+          "ColumnName": "ActionKindCaption",
+          "Value": "New contract"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "ColumnName": "Id",
+          "Value": "0d4f6a10-0001-4b8e-9c3a-5d6e7f8a9b12"
+        },
+        {
+          "SchemaColumnUId": "55132174-2b96-4e0a-830c-b8e952b12c45",
+          "ColumnName": "PageCaption",
+          "Value": "Contract item"
+        },
+        {
+          "SchemaColumnUId": "a19bf4bf-e22b-49b5-b6e0-918ff6290020",
+          "ColumnName": "ActionKindCaption",
+          "Value": "New contract item"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "ColumnName": "Id",
+          "Value": "0d4f6a10-0001-4b8e-9c3a-5d6e7f8a9b13"
+        },
+        {
+          "SchemaColumnUId": "55132174-2b96-4e0a-830c-b8e952b12c45",
+          "ColumnName": "PageCaption",
+          "Value": "Delivery note"
+        },
+        {
+          "SchemaColumnUId": "a19bf4bf-e22b-49b5-b6e0-918ff6290020",
+          "ColumnName": "ActionKindCaption",
+          "Value": "New delivery note"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "ColumnName": "Id",
+          "Value": "0d4f6a10-0001-4b8e-9c3a-5d6e7f8a9b14"
+        },
+        {
+          "SchemaColumnUId": "55132174-2b96-4e0a-830c-b8e952b12c45",
+          "ColumnName": "PageCaption",
+          "Value": "Return note"
+        },
+        {
+          "SchemaColumnUId": "a19bf4bf-e22b-49b5-b6e0-918ff6290020",
+          "ColumnName": "ActionKindCaption",
+          "Value": "New return note"
+        }
+      ]
+    }
+  ]
+}

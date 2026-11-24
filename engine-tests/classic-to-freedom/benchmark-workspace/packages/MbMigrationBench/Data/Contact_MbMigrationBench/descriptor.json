@@ -1,0 +1,35 @@
+﻿{
+  "Descriptor": {
+    "UId": "b9d22212-50b8-447a-bfd0-0c3e615353b8",
+    "Name": "Contact_MbMigrationBench",
+    "ModifiedOnUtc": "\/Date(1795500764000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "16be3651-8fe2-4159-8dd0-a803d4683dd3",
+      "Name": "Contact"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "5c6ca10e-1180-4c1e-8a50-55a72ff9bdd4",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "Account",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "a5cca792-47dd-428a-83fb-5c92bdd97ff8",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "Name",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      }
+    ]
+  }
+}

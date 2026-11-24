@@ -1,0 +1,10 @@
+= MetaData.Schema.UId "c82aaf3e-3302-5ef1-9805-687c7b6f1c2e"
+= MetaData.Schema.A2 "MbContractSection"
+= MetaData.Schema.A5 "58d605dd-d413-50d8-adbf-95a74c266f3a"
++ MetaData.Schema.B2 {
+  "UId": "6d332f22-777c-5fc0-a1c2-5f341f369c80",
+  "A2": "MbCloseSelectedCaption",
+  "A3": "c82aaf3e-3302-5ef1-9805-687c7b6f1c2e",
+  "A4": "c82aaf3e-3302-5ef1-9805-687c7b6f1c2e",
+  "A5": "58d605dd-d413-50d8-adbf-95a74c266f3a"
+}

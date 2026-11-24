@@ -1,0 +1,38 @@
+= MetaData.Schema.UId "8b2d3d89-6842-5967-9571-e52a9c216ac8"
+= MetaData.Schema.A2 "MbContractPage"
+= MetaData.Schema.A5 "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
++ MetaData.Schema.B2 {
+  "UId": "511aa388-b3a0-5e16-abe3-af304a43653a",
+  "A2": "MbDocumentsTabCaption",
+  "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A4": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A5": "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
+}
++ MetaData.Schema.B2 {
+  "UId": "0d2c0a1c-2eba-58b4-93ef-747191a7b58b",
+  "A2": "MbGeneralTabCaption",
+  "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A4": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A5": "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
+}
++ MetaData.Schema.B2 {
+  "UId": "313eb246-4464-5445-941d-4c3e389b02eb",
+  "A2": "MbItemsTabCaption",
+  "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A4": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A5": "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
+}
++ MetaData.Schema.B2 {
+  "UId": "4a3b16c1-3ffd-5c55-b8ec-eeb4df7ab1c5",
+  "A2": "MbNumberFormat",
+  "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A4": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A5": "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
+}
++ MetaData.Schema.B2 {
+  "UId": "597ffd4a-b7cd-5d1a-870f-8f713111b882",
+  "A2": "MbStartApprovalButtonCaption",
+  "A3": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A4": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+  "A5": "d92b0e8d-6fd6-57ef-bd3e-80a587d23238"
+}

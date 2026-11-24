@@ -1,0 +1,115 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0004-4b8e-9c3a-5d6e7f8a9b61"
+        },
+        {
+          "SchemaColumnUId": "002e7bea-7d69-425f-a88b-9d534a2d258a",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "45c0e70a-fd59-4f55-a7ba-42bc9ff0afb4",
+          "Value": 120.00
+        },
+        {
+          "SchemaColumnUId": "70a03217-15c1-4dc5-b4c3-f03eab7070ed",
+          "Value": true
+        },
+        {
+          "SchemaColumnUId": "7ff3a8e5-4c21-44aa-861a-3751ecd51e35",
+          "Value": 1200.00
+        },
+        {
+          "SchemaColumnUId": "d4f99846-34c4-40e1-927a-06044ee2aec3",
+          "Value": "\/Date(1796083200000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "e08149d3-d45c-4b2f-9990-ac6953f7c318",
+          "Value": "On-site support (hours)"
+        },
+        {
+          "SchemaColumnUId": "f91795e5-1e3d-436e-8443-a3814931da1d",
+          "Value": 10.00
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0004-4b8e-9c3a-5d6e7f8a9b62"
+        },
+        {
+          "SchemaColumnUId": "002e7bea-7d69-425f-a88b-9d534a2d258a",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "45c0e70a-fd59-4f55-a7ba-42bc9ff0afb4",
+          "Value": 150.00
+        },
+        {
+          "SchemaColumnUId": "70a03217-15c1-4dc5-b4c3-f03eab7070ed",
+          "Value": true
+        },
+        {
+          "SchemaColumnUId": "7ff3a8e5-4c21-44aa-861a-3751ecd51e35",
+          "Value": 450.00
+        },
+        {
+          "SchemaColumnUId": "d4f99846-34c4-40e1-927a-06044ee2aec3",
+          "Value": "\/Date(1805068800000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "e08149d3-d45c-4b2f-9990-ac6953f7c318",
+          "Value": "Spare parts kit"
+        },
+        {
+          "SchemaColumnUId": "f91795e5-1e3d-436e-8443-a3814931da1d",
+          "Value": 3.00
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0004-4b8e-9c3a-5d6e7f8a9b63"
+        },
+        {
+          "SchemaColumnUId": "002e7bea-7d69-425f-a88b-9d534a2d258a",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "45c0e70a-fd59-4f55-a7ba-42bc9ff0afb4",
+          "Value": 300.00
+        },
+        {
+          "SchemaColumnUId": "70a03217-15c1-4dc5-b4c3-f03eab7070ed",
+          "Value": false
+        },
+        {
+          "SchemaColumnUId": "7ff3a8e5-4c21-44aa-861a-3751ecd51e35",
+          "Value": 300.00
+        },
+        {
+          "SchemaColumnUId": "d4f99846-34c4-40e1-927a-06044ee2aec3",
+          "Value": "\/Date(1769904000000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "e08149d3-d45c-4b2f-9990-ac6953f7c318",
+          "Value": "Legacy maintenance"
+        },
+        {
+          "SchemaColumnUId": "f91795e5-1e3d-436e-8443-a3814931da1d",
+          "Value": 1.00
+        }
+      ]
+    }
+  ]
+}

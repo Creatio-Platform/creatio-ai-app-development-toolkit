@@ -1,0 +1,28 @@
+﻿{
+  "Descriptor": {
+    "UId": "cb40ba34-75dc-48d2-8af8-e785e4a35464",
+    "Name": "MbContractStatus",
+    "ModifiedOnUtc": "\/Date(1795500156000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "acab4718-91d6-4d66-9ae4-49262a30c2d6",
+      "Name": "MbContractStatus"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "736c30a7-c0ec-4fa9-b034-2552b319b633",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "Name",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "221a75e8-fcf0-59e8-9884-be048a186a77",
+    "Name": "MbBaseDocumentPage",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "d62293c0-7f14-44b1-b547-735fb40499cd",
+      "Name": "BaseModulePageV2"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Base document page",
+    "DependsOn": []
+  }
+}

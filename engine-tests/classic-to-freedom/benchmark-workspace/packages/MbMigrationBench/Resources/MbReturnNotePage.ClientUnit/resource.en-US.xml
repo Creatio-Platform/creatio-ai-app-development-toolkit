@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Return note edit page" />
+			<Item Name="LocalizableStrings.MbAlreadyPostedMessage.Value" Value="The document is already posted." />
+			<Item Name="LocalizableStrings.MbPostButtonCaption.Value" Value="Post" />
+		</Items>
+	</Group>
+</Resources>

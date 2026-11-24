@@ -1,0 +1,98 @@
+﻿{
+  "Descriptor": {
+    "UId": "6807b90d-f6aa-4b34-9995-8be9cd7c4f58",
+    "Name": "MbContract",
+    "ModifiedOnUtc": "\/Date(1795500764000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "5f6085a3-ddc6-4188-8a62-41506172b401",
+      "Name": "MbContract"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "2b953009-99b8-4993-b58d-800b30ce69c6",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbStartDate",
+        "DataTypeValueUId": "d21e9ef4-c064-4012-b286-fa1a8171da44"
+      },
+      {
+        "ColumnUId": "33313fa0-b514-45ed-a1fd-c288fc1dc6cf",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbContact",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "535efd36-2103-4de3-afe7-01c50368c5cf",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbAmount",
+        "DataTypeValueUId": "969093e2-2b4e-463b-883a-3d3b8c61f0cd"
+      },
+      {
+        "ColumnUId": "562e0be7-552b-47d7-bedd-fbd305f6ea2f",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbStatus",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "571cfc02-29f1-4e35-a7af-bb436591fce2",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbEndDate",
+        "DataTypeValueUId": "d21e9ef4-c064-4012-b286-fa1a8171da44"
+      },
+      {
+        "ColumnUId": "6c5ccb74-0f46-410a-9858-28a0f154d463",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbNotes",
+        "DataTypeValueUId": "5ca35f10-a101-4c67-a96a-383da6afacfc"
+      },
+      {
+        "ColumnUId": "7245f57b-d9c5-45ac-893e-98ab16f3933c",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbAccount",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "7529314d-d809-4e02-81f8-6adfbfdfca8f",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbApprovalComment",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "77fcb621-1fd8-4631-af5a-94a6cddd2a56",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbName",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "87a5e516-04d5-4ea4-b8e0-f922da67b005",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbNumber",
+        "DataTypeValueUId": "325a73b8-0f47-44a0-8412-7606f78003ac"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "e13d11f4-9802-45a9-bf4d-ccfa4ed2c2e1",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbApproved",
+        "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"
+      }
+    ]
+  }
+}

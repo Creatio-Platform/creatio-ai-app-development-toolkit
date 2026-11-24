@@ -1,0 +1,10 @@
+= MetaData.Schema.UId "57894beb-66c8-5585-b05f-69f8ef75c9d6"
+= MetaData.Schema.A2 "MbDocumentLogDetail"
+= MetaData.Schema.A5 "f6e3d350-005e-58dd-b303-ce59f1bd543f"
++ MetaData.Schema.B2 {
+  "UId": "b26c16f9-3ab0-51a2-afd7-fc341637f103",
+  "A2": "Caption",
+  "A3": "57894beb-66c8-5585-b05f-69f8ef75c9d6",
+  "A4": "57894beb-66c8-5585-b05f-69f8ef75c9d6",
+  "A5": "f6e3d350-005e-58dd-b303-ce59f1bd543f"
+}

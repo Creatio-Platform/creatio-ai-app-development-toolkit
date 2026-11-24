@@ -1,0 +1,10 @@
+﻿{
+  "Descriptor": {
+    "UId": "741915ef-13c0-5bea-b660-6b2680986347",
+    "Name": "MbDocumentTotalsMixin",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Document totals mixin",
+    "DependsOn": []
+  }
+}

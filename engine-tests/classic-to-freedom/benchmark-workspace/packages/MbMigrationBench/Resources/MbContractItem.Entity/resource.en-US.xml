@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Contract item" />
+			<Item Name="Columns.MbContract.Caption" Value="Contract" />
+			<Item Name="Columns.MbDeliveryDate.Caption" Value="Delivery date" />
+			<Item Name="Columns.MbIsActive.Caption" Value="Active" />
+			<Item Name="Columns.MbName.Caption" Value="Name" />
+			<Item Name="Columns.MbPrice.Caption" Value="Price" />
+			<Item Name="Columns.MbQuantity.Caption" Value="Quantity" />
+			<Item Name="Columns.MbTotal.Caption" Value="Total" />
+			<Item Name="EventsProcessSchema.Caption" Value="Business process" />
+		</Items>
+	</Group>
+</Resources>

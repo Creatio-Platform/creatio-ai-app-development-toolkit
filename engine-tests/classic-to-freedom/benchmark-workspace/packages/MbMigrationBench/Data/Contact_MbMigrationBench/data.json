@@ -1,0 +1,38 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0002-4b8e-9c3a-5d6e7f8a9b42"
+        },
+        {
+          "SchemaColumnUId": "5c6ca10e-1180-4c1e-8a50-55a72ff9bdd4",
+          "Value": "0d4f6a10-0002-4b8e-9c3a-5d6e7f8a9b41",
+          "DisplayValue": "Northwind Demo Ltd"
+        },
+        {
+          "SchemaColumnUId": "a5cca792-47dd-428a-83fb-5c92bdd97ff8",
+          "Value": "Alex Demo"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0002-4b8e-9c3a-5d6e7f8a9b43"
+        },
+        {
+          "SchemaColumnUId": "5c6ca10e-1180-4c1e-8a50-55a72ff9bdd4",
+          "Value": "null",
+          "DisplayValue": ""
+        },
+        {
+          "SchemaColumnUId": "a5cca792-47dd-428a-83fb-5c92bdd97ff8",
+          "Value": "Sam Outsider"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+= MetaData.Schema.UId "3dcde15b-507f-5d9a-b8d7-f636cd6b9e9d"
+= MetaData.Schema.A2 "MbApproveContractProcessPage"
+= MetaData.Schema.A5 "75050259-36e8-5802-9256-f92d5411e953"
++ MetaData.Schema.B2 {
+  "UId": "34ce3ae6-f8ef-53de-b1a6-e2df2598bc91",
+  "A2": "MbApproveButtonCaption",
+  "A3": "3dcde15b-507f-5d9a-b8d7-f636cd6b9e9d",
+  "A4": "3dcde15b-507f-5d9a-b8d7-f636cd6b9e9d",
+  "A5": "75050259-36e8-5802-9256-f92d5411e953"
+}
++ MetaData.Schema.B2 {
+  "UId": "ec62d0ed-1e79-527e-b4ad-d3f01a5bc9e1",
+  "A2": "MbCommentCaption",
+  "A3": "3dcde15b-507f-5d9a-b8d7-f636cd6b9e9d",
+  "A4": "3dcde15b-507f-5d9a-b8d7-f636cd6b9e9d",
+  "A5": "75050259-36e8-5802-9256-f92d5411e953"
+}

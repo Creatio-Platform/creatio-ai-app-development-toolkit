@@ -1,0 +1,114 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51"
+        },
+        {
+          "SchemaColumnUId": "2b953009-99b8-4993-b58d-800b30ce69c6",
+          "Value": "\/Date(1767225600000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "33313fa0-b514-45ed-a1fd-c288fc1dc6cf",
+          "Value": "0d4f6a10-0002-4b8e-9c3a-5d6e7f8a9b42",
+          "DisplayValue": "Alex Demo"
+        },
+        {
+          "SchemaColumnUId": "535efd36-2103-4de3-afe7-01c50368c5cf",
+          "Value": 1650.00
+        },
+        {
+          "SchemaColumnUId": "562e0be7-552b-47d7-bedd-fbd305f6ea2f",
+          "Value": "6f0c4b2e-1d1a-4c3e-9a51-0b1c2d3e4f02",
+          "DisplayValue": "Active"
+        },
+        {
+          "SchemaColumnUId": "571cfc02-29f1-4e35-a7af-bb436591fce2",
+          "Value": "\/Date(1798675200000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "6c5ccb74-0f46-410a-9858-28a0f154d463",
+          "Value": "Contract with active and inactive items, payments and both document kinds."
+        },
+        {
+          "SchemaColumnUId": "7245f57b-d9c5-45ac-893e-98ab16f3933c",
+          "Value": "0d4f6a10-0002-4b8e-9c3a-5d6e7f8a9b41",
+          "DisplayValue": "Northwind Demo Ltd"
+        },
+        {
+          "SchemaColumnUId": "7529314d-d809-4e02-81f8-6adfbfdfca8f",
+          "Value": "Approved by the demo data set."
+        },
+        {
+          "SchemaColumnUId": "77fcb621-1fd8-4631-af5a-94a6cddd2a56",
+          "Value": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "87a5e516-04d5-4ea4-b8e0-f922da67b005",
+          "Value": "C-00001"
+        },
+        {
+          "SchemaColumnUId": "e13d11f4-9802-45a9-bf4d-ccfa4ed2c2e1",
+          "Value": true
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b52"
+        },
+        {
+          "SchemaColumnUId": "2b953009-99b8-4993-b58d-800b30ce69c6",
+          "Value": "\/Date(1793491200000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "33313fa0-b514-45ed-a1fd-c288fc1dc6cf",
+          "Value": "null",
+          "DisplayValue": ""
+        },
+        {
+          "SchemaColumnUId": "535efd36-2103-4de3-afe7-01c50368c5cf",
+          "Value": 0.00
+        },
+        {
+          "SchemaColumnUId": "562e0be7-552b-47d7-bedd-fbd305f6ea2f",
+          "Value": "6f0c4b2e-1d1a-4c3e-9a51-0b1c2d3e4f01",
+          "DisplayValue": "Draft"
+        },
+        {
+          "SchemaColumnUId": "571cfc02-29f1-4e35-a7af-bb436591fce2",
+          "Value": "null"
+        },
+        {
+          "SchemaColumnUId": "6c5ccb74-0f46-410a-9858-28a0f154d463",
+          "Value": ""
+        },
+        {
+          "SchemaColumnUId": "7245f57b-d9c5-45ac-893e-98ab16f3933c",
+          "Value": "0d4f6a10-0002-4b8e-9c3a-5d6e7f8a9b41",
+          "DisplayValue": "Northwind Demo Ltd"
+        },
+        {
+          "SchemaColumnUId": "7529314d-d809-4e02-81f8-6adfbfdfca8f",
+          "Value": ""
+        },
+        {
+          "SchemaColumnUId": "77fcb621-1fd8-4631-af5a-94a6cddd2a56",
+          "Value": "Pilot contract"
+        },
+        {
+          "SchemaColumnUId": "87a5e516-04d5-4ea4-b8e0-f922da67b005",
+          "Value": "C-00002"
+        },
+        {
+          "SchemaColumnUId": "e13d11f4-9802-45a9-bf4d-ccfa4ed2c2e1",
+          "Value": false
+        }
+      ]
+    }
+  ]
+}

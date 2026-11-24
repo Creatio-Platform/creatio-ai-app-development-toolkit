@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Contract items detail" />
+			<Item Name="LocalizableStrings.Caption.Value" Value="Items" />
+			<Item Name="LocalizableStrings.MbAllItemsCaption.Value" Value="All items" />
+			<Item Name="LocalizableStrings.MbAnyDateCaption.Value" Value="Any delivery date" />
+			<Item Name="LocalizableStrings.MbDeactivateSelectedCaption.Value" Value="Deactivate selected" />
+			<Item Name="LocalizableStrings.MbDueSoonCaption.Value" Value="Due in 30 days" />
+			<Item Name="LocalizableStrings.MbOnlyActiveCaption.Value" Value="Active only" />
+			<Item Name="LocalizableStrings.MbSummaryTemplate.Value" Value="Total: {0} | Active items: {1}" />
+		</Items>
+	</Group>
+</Resources>

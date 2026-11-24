@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "fce0aa0a-aa8e-54dc-88bd-f49dac2702a7",
+    "Name": "MbDeliveryNotePage",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "221a75e8-fcf0-59e8-9884-be048a186a77",
+      "Name": "MbBaseDocumentPage"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Delivery note edit page",
+    "DependsOn": []
+  }
+}

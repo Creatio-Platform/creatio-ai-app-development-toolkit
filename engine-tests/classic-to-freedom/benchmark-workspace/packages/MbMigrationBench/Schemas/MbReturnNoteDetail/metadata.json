@@ -1,0 +1,10 @@
+= MetaData.Schema.UId "06d430c7-8352-5f10-a630-25f8b3fa58ef"
+= MetaData.Schema.A2 "MbReturnNoteDetail"
+= MetaData.Schema.A5 "878e27f6-af54-5569-9e33-11a34afd118d"
++ MetaData.Schema.B2 {
+  "UId": "8a62f975-0f09-5701-8cf8-66b9751ee470",
+  "A2": "Caption",
+  "A3": "06d430c7-8352-5f10-a630-25f8b3fa58ef",
+  "A4": "06d430c7-8352-5f10-a630-25f8b3fa58ef",
+  "A5": "878e27f6-af54-5569-9e33-11a34afd118d"
+}

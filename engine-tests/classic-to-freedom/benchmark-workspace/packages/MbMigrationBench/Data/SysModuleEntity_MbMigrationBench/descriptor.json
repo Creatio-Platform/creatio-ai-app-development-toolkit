@@ -1,0 +1,28 @@
+﻿{
+  "Descriptor": {
+    "UId": "08a2d9f7-b94e-4154-81a3-6a813113aa17",
+    "Name": "SysModuleEntity_MbMigrationBench",
+    "ModifiedOnUtc": "\/Date(1795500723000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "9c762665-90ad-497b-ac4b-45bb729630a1",
+      "Name": "SysModuleEntity"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "0c59594b-490a-4b55-a564-5841cfae3c19",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "SysEntitySchemaUId",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      }
+    ]
+  }
+}

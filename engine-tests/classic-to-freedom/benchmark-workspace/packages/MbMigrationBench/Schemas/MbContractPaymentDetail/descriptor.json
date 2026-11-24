@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "3018314e-02f3-5723-9313-35726b9c2066",
+    "Name": "MbContractPaymentDetail",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "01eb38ee-668a-42f0-999d-c2534f979089",
+      "Name": "BaseGridDetailV2"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Payments",
+    "DependsOn": []
+  }
+}

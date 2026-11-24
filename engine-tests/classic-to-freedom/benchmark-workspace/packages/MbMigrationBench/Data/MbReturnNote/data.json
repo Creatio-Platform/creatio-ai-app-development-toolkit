@@ -1,0 +1,41 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0007-4b8e-9c3a-5d6e7f8a9b91"
+        },
+        {
+          "SchemaColumnUId": "1912e2ac-0cb3-4ca6-a772-d072d270bf60",
+          "Value": "Damaged in transport"
+        },
+        {
+          "SchemaColumnUId": "1b701d62-6858-4ebc-bd64-f0be88b78889",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "8df10fd8-7805-40e1-97fd-64f1b6355cdc",
+          "Value": 150.00
+        },
+        {
+          "SchemaColumnUId": "8e7cb1ed-95b0-43a6-817c-7b5805fa9a5c",
+          "Value": "R-0001"
+        },
+        {
+          "SchemaColumnUId": "a1a460d0-93e1-4079-8bed-ea076be7b20f",
+          "Value": "Return of a damaged part"
+        },
+        {
+          "SchemaColumnUId": "cb534dcd-fc97-46c8-985b-37fb19627ff3",
+          "Value": "\/Date(1775088000000+0200)\/"
+        },
+        {
+          "SchemaColumnUId": "eaeca512-3e7f-41f0-b664-8cc2b7a878c7",
+          "Value": false
+        }
+      ]
+    }
+  ]
+}

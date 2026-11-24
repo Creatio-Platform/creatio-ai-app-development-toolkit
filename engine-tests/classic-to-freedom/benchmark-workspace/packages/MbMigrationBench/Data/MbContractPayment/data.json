@@ -1,0 +1,54 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0005-4b8e-9c3a-5d6e7f8a9b71"
+        },
+        {
+          "SchemaColumnUId": "10d1b01f-4cda-421b-a120-00abe4a1e18b",
+          "Value": "Advance payment"
+        },
+        {
+          "SchemaColumnUId": "1480d03f-ec2b-4ea8-8124-34e2d8db5f85",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "65adb888-b31f-40b6-828b-fb3655b5258f",
+          "Value": 800.00
+        },
+        {
+          "SchemaColumnUId": "d9d29998-dc75-4427-9ee2-9f125154e422",
+          "Value": "\/Date(1768435200000+0100)\/"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0005-4b8e-9c3a-5d6e7f8a9b72"
+        },
+        {
+          "SchemaColumnUId": "10d1b01f-4cda-421b-a120-00abe4a1e18b",
+          "Value": "Second instalment"
+        },
+        {
+          "SchemaColumnUId": "1480d03f-ec2b-4ea8-8124-34e2d8db5f85",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        },
+        {
+          "SchemaColumnUId": "65adb888-b31f-40b6-828b-fb3655b5258f",
+          "Value": 600.00
+        },
+        {
+          "SchemaColumnUId": "d9d29998-dc75-4427-9ee2-9f125154e422",
+          "Value": "\/Date(1781481600000+0200)\/"
+        }
+      ]
+    }
+  ]
+}
