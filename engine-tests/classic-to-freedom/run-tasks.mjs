@@ -9308,6 +9308,15 @@ check("child page wiring: build-page.md names the call, argument and fields of t
       && /`editPages\[\]`/.test(step) && /`cardSchema`/.test(step) && /`kind: classic`/.test(step)
       && /never write `SysModuleEdit`/.test(step);
   });
+// The field the wiring step reads must be the one the skill's canonical description of the tool response names, so
+// a rename in one place fails here instead of leaving the builder reading an undefined property.
+check("child page wiring: the `editPages[]` page field the wiring step reads is the one SKILL.md's Arg-facts names",
+  () => {
+    const skill = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+    const argFacts = skill.split("\n").find((l) => l.startsWith("> Arg-facts:") && l.includes("list-entity-client-schemas")) || "";
+    return /`editPages` \(each with the page it opens in `cardSchema`/.test(argFacts);
+  });
 
 // Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
 // add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
