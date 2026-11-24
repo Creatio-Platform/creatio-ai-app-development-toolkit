@@ -2701,7 +2701,7 @@ export const LIST_PAGE_KEY = "list";
 //
 // WHICH mechanism a row gets is decided by whether the built page can answer it, never by convenience:
 //   · columns and quick filters are IN the page body, so they are MEASURED off it (`listcolumns` / `listfilter`),
-//     exactly like a form-page field row — see `resolveListColumnsVk` / `resolveListFilterVk`;
+//     exactly like a form-page field row — see `resolveListColumnsVk` / `resolveQuickFilterVk`;
 //   · a command-bar action and a ROW action are NOT: a command-bar action's Freedom container stays unresolved while
 //     the section view `diff` goes unfolded, and a row action's Freedom element name is not predictable here at all,
 //     so neither has an identity to match and BOTH keep an EVIDENCE row (D7) — a filed record plus a judge verdict,
