@@ -28,7 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
-import { readDecisionRecords, orchestratorDecisions } from "./directives.mjs";
+import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
@@ -101,7 +101,7 @@ function readDecisionsMd(text, addHeading, add) {
   const lines = text.split(/\r?\n/);
   let structured = false;
   for (const dl of lines) {
-    const h = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
+    const h = DECISION_HEADING.exec(dl);
     if (h) { addHeading(h[1], h[2]); structured = true; continue; }
     const t = /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl);   // table row — second cell is the title ([^|] can't cross the cell)
     if (t) { add(t[1], t[2]); structured = true; }
@@ -116,7 +116,7 @@ export function readDecisions(migrationDir) {
   // A heading keeps its title verbatim (bar the leading separator); a table cell / plain line goes through
   // decisionTitle, which lifts the bold lead and caps a long cell. Headings are last-wins (a later heading refines
   // an earlier one); table/plain are first-wins.
-  const addHeading = (id, raw) => { const t = String(raw || "").replace(/^[\s—–:.-]+/, "").trim(); if (t) out.set(`D${id}`, t); };
+  const addHeading = (id, raw) => { const t = headingTitle(raw); if (t) out.set(`D${id}`, t); };
   const add = (id, raw) => { const k = `D${id}`; const t = decisionTitle(raw); if (t && !out.has(k)) out.set(k, t); };
   try {
     readDecisionsMd(fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8"), addHeading, add);

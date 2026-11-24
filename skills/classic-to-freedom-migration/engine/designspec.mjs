@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
-import { DIRECTIVE_REQUIRES, directiveCovers, RUN_SCOPE } from "./directives.mjs";
+import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -3436,12 +3436,10 @@ export function checklistGroups(result, opts = {}) {
 // design pass's filed row. The JUDGED row is the review's: a context that did not build the page rules on that
 // record against the built page. So a directive closes only when a builder says how it was followed AND someone
 // else agrees, and a builder who builds something else in its place leaves both rows open.
-export const directiveEvidenceId = (pageKey, id) => `${pageKey}#directive:${id}`;
-export const DIRECTIVE_FILED_PART = "filed";
 // The directive's id sits in a code span so the split's row key, which masks digits in prose, keeps `D7` and `D8`
 // apart.
 function directiveRows(pageKey, d) {
-  const id = directiveEvidenceId(pageKey, d.id);
+  const id = `${pageKey}#directive:${d.id}`;
   const base = `User directive \`${d.id}\` — the user asked: “${esc(d.quote)}”. **Expected on this page:** ${esc(d.expectation)}.`;
   const filedLabel = `${base} **This row: the builder FOLLOWED it** — a record under \`${esc(id)}\` says how`
     + ` (\`howFollowed\`) and names the components that carry it (\`components\`). If the page cannot do what the user`
@@ -3449,26 +3447,20 @@ function directiveRows(pageKey, d) {
     + " something else in its place.";
   const judgedLabel = `${base} **This row: INDEPENDENTLY JUDGED** — a reviewer who did not build the page checked it`
     + " against the expectation above and found the record convincing.";
-  const extra = (part) => ({ deliverableId: `directive:${d.id}:${part}`, directive: { id: d.id } });
-  return [
-    evidenceRow(id, filedLabel, extra(DIRECTIVE_FILED_PART), { part: DIRECTIVE_FILED_PART, requires: DIRECTIVE_REQUIRES }),
-    evidenceRow(id, judgedLabel, extra("judged"), { part: "judged", requires: DIRECTIVE_REQUIRES }),
-  ];
+  const pair = (part, label) => evidenceRow(id, label,
+    { deliverableId: directiveRowId(d.id, part), directive: { id: d.id } }, { part, requires: DIRECTIVE_REQUIRES });
+  return [pair(DIRECTIVE_FILED, filedLabel), pair(DIRECTIVE_JUDGED, judgedLabel)];
 }
-// A directive missing its expectation or scope builds no row: the plan reports it as incomplete instead
-// (`provenanceIssues`), and a row asking a builder to meet an unstated expectation could never be judged.
-const buildableDirective = (d) => d && typeof d.expectation === "string" && d.expectation.trim() !== "" && d.scope?.length;
 // The directive rows join each page's `Quality gates` group, which the cut already splits into the builder's filed
-// half and the review's judged half.
+// half and the review's judged half. `directives` holds only complete ones (`directivesOf`).
 function spliceDirectiveRows(groups, directives, ctx) {
-  const list = (directives || []).filter(buildableDirective);
-  if (!list.length) return;
+  if (!directives?.length) return;
+  const gates = new Map(groups.filter((g) => (g.baseTitle || g.title) === "Quality gates").map((g) => [g.pageKey, g]));
   for (const key of publishedPageKeys(groups)) {
-    const rows = list.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d));
+    const rows = directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d));
     if (!rows.length) continue;
     const add = pageGroup(key, "Quality gates", rows, ctx);
-    const gate = groups.find((g) => g.pageKey === key && (g.baseTitle || g.title) === "Quality gates");
-    if (gate) gate.rows.push(...add.rows);
+    if (gates.has(key)) gates.get(key).rows.push(...add.rows);
     else groups.push(add);
   }
 }
@@ -3481,11 +3473,11 @@ export function publishedPageKeys(groups) {
 function renderDirectivesSection(result) {
   const list = result.directives || [];
   if (!list.length) return [];
-  const where = (d) => (d.scope.includes(RUN_SCOPE) ? "every page" : d.scope.map((k) => "`" + esc(k) + "`").join(", ") || "—");
+  const where = (d) => (d.scope.includes(RUN_SCOPE) ? "every page" : d.scope.map((k) => "`" + esc(k) + "`").join(", "));
   return ["", "### User directives", "",
     "> The user's own instructions, quoted verbatim from `decisions.md`. Each one is checked on every page it names: the builder files how it was followed, and an independent judge rules on that record against the built page.", "",
     "| Decision | The user's words | Expected on the built page | Pages |", "| --- | --- | --- | --- |",
-    ...list.map((d) => `| ${esc(d.id)} | “${esc(d.quote || "?")}” | ${esc(d.expectation || "<FILL: Expectation>")} | ${where(d)} |`), ""];
+    ...list.map((d) => `| ${esc(d.id)} | “${esc(d.quote || "?")}” | ${esc(d.expectation)} | ${where(d)} |`), ""];
 }
 const provenanceIssueText = (x) => `\`${x.key}\` ${x.problem}`;
 

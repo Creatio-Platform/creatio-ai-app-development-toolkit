@@ -3534,15 +3534,6 @@ function planDecisionsFolder(outFile, tasksDir) {
   if (outFile) return path.dirname(path.resolve(outFile));
   return null;
 }
-function planDecisions(outFile, tasksDir) {
-  const folder = planDecisionsFolder(outFile, tasksDir);
-  return folder ? readDecisions(folder) : null;
-}
-// The provenance records of the same decisions.md, read from the same folder: the directives and who decided what.
-function planDecisionRecords(outFile, tasksDir) {
-  const folder = planDecisionsFolder(outFile, tasksDir);
-  return folder ? readDecisionRecords(folder) : [];
-}
 function planGapRefusal(result) {
   const gaps = planGaps(result);
   if (!gaps.length) return null;
@@ -4506,9 +4497,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // reconcile). A rebuild always builds fresh, so the flag on one is a mistake worth naming, not silently ignoring.
   if (reconcileModeArg && !manifest.planMeta?.freedomExists) fail(`\`${RECONCILE_MODE_FLAG}\` applies only to an existing-Freedom reconcile (planMeta.freedomExists); this plan rebuilds the page from scratch, where there is nothing to reconcile onto.`);
   let result;
-  const decisions = planDecisions(outFile, tasksDir);
+  // The decision titles and their provenance records (the directives, who decided what) come from the same file.
+  const decisionsFolder = planDecisionsFolder(outFile, tasksDir);
+  const decisions = decisionsFolder ? readDecisions(decisionsFolder) : null;
+  const decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : [];
   const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
-  const decisionRecords = planDecisionRecords(outFile, tasksDir);
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.

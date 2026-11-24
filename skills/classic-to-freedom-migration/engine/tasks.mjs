@@ -40,7 +40,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
-import { directiveCovers } from "./directives.mjs";
+import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
 import { RECONCILE_MODES } from "./reconcile-modes.mjs";
@@ -663,7 +663,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
-    directives: result.directives || [],
+    directives: result.directives,
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -1100,7 +1100,7 @@ function markersBlock() {
 // building something the user ruled out.
 function directivesBlock(task, directives) {
   const pages = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
-  const own = (directives || []).filter((d) => d.expectation && [...pages].some((k) => directiveCovers(d, k)));
+  const own = (directives || []).filter((d) => [...pages].some((k) => directiveCovers(d, k)));
   if (!own.length) return [];
   return [
     "- **User directives — the user's own words. Build to them on every page they name:**",
@@ -2553,7 +2553,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
-    directives: result.directives || [],
+    directives: result.directives,
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2870,7 +2870,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode, directives: result.directives || [] }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode, directives: result.directives }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4128,7 +4128,7 @@ function mintDeclared(dir, result, decls, written) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, directives: result.directives || [] }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, directives: result.directives }));
     written.push(task);
   }
 }
@@ -4706,7 +4706,6 @@ function clearStaleStatusCells(tasks) {
 // no `deliverableStatus` entry, no `withoutDeliverable` item and no directive row. `{ id, title }` in file order;
 // `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
 // directive whose scope reached no task stays unaccounted and the first dispatch is refused.
-const DIRECTIVE_ROW_ID = /^directive:(D\d+):/;
 export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
   const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
   for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
@@ -4715,8 +4714,8 @@ export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus 
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     for (const d of map.values()) cited.add(decisionOf(d));
     for (const r of t.rows || []) {
-      const m = DIRECTIVE_ROW_ID.exec(r.deliverableId || "");
-      if (m) cited.add(m[1]);
+      const directive = parseDirectiveRowId(r.deliverableId);
+      if (directive) cited.add(directive.id);
     }
   }
   return [...(decisions || new Map()).entries()]

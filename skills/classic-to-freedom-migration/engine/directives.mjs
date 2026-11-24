@@ -21,17 +21,30 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const KIND_DIRECTIVE = "directive";
-export const KIND_ANSWER = "answer";
+const KIND_DIRECTIVE = "directive";
+const KIND_ANSWER = "answer";
 const KINDS = new Set([KIND_DIRECTIVE, KIND_ANSWER]);
-export const DECIDED_BY_USER = "user";
-export const DECIDED_BY_ORCHESTRATOR = "orchestrator";
+const DECIDED_BY_USER = "user";
+const DECIDED_BY_ORCHESTRATOR = "orchestrator";
 const DECIDERS = new Set([DECIDED_BY_USER, DECIDED_BY_ORCHESTRATOR]);
 // A directive scoped to the whole run applies to every page the plan publishes.
 export const RUN_SCOPE = "run";
 // What a builder's record must name for a directive row to count as filed: how the directive was followed, and the
 // components on the page that carry it. Both are prose a judge can check against the page, never a bare "done".
 export const DIRECTIVE_REQUIRES = ["howFollowed", "components"];
+
+// A directive's two rows on a page: `directive:D<N>:filed` (the builder's record) and `directive:D<N>:judged` (the
+// review's verdict). The deliverable id is the one field a task row keeps from the plan row, so it is how the cut
+// routes the filed row and how the unaccounted-decisions gate finds the decision a row carries.
+export const DIRECTIVE_FILED = "filed";
+export const DIRECTIVE_JUDGED = "judged";
+export const directiveRowId = (id, part) => `directive:${id}:${part}`;
+const DIRECTIVE_ROW_ID = /^directive:(D\d+):(\w+)$/;
+// `{ id, part }` for a directive row's deliverable id, else null.
+export function parseDirectiveRowId(deliverableId) {
+  const m = DIRECTIVE_ROW_ID.exec(deliverableId || "");
+  return m ? { id: m[1], part: m[2] } : null;
+}
 
 // The provenance field each label maps to. Labels are matched case-insensitively, so `Decided By:` and
 // `decided by:` are the same field; any other `- Label:` line under the heading (Decision, Rationale, Approved by,
@@ -44,7 +57,9 @@ const FIELD_OF = new Map([
   ["scope", "scope"],
   ["expectation", "expectation"],
 ]);
-const DECISION_HEADING = /^#{1,4}\s+D(\d+)\b(.*)$/;
+// The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
+// entries and the same titles.
+export const DECISION_HEADING = /^#{1,4}\s+D(\d+)\b(.*)$/;
 const ANY_HEADING = /^#{1,4}\s/;
 // `- Quote: …`, `* Quote: …`, `- **Quote:** …` and `- **Quote**: …` are one field.
 const FIELD_LINE = /^\s*[-*]\s+(?:\*\*)?([A-Za-z][A-Za-z ]*?)(?::\*\*|\*\*:|:)\s*(.*)$/;
@@ -58,7 +73,8 @@ function cleanValue(field, raw) {
   if (field === "kind" || field === "decidedBy") return stripTicks(v).toLowerCase();
   return v;
 }
-function headingTitle(raw) {
+// A heading's title: the text after `D<N>`, with the separator that follows the id stripped.
+export function headingTitle(raw) {
   return String(raw || "").replace(/^[\s—–:.-]+/, "").trim();
 }
 
@@ -100,16 +116,19 @@ export function scopeKeys(scope) {
   return String(scope || "").split(",").map(stripTicks).filter(Boolean);
 }
 
-// The directives among the records, shaped for the planner. An entry is a directive by its `Kind:` line alone;
-// whether it is complete is `provenanceIssues`' question, and the plan does not build from an incomplete one.
+// The directives the plan builds from, shaped for the planner: `Kind: directive` entries with an expectation and a
+// scope. An incomplete one is left out here and named by `provenanceIssues` instead — a row asking a builder to meet
+// an unstated expectation could never be judged.
 export function directivesOf(records) {
-  return (records || []).filter((r) => r.fields?.kind === KIND_DIRECTIVE).map((r) => ({
-    id: r.id,
-    title: r.title,
-    quote: r.fields.quote || "",
-    expectation: r.fields.expectation || "",
-    scope: scopeKeys(r.fields.scope),
-  }));
+  return (records || [])
+    .filter((r) => r.fields?.kind === KIND_DIRECTIVE && !blank(r.fields.expectation) && scopeKeys(r.fields.scope).length)
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      quote: r.fields.quote || "",
+      expectation: r.fields.expectation,
+      scope: scopeKeys(r.fields.scope),
+    }));
 }
 
 // Does `directive` apply to the page published under `pageKey`?

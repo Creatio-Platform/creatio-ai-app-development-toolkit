@@ -18,16 +18,18 @@
 //
 // So: the split file says WHERE the seams are. This module says whether that answer is admissible, and keeps it
 // answerable to a plan that moves.
+import { parseDirectiveRowId, DIRECTIVE_FILED } from "./directives.mjs";
+
 export const SPLIT_FILE = "split.json";
 export const SPLIT_SCAFFOLD = "scaffold";
 const PAGE_SEP = "::";
 // The filed half of a page's `Quality gates` pair: the row that says the design pass ran and its record was filed.
 // Filing is build work, so this row belongs to the page's last writer; the judged half belongs to the review.
 export const QUALITY_FILED_ID = "quality:ran";
-// A user directive's filed row (`directive:D<N>:filed`) is the same kind of row: the builder records how the page
-// follows the directive, and the judged twin stays with the review.
-const DIRECTIVE_FILED_ID = /^directive:D\d+:filed$/;
-export const isFiledGateRow = (row) => row?.deliverableId === QUALITY_FILED_ID || DIRECTIVE_FILED_ID.test(row?.deliverableId || "");
+// A user directive's filed row is the same kind of row: the builder records how the page follows the directive, and
+// the judged twin stays with the review.
+export const isFiledGateRow = (row) => row?.deliverableId === QUALITY_FILED_ID
+  || parseDirectiveRowId(row?.deliverableId)?.part === DIRECTIVE_FILED;
 
 // A row is matched by its STRUCTURAL KEY — the label with its digits masked — for the same reason a task id is:
 // the digits are what a growing plan moves. `Fields — 19 expected` and `Fields — 20 expected` are one row with a
@@ -349,14 +351,13 @@ function filedGateOutsideLastWriter(items) {
       if (!isFiledGateRow(r)) continue;
       const owner = lastWriterOf(items, r.pageKey);
       if (owner.at === i) continue;
-      const quality = r.deliverableId === QUALITY_FILED_ID;
-      const record = quality ? `${r.pageKey}#quality-gates` : (r.vk?.id || r.deliverableId);
-      const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${r.deliverableId}\`, record \`${record}\`) of \`${r.pageKey}\``;
+      const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${r.deliverableId}\`, record \`${r.vk?.id || `${r.pageKey}#quality-gates`}\`) of \`${r.pageKey}\``;
       const why = filedGateMisplacement(it, r.pageKey, owner);
-      const claims = quality
-        ? `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
-          + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record."
-        : "Claim this filed row in that writer and keep its judged twin in the read-only review — claiming both in the writer makes the page's builder judge its own record.";
+      // The design pass's pair is the group's first two rows; a directive's pair follows them.
+      const which = r.deliverableId === QUALITY_FILED_ID
+        ? `\`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\` (the judged row)`
+        : "this filed row in that writer and keep its judged twin";
+      const claims = `Claim ${which} in the read-only review — claiming both in the writer makes the page's builder judge its own record.`;
       out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey, owner)} ${claims}`);
     }
   });
