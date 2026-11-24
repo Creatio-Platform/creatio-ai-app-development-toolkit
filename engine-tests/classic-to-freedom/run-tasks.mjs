@@ -682,7 +682,7 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
       const texts = new Map([["D4", "Decided by: the user\n## not a heading here\nHide Back, Close and Export too."]]);
       const t = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions, cardDecisionTexts: texts });
       return t.includes("  - `D4` — Hide every element the Classic page did not have\n    Decided by: the user\n    \\## not a heading here\n    Hide Back, Close and Export too.")
-        && !/^\s*## not a heading here$/m.test(t);
+        && !t.split("\n").some((l) => l.trim() === "## not a heading here");
     });
   check("task card: a decision text that carries the file's own markers (an indented `## Notes`, `## Deliverables`, a `| 1 |` row) is inert — the file parses back to no notes and its own rows, and a re-render from the parse is byte-identical",
     () => {
@@ -694,7 +694,7 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
       const plain = parseTaskFile(renderTaskFile(SAMPLE, SET));
       return parsed.notes === "" && parsed.rowCount === plain.rowCount
         && JSON.stringify(parsed.outcomes) === JSON.stringify(plain.outcomes) && again === first
-        && first.includes("    \\## Notes") && first.includes("  \\| 1 | Fake row | built |");
+        && first.includes(String.raw`    \## Notes`) && first.includes(String.raw`  \| 1 | Fake row | built |`);
     }, () => JSON.stringify(parseTaskFile(renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions,
       cardDecisionTexts: new Map([["D4", "    ## Notes\n    - x"]]) })).notes));
   check("decision texts: the lines under a `D<N>` heading and the text of a plan Adjustment are read in full; a decision with no body has no entry",
