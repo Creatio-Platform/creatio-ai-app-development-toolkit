@@ -68,7 +68,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, worklogBrowser, BROWSER_ANSWERS, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
@@ -3716,7 +3716,7 @@ function recordFileLines(records) {
 
 // The browser answer step 7.0b records in `worklog.md` of the migration folder above the task folder `dir`. `--start`
 // and `--next` read it through the shared start predicate, so a page task is held until the question was asked.
-const browserGateFor = (dir) => ({ answer: worklogBrowser(readTextOr(path.join(path.dirname(path.resolve(dir)), "worklog.md"))) });
+const browserGateFor = (dir) => ({ answer: readWorklogBrowser(dir) });
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;

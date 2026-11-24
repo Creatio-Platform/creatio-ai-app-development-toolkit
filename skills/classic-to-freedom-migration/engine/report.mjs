@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
-import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, worklogBrowser,
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowser,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -61,7 +61,6 @@ export function browserChecksOf(notes) {
 }
 // The cap a task's browser checks are held to: the second only confirms a fix the first one found.
 const BROWSER_CHECK_CAP = 2;
-const readTextOrEmpty = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
 // WHICH BUILT PAGES A BROWSER CHECK EXERCISED. A page is the artifact its page-writing tasks write; it is exercised
 // when at least one of them reports a check. A run can be complete and still have pages nobody opened after a save,
 // and those pages are what a person has to check by hand.
@@ -72,12 +71,12 @@ function browserExercise(tasks) {
     if (!writesPage(t.writesTo)) continue;
     const n = browserChecksOf(t.notes) ?? 0;
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
-    const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, checks: 0, tasks: [] };
-    page.checks += n;
+    const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
+    page.exercised ||= n > 0;
     page.tasks.push(t);
     pages.set(t.writesTo, page);
   }
-  return { unexercised: [...pages.values()].filter((p) => p.checks === 0), capBreaches };
+  return { unexercised: [...pages.values()].filter((p) => !p.exercised), capBreaches };
 }
 function browserSection({ unexercised, capBreaches }, pageName, answer) {
   const L = [];
@@ -732,7 +731,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const postponedCount = postponedRows.length;
   const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
   const exercise = browserExercise(tasks);
-  const unexercised = exercise.unexercised;
+  const { unexercised } = exercise;
   let verdict;
   if (!complete) {
     // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
@@ -760,7 +759,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
-  const browser = browserSection(exercise, pageName, worklogBrowser(readTextOrEmpty(path.join(dir || ".", "..", "worklog.md"))));
+  const browser = browserSection(exercise, pageName, unexercised.length && dir ? readWorklogBrowser(dir) : null);
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",

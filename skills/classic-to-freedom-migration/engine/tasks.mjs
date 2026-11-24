@@ -3440,7 +3440,7 @@ export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
-export function startBlocker(task, tasks, running = {}, decisions = decisionIndex(tasks), browserGate = null) {
+export function startBlocker(task, tasks, running = {}, { decisions = decisionIndex(tasks), browserGate = null } = {}) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
   if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
@@ -3581,7 +3581,7 @@ function openClock(dir, t, merged, opts, now) {
   // answer to "which task may I start?" cannot disagree with what this call then does with that id. The four
   // refusal SHAPES are unchanged: every caller reads `unread` / `blockedByDispatch` / `blockedByDeps` /
   // `blockedByOverlap` off the returned object exactly as before, in the same precedence.
-  const blocker = startBlocker(t, merged.tasks, state.running, undefined, opts.browserGate);
+  const blocker = startBlocker(t, merged.tasks, state.running, { browserGate: opts.browserGate });
   // A file the engine REFUSED to read is not started. Re-rendering it in `--start` is exactly what
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
@@ -4177,7 +4177,7 @@ export function startableTasks(set, dir, browserGate = null) {
   const claimed = new Map();   // artifact → the member of THIS answer that already writes it
   const decisions = decisionIndex(tasks);
   for (const t of candidates) {
-    const blocker = startBlocker(t, tasks, running, decisions, browserGate);
+    const blocker = startBlocker(t, tasks, running, { decisions, browserGate });
     if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file, rows: blocker.rows }); continue; }
     const owner = t.writesTo ? claimed.get(t.writesTo) : null;
     if (owner) { withheld.push({ task: t, cause: HOLD_SEQUENCED, tasks: [owner] }); continue; }
@@ -4906,6 +4906,16 @@ export const BROWSER_ANSWERS = Object.freeze(["page-smoke", "surface", "none"]);
 // correction to a value outside BROWSER_ANSWERS leaves the run with no answer, not with the earlier one.
 export function worklogBrowser(worklogText) {
   return worklogField(worklogText, "Browser:", BROWSER_ANSWERS);
+}
+
+// The `Browser:` answer recorded for the task folder `tasksDir`: its `worklog.md` lives in the migration folder above
+// it. null when there is no such file or no valid line. The one place the engine reads it, so the start gate and the
+// result report cannot disagree on where it is.
+export function readWorklogBrowser(tasksDir) {
+  let text = "";
+  try { text = fs.readFileSync(path.join(path.dirname(path.resolve(tasksDir)), "worklog.md"), "utf8"); }
+  catch { /* no worklog.md: no answer */ }
+  return worklogBrowser(text);
 }
 
 function worklogField(worklogText, field, allowed) {
