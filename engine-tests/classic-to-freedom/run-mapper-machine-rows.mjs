@@ -113,6 +113,21 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       () => [commented, scaffold, memberOnly].every((x) => x[0] === "⚠ verify")
         && /is a platform name every handler uses/.test(ev(scaffold)) && /defines no function `applyRights`/.test(ev(memberOnly)),
       () => [commented, scaffold, memberOnly]);
+    // An unpaired quote (`/'/g`, a regex literal) is not a string: the comments after it are still blanked, so a
+    // commented-out request keeps reading ⚠ — on the quote's own line, on the next one, and after a `"` or a backtick.
+    const STRAY = (q, sameLine) => `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        const safe = value.replace(/${q}/g, "");${sameLine ? "" : "\n"}        // TODO: await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest" });
+        return next?.handle(request); } }]`;
+    const stray = [["'", false], ["'", true], ['"', false], ["`", false]].map(([q, same]) =>
+      P(["usr.SetCanEditFieldsRequest"], verifyCtx({ pages: { main: page({ handlers: STRAY(q, same) }) } }, "main")));
+    const SENT_AFTER = `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        const safe = value.replace(/'/g, "");
+        await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest" }); // it's sent
+        return next?.handle(request); } }]`;
+    const sentAfter = P(["usr.SetCanEditFieldsRequest"], verifyCtx({ pages: { main: page({ handlers: SENT_AFTER }) } }, "main"));
+    check("Ported as: an unpaired quote in code (`value.replace(/'/g, \"\")`) does not switch comment blanking off — a request named only in a later comment reads ⚠, never ✅, while a request really sent after the quote still reads ✅",
+      () => stray.every((x) => x[0] === "⚠ verify") && st(sentAfter) === "✅ Done",
+      () => [...stray, sentAfter]);
     const platform = P(["crt.HandleViewModelInitRequest"]);
     check("Ported as: a platform request a handler answers (`crt.HandleViewModelInitRequest`) is reached — the platform sends it",
       () => st(platform) === "✅ Done" && /answers platform request/.test(ev(platform)), () => platform);

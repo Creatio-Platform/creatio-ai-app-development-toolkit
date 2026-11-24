@@ -4762,11 +4762,17 @@ function calledIn(code, name, bare = false) {
 }
 // The handler source with its comments blanked and its strings kept: a request type is a string, and a request
 // named only in a comment is not sent.
-// Where the string opened at `i` ends: one past its unescaped closing quote.
+// Where the string opened at `i` ends: one past its unescaped closing quote, or -1 when it has none. A `'` or `"`
+// string cannot cross a line end; a template literal can. A quote with no twin (`/'/g` in a regex literal) is not
+// a string, so the caller keeps scanning after it and the comments that follow are still blanked.
 function stringEnd(src, i) {
+  const quote = src[i];
   let j = i + 1;
-  while (j < src.length && src[j] !== src[i]) j += src[j] === "\\" ? 2 : 1;
-  return j + 1;
+  while (j < src.length && src[j] !== quote) {
+    if (src[j] === "\n" && quote !== "`") return -1;
+    j += src[j] === "\\" ? 2 : 1;
+  }
+  return j < src.length ? j + 1 : -1;
 }
 // Where the comment opened at `i` ends: a line comment at its newline (kept), a block comment past its `*/`.
 function commentEnd(src, i) {
@@ -4785,8 +4791,9 @@ function withoutComments(s) {
   let i = 0;
   while (i < src.length) {
     let end = i + 1;
-    if (QUOTES.has(src[i])) {
-      end = stringEnd(src, i);
+    const close = QUOTES.has(src[i]) ? stringEnd(src, i) : -1;
+    if (close > 0) {
+      end = close;
       out.push(src.slice(i, end));
     } else if (src[i] === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
       end = commentEnd(src, i);
