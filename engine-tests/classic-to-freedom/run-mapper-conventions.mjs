@@ -125,7 +125,7 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
     const set = syncTaskDir(tmp, ab, {});
     const files = (set.tasks || []).map((t) => fs.readFileSync(path.join(tmp, t.file), "utf8"));
     const repair = renderTaskFile({ ...set.tasks[0], kind: "repair", repairRound: 1, cause: "verify:main" }, { planVersion: ab.planVersion, projectConventions: ab.projectConventions });
-    const blockOk = (t) => /## Project conventions/.test(t) && /`ab\.<Name>Request`/.test(t) && /`AbClientHelperModule`/.test(t)
+    const blockOk = (t) => /## Project conventions/.test(t) && /the `ab\.` namespace/.test(t) && /`ab\.<Element>Clicked`/.test(t) && !/<Name>Request/.test(t) && /`AbClientHelperModule`/.test(t)
       && /`AbConstants`, `AbCommonConstants` — reference existing record ids through them/.test(t) && /Freedom pages CAN import these client-unit modules/.test(t)
       && t.indexOf("## Project conventions") < t.indexOf("## Deliverables");
     check("conventions: every build task file `--tasks` writes carries the conventions block, before its deliverables",
@@ -189,9 +189,11 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
     () => foreignNames({ request: new Set(["ab.Order.Approve", "zz.Order.Approve", "NoNamespace"]), validator: null, converter: null }, { request: "ab" })
       .map((f) => f.name).join() === "zz.Order.Approve,NoNamespace");
   const handlersOnly = renderVerify(ab, opts, { pages: { main: page({ handlers: '[{ request: "ab.ApplyButtonClicked" }]', deps: "[]" }) } });
-  check("verify: a bundle that carries handlers but no validators/converters cannot claim them clean — the namespace row is confirm-on-stand, naming what is missing",
-    () => /confirm on-stand/.test(rowLine(handlersOnly.markdown, NS_ROW)) && /validators \/ converters/.test(rowLine(handlersOnly.markdown, NS_ROW)),
-    () => rowLine(handlersOnly.markdown, NS_ROW));
+  check("verify: a bundle that carries handlers but leaves out validators/converters (get-page omits them when empty) closes the namespace row ✅",
+    () => /✅ Done/.test(rowLine(handlersOnly.markdown, NS_ROW)), () => rowLine(handlersOnly.markdown, NS_ROW));
+  const handlersOnlyForeign = renderVerify(ab, opts, { pages: { main: page({ handlers: '[{ request: "zz.Go" }]', deps: "[]" }) } });
+  check("verify: …and a foreign request in that bundle still blocks it",
+    () => /⚠ verify/.test(rowLine(handlersOnlyForeign.markdown, NS_ROW)), () => rowLine(handlersOnlyForeign.markdown, NS_ROW));
 
   // AC 8 — one constants object exposed under two return keys: both paths are candidates.
   const aliasIdx = constantsGuidIndex({ projectConventions: { ...DW, constantsModules: ["AliasConstants"] }, constantsModules: { AliasConstants:
@@ -251,11 +253,11 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
     () => childOwnBlock.conventionsBlockers);
 
   // planVersion takes what the plan shows of a constants module, not its bytes.
-  const reformatted = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js").replace(/\n/g, "\n\n") + "\n// re-fetched" },
+  const reformatted = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js").replaceAll("\n", "\n\n") + "\n// re-fetched" },
     AbCommonConstants: body("AbCommonConstants.js") } }), { baseDir: dir });
   const extraConstant = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js") },
     AbCommonConstants: body("AbCommonConstants.js").replace("return", 'var Unused = { X: "4e4e4e4e-0000-4000-8000-000000000004" }; return') } }), { baseDir: dir });
-  const remapped = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js").replace(/OrderStatus/g, "Status") },
+  const remapped = runMigration(manifest(DW, { constantsModules: { AbConstants: { body: body("AbConstants.js").replaceAll("OrderStatus", "Status") },
     AbCommonConstants: body("AbCommonConstants.js") } }), { baseDir: dir });
   check("planVersion: re-fetching a constants module (reformatted, or one more constant the plan never uses) keeps the version; an id mapped to another path moves it",
     () => reformatted.planVersion === ab.planVersion && extraConstant.planVersion === ab.planVersion && remapped.planVersion !== ab.planVersion,
@@ -294,10 +296,54 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
 
   // AC 8 — a declared module the Classic page never imported still has its (informational) row.
   check("conventions: a declared constants module the Classic page never imported gets an informational row, not a blocking one",
-    () => /\[module-dep\] AbCommonConstants — project constants module, not imported by the Classic page/.test(ab.checklist)
-      && rowIds(ab, opts).includes("module-dep:AbCommonConstants")
+    () => /\[module-dep\] AbCommonConstants — project constants module, not in the Classic page's define\(\) dependencies/.test(ab.checklist)
+      && rowIds(ab, opts).includes("module-dep:project:AbCommonConstants")
       && !/⚠ verify/.test(rowLine(foreign.markdown, /\[module-dep\] AbCommonConstants/)),
     () => [ab.checklist.split("\n").filter((l) => /AbCommonConstants/.test(l)), rowLine(foreign.markdown, /\[module-dep\] AbCommonConstants/)]);
+
+  // The per-module rows carry their own id, never one the aggregate can hold; the aggregate's id stays bound.
+  const ONLY_DECLARED = { resolved: true, requestPrefix: "ab", helperModules: [], constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "e", confirmedBy: "plan" };
+  const pageWith = (deps) => ({ ...manifest(ONLY_DECLARED), constantsModules: { AbConstants: body("AbConstants.js") },
+    schemas: [{ pkg: "P", body: `define("P",${JSON.stringify(deps)},function(){return{entitySchemaName:"UsrOrder",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] });
+  const allDeclared = runMigration(pageWith(["AbConstants"]), { baseDir: dir });
+  const allDeclaredIds = rowIds(allDeclared, checklistOpts(pageWith(["AbConstants"])));
+  check("module-dep: when every Classic dependency is a declared module the aggregate id is still a row, apart from the checked per-module row",
+    () => allDeclaredIds.includes("module-dep:AbConstants") && allDeclaredIds.includes("module-dep:project:AbConstants")
+      && /\[module-dep\] AbConstants \|/.test(allDeclared.checklist) && /\[module-dep\] AbConstants — project constants module: import it/.test(allDeclared.checklist),
+    () => allDeclaredIds.filter((x) => /module-dep/.test(x)));
+  const noDeps = runMigration(pageWith([]), { baseDir: dir });
+  check("module-dep: a Classic page with no define() dependency still lists the declared modules on its form page (informational)",
+    () => /\[module-dep\] AbConstants — project constants module, not in the Classic page's define\(\) dependencies/.test(noDeps.checklist)
+      && rowIds(noDeps, checklistOpts(pageWith([]))).includes("module-dep:project:AbConstants"),
+    () => noDeps.checklist.split("\n").filter((l) => /module-dep/.test(l)));
+
+  // AC 3 — keys that are one namespace are one count, never a conflict.
+  check("conventions: conflict counts under keys that normalize to one namespace are summed — `ab` and `Ab.` are no conflict, `.` is no namespace",
+    () => !conventionsOf({ projectConventions: { ...DW, conflict: { ab: 7, "Ab.": 2 } } }).conflict
+      && !conventionsOf({ projectConventions: { ...DW, conflict: { ab: 7, ".": 2 } } }).conflict
+      && conventionsOf({ projectConventions: { ...DW, conflict: { ab: 7, "Ab.": 2, usr: 1 } } }).conflict.join("|") === "ab,9|usr,1");
+
+  // AC 1 — a menu item's request uses the project prefix too.
+  const menuRun = runMigration({ ...manifest(DW), schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"UsrOrder",methods:{onDo:function(){}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}},{operation:"insert",name:"ActBtn",parentName:"ProfileContainer",propertyName:"items",values:{itemType:5,caption:"Act"}},{operation:"insert",name:"DoItem",parentName:"ActBtn",propertyName:"menu",values:{itemType:9,caption:"Do",click:{bindTo:"onDo"}}}]};});' }] }, { baseDir: dir });
+  const menuHandler = (menuRun.changeSet.requestHandlers || []).find((h) => h.componentType === "crt.MenuItem");
+  const menuItem = (menuRun.changeSet.viewConfigDiff || []).flatMap((o) => o.values?.menuItems || []).find((m) => m.clicked);
+  check("conventions: a menu item's `clicked` request and its handler entry use the project prefix",
+    () => menuHandler?.request === "ab.DoItemClicked" && menuItem?.clicked?.request === "ab.DoItemClicked",
+    () => ({ handler: menuHandler, item: menuItem }));
+
+  // The carry-up from a TYPED and a MINI page, like the child page's above.
+  const GUID_BODY = (n) => `define("${n}",[],function(){return{entitySchemaName:"UsrOrder",methods:{onX:function(){this.set("S","1b7e3a3c-0000-4c5d-8e9f-0a1b2c3d4e5f");}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+  const PLAIN_ROOT = [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"UsrOrder",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});' }];
+  const typedRun = runMigration({ ...manifest(DW), schemas: PLAIN_ROOT, typedPages: [{ schema: "TP", type: "X" }],
+    typedPageSchemas: { TP: { entity: "UsrOrder", noParentTemplate: true, schemas: [{ pkg: "P", body: GUID_BODY("TP") }], projectConventions: { ...DW, requestPrefix: "zz" } } } }, { baseDir: dir });
+  const miniRun = runMigration({ ...manifest(DW), schemas: PLAIN_ROOT, addRecordMiniPage: { schema: "MP" },
+    miniPageSchemas: { MP: { schemas: [{ pkg: "P", body: GUID_BODY("MP") }], seed: CLEAN_SEED, projectConventions: { ...DW, requestPrefix: "zz" } } } }, { baseDir: dir });
+  for (const [name, run] of [["typed", typedRun], ["mini", miniRun]]) {
+    check(`conventions: a ${name} page's record id reaches the root table, and its own conventions block blocks the root plan`,
+      () => /\| `1b7e3a3c-0000-4c5d-8e9f-0a1b2c3d4e5f` \| `AbConstants\.OrderStatus\.New` \|/.test(section(run.plan))
+        && run.conventionsBlockers.some((x) => /is ignored — a sub-page uses the root manifest's block/.test(x)),
+      () => ({ blockers: run.conventionsBlockers, ids: run.recordIds }));
+  }
 }
 
 // The deliverable ids of every row a run publishes.

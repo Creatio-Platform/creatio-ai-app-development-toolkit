@@ -11638,7 +11638,7 @@ console.log("\n===== project conventions: every writer of a task file carries th
   const CONV = { requestPrefix: "ab", validatorPrefix: "ab", converterPrefix: "ab", helperModules: ["AbClientHelperModule"],
     constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "ab. on 7 requests", confirmedBy: "plan", conflict: null, previous: null };
   const RUN_C = { ...RUN, projectConventions: CONV };
-  const carries = (text) => /## Project conventions/.test(text) && /`ab\.<Name>Request`/.test(text) && /`AbConstants`/.test(text)
+  const carries = (text) => /## Project conventions/.test(text) && /the `ab\.` namespace/.test(text) && /`ab\.<Element>Clicked`/.test(text) && /`AbConstants`/.test(text)
     && text.indexOf("## Project conventions") < text.indexOf("## Deliverables");
   const taskFiles = (dir) => fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
   check("conventions: the split cut carries the run's conventions into every task file it renders",

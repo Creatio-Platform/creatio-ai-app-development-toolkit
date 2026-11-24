@@ -44,7 +44,6 @@ const GUID_IN_TEXT = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 // Local, not imported: migrate.mjs and reads.mjs keep their own, and both sit above this module in the imports.
 const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-const blank = (v) => typeof v !== "string" || v.trim() === "";
 // `ab`, `ab.`, ` Ab ` and `AB` are one namespace: recorded lower-case, as the reference tells the agent to write it
 // (a `SchemaNamePrefix` of `Usr` is the namespace `usr`), so the mapper emits and `--verify` reads the same spelling.
 export const normalizePrefix = (v) => (typeof v === "string" ? stripTrailingDots(v.trim()).toLowerCase() : "");
@@ -80,8 +79,13 @@ export const prefixesOf = (c) => Object.fromEntries(NAME_KINDS.map((k) => [k, c[
 // `{ ns: count }`, kept only when it names at least two namespaces — one namespace is no conflict.
 function conflictOf(v) {
   if (!isObj(v)) return null;
-  const counts = Object.entries(v).filter(([k, n]) => !blank(k) && Number.isFinite(n) && n > 0)
-    .map(([k, n]) => [normalizePrefix(k), n]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  // Keys that are one namespace (`ab`, `Ab.`) are summed; a key with no namespace left (`.`) is dropped.
+  const sums = new Map();
+  for (const [k, n] of Object.entries(v)) {
+    const ns = normalizePrefix(k);
+    if (ns && Number.isFinite(n) && n > 0) sums.set(ns, (sums.get(ns) || 0) + n);
+  }
+  const counts = [...sums].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return counts.length >= 2 ? counts : null;
 }
 function previousOf(v) {
@@ -319,21 +323,26 @@ export function bundleDeps(entry) {
   // so a name quoted elsewhere in the payload cannot pass for an import.
   const node = parseJsExpression(v);
   if (node?.type === "ArrayExpression") return node.elements.filter(isStringLiteral).map((el) => el.value);
-  const list = /\[([^\]]*)\]/.exec(String(v));
-  return list ? [...list[1].matchAll(/["']([^"']+)["']/g)].map((m) => m[1]) : [];
+  const text = String(v);
+  const open = text.indexOf("[");
+  const close = open < 0 ? -1 : text.indexOf("]", open);
+  if (close < 0) return [];
+  return [...text.slice(open + 1, close).matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
 }
 const isStringLiteral = (n) => n?.type === "Literal" && typeof n.value === "string";
 // The custom names a built page DECLARES, per kind: the request of each handler entry, validator and converter
 // registrations. A request a handler body only dispatches (`next?.handle({ request: "pkg.X" })`) or a button only
-// fires belongs to whoever declares its handler, so it is not read. A kind whose source the bundle did not carry is
-// null — "not provided", never "provided and empty" — and the whole result is null when none of the three is there.
+// fires belongs to whoever declares its handler, so it is not read. The whole result is null when the bundle carries
+// none of the three ("not provided"). When it carries at least one, a missing one is EMPTY: get-page leaves an empty
+// `validators` / `converters` out, and a page that has none must still be able to close its namespace row.
 // `handlersSrc` is verifyCtx's own normalization of `entry.handlers` (source text either way).
 export function bundleCustomNames(entry, handlersSrc) {
   if (!entry || (handlersSrc == null && entry.validators == null && entry.converters == null)) return null;
+  const handlers = Array.isArray(entry.handlers) ? entry.handlers : handlersSrc;
   return {
-    request: handlersSrc == null ? null : new Set(handlerRequests(Array.isArray(entry.handlers) ? entry.handlers : handlersSrc)),
-    validator: entry.validators == null ? null : new Set(registeredNames(entry.validators)),
-    converter: entry.converters == null ? null : new Set(registeredNames(entry.converters)),
+    request: new Set(handlers == null ? [] : handlerRequests(handlers)),
+    validator: new Set(registeredNames(entry.validators)),
+    converter: new Set(registeredNames(entry.converters)),
   };
 }
 // The `request` of each top-level entry of a handlers array — parsed, or its source. Source that does not parse
@@ -447,7 +456,7 @@ export function conventionsTaskLines(c, esc) {
     "",
     "<!-- ENGINE-OWNED: the conventions approved with the plan. They override any generic guidance that names `usr.`. -->",
     "",
-    `- **Custom requests:** name them \`${esc(c.requestPrefix)}.<Name>Request\` — never \`usr.\` unless that is the prefix here.`,
+    `- **Custom requests:** in the ${w.code(c.requestPrefix + ".")} namespace — never \`usr.\` unless that is the prefix here. Keep the request names the plan gives (a button's or menu item's is ${w.code(c.requestPrefix + ".<Element>Clicked")}); name a new one in the same namespace.`,
     `- **Validators / converters:** ${w.code(c.validatorPrefix + ".")} / ${w.code(c.converterPrefix + ".")}.`,
     `- **Helper modules:** ${w.list(c.helperModules)} — reuse what they already provide instead of writing it again.`,
     `- **Constants modules:** ${w.list(c.constantsModules)} — reference existing record ids through them: add the module to the page's SCHEMA_DEPS and use the named value; never paste a GUID. The plan's *Project conventions* section maps each id to its path.`,

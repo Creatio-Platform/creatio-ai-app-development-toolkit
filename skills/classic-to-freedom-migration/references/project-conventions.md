@@ -52,7 +52,7 @@ Otherwise the conventions are approved with the plan (`confirmedBy: "plan"`).
 
 Detect again on every run — there is no shared project file. When the project's migration folder has an
 earlier migration, read the `### Project conventions` table of the newest earlier `plan.md` and record it as
-`previous`. The plan shows both; it asks only when they differ, and stays ⛔ until the user chooses
+`previous`, copying all three prefix rows (request, validator, converter) and both module lists. The plan shows both; it asks only when they differ, and stays ⛔ until the user chooses
 (`confirmedBy: "user"`).
 
 ## 4. Record it
@@ -67,6 +67,7 @@ earlier migration, read the `### Project conventions` table of the newest earlie
   "evidence": "ab. — 7 requests on Page_OrderDelivery",
   "confirmedBy": "plan",
   "previous": { "folder": "<earlier migration folder>", "requestPrefix": "ab",
+                "validatorPrefix": "ab", "converterPrefix": "ab",
                 "helperModules": ["AbClientHelperModule"], "constantsModules": ["AbConstants"] }
 },
 "constantsModules": { "AbConstants": { "body": "<define(...) source>" } }
@@ -85,7 +86,8 @@ earlier migration, read the `### Project conventions` table of the newest earlie
   client-unit modules — list the module in SCHEMA_DEPS and take it as a factory argument.
 - A declared helper or constants module the Classic page imported gets its own checked row: `--verify` closes
   it when the built page's SCHEMA_DEPS (`bundle.deps`) list it, or a decision (`--decide D<N>`) says why the page
-  does not need it. A declared module the Classic page did not import gets an informational row.
+  does not need it. A declared module the Classic page did not import gets an informational row on the form
+  page, also when the Classic page has no other define() dependency.
 - `--verify` reads the built page's `handlers`, `validators` and `converters`: a custom name the page declares
   (a handler entry's `request`, a validator or converter key) outside the confirmed namespace keeps the page
   from COMPLETE until it is renamed or a decision accepts it. A request a handler only dispatches is not read.

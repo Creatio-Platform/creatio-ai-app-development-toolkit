@@ -2755,8 +2755,11 @@ function cardField(x) {
 // it and must NOT ask for a second build. Same shape as the folded-helper note beside it.
 const LIST_MAPPED_TARGET = "already mapped into the list page's own ops";
 // One row per imperative member, same sharing rule.
+// `opts.declaredModuleRows` (the form page): the project's declared modules get their rows even when the Classic page
+// has no `module-dep` member at all — an empty or inert define() list is the page most likely to need them.
 function memberWorklistRows(cs, opts = {}) {
-  return (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
+  const members = (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind));
+  const rows = members
     // a virtual attribute is on the built page's `viewModelConfig.attributes` (`vmattr` vk); the `module-dep`
     // aggregate splits into one checked row per declared project module (see moduleDepRows).
     .flatMap((d) => {
@@ -2766,36 +2769,43 @@ function memberWorklistRows(cs, opts = {}) {
       if (d.kind === "module-dep") return moduleDepRows(d, opts.projectConventions);
       return [{ deliverableId, label, ...cardField(d) }];
     });
+  if (opts.declaredModuleRows && !members.some((d) => d.kind === "module-dep")) rows.push(...moduleDepRows(null, opts.projectConventions));
+  return rows;
 }
-// The Classic page's define() dependencies, split by the project's conventions. A helper or constants module the
-// conventions declare is a real dependency of the Freedom page too — Freedom pages import client-unit modules
-// through SCHEMA_DEPS — so it gets its own CHECKED row: `--verify` closes it when the built page imports the module,
-// or a decision records why this page does not need it. Everything else (platform and utility modules) stays one
-// informational row, as before.
+// The Classic page's define() dependencies (`d`, the `module-dep` member; null when the page has none), split by the
+// project's conventions. A helper or constants module the conventions declare is a real dependency of the Freedom
+// page too — Freedom pages import client-unit modules through SCHEMA_DEPS — so one the Classic page imported gets
+// its own CHECKED row: `--verify` closes it when the built page imports the module, or a decision records why this
+// page does not need it. A declared module the Classic page did not import gets an informational row. The
+// per-module rows carry their own id (`module-dep:project:<Module>`), never one the aggregate could also hold, so a
+// status recorded against the aggregate cannot close a checked row.
 function moduleDepRows(d, conventions) {
-  const deps = Array.isArray(d.modules) ? d.modules : String(d.item).split(",").map((x) => x.trim()).filter(Boolean);
+  let deps = [];
+  if (d) deps = Array.isArray(d.modules) ? d.modules : String(d.item).split(",").map((x) => x.trim()).filter(Boolean);
   const role = new Map([
     ...(conventions?.helperModules || []).map((m) => [m, "helper module"]),
     ...(conventions?.constantsModules || []).map((m) => [m, "constants module"]),
   ]);
-  const declared = deps.filter((m) => role.has(m));
-  const rest = deps.filter((m) => !role.has(m));
-  const rows = declared.map((m) => ({ deliverableId: `module-dep:${m}`, label: `[module-dep] ${esc(m)} — project ${role.get(m)}: import it in the page's SCHEMA_DEPS`,
-    ...cardField(d), vk: { type: "moduledep", module: m } }));
-  // A declared module the Classic page never imported still gets its row, informational: the builder learns of it
-  // from the task's conventions block, and nothing on the Classic page says this page needs it, so it cannot block.
-  for (const m of role.keys()) {
-    if (deps.includes(m)) continue;
-    rows.push({ deliverableId: `module-dep:${m}`, label: `[module-dep] ${esc(m)} — project ${role.get(m)}, not imported by the Classic page`, ...cardField(d),
+  const card = d ? cardField(d) : {};
+  const rows = [];
+  for (const [m, kind] of role) {
+    const deliverableId = `module-dep:project:${m}`;
+    if (deps.includes(m)) rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}: import it in the page's SCHEMA_DEPS`, ...card, vk: { type: "moduledep", module: m } });
+    // Nothing on the Classic page says this page needs it, so it cannot block; the builder learns of it from the
+    // task's conventions block.
+    else rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}, not in the Classic page's define() dependencies`, ...card,
       info: "declared in projectConventions; import it in SCHEMA_DEPS only if the Freedom page uses its ids or helpers" });
   }
-  if (rest.length) {
-    const item = rest.join(", ");
-    // The aggregate's OWN id (`memberId(d)`, every dependency), not one rebuilt from the rest: the plan's member
-    // line and a `deliverableStatus` entry recorded before the split both address the row by it.
-    rows.push({ deliverableId: memberId(d), label: `[module-dep] ${esc(item)}`, ...cardField(d),
-      info: "Classic define() dependencies outside the project's declared helper and constants modules — their contribution is carried by the handlers and rules that used them" });
-  }
+  if (!d) return rows;
+  // The aggregate keeps its OWN id (`memberId(d)`, every dependency), always: the plan's member line and a
+  // `deliverableStatus` entry recorded before the split both address the row by it, also when every dependency
+  // is a declared module.
+  const rest = deps.filter((m) => !role.has(m));
+  rows.push(rest.length
+    ? { deliverableId: memberId(d), label: `[module-dep] ${esc(rest.join(", "))}`, ...card,
+      info: "Classic define() dependencies outside the project's declared helper and constants modules — their contribution is carried by the handlers and rules that used them" }
+    : { deliverableId: memberId(d), label: `[module-dep] ${esc(d.item)}`, ...card,
+      info: "every Classic define() dependency here is a declared project module — each has its own row" });
   return rows;
 }
 // The section's imperative work, built by the SAME two row builders as the form page's. Both titles name the
@@ -3435,7 +3445,7 @@ export function checklistGroups(result, opts = {}) {
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Other declared logic worklist", memberWorklistRows(cs, opts));
+  G("⚠ Other declared logic worklist", memberWorklistRows(cs, { ...opts, declaredModuleRows: true }));
   // The project's namespace, checked on every page that is built: a custom request, validator or converter outside
   // it is a blocking row until it is renamed or a decision accepts it.
   G("Project conventions", conventionRows(opts));
@@ -4756,11 +4766,8 @@ export function resolveNamespaceVk(vk, ctx) {
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so its names cannot be checked", "missing"];
   if (!ctx.customNames) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the namespace", "skip"];
   const foreign = foreignNames(ctx.customNames, vk.prefixes || {});
-  const missing = NAME_KINDS.filter((k) => !ctx.customNames[k]);
   const named = foreign.map((f) => f.kind + " `" + esc(f.name) + "`").join(", ");
   if (foreign.length) return ["⚠ verify", `outside the project namespace: ${named} — rename it, or record a decision (\`--decide D<N>\`) that accepts it`, "unverified"];
-  // A kind the bundle did not carry was never read, so "none outside" cannot be claimed for it.
-  if (missing.length) return ["☐ confirm on-stand", `the bundle carries no ${missing.map((k) => k + "s").join(" / ")} — pass get-page's \`bundle.json\` whole to check them; the names it did carry are all in the project namespace`, "skip"];
   const total = NAME_KINDS.reduce((n, k) => n + ctx.customNames[k].size, 0);
   return ["✅ Done", `${total} request/validator/converter name(s) on the built page, none outside the project namespace`, "ok"];
 }

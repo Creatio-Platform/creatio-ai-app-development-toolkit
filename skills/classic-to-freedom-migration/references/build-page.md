@@ -23,7 +23,8 @@ clio-safety rules apply to every write.
    **Your task file's `## Project conventions` block is the project's namespace and modules**: name custom
    requests, validators and converters in its prefix (over any guide that says `usr.`), reuse its helper
    modules, and reference record ids through its constants modules in SCHEMA_DEPS, never as pasted GUIDs.
-   `--verify` checks both: a foreign name or a declared module the page did not import keeps it open.
+   `--verify` checks both: a foreign name keeps the page open, and so does a declared module the CLASSIC page
+   imported that yours does not (the other declared modules are informational rows).
 2. Subtask order INSIDE your task, in the order the platform requires: template creation or
    existing-page selection → entity/data-source adjustments → layout → business rules →
    details/related lists/standard features → handlers/converters/validators → backend/service →

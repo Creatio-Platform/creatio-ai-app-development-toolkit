@@ -2664,13 +2664,15 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // or holding a constant this plan never uses) leaves the plan as it was, so the approval stands; an id the plan maps
 // differently moves the version.
 const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules"]);
+// Code-unit order, as the key sort above: a hash input must not depend on the locale.
+const byCodeUnit = (a, b) => (a < b ? -1 : Number(a > b));
 function computePlanVersion(manifest, readBody, recordIds = []) {
   const h = createHash("sha256");
   const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
   feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
   if (recordIds.length) {
     h.update("\u0001R");
-    h.update(JSON.stringify(recordIds.map(({ guid, paths }) => [guid, [...paths].sort()]).sort((a, b) => (a[0] < b[0] ? -1 : 1))));
+    h.update(JSON.stringify(recordIds.map(({ guid, paths }) => [guid, [...paths].sort(byCodeUnit)]).sort((a, b) => byCodeUnit(a[0], b[0]))));
   }
   return "plan-" + h.digest("hex").slice(0, 12);
 }
