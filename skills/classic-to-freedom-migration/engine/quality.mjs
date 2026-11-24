@@ -33,20 +33,21 @@ export const DEFAULT_QUALITY_THRESHOLDS = Object.freeze({
   maxSequentialIndependentAwaits: 2,
 });
 
-// What each rule's row says it checks, in the order the rows are shown. A finding marked `advisory` is noted, never
-// blocking; every unused-string finding is one.
+// What each rule's row says it checks, in the order the rows are shown. The label names the threshold KEY, never its
+// value: a row's label is its decision key, so a decision recorded on it survives a changed limit. A finding marked
+// `advisory` is noted, never blocking; every unused-string finding is one.
 export const QUALITY_ROW_RULES = Object.freeze([
-  { rule: QUALITY_RULES.functionTooLong, label: (t) => `no function longer than ${t.maxFunctionLines} lines` },
-  { rule: QUALITY_RULES.nestedFunctions, label: (t) => `no handler declaring more than ${t.maxNestedFunctionsPerHandler} functions in its body` },
-  { rule: QUALITY_RULES.duplicateInPage, label: () => "no helper declared twice on the page" },
-  { rule: QUALITY_RULES.duplicateAcrossPages, label: () => "no helper copied from another page of the run" },
-  { rule: QUALITY_RULES.catchLogOnly, label: () => "no catch block that only logs the error" },
-  { rule: QUALITY_RULES.numericComparisonType, label: () => "no bare numeric `comparisonType`" },
-  { rule: QUALITY_RULES.sequentialAwaits, label: (t) => `no more than ${t.maxSequentialIndependentAwaits} independent model loads awaited one after another` },
-  { rule: QUALITY_RULES.guidLiteral, label: () => "no hard-coded record id a project constants module holds" },
-  { rule: QUALITY_RULES.planCodeInComment, label: () => "no plan code (card, AC, decision id) in a comment" },
-  { rule: QUALITY_RULES.requestWithoutSender, label: () => "every custom request the page handles has a sender" },
-  { rule: QUALITY_RULES.unusedResourceString, label: () => "resource strings in use (advisory)" },
+  { rule: QUALITY_RULES.functionTooLong, label: "no function longer than `maxFunctionLines`" },
+  { rule: QUALITY_RULES.nestedFunctions, label: "no handler declaring more than `maxNestedFunctionsPerHandler` functions in its body" },
+  { rule: QUALITY_RULES.duplicateInPage, label: "no helper declared twice on the page" },
+  { rule: QUALITY_RULES.duplicateAcrossPages, label: "no helper copied from another page of the run" },
+  { rule: QUALITY_RULES.catchLogOnly, label: "no catch block that only logs the error" },
+  { rule: QUALITY_RULES.numericComparisonType, label: "no bare numeric `comparisonType`" },
+  { rule: QUALITY_RULES.sequentialAwaits, label: "no more than `maxSequentialIndependentAwaits` independent model loads awaited one after another" },
+  { rule: QUALITY_RULES.guidLiteral, label: "no hard-coded record id a project constants module holds" },
+  { rule: QUALITY_RULES.planCodeInComment, label: "no plan code (card, AC, decision id) in a comment" },
+  { rule: QUALITY_RULES.requestWithoutSender, label: "every custom request the page handles has a sender" },
+  { rule: QUALITY_RULES.unusedResourceString, label: "resource strings in use (advisory)" },
 ]);
 
 // A named helper smaller than this many AST nodes (`v => v`) is not worth moving to a module, so copies of it are
@@ -73,6 +74,7 @@ export function qualityThresholdsOf(manifest) {
 const childNodes = childNodesOf;
 const isFunction = (n) => isFnNode(n) || n?.type === "FunctionDeclaration";
 const lineOf = (n) => n?.loc?.start?.line ?? 0;
+const finding = (rule, section, line, text, extra = {}) => ({ rule, section, line, text, ...extra });
 
 // ---- one page ----
 
@@ -85,27 +87,9 @@ export function lintPageQuality(entry, thresholds = DEFAULT_QUALITY_THRESHOLDS, 
   // `requestKeys` are the `request` literals of the handler entries: naming the request a handler answers is not
   // sending it, so they stay out of `strings` (the values a sender could be).
   const page = { findings: [], helpers: [], handled: [], requestKeys: new Set(), strings: new Set(), unreadable: [] };
-  for (const section of sources) {
-    const comments = [];
-    const ast = parseJsExpression(entry[section], { locations: true, onComment: comments });
-    if (!ast) { page.unreadable.push(section); continue; }
-    if (section === "handlers" && ast.type === "ArrayExpression") lintHandlers(ast, page, thresholds);
-    walkSection(ast, section, null, page, thresholds, constantsGuids);
-    for (const c of comments) {
-      const codes = [...c.value.matchAll(PLAN_CODE)].map((m) => m[0]);
-      if (codes.length) {
-        page.findings.push(finding(QUALITY_RULES.planCodeInComment, section, c.loc.start.line,
-          `${codes.length} plan code(s) in a comment: ${[...new Set(codes)].map((code) => "`" + code + "`").join(", ")}`, { value: codes.length }));
-      }
-    }
-  }
-  const helpersByShape = groupBy(page.helpers, (h) => h.shape);
-  for (const copies of helpersByShape.values()) {
-    for (const copy of copies.slice(1)) {
-      page.findings.push(finding(QUALITY_RULES.duplicateInPage, copy.section, copy.line,
-        `\`${copy.name}\` repeats \`${copies[0].name}\` (line ${copies[0].line}); declared ${copies.length} times`));
-    }
-  }
+  const ctx = { page, t: thresholds, constantsGuids };
+  for (const section of sources) lintSection(entry[section], section, ctx);
+  reportDuplicateHelpers(page);
   collectJsonStrings([entry.viewConfig, entry.viewModelConfig, entry.modelConfig], page.strings);
   for (const key of unusedResourceStrings(entry, sources)) {
     page.findings.push(finding(QUALITY_RULES.unusedResourceString, "resources", 0, `\`${key}\``, { advisory: true }));
@@ -113,33 +97,73 @@ export function lintPageQuality(entry, thresholds = DEFAULT_QUALITY_THRESHOLDS, 
   return page;
 }
 
-const finding = (rule, section, line, text, extra = {}) => ({ rule, section, line, text, ...extra });
+function lintSection(src, section, ctx) {
+  const comments = [];
+  const ast = parseJsExpression(src, { locations: true, onComment: comments });
+  if (!ast) { ctx.page.unreadable.push(section); return; }
+  if (section === "handlers" && ast.type === "ArrayExpression") lintHandlers(ast, ctx);
+  walkSection(ast, section, null, ctx);
+  for (const c of comments) checkComment(c, section, ctx.page);
+}
 
-// The single-node rules, over one whole section. `ownerKey` is the key of the property whose value the node is, so
-// an element's own `id` is told apart from a record id used as data.
-function walkSection(node, section, ownerKey, page, t, constantsGuids, depth = 0) {
-  if (!node || depth > 1000) return;
-  if (isFunction(node)) {
-    const lines = node.loc.end.line - node.loc.start.line + 1;
-    if (lines > t.maxFunctionLines) {
-      page.findings.push(finding(QUALITY_RULES.functionTooLong, section, lineOf(node),
-        `${node.id?.name ? "`" + node.id.name + "` is " : ""}${lines} lines (limit ${t.maxFunctionLines})`, { value: lines, limit: t.maxFunctionLines }));
+function checkComment(comment, section, page) {
+  const codes = [...comment.value.matchAll(PLAN_CODE)].map((m) => m[0]);
+  if (!codes.length) return;
+  const named = [...new Set(codes)].map((code) => "`" + code + "`").join(", ");
+  page.findings.push(finding(QUALITY_RULES.planCodeInComment, section, comment.loc.start.line,
+    `${codes.length} plan code(s) in a comment: ${named}`, { value: codes.length }));
+}
+
+function reportDuplicateHelpers(page) {
+  for (const copies of groupBy(page.helpers, (h) => h.shape).values()) {
+    for (const copy of copies.slice(1)) {
+      page.findings.push(finding(QUALITY_RULES.duplicateInPage, copy.section, copy.line,
+        `\`${copy.name}\` repeats \`${copies[0].name}\` (line ${copies[0].line}); declared ${copies.length} times`));
     }
-  } else if (node.type === "CatchClause" && node.body.body.every(isConsoleCall)) {
-    page.findings.push(finding(QUALITY_RULES.catchLogOnly, section, lineOf(node), "the catch block only logs the error"));
-  } else if (node.type === "Property" && staticPropKey(node) === "comparisonType" && node.value?.type === "Literal" && typeof node.value.value === "number") {
-    page.findings.push(finding(QUALITY_RULES.numericComparisonType, section, lineOf(node), `\`comparisonType: ${node.value.raw}\``));
-  } else if (node.type === "Literal" && typeof node.value === "string") {
-    if (ownerKey !== "id" && GUID_RE.test(node.value)) {
-      const guid = node.value.toLowerCase();
-      page.findings.push(finding(QUALITY_RULES.guidLiteral, section, lineOf(node), `\`${node.value}\``, { advisory: !constantsGuids.has(guid) }));
-    }
-    if (!page.requestKeys.has(node)) addSenderCandidate(page.strings, node.value);
   }
+}
+
+// One walk over a section for the rules that look at single nodes. `ownerKey` is the key of the property whose value
+// the node is, so an element's own `id` is told apart from a record id used as data.
+function walkSection(node, section, ownerKey, ctx, depth = 0) {
+  if (!node || depth > 1000) return;
+  const found = checkNode(node, section, ownerKey, ctx);
+  if (found) ctx.page.findings.push(found);
   for (const child of childNodes(node)) {
     const owner = node.type === "Property" && child === node.value ? staticPropKey(node) : null;
-    walkSection(child, section, owner, page, t, constantsGuids, depth + 1);
+    walkSection(child, section, owner, ctx, depth + 1);
   }
+}
+
+// The finding one node raises, if any.
+function checkNode(node, section, ownerKey, ctx) {
+  if (isFunction(node)) return checkFunctionLength(node, section, ctx.t);
+  if (node.type === "CatchClause") {
+    return node.body.body.every(isConsoleCall) ? finding(QUALITY_RULES.catchLogOnly, section, lineOf(node), "the catch block only logs the error") : null;
+  }
+  if (node.type === "Property") return checkComparisonType(node, section);
+  if (node.type === "Literal" && typeof node.value === "string") return checkStringLiteral(node, section, ownerKey, ctx);
+  return null;
+}
+
+function checkFunctionLength(node, section, t) {
+  const lines = node.loc.end.line - node.loc.start.line + 1;
+  if (lines <= t.maxFunctionLines) return null;
+  const name = node.id?.name ? "`" + node.id.name + "` is " : "";
+  return finding(QUALITY_RULES.functionTooLong, section, lineOf(node), `${name}${lines} lines (limit ${t.maxFunctionLines})`,
+    { value: lines, limit: t.maxFunctionLines });
+}
+
+function checkComparisonType(node, section) {
+  if (staticPropKey(node) !== "comparisonType" || node.value?.type !== "Literal" || typeof node.value.value !== "number") return null;
+  return finding(QUALITY_RULES.numericComparisonType, section, lineOf(node), `\`comparisonType: ${node.value.raw}\``);
+}
+
+function checkStringLiteral(node, section, ownerKey, ctx) {
+  if (!ctx.page.requestKeys.has(node)) addSenderCandidate(ctx.page.strings, node.value);
+  if (ownerKey === "id" || !GUID_RE.test(node.value)) return null;
+  return finding(QUALITY_RULES.guidLiteral, section, lineOf(node), `\`${node.value}\``,
+    { advisory: !ctx.constantsGuids.has(node.value.toLowerCase()) });
 }
 
 const isConsoleCall = (s) => s.type === "ExpressionStatement" && s.expression.type === "CallExpression"
@@ -147,36 +171,44 @@ const isConsoleCall = (s) => s.type === "ExpressionStatement" && s.expression.ty
 
 // ---- handlers ----
 
-function lintHandlers(array, page, t) {
+function lintHandlers(array, ctx) {
   for (const entry of array.elements) {
     if (entry?.type !== "ObjectExpression") continue;
-    let handler = null;
-    for (const p of entry.properties) {
-      const key = p.type === "Property" ? staticPropKey(p) : null;
-      if (key === "request" && p.value.type === "Literal" && typeof p.value.value === "string") {
-        page.handled.push({ request: p.value.value, line: lineOf(p) });
-        page.requestKeys.add(p.value);
-      }
-      if (key === "handler" && isFunction(p.value)) handler = p.value;
-    }
-    if (!handler) continue;
-    const helpers = [];
-    collectNamedFunctions(handler.body, helpers);
-    // The handler's own variables: its parameters and what its body declares outside the functions in it. A sibling
-    // helper is not one of them — a helper calling another moves to the module with it.
-    const helperNames = new Set(helpers.map((h) => h.name));
-    const handlerNames = new Set([...handler.params.flatMap((p) => [...bindingNames(p)]), ...declaredNamesIn(handler.body, { intoFunctions: false })]
-      .filter((n) => !helperNames.has(n)));
-    for (const h of helpers) {
-      if (h.nodeCount >= MIN_DUPLICATE_FUNCTION_NODES && !usesHandlerVariables(h, handlerNames)) page.helpers.push(h);
-    }
-    if (helpers.length > t.maxNestedFunctionsPerHandler) {
-      page.findings.push(finding(QUALITY_RULES.nestedFunctions, "handlers", lineOf(handler),
-        `${helpers.length} functions in one handler (limit ${t.maxNestedFunctionsPerHandler}): ${helpers.map((h) => h.name).join(", ")}`,
-        { value: helpers.length, limit: t.maxNestedFunctionsPerHandler }));
-    }
-    checkSequentialAwaits(handler.body, page, t);
+    const handler = readHandlerEntry(entry, ctx.page);
+    if (handler) lintHandler(handler, ctx);
   }
+}
+
+// Records the request a handler entry answers and returns its handler function (null when it has none).
+function readHandlerEntry(entry, page) {
+  let handler = null;
+  for (const p of entry.properties) {
+    const key = p.type === "Property" ? staticPropKey(p) : null;
+    if (key === "request" && p.value.type === "Literal" && typeof p.value.value === "string") {
+      page.handled.push({ request: p.value.value, line: lineOf(p) });
+      page.requestKeys.add(p.value);
+    } else if (key === "handler" && isFunction(p.value)) handler = p.value;
+  }
+  return handler;
+}
+
+function lintHandler(handler, { page, t }) {
+  const helpers = [];
+  collectNamedFunctions(handler.body, helpers);
+  // The handler's own variables: its parameters and what its body declares outside the functions in it. A sibling
+  // helper is not one of them — a helper calling another moves to the module with it.
+  const helperNames = new Set(helpers.map((h) => h.name));
+  const handlerNames = new Set([...handler.params.flatMap((p) => [...bindingNames(p)]), ...declaredNamesIn(handler.body, { intoFunctions: false })]
+    .filter((n) => !helperNames.has(n)));
+  for (const h of helpers) {
+    if (h.nodeCount >= MIN_DUPLICATE_FUNCTION_NODES && !usesHandlerVariables(h, handlerNames)) page.helpers.push(h);
+  }
+  if (helpers.length > t.maxNestedFunctionsPerHandler) {
+    page.findings.push(finding(QUALITY_RULES.nestedFunctions, "handlers", lineOf(handler),
+      `${helpers.length} functions in one handler (limit ${t.maxNestedFunctionsPerHandler}): ${helpers.map((h) => h.name).join(", ")}`,
+      { value: helpers.length, limit: t.maxNestedFunctionsPerHandler }));
+  }
+  checkSequentialAwaits(handler.body, page, t);
 }
 
 // Named functions only (`function name() {}`, `const name = () => {}`): an inline callback is not a helper.
@@ -187,13 +219,20 @@ function collectNamedFunctions(node, out, depth = 0) {
   for (const child of childNodes(node)) collectNamedFunctions(child, out, depth + 1);
 }
 
+// The part of a node its shape keeps besides its type: an identifier's name, a literal's source text.
+function shapeToken(n) {
+  if (n.type === "Identifier") return " " + n.name;
+  if (n.type === "Literal") return " " + n.raw;
+  return "";
+}
+
 function describeHelper(name, anchor, fn) {
   const parts = [];
   let nodeCount = 0;
   const shape = (n, depth = 0) => {
     if (!n || depth > 1000) return;
     nodeCount++;
-    parts.push("(" + n.type + (n.type === "Identifier" ? " " + n.name : n.type === "Literal" ? " " + n.raw : ""));
+    parts.push("(" + n.type + shapeToken(n));
     for (const child of childNodes(n)) shape(child, depth + 1);
     parts.push(")");
   };
@@ -254,42 +293,54 @@ function referencedNames(node, out = new Set(), depth = 0) {
   return out;
 }
 
+// ---- sequential awaits ----
+
 // Within each block: the awaited model loads (`await x.load(…)`, `await sdk.Model.create(…)`) that use no earlier
-// load's result, followed through the variables assigned from it.
+// load's result, followed through the variables assigned from it. A nested function is its own sequence.
 function checkSequentialAwaits(node, page, t, depth = 0) {
   if (!node || depth > 1000) return;
-  if (node.type === "BlockStatement") {
-    const fromLoads = new Set();
-    let independent = 0;
-    let first = null;
-    for (const statement of node.body) {
-      // Nothing can depend on a load before the first one, so the statement is only read once there is one.
-      const usesLoad = fromLoads.size > 0 && [...referencedNames(statement)].some((n) => fromLoads.has(n));
-      const isLoad = isAwaitedLoad(statement);
-      if (isLoad && !usesLoad) { independent++; first ??= statement; }
-      if (isLoad || usesLoad) statementBindings(statement).forEach((n) => fromLoads.add(n));
-    }
-    if (independent > t.maxSequentialIndependentAwaits) {
-      page.findings.push(finding(QUALITY_RULES.sequentialAwaits, "handlers", lineOf(first),
-        `${independent} independent model loads awaited one after another (limit ${t.maxSequentialIndependentAwaits})`,
-        { value: independent, limit: t.maxSequentialIndependentAwaits }));
-    }
-  }
+  if (node.type === "BlockStatement") checkBlockAwaits(node, page, t);
   for (const child of childNodes(node)) if (!isFunction(child)) checkSequentialAwaits(child, page, t, depth + 1);
 }
 
-function isAwaitedLoad(statement) {
+function checkBlockAwaits(block, page, t) {
+  const fromLoads = new Set();
+  let independent = 0;
+  let first = null;
+  for (const statement of block.body) {
+    // Nothing can depend on a load before the first one, so the statement is only read once there is one.
+    const usesLoad = fromLoads.size > 0 && [...referencedNames(statement)].some((n) => fromLoads.has(n));
+    const isLoad = isAwaitedLoad(statement);
+    if (isLoad && !usesLoad) { independent++; first ??= statement; }
+    if (isLoad || usesLoad) statementBindings(statement).forEach((n) => fromLoads.add(n));
+  }
+  if (independent <= t.maxSequentialIndependentAwaits) return;
+  page.findings.push(finding(QUALITY_RULES.sequentialAwaits, "handlers", lineOf(first),
+    `${independent} independent model loads awaited one after another (limit ${t.maxSequentialIndependentAwaits})`,
+    { value: independent, limit: t.maxSequentialIndependentAwaits }));
+}
+
+// The expression a statement awaits, if it is `await …;`, `x = await …;` or `const x = await …;`.
+function awaitedCall(statement) {
   let expr = null;
-  if (statement.type === "ExpressionStatement") expr = statement.expression.type === "AssignmentExpression" ? statement.expression.right : statement.expression;
-  else if (statement.type === "VariableDeclaration" && statement.declarations.length === 1) expr = statement.declarations[0].init;
+  if (statement.type === "ExpressionStatement") {
+    expr = statement.expression.type === "AssignmentExpression" ? statement.expression.right : statement.expression;
+  } else if (statement.type === "VariableDeclaration" && statement.declarations.length === 1) {
+    expr = statement.declarations[0].init;
+  }
   const call = expr?.type === "AwaitExpression" ? expr.argument : null;
-  const callee = call?.type === "CallExpression" ? call.callee : null;
+  return call?.type === "CallExpression" ? call : null;
+}
+
+function isAwaitedLoad(statement) {
+  const callee = awaitedCall(statement)?.callee;
   if (callee?.type !== "MemberExpression" || callee.computed || callee.property.type !== "Identifier") return false;
   if (callee.property.name === "load") return true;
-  const obj = callee.object;
-  return callee.property.name === "create" && ((obj.type === "Identifier" && obj.name === "Model")
-    || (obj.type === "MemberExpression" && !obj.computed && obj.property.name === "Model"));
+  return callee.property.name === "create" && isModelReference(callee.object);
 }
+
+const isModelReference = (obj) => (obj.type === "Identifier" && obj.name === "Model")
+  || (obj.type === "MemberExpression" && !obj.computed && obj.property.name === "Model");
 
 // The names a statement binds: the declared variables of a declaration, or the assigned identifier of an assignment.
 function statementBindings(statement) {
@@ -314,11 +365,16 @@ function collectJsonStrings(values, out, depth = 0) {
   }
 }
 
+// The page's resource strings, from get-page's `{ strings: {…} }` or a flat map; null when the bundle has none.
+function resourceStringsOf(res) {
+  if (!res || typeof res !== "object") return null;
+  return res.strings && typeof res.strings === "object" ? res.strings : res;
+}
+
 // Resource strings no binding, caption or code on the page names. The bundle merges the template's strings with
 // the page's own, so a template string the template's code uses is reported too — the row is advisory for that.
 function unusedResourceStrings(entry, sources) {
-  const res = entry.resources;
-  const strings = res && typeof res === "object" ? (res.strings && typeof res.strings === "object" ? res.strings : res) : null;
+  const strings = resourceStringsOf(entry.resources);
   if (!strings) return [];
   const text = JSON.stringify([entry.viewConfig, entry.viewModelConfig, entry.modelConfig]) + sources.map((s) => entry[s]).join("\n");
   const used = new Set();
@@ -344,36 +400,41 @@ export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, c
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   const sent = new Set();
-  for (const page of byPage.values()) page?.strings.forEach((s) => sent.add(s));
   const helperOwners = new Map();
   for (const [key, page] of byPage) {
-    for (const h of page?.helpers || []) {
-      if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
-    }
+    page?.strings.forEach((s) => sent.add(s));
+    for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
   for (const [key, page] of byPage) {
     if (!page) continue;
-    const seen = new Set();
-    for (const h of page.helpers) {
-      const owner = helperOwners.get(h.shape);
-      if (owner.key !== key && !seen.has(h.shape)) {
-        seen.add(h.shape);
-        page.findings.push(finding(QUALITY_RULES.duplicateAcrossPages, h.section, h.line, `\`${h.name}\` copies \`${owner.helper.name}\` of page \`${owner.key}\``));
-      }
-    }
-    for (const { request, line } of page.handled) {
-      if (!/^crt\./i.test(request) && !sent.has(request)) {
-        page.findings.push(finding(QUALITY_RULES.requestWithoutSender, "handlers", line, `\`${request}\` is handled but no page of the run sends it`));
-      }
-    }
+    reportCopiesFromOtherPages(key, page, helperOwners);
+    reportRequestsWithoutSender(page, sent);
   }
   return byPage;
+}
+
+function reportCopiesFromOtherPages(key, page, helperOwners) {
+  const seen = new Set();
+  for (const h of page.helpers) {
+    const owner = helperOwners.get(h.shape);
+    if (owner.key === key || seen.has(h.shape)) continue;
+    seen.add(h.shape);
+    page.findings.push(finding(QUALITY_RULES.duplicateAcrossPages, h.section, h.line, `\`${h.name}\` copies \`${owner.helper.name}\` of page \`${owner.key}\``));
+  }
+}
+
+function reportRequestsWithoutSender(page, sent) {
+  for (const { request, line } of page.handled) {
+    if (/^crt\./i.test(request) || sent.has(request)) continue;
+    page.findings.push(finding(QUALITY_RULES.requestWithoutSender, "handlers", line, `\`${request}\` is handled but no page of the run sends it`));
+  }
 }
 
 // The run's findings, built once per `--built` root: the verify rows of every page read the same result.
 const RUN_CACHE = new WeakMap();
 // The key of one thresholds + constants-module combination, built once per set of rows (see `codeQualityRows`).
-export const qualityRunKey = (thresholds, constantsGuids) => JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort().join();
+export const qualityRunKey = (thresholds, constantsGuids) =>
+  JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort((a, b) => a.localeCompare(b)).join();
 export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids)) {
   const pages = root?.pages && typeof root.pages === "object" ? root.pages : { main: root };
   let perRoot = RUN_CACHE.get(root);
@@ -381,4 +442,3 @@ export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualit
   if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || [])));
   return perRoot.get(cacheKey);
 }
-

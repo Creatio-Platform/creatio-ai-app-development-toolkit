@@ -39,7 +39,7 @@ const CASES = [
 const pageOf = (handlers) => ({ handlers: `[${handlers}]`, viewConfig: { items: [{ type: "crt.Button", name: "B", clicked: { request: "usr.Sent" } }] } });
 
 export function runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX }) {
-  // AC 3 — each rule fires on its defect and stays silent on the clean counterpart.
+  // each rule fires on its defect and stays silent on the clean counterpart.
   for (const { rule, bad, good } of CASES) {
     const badPage = lintPageQuality(pageOf(bad));
     const goodPage = lintPageQuality(pageOf(good));
@@ -47,6 +47,21 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       () => rulesOf(badPage).includes(rule) && !rulesOf(goodPage).includes(rule),
       () => ({ bad: badPage.findings, good: goodPage.findings }));
   }
+  // The same rules read the validators and converters sections, and say which section a finding is in.
+  const sections = lintPageQuality({ handlers: "[]",
+    validators: `{ "usr.Positive": { validator: (config) => { return function(control) {\n${lines(61)}\nreturn null; }; }, params: [] } }`,
+    converters: `{ "usr.ToStatus": function(value) {\n// C04 AC-2: map the status\ntry { return value === "aaaaaaaa-0000-4000-8000-000000000001"; } catch (e) { console.error(e); }\n} }` });
+  const inSection = (rule, section) => sections.findings.some((f) => f.rule === rule && f.section === section && f.line > 0);
+  check("quality: validators and converters are linted too, each finding naming its section and line",
+    () => inSection(R.functionTooLong, "validators") && inSection(R.planCodeInComment, "converters")
+      && inSection(R.catchLogOnly, "converters") && inSection(R.guidLiteral, "converters"),
+    () => sections.findings);
+  const cleanSections = lintPageQuality({ handlers: "[]", validators: '{ "usr.Positive": { validator: () => () => null, params: [] } }',
+    converters: '{ "usr.ToStatus": function(value) { return value === Constants.Status.Active; } }' });
+  check("quality: clean validators and converters raise nothing", () => cleanSections.findings.length === 0, () => cleanSections.findings);
+  const prose = lintPageQuality(pageOf(handler("usr.Commented", "// Uses ISO-8601 dates, HTTP/2 and the v2 API; step 3 of the wizard.\nconst x = 1;")));
+  check("quality: ordinary technical tokens in a comment are not plan codes", () => count(prose, R.planCodeInComment) === 0, () => prose.findings);
+
   const measured = lintPageQuality(pageOf(handler("usr.Long", lines(61))));
   check("quality: a long function's finding states the measured length and the limit",
     () => measured.findings.some((f) => f.rule === R.functionTooLong && f.value === 64 && f.limit === 60 && /64 lines \(limit 60\)/.test(f.text)),
@@ -61,7 +76,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("quality: a helper reading its handler's $context/scopes is not a duplicate in another handler",
     () => count(lintPageQuality(pageOf(`${handler("usr.A", wrapper)}, ${handler("usr.B", wrapper)}`)), R.duplicateInPage) === 0);
 
-  // AC 2 — a local element id is never a finding; a record id used as data is.
+  // a local element id is never a finding; a record id used as data is.
   const ids = lintPageQuality({ handlers: `[${handler("usr.Cols", "const column = { id: \"8dc41780-0000-4000-8000-000000000002\" }; if (s === \"8dc41780-1234-4000-8000-000000000001\") { return; }")}]`,
     viewConfig: { items: [{ type: "crt.ListWidget", columns: [{ id: "8dc41780-0000-4000-8000-000000000001" }] }] } });
   check("quality: an element's own `id` (handler object or viewConfig columns[].id) is never a GUID finding; a compared record id is",
@@ -99,7 +114,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       === JSON.stringify({ maxFunctionLines: 100, maxNestedFunctionsPerHandler: 3, maxSequentialIndependentAwaits: 2 })
       && JSON.stringify(qualityThresholdsOf({})) === JSON.stringify(DEFAULT_QUALITY_THRESHOLDS));
 
-  // AC 5 / AC 6 — the verify rows, through the plan the engine renders.
+  // the verify rows, through the plan the engine renders.
   const dir = path.join(FIX, "conventions");
   const body = (f) => fs.readFileSync(path.join(dir, f), "utf8");
   const AB = { resolved: true, requestPrefix: "usr", helperModules: [], constantsModules: ["AbConstants"], source: "fallback",
@@ -119,31 +134,42 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => /⚠ verify/.test(rowLine(failing.markdown, R.functionTooLong)) && /73 lines \(limit 60\)/.test(rowLine(failing.markdown, R.functionTooLong)) && !failing.complete,
     () => rowLine(failing.markdown, R.functionTooLong));
   const raised = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 100 } })), built(longHandler));
-  check("verify: raising manifest.qualityThresholds.maxFunctionLines over the length clears that row",
-    () => /✅ Done/.test(rowLine(raised.markdown, R.functionTooLong)) && /no function longer than 100 lines/.test(raised.markdown),
+  check("verify: raising manifest.qualityThresholds.maxFunctionLines over the length clears that row, under the same label",
+    () => /✅ Done/.test(rowLine(raised.markdown, R.functionTooLong)) && rowLine(raised.markdown, R.functionTooLong).includes("no function longer than `maxFunctionLines`"),
     () => rowLine(raised.markdown, R.functionTooLong));
-  const failingLabel = `[code-quality] ${R.functionTooLong} — no function longer than 60 lines`;
+  const failingLabel = `[code-quality] ${R.functionTooLong} — no function longer than \`maxFunctionLines\``;
   const decided = renderVerify(result, opts, built(longHandler), new Set([verifyRowKey("main", failingLabel)]));
   check("verify: a D<N> decision recorded on a Code quality row closes it",
     () => !/⚠ verify/.test(rowLine(decided.markdown, R.functionTooLong)), () => rowLine(decided.markdown, R.functionTooLong));
+  const decidedRaised = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 65 } })), built(longHandler),
+    new Set([verifyRowKey("main", failingLabel)]));
+  check("verify: a decision recorded on a Code quality row still holds after the threshold changes (the label names no value)",
+    () => !/⚠ verify/.test(rowLine(decidedRaised.markdown, R.functionTooLong)), () => rowLine(decidedRaised.markdown, R.functionTooLong));
   const clean = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`));
-  check("verify: a clean page closes every blocking Code quality row ✅",
-    () => [R.functionTooLong, R.nestedFunctions, R.catchLogOnly, R.planCodeInComment, R.requestWithoutSender, R.guidLiteral]
-      .every((rule) => /✅ Done/.test(rowLine(clean.markdown, rule))),
+  check("verify: a clean page closes every Code quality row ✅ (the advisory one never reads ⚠)",
+    () => Object.values(R).every((rule) => rule === R.unusedResourceString
+      ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
   const heldId = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", `if (s === "${held}") { return; }`)}]`));
   check("verify: a record id the declared constants module holds blocks the GUID row",
     () => /⚠ verify/.test(rowLine(heldId.markdown, R.guidLiteral)), () => rowLine(heldId.markdown, R.guidLiteral));
   const noConventions = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] }, built(`[${handler("usr.ApplyButtonClicked", `if (s === "${held}") { return; }`)}]`));
-  check("verify: without recorded projectConventions the GUID row says the constants-module check was skipped and does not block",
-    () => /ℹ noted/.test(rowLine(noConventions.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventions.markdown, R.guidLiteral)),
+  const kindOf = (v, rule) => (v.rows.find((r) => r.deliverable.includes(`[code-quality] ${rule} —`)) || {}).kind;
+  check("verify: without recorded projectConventions the GUID row says the constants-module check was skipped, does not block, and is a note (not a hand-confirm item)",
+    () => /ℹ noted/.test(rowLine(noConventions.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventions.markdown, R.guidLiteral))
+      && kindOf(noConventions, R.guidLiteral) === "info",
     () => rowLine(noConventions.markdown, R.guidLiteral));
   check("verify: the Code quality rows are verify-only — the plan's groups (and so the task cut, a split and every digest) carry none",
     () => !checklistGroups(result, opts).some((g) => /Code quality/.test(g.title)) && /\*\*Code quality/.test(clean.markdown));
   const notBuilt = renderVerify(result, opts, { pages: { main: false } });
   check("verify: a page reported not built gets non-gating Code quality rows — its own rows already block",
-    () => /☐ confirm on-stand/.test(rowLine(notBuilt.markdown, R.functionTooLong)) && /no code to check/.test(rowLine(notBuilt.markdown, R.functionTooLong)),
+    () => /☐ confirm on-stand/.test(rowLine(notBuilt.markdown, R.functionTooLong)) && /no code to check/.test(rowLine(notBuilt.markdown, R.functionTooLong))
+      && kindOf(notBuilt, R.functionTooLong) === "info",
     () => rowLine(notBuilt.markdown, R.functionTooLong));
+  const unparsable = renderVerify(result, opts, built("[ {"));
+  check("verify: an unparsable handlers section blocks every Code quality row and names the section",
+    () => /⚠ verify/.test(rowLine(unparsable.markdown, R.functionTooLong)) && /ˋhandlersˋ could not be parsed/.test(rowLine(unparsable.markdown, R.functionTooLong)) && !unparsable.complete,
+    () => rowLine(unparsable.markdown, R.functionTooLong));
   const noBundle = renderVerify(result, opts, { pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate", viewConfig: { items: [] } } } });
   check("verify: a bundle without code sections cannot be checked — the rows are confirm-on-stand, never a silent ✅",
     () => /confirm on-stand/.test(rowLine(noBundle.markdown, R.functionTooLong)), () => rowLine(noBundle.markdown, R.functionTooLong));
@@ -164,8 +190,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       () => /⚠ verify/.test(rowLine(viaFile.markdown, R.catchLogOnly)), () => rowLine(viaFile.markdown, R.catchLogOnly));
   } finally { fs.rmSync(asDir, { recursive: true, force: true }); }
 
-  // AC 7 — the engine stays zero-dependency: quality.mjs imports only its siblings.
+  // the engine stays zero-dependency: quality.mjs imports only its siblings.
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
   check("quality: quality.mjs imports only engine siblings (no package)",
-    () => [...src.matchAll(/^import .* from "([^"]+)";$/gm)].every((m) => m[1].startsWith("./")));
+    () => { const from = [...src.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]);
+      return from.length >= 2 && from.every((m) => m.startsWith("./")) && !/\bimport\s*\(/.test(src) && !/\brequire\s*\(/.test(src); });
 }

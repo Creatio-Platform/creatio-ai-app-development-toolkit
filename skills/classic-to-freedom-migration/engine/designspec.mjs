@@ -4854,7 +4854,7 @@ function codeQualityRows(opts) {
   const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
   return QUALITY_ROW_RULES.map(({ rule, label }) => ({
     deliverableId: `quality:${rule}`,
-    label: `[code-quality] ${rule} — ${label(thresholds)}`,
+    label: `[code-quality] ${rule} — ${label}`,
     vk: { type: "quality", rule, thresholds, constantsGuids, runKey, note: notes[rule] || "" },
   }));
 }
@@ -5315,6 +5315,8 @@ function withTextCheck(verdict, vk, ctx) {
 function rowKindOf(r, outcome) {
   if (r.na) return "na";
   if (r.info) return "info";
+  // A Code quality row that does not block is a note about the page's code, never a plan item to confirm by hand.
+  if (outcome === "skip" && r.vk?.type === "quality") return "info";
   if (outcome === "skip") return "confirm";
   return r.vk ? "machine" : "confirm";
 }
