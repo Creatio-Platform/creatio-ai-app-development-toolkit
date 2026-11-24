@@ -5841,10 +5841,31 @@ console.log("\n===== the migration result report — one artifact, computed from
   const allChecked = exercisedRep([pageTask("e-b", "main", "Browser checks: 0 — read-back only"),
     pageTask("e-a", "main", "Browser checks: 1 — loads clean"), pageTask("e-c", "child:C1", "Browser checks: 2 — loads; fix confirmed")],
   tmp("result-report-exercised"));
-  check("exercised: every page whose last built task reports `Browser checks: ≥1` keeps 🟢 COMPLETE, no browser section and no stderr note",
+  check("exercised: every page whose last built task reports `Browser checks: ≥1` keeps 🟢 COMPLETE, no not-exercised section and no stderr note",
     () => allChecked.complete === true && /🟢 \*\*COMPLETE\*\*/.test(allChecked.markdown) && allChecked.verdictColour === "green"
       && !/Not exercised in a browser/.test(allChecked.markdown) && unexercisedNote(allChecked) === "",
     () => allChecked.markdown.split("\n")[2]);
+  {
+    // The exercised section, byte for byte: each page beside its last built task, the count, and the builder's own
+    // words after the dash, so the number a 🟢 verdict rests on is read next to what each check answered.
+    const md = allChecked.markdown;
+    const from = md.indexOf("## Exercised in a browser");
+    const got = from < 0 ? [] : md.slice(from).split("\n\n## ")[0].split("\n").filter((l) => l.startsWith("- ") || l.startsWith("## "));
+    const want = [
+      "## Exercised in a browser (2)",
+      "- **Main page** (`page:main`) — [Page build](e-a.md), 1 check: loads clean",
+      "- **C1 page** (`page:child:C1`) — [Page build](e-c.md), 2 checks: loads; fix confirmed",
+    ];
+    const pageNames = got.slice(1).map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    const wantNames = want.slice(1).map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    check("exercised: a 🟢 run quotes each exercised page's `Browser checks` prose beside its count, from the page's last built task",
+      () => got[0] === want[0] && JSON.stringify(pageNames) === JSON.stringify(wantNames),
+      () => ({ got, want }));
+    const bare = exercisedRep([pageTask("b-a", "main", "Browser checks: 1")], tmp("result-report-exercised-bare"));
+    check("exercised: a `Browser checks: N` line with no prose is named as such beside the page, not left blank",
+      () => bare.verdictColour === "green" && /, 1 check: no account of what the checks answered$/m.test(bare.markdown),
+      () => bare.markdown.slice(bare.markdown.indexOf("## Exercised")));
+  }
   const lastChunkUnchecked = exercisedRep([pageTask("k-a", "main", "Browser checks: 1 — loads clean"),
     pageTask("k-b", "main", "Browser checks: 0 — saved the handlers")], tmp("result-report-last-chunk"));
   check("exercised: a page whose LAST built chunk reports no check is unexercised even though an earlier chunk checked it — the page is opened as it finally stands",

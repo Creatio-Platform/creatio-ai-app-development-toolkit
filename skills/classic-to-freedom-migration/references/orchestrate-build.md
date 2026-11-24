@@ -627,7 +627,9 @@ a decision, no boundary was asserted without one, and every machine-checked plan
 A run that meets all of that but has a page none of whose build tasks reports `Browser checks: ≥1`
 reads `🟠 BUILT, NOT EXERCISED` instead, and its *Not exercised in a browser* section lists those
 pages with their `Check on stand` lines and the recorded `Browser:` answer: present it as it is — a
-page nobody opened after a save is work for the user now, not a footnote. Tasks reporting more than
+page nobody opened after a save is work for the user now, not a footnote. Its *Exercised in a browser*
+section lists every page that does report a check, with the count and the build agent's own words for
+what each check answered, quoted from the last built task. Tasks reporting more than
 two checks are listed under *Browser checks over the cap*; that is a warning, not a red verdict.
 The engine copies `name` from each page's `bundle.json` into the payload as `schemaName` — that is
 how the report names the pages. Where the ledger and the built page disagree — a task `done` while

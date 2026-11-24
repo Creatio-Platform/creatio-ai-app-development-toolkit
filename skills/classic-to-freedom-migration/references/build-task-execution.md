@@ -294,6 +294,7 @@ nothing (`Browser checks: 0 — <why>`): N=0 is valid only under `Browser: none`
 could not run (a `page-smoke` refusal, a page that would not open), and the reason says which —
 never because the `get-page` read-backs looked right, which read back the saved schema, not the
 running page. The engine cannot see your tool calls, so this line is how a reviewer and the judge
-see that the cap held, and the result report reads N from it: a page none of whose tasks reports a
+see that the cap held, and the result report reads N from it and quotes your words after the dash
+beside each exercised page, so write what each check answered, not just that it ran: a page none of whose tasks reports a
 check ends the run as **BUILT, NOT EXERCISED**, with your `Check on stand (row N): …` lines as the
 list a person works through by hand. N above 2 is a defect in the task, and the report lists it.

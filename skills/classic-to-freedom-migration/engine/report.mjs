@@ -49,16 +49,19 @@ const labelKey = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " 
 export const DECISION_MARKER = /^[\s*>-]*Decision needed \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
 export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
 // `Browser checks: N — <what each check answered>`, the line every page-writing task writes under `## Notes`. The
-// number is read, the prose is not; null when the task wrote no such line, which the verdict counts as 0.
-const BROWSER_CHECKS = /^[\s*>-]*Browser checks[\s:*]*(\d+)/i;
-export function browserChecksOf(notes) {
-  let n = null;
+// number decides the verdict; the prose is not judged, only quoted beside each exercised page in the result report,
+// so a person reads what the builder says each check answered instead of trusting a typed number. null when the
+// task wrote no such line, which the verdict counts as 0.
+const BROWSER_CHECKS = /^[\s*>-]*Browser checks[\s:*]*(\d+)\s*(?:[—–-]+\s*)?(.*)$/i;
+function browserChecksLine(notes) {
+  let found = null;
   for (const line of String(notes || "").split(/\r?\n/)) {
     const m = BROWSER_CHECKS.exec(line);
-    if (m) n = Number(m[1]);
+    if (m) found = { n: Number(m[1]), text: m[2].trim() };
   }
-  return n;
+  return found;
 }
+export const browserChecksOf = (notes) => browserChecksLine(notes)?.n ?? null;
 // The cap a task's browser checks are held to: the second only confirms a fix the first one found.
 const BROWSER_CHECK_CAP = 2;
 // A task that saved something on its page: closed `done`, or `partial` with part of it built. One closed
@@ -75,14 +78,17 @@ function browserExercise(tasks, declined = false) {
   const capBreaches = [];
   for (const t of tasks) {
     if (!writesPage(t.writesTo) || !BUILT_STATUSES.has(t.status)) continue;
-    const n = browserChecksOf(t.notes) ?? 0;
+    const line = browserChecksLine(t.notes);
+    const n = line?.n ?? 0;
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
     const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
     page.exercised = n > 0 && !declined;
+    page.evidence = { task: t, n, text: line?.text || "" };
     page.tasks.push(t);
     pages.set(t.writesTo, page);
   }
-  return { unexercised: [...pages.values()].filter((p) => !p.exercised), capBreaches };
+  const all = [...pages.values()];
+  return { exercised: all.filter((p) => p.exercised), unexercised: all.filter((p) => !p.exercised), capBreaches };
 }
 // BUILT, NOT EXERCISED on stderr, so a caller reading stderr alone learns which pages still need a person; "" for
 // any other verdict. It is a note, not an exit-2 leg: every task closed and every built row checks out, so the exit
@@ -92,13 +98,20 @@ export function unexercisedNote(report) {
   return `migrate.mjs: 🟠 BUILT, NOT EXERCISED — no browser check after the last save of ${report.unexercisedPages.join(", ")}.`
     + " Check them on the stand; the migration result report lists what to check.\n";
 }
-function browserSection({ unexercised, capBreaches }, pageName, answer) {
-  const L = unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [];
-  if (capBreaches.length) {
-    if (L.length) L.push("");
-    L.push(...capBreachLines(capBreaches));
-  }
-  return L;
+function browserSection({ exercised, unexercised, capBreaches }, pageName, answer) {
+  const blocks = [unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [],
+    exercised.length ? exercisedLines(exercised, pageName) : [], capBreaches.length ? capBreachLines(capBreaches) : []];
+  return blocks.filter((b) => b.length).flatMap((b, i) => (i ? ["", ...b] : b));
+}
+// What each exercised page's last built task says its checks answered, quoted as written: the verdict counts the
+// number, and this is the prose a person reads to see whether the number stands for a real check.
+function exercisedLines(exercised, pageName) {
+  return [`## Exercised in a browser (${exercised.length})`, "",
+    "The last build task of each page reports these browser checks after its last save. The count decides the"
+      + " verdict; the words are the build agent's own account of what each check answered.", "",
+    ...exercised.map(({ writesTo, pageKey, evidence: { task: t, n, text } }) =>
+      `- **${pageName(pageKey)}** (\`${esc(writesTo)}\`) — [${cell(t.group || t.id)}](${enc(t.file)}), ${plural(n, "check")}: `
+        + (text ? cell(text) : "no account of what the checks answered"))];
 }
 function unexercisedLines(unexercised, pageName, answer) {
   const recorded = answer ? `\`${esc(answer)}\`` : "none — `worklog.md` has no `Browser:` line";
