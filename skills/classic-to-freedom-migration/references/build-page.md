@@ -198,16 +198,16 @@ page handler is client-side: it fires on a UI save in the browser, not on an ODa
 of that save is its captured `UpdateQuery` (the columns it wrote); where a behaviour writes data, read
 the record back and check the mapped values; a detail's link shows in its captured `SelectQuery` filter
 — each with one value change per AC, as `build-task-execution.md` → *Evidence, cheapest first* says.
-The AC lines go in the Evidence cell, the task's Notes and the evidence record — never in a comment
-in the page's code (`classic-ui-expert` → `08-card-contract.md`, *Shipped code cites nothing*).
+The AC lines go in the Evidence cell, the task's Notes and the evidence record. The page's code
+carries no card id, AC number, decision id or task id — not in a comment, a name or a string
+(`classic-ui-expert` → `08-card-contract.md`, *Shipped code cites nothing*).
 
 **Lock and permission flags fail closed.** A flag that locks fields, hides an action or grants an
 operation (`CanEditFields`, `IsReadOnly`, `CanApprove`, …) starts at its RESTRICTIVE value and
 becomes permissive only after a check returns a clear positive answer. When the check throws, is
 denied, or returns nothing (no record, no rights to read it, an empty response), the flag stays
-restrictive and the page tells the user why, with a localizable message. A `try/catch` around such a
-check that only logs is the defect this rule exists for: the error is swallowed and the user edits a
-record that should be locked.
+restrictive and the page tells the user why, with a localizable message. No `try/catch` that only
+logs around such a check.
 
 ```js
 // Incorrect — permissive default, the error is only logged: a failed read leaves the page editable.
@@ -231,13 +231,14 @@ request.$context.CanEditFields = canEdit;
 
 The rule covers lock and permission flags only. Any other read — a tooltip, a counter, a
 default value — may still fail without blocking the page. Test the closed path as one of the row's
-ACs: make the check fail (a status the lock does not allow, a user without read rights on the source
-record) and show that the field stays locked and the message appears.
+ACs: one record in a status the lock does not allow is enough to show that the field stays locked;
+setting up a user without read rights is not required.
 
 **A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
-verified only when a record that MUST match it comes back — and, wherever the data allows, a record
-that must NOT match does not. Pick the control records before you run the query, from the filter's
-own rule (for a date range: one record inside the range and one just outside it). Each of these
+verified only when a record that MUST match it comes back. A record that must NOT match and does
+not come back is better still, but only when one already exists on the stand — never create a
+record for it. Pick the controls from the filter's own rule (for a date range: one record inside the
+range, one just outside it). Each of these
 leaves the row **unverified**, reported as `⚠ Partial — unverified` with its reason, never `✅ Done`:
 
 - the query returns 0 rows — an empty result proves nothing about a filter, it is what a wrong
