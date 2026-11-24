@@ -87,6 +87,18 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("quality: a helper nested in another helper is part of it — its copies are not reported on their own",
     () => count(nestedCopies, R.duplicateInPage) === 0, () => nestedCopies.findings);
 
+  const declared = lintPageQuality(pageOf(`${handler("usr.A", "function fmt(v) { return v && v.value ? v.value : v; } fmt(1);")}, `
+    + handler("usr.B", "function fmt2(v) { return v && v.value ? v.value : v; } fmt2(2);")));
+  check("quality: two `function name() {}` helpers with one body in two handlers are a duplicate",
+    () => count(declared, R.duplicateInPage) === 1, () => declared.findings);
+  const codeless = lintRunQuality({ main: { handlers: `[${handler("usr.Go", "const x = 1;")}]` },
+    "child:Other": { viewConfig: { items: [{ type: "crt.Button", name: "Go", clicked: { request: "usr.Go" } }] } } });
+  check("quality: a page with no code sections still counts as a sender — its button closes the request on another page",
+    () => count(codeless.get("main"), R.requestWithoutSender) === 0, () => codeless.get("main").findings);
+  const undecidable = lintRunQuality({ main: { handlers: `[${handler("usr.Orphan", "const x = 1;")}]` }, "child:Other": { handlers: "[ {" } });
+  check("quality: with an unreadable page in the run, no request is reported as unsent — the sender may be in what was not read",
+    () => count(undecidable.get("main"), R.requestWithoutSender) === 0, () => undecidable.get("main").findings);
+
   // A helper closing over its handler's own variables is a binding of that handler, not a copy of a helper.
   const wrapper = "const { $context, scopes } = request; const process = (config) => sdk.HandlerChainService.instance.process({ ...config, $context, scopes: [...scopes] }); await process({ type: \"usr.Sent\" });";
   check("quality: a helper reading its handler's $context/scopes is not a duplicate in another handler",

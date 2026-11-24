@@ -225,7 +225,9 @@ function collectNamedFunctions(node, out, insideHelper = false, depth = 0) {
   if (!node || depth > 1000) return;
   if (node.type === "FunctionDeclaration" && node.id) out.push(describeHelper(node.id.name, node, node, insideHelper));
   else if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) out.push(describeHelper(node.id.name, node, node.init, insideHelper));
-  for (const child of childNodes(node)) collectNamedFunctions(child, out, insideHelper || isFunction(child), depth + 1);
+  // A function's own children are inside it; the function itself is at the level it was found on.
+  const inner = insideHelper || isFunction(node);
+  for (const child of childNodes(node)) collectNamedFunctions(child, out, inner, depth + 1);
 }
 
 // The part of a node its shape keeps besides its type: an identifier's name, a literal's source text.
@@ -410,17 +412,24 @@ function groupBy(items, keyOf) {
 // another page, and a custom request no page sends. `pages` is `{ pageKey: bundle entry }`.
 export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set()) {
   const byPage = new Map();
-  for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   const sent = new Set();
+  for (const [key, entry] of Object.entries(pages || {})) {
+    const page = lintPageQuality(entry, thresholds, constantsGuids);
+    byPage.set(key, page);
+    // A page with no code sections still sends requests from its buttons, so its config strings count either way.
+    if (page) page.strings.forEach((s) => sent.add(s));
+    else if (entry && typeof entry === "object") collectJsonStrings([entry.viewConfig, entry.viewModelConfig, entry.modelConfig], sent);
+  }
   const helperOwners = new Map();
   for (const [key, page] of byPage) {
-    page?.strings.forEach((s) => sent.add(s));
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
+  // A section that could not be read may hold the sender, so "nobody sends it" cannot be decided for the run.
+  const sendersKnown = ![...byPage.values()].some((page) => page?.unreadable.length);
   for (const [key, page] of byPage) {
     if (!page) continue;
     reportCopiesFromOtherPages(key, page, helperOwners);
-    reportRequestsWithoutSender(page, sent);
+    if (sendersKnown) reportRequestsWithoutSender(page, sent);
   }
   return byPage;
 }
