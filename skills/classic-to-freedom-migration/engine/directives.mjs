@@ -61,15 +61,40 @@ const FIELD_OF = new Map([
 // entries and the same titles.
 export const DECISION_HEADING = /^#{1,4}\s+D(\d+)\b(.*)$/;
 const ANY_HEADING = /^#{1,4}\s/;
-// `- Quote: …`, `* Quote: …`, `- **Quote:** …` and `- **Quote**: …` are one field.
-const FIELD_LINE = /^\s*[-*]\s+(?:\*\*)?([A-Za-z][A-Za-z ]*?)(?::\*\*|\*\*:|:)\s*(.*)$/;
-// The quote marks a person types around a quotation are not part of it.
-const QUOTE_MARKS = /^["'“”„«»‘’]+|["'“”„«»‘’]+$/g;
-
-const stripTicks = (s) => s.replace(/^`+|`+$/g, "").trim();
+// A field label: letters and spaces, starting with a letter.
+const LABEL = /^[A-Za-z][A-Za-z ]*$/;
+// `- Quote: …`, `* Quote: …`, `- **Quote:** …` and `- **Quote**: …` are one field: `{ label, value }`, or null for
+// any other line. Split at the first colon by hand rather than by one regex over the whole line, so a long line
+// costs one pass.
+function fieldLine(line) {
+  const s = line.trimStart();
+  if (!(s.startsWith("- ") || s.startsWith("* "))) return null;
+  const body = s.slice(2).trimStart();
+  const colon = body.indexOf(":");
+  if (colon < 0) return null;
+  const label = body.slice(0, colon).replaceAll("**", "").trim();
+  if (!LABEL.test(label)) return null;
+  let value = body.slice(colon + 1);
+  if (value.startsWith("**")) value = value.slice(2);
+  return { label, value: value.trim() };
+}
+// The pair of quote marks a person types around a quotation is not part of it. Only ONE wrapping pair is removed,
+// so a quotation that itself ends in a quoted word keeps its inner marks.
+const CLOSING_MARKS = new Map([['"', '"'], ["'", "'"], ["“", "”"], ["„", "“”"], ["«", "»"], ["‘", "’"]]);
+function unwrapQuote(v) {
+  const closing = CLOSING_MARKS.get(v[0]);
+  return v.length >= 2 && closing?.includes(v.at(-1)) ? v.slice(1, -1).trim() : v;
+}
+function stripTicks(s) {
+  let from = 0;
+  let to = s.length;
+  while (from < to && s[from] === "`") from++;
+  while (to > from && s[to - 1] === "`") to--;
+  return s.slice(from, to).trim();
+}
 function cleanValue(field, raw) {
   const v = String(raw || "").trim();
-  if (field === "quote") return v.replace(QUOTE_MARKS, "").trim();
+  if (field === "quote") return unwrapQuote(v);
   if (field === "kind" || field === "decidedBy") return stripTicks(v).toLowerCase();
   return v;
 }
@@ -94,20 +119,24 @@ export function parseDecisionRecords(text) {
     }
     if (ANY_HEADING.test(line)) { cur = null; continue; }
     if (!cur) continue;
-    const f = FIELD_LINE.exec(line);
-    const field = f && FIELD_OF.get(f[1].trim().toLowerCase());
-    if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f[2]);
+    const f = fieldLine(line);
+    const field = f && FIELD_OF.get(f.label.toLowerCase());
+    if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f.value);
   }
   return [...byId.values()];
 }
 
-// The records of `<migrationDir>/decisions.md`; none when the file is absent.
+// The records of `<migrationDir>/decisions.md`; none when the file is absent. Any other read failure is thrown: a
+// decisions.md that exists but cannot be read would otherwise drop every directive in it without a word.
 export function readDecisionRecords(migrationDir) {
+  let text;
   try {
-    return parseDecisionRecords(fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8"));
-  } catch {
-    return [];
+    text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
+  } catch (e) {
+    if (e?.code === "ENOENT") return [];
+    throw e;
   }
+  return parseDecisionRecords(text);
 }
 
 // `Scope: main, typed:Product` → ["main", "typed:Product"]. Commas separate keys; backticks around a key are

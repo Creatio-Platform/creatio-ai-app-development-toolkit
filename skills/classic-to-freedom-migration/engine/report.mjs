@@ -682,7 +682,8 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
-  const withoutYou = decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir || ".", ".."))));
+  // Read only beside a task folder: with none, `..` would name whatever folder the process happens to run in.
+  const withoutYou = dir ? decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, "..")))) : [];
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",

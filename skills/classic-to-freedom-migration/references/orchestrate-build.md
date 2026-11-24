@@ -141,9 +141,10 @@ onto). Per-mode placement procedure: `./references/existing-freedom-reconcile.md
    done together in one item (a related list and the handler that filters it; a folded handler chain
    and its helpers; the containers before what goes in them; a page's `[attribute-virtual] X` row in
    the same item as, or an item before, every handler that sets X — a handler writing an attribute
-   that does not exist yet is inert; each page's FILED `Quality gates` row — the first of its two,
-   so `@Quality gates[1]` claims it — in the LAST item that writes that page, and the judged row in
-   the read-only review), mark an item `"stopGate": true` when
+   that does not exist yet is inert; each page's FILED `Quality gates` rows — they come first, one
+   for the design pass plus one per user directive on the page, so `@Quality gates[1+N]` claims them
+   for N directives — in the LAST item that writes that page, and the judged rows in the read-only
+   review), mark an item `"stopGate": true` when
    it could legitimately halt the run rather than finish (it is carried into the task's front matter
    and shown as `⏸ stop-gate` in `index.md`, so the orchestrator sees it before dispatching), and
    give an item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns

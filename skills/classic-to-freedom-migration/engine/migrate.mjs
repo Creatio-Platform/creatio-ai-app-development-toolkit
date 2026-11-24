@@ -3527,12 +3527,16 @@ function splitDriftLines(set) {
 // one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
 // refusal are two chances for one of them to soften.
 // The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
-// migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
-// require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
-function planDecisionsFolder(outFile, tasksDir) {
+// migration folder the plan is written into (`--out`), else the first of the `--from` / `--reads` migration folder and
+// the folder of the `--built` file that holds a decisions.md. Null when the run names none of them. Only `--plan` and
+// `--tasks` require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it
+// is not. The later sources are read so a per-page `--verify` carries the user's directives, which are checklist rows:
+// without them it would report a page complete that never had its directive checked.
+function planDecisionsFolder({ outFile, tasksDir, fromDir, readsDir, builtFile }) {
   if (tasksDir) return path.join(path.resolve(tasksDir), "..");
   if (outFile) return path.dirname(path.resolve(outFile));
-  return null;
+  const candidates = [fromDir, readsDir, builtFile && path.dirname(builtFile)].filter(Boolean).map((d) => path.resolve(d));
+  return candidates.find((d) => fs.existsSync(path.join(d, "decisions.md"))) || null;
 }
 function planGapRefusal(result) {
   const gaps = planGaps(result);
@@ -4498,7 +4502,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (reconcileModeArg && !manifest.planMeta?.freedomExists) fail(`\`${RECONCILE_MODE_FLAG}\` applies only to an existing-Freedom reconcile (planMeta.freedomExists); this plan rebuilds the page from scratch, where there is nothing to reconcile onto.`);
   let result;
   // The decision titles and their provenance records (the directives, who decided what) come from the same file.
-  const decisionsFolder = planDecisionsFolder(outFile, tasksDir);
+  const decisionsFolder = planDecisionsFolder({ outFile, tasksDir, fromDir, readsDir, builtFile });
   const decisions = decisionsFolder ? readDecisions(decisionsFolder) : null;
   const decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : [];
   const taskOpts = () => ({ ...checklistOpts(manifest), decisions });

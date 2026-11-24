@@ -1714,8 +1714,7 @@ function renderPlanBanners(result, opts) {
     ...result.statusIssues.map((x) => `> - ${esc(statusIssueText(x))}`), "");
   if ((result.noDeliverableIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.noDeliverableIssues.length} \`manifest.decisionsWithoutDeliverable\` item(s) cannot be applied:**`,
     ...result.noDeliverableIssues.map((x) => `> - ${esc(noDeliverableIssueText(x))}`), "");
-  if ((result.provenanceIssues || []).length) P.push(`> ⛔ **PLAN INCOMPLETE — ${result.provenanceIssues.length} \`decisions.md\` provenance problem(s):** correct the entry, then re-run \`migrate.mjs --plan\`.`,
-    ...result.provenanceIssues.map((x) => `> - ${esc(provenanceIssueText(x))}`), "");
+  P.push(...provenanceBanner(result));
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];
@@ -3453,15 +3452,22 @@ function directiveRows(pageKey, d) {
 }
 // The directive rows join each page's `Quality gates` group, which the cut already splits into the builder's filed
 // half and the review's judged half. `directives` holds only complete ones (`directivesOf`).
+// EVERY FILED ROW COMES BEFORE EVERY JUDGED ROW. A split claims a group's rows in order (`@Quality gates[n]` takes
+// the next n unclaimed), so the page's last writer claims the first `1 + N` rows (the design pass's filed row and
+// one per directive) and the review claims the rest. Interleaved pairs could not be cut by a group claim at all.
+const isFiledPart = (r) => r.vk?.part === DIRECTIVE_FILED;
 function spliceDirectiveRows(groups, directives, ctx) {
   if (!directives?.length) return;
   const gates = new Map(groups.filter((g) => (g.baseTitle || g.title) === "Quality gates").map((g) => [g.pageKey, g]));
   for (const key of publishedPageKeys(groups)) {
-    const rows = directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d));
-    if (!rows.length) continue;
-    const add = pageGroup(key, "Quality gates", rows, ctx);
-    if (gates.has(key)) gates.get(key).rows.push(...add.rows);
-    else groups.push(add);
+    const added = pageGroup(key, "Quality gates",
+      directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d)), ctx).rows;
+    if (!added.length) continue;
+    const gate = gates.get(key);
+    const rows = [...(gate?.rows || []), ...added];
+    const ordered = [...rows.filter(isFiledPart), ...rows.filter((r) => !isFiledPart(r))];
+    if (gate) gate.rows = ordered;
+    else groups.push({ ...pageGroup(key, "Quality gates", [], ctx), rows: ordered });
   }
 }
 // The page keys a set of groups publishes, in emission order — what a directive's `Scope:` may name.
@@ -3480,6 +3486,13 @@ function renderDirectivesSection(result) {
     ...list.map((d) => `| ${esc(d.id)} | “${esc(d.quote || "?")}” | ${esc(d.expectation)} | ${where(d)} |`), ""];
 }
 const provenanceIssueText = (x) => `\`${x.key}\` ${x.problem}`;
+// The plan's ⛔ banner for the decisions.md entries whose provenance does not stand; nothing when all do.
+function provenanceBanner(result) {
+  const issues = result.provenanceIssues || [];
+  if (!issues.length) return [];
+  return [`> ⛔ **PLAN INCOMPLETE — ${issues.length} \`decisions.md\` provenance problem(s):** correct the entry, then re-run \`migrate.mjs --plan\`.`,
+    ...issues.map((x) => `> - ${esc(provenanceIssueText(x))}`), ""];
+}
 
 // `--checklist` — the grouped Plan-vs-Done skeleton (all rows `☐ pending`), presented AFTER implementing. Not part
 // of `--plan`. The verified version is `--verify` below (SAME structure, Status auto-filled from the built page).

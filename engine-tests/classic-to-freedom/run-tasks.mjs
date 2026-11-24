@@ -27,7 +27,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
-import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE, isFiledGateRow } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
@@ -35,7 +35,6 @@ import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/
 import { approvePlan } from "./_testkit.mjs";
 import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
-import { isFiledGateRow } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -11681,6 +11680,18 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       const r = parseDecisionRecords("## D9 — Legacy\n- Decision: keep it\n## Notes\n- Quote: not D9's");
       return r.length === 1 && Object.keys(r[0].fields).length === 0;
     });
+  check("directives (parse): only ONE wrapping pair of quote marks is removed, so a quotation ending in a quoted word stays verbatim",
+    () => {
+      const [r] = parseDecisionRecords("## D1 — t\n- Quote: \"label it 'Total'\"\n");
+      const [s] = parseDecisionRecords("## D2 — t\n- Quote: 'Total' stays\n");
+      return r.fields.quote === "label it 'Total'" && s.fields.quote === "'Total' stays";
+    });
+  check("directives (parse): a long field line with no colon is read in linear time and yields no field",
+    () => {
+      const t0 = Date.now();
+      const [r] = parseDecisionRecords("## D1 — t\n- " + "a ".repeat(50000) + "\n");
+      return Object.keys(r.fields).length === 0 && Date.now() - t0 < 2000;
+    });
   check("directives (parse): `Scope:` takes comma-separated page keys, backticks stripped",
     () => scopeKeys("`main`, typed:Product ,list").join("|") === "main|typed:Product|list");
   check("directives (provenance): a complete directive, a quoted answer, an orchestrator decision and a legacy entry raise no issue",
@@ -11722,10 +11733,16 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     .filter((r) => r.directive?.id === "D1");
   check("directives (plan): a directive scoped to `main` publishes ONE evidence id with a filed and a judged row, in main's `Quality gates`, and on no other page",
     () => dRows.length === 2 && dRows.every((r) => r.pageKey === "main" && r.group === "Quality gates" && r.id === "main#directive:D1")
-      && dRows.map((r) => r.vk.part).sort().join() === "filed,judged"
+      && dRows.filter((r) => r.vk.part === "filed").length === 1 && dRows.filter((r) => r.vk.part === "judged").length === 1
       && dRows.every((r) => r.vk.requires.join() === "howFollowed,components")
       && dRows.filter(isFiledGateRow).length === 1,
     () => dRows.map((r) => ({ id: r.id, page: r.pageKey, group: r.group, part: r.vk?.part })));
+  {
+    const gate = groupsD.find((g) => g.pageKey === "main" && (g.baseTitle || g.title) === "Quality gates");
+    const parts = gate.rows.map((r) => `${r.deliverableId}`);
+    check("directives (plan): main's `Quality gates` lists every filed row before every judged row, so `@Quality gates[2]` claims exactly the two filed rows",
+      () => parts.join() === "quality:ran,directive:D1:filed,quality:judged,directive:D1:judged", () => parts);
+  }
   check("directives (plan): the plan shows the user's words, the expectation and the pages in a `### User directives` table",
     () => /### User directives/.test(runD.plan) && runD.plan.includes("“use the Summaries component”")
       && runD.plan.includes("crt.Summaries component") && planGaps(runD).length === 0,
@@ -11774,6 +11791,68 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       return delivered.length === 0 && notDelivered.map((d) => d.id).join() === "D1";
     });
 
+  // A split cuts a directive page with group claims: the page's last writer claims the filed rows, which open the
+  // `Quality gates` group, and the review claims the rest.
+  {
+    const keys = bodyOrder(setD);
+    const rowsOf = (k) => groupsD.filter((g) => g.pageKey === k && (g.baseTitle || g.title) !== "Quality gates")
+      .flatMap((g) => g.rows.map((r) => r.label));
+    const filedOf = (k) => groupsD.filter((g) => g.pageKey === k && (g.baseTitle || g.title) === "Quality gates")
+      .flatMap((g) => g.rows).filter(isFiledGateRow).length;
+    const splitWith = (mainClaim) => ({ planVersion: runD.planVersion, items: [
+      ...keys.map((k) => splitItem(`build-${slugKey(k)}`, k, k, [...rowsOf(k), k === "main" ? mainClaim : `@Quality gates[${filedOf(k)}]`])),
+      splitItem("review", "main", "", keys.map((k) => (k === "main" ? "@Quality gates" : `${k}::@Quality gates`))),
+    ] });
+    const good = buildTaskSetFromSplit(runD, splitWith("@Quality gates[2]"), OPTS);
+    const bad = buildTaskSetFromSplit(runD, splitWith("@Quality gates[1]"), OPTS);
+    const holder = (set, id) => set.tasks?.find((t) => t.rows.some((r) => r.deliverableId === id))?.id;
+    check("directives (split): `@Quality gates[2]` in main's writer and `@Quality gates` in the review cut a directive page — the filed row to the writer, the judged row to the review",
+      () => !good.refused && holder(good, "directive:D1:filed") === "build-main" && holder(good, "directive:D1:judged") === "review",
+      () => ({ problems: good.problems, filed: holder(good, "directive:D1:filed"), judged: holder(good, "directive:D1:judged") }));
+    check("directives (split): a split that leaves the directive's filed row to the review is refused, and the refusal names the claim that cuts it",
+      () => bad.refused && bad.problems.some((p) => p.includes("directive:D1:filed") && p.includes("`@Quality gates[2]`")),
+      () => bad.problems);
+  }
+
+  // The CLI reads decisions.md from the migration folder: no orchestrator pastes the directive anywhere.
+  {
+    const folder = tmp("directives-cli");
+    const dir = path.join(folder, "build-tasks");
+    fs.writeFileSync(path.join(folder, "decisions.md"), SUMMARIES.split("\n## D2")[0] + "\n");
+    const plan = cliUnapproved(["--plan", "--out", path.join(folder, "plan.md")], MANIFEST);
+    const cut = cliTasks(["--tasks", dir], MANIFEST);
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE) : [];
+    const withBlock = files.filter((f) => fs.readFileSync(path.join(dir, f), "utf8").includes("“use the Summaries component”"));
+    // The fixture's plan carries unrelated planning gaps (exit 2); the file it writes is what is checked here.
+    const planText = fs.existsSync(path.join(folder, "plan.md")) ? fs.readFileSync(path.join(folder, "plan.md"), "utf8") : "";
+    check("directives (CLI): `--plan --out` reads decisions.md beside the plan and writes the `### User directives` table",
+      () => planText.includes("### User directives") && planText.includes("“use the Summaries component”") && !/provenance problem/.test(planText),
+      () => ({ status: plan.status, stderr: (plan.stderr || "").slice(0, 600) }));
+    check("directives (CLI): `--tasks` writes the directive into main's task files from decisions.md alone",
+      () => cut.status === 0 && withBlock.length > 0,
+      () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 800), files, withBlock }));
+    const builtPath = path.join(folder, "built.json");
+    fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: false } }));
+    const verified = cliUnapproved(["--verify", "--built", builtPath], MANIFEST);
+    const elsewhere = tmp("directives-cli-built-alone");
+    fs.writeFileSync(path.join(elsewhere, "built.json"), JSON.stringify({ pages: { main: false } }));
+    const alone = cliUnapproved(["--verify", "--built", path.join(elsewhere, "built.json")], MANIFEST);
+    check("directives (CLI): a per-page `--verify --built` reads the decisions.md beside the built file, so the directive's rows are checked; a built file with none beside it carries no directive row",
+      () => (verified.stdout || "").includes("main#directive:D1") && !(alone.stdout || "").includes("#directive:"),
+      () => ({ status: verified.status, stdout: (verified.stdout || "").slice(0, 400), stderr: (verified.stderr || "").slice(0, 400) }));
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+    fs.rmSync(folder, { recursive: true, force: true });
+
+    const refused = tmp("directives-cli-refused");
+    const dir2 = path.join(refused, "build-tasks");
+    fs.writeFileSync(path.join(refused, "decisions.md"), "## D1 — Hide the Add button\n- Decided by: user\n");
+    const run = cliTasks(["--tasks", dir2], MANIFEST);
+    check("directives (CLI): a `Decided by: user` entry with no quote makes `--tasks` exit 2 and write nothing",
+      () => run.status === 2 && !fs.existsSync(dir2) && /provenance INVALID/.test(run.stdout || ""),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 800), wrote: fs.existsSync(dir2) }));
+    fs.rmSync(refused, { recursive: true, force: true });
+  }
+
   // Verification: the pair closes on a filed record AND a convincing verdict, and a rejected record stays open.
   {
     const id = "main#directive:D1";
@@ -11786,12 +11865,15 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     const labelsOnly = rowsFor({ evidence: { [id]: { components: ["Label1"] } } });
     check("directives (verify): with no record both rows are open",
       () => none.length === 2 && none.every((r) => r.outcome !== "ok"), () => none);
-    check("directives (verify): a filed record closes the filed row only; the judged row waits for a verdict",
-      () => filedOnly.filter((r) => r.outcome === "ok").length === 1, () => filedOnly);
+    const filedRow = (rows) => rows.find((r) => r.deliverable.includes("the builder FOLLOWED it"));
+    const judgedRow = (rows) => rows.find((r) => r.deliverable.includes("INDEPENDENTLY JUDGED"));
+    check("directives (verify): a filed record closes the filed row; the judged row waits for a verdict",
+      () => filedRow(filedOnly)?.outcome === "ok" && judgedRow(filedOnly)?.outcome === "unverified", () => filedOnly);
     check("directives (verify): a convincing verdict on a complete record closes both rows",
-      () => judged.every((r) => r.outcome === "ok"), () => judged);
-    check("directives (verify): a rejected record leaves the judged row MISSING with the judge's reason",
-      () => rejected.some((r) => r.outcome === "missing" && /eight labels/.test(r.evidence)), () => rejected);
+      () => judged.length === 2 && judged.every((r) => r.outcome === "ok"), () => judged);
+    check("directives (verify): a rejected record keeps the filed row closed and leaves the judged row MISSING with the judge's reason",
+      () => filedRow(rejected)?.outcome === "ok" && judgedRow(rejected)?.outcome === "missing"
+        && /eight labels/.test(judgedRow(rejected).evidence), () => rejected);
     check("directives (verify): a record that does not say how the directive was followed is incomplete",
       () => labelsOnly.every((r) => r.outcome !== "ok"), () => labelsOnly);
   }

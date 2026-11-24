@@ -4706,6 +4706,10 @@ function clearStaleStatusCells(tasks) {
 // no `deliverableStatus` entry, no `withoutDeliverable` item and no directive row. `{ id, title }` in file order;
 // `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
 // directive whose scope reached no task stays unaccounted and the first dispatch is refused.
+// The `D<N>` each directive row of `rows` carries to a builder.
+function citedDirectives(rows) {
+  return (rows || []).map((r) => parseDirectiveRowId(r.deliverableId)?.id).filter(Boolean);
+}
 export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
   const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
   for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
@@ -4713,10 +4717,7 @@ export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus 
     if (t.unread) continue;
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     for (const d of map.values()) cited.add(decisionOf(d));
-    for (const r of t.rows || []) {
-      const directive = parseDirectiveRowId(r.deliverableId);
-      if (directive) cited.add(directive.id);
-    }
+    for (const id of citedDirectives(t.rows)) cited.add(id);
   }
   return [...(decisions || new Map()).entries()]
     .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
