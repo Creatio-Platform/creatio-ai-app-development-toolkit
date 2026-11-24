@@ -6,6 +6,7 @@ import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForIte
   widgetsByMatch, profileCardsByEntity, knownCardActions, FEATURE_CONNECTIONS,
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
 import { resolveRowTarget, runCarries } from "./mapping-registry.mjs";
+import { DEFAULT_REQUEST_PREFIX, normalizePrefix } from "./conventions.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -549,7 +550,9 @@ export function mapToFreedom(eff, opts = {}) {
     registryUnindexedVersion: opts.registryUnindexedVersion || null, featureStatus: opts.featureStatus || (() => null),
     // the run's component registry `{ index, version, source }` (migrate.mjs `runRegistryFor`), or null: decides
     // whether a row's version-gated `upgrade` target is emitted (crt.RadioGroup) or its fallback `target`.
-    registry: opts.registry || null };
+    registry: opts.registry || null,
+    // the namespace every custom request this page emits is named in (see `freedomRequest`)
+    requestPrefix: normalizePrefix(opts.requestPrefix) || DEFAULT_REQUEST_PREFIX };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -782,10 +785,11 @@ function createContainers(ctx) {
 // container by climbing the classic ancestry, converting the classic 24-col grid into the target grid.
 // Returns viewConfigDiff/attributes/pdsColumns + its needsDecision[]/accountedFor[] + the profileRegion
 // resolver the details phase reuses.
-// The Freedom request name for a classic control's click. `usr.` prefixed and derived from the ELEMENT name, so
-// two controls bound to the same classic method still get their own request (the classic method is a shared
-// handler; the request is the element's own entry point).
-const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
+// The Freedom request name for a classic control's click, in the PROJECT's namespace (`manifest.projectConventions
+// .requestPrefix`, threaded in as `opts.requestPrefix`; the engine default only when a caller gives none) and
+// derived from the ELEMENT name, so two controls bound to the same classic method still get their own request (the
+// classic method is a shared handler; the request is the element's own entry point).
+const freedomRequest = (elementName, prefix) => `${prefix}.${elementName}Clicked`;
 
 // Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
 // too) and surface the dynamic-visibility / ancestor-visibility decisions.
@@ -1317,7 +1321,7 @@ function mapFields(ctx, containers) {
       // the `request` — the classic method behind it is engine knowledge and goes on the worklist, exactly like a
       // button's; emitting it inside `menuItems` would put a key no component contract declares on the built page.
       if (child.handlers?.click) {
-        const request = freedomRequest(child.name);
+        const request = freedomRequest(child.name, ctx.requestPrefix);
         entry.clicked = { request };
         sink.handlers.push({ request, element: child.name, componentType: "crt.MenuItem",
           classicHandler: child.handlers.click, tier: rowForItem(child)?.tier ?? null });
@@ -1424,7 +1428,7 @@ function mapFields(ctx, containers) {
     // goes on the worklist — the classic method it came from is already a stub row of its own (the engine resolves
     // a control's click binding as that method's trigger), so this adds the WIRING, not a second copy of the method.
     if (row.target.events?.clicked && it.handlers?.click) {
-      const request = freedomRequest(it.name);
+      const request = freedomRequest(it.name, ctx.requestPrefix);
       values.clicked = { request };
       sink.handlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
     }

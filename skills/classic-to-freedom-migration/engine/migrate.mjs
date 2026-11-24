@@ -26,6 +26,8 @@
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
 //     "runDiagnostics": { skillVersion, git, clioVersion, gateVersion, environment, uri, stand }, // optional; the `diagnostics.mjs --json` object — `--plan` prints it as the plan's `### Run diagnostics` block (`unknown (not supplied)` when absent). Not part of the plan version.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
+//     "projectConventions": { resolved, requestPrefix, validatorPrefix?, converterPrefix?, helperModules, constantsModules, source, evidence, confirmedBy, conflict?, previous? }, // REQUIRED for `--plan`: the team's request namespace and modules (conventions.mjs); a verified `usr` fallback is a valid answer
+//     "constantsModules": { "<Module>": { "body": "<define(...) source>" }, … }, // the bodies of projectConventions.constantsModules — the plan maps every GUID it shows to its `Module.Path`
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
@@ -74,6 +76,7 @@ import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
+import { conventionsOf, projectConventionsIssues } from "./conventions.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -172,7 +175,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
     // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
     // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -562,6 +565,7 @@ function sectionChangeSetOf(manifest, opts, sectionEff) {
     entityColumns: manifest.entityColumns || {},
     resources: strings.resources,
     resourceStrings: strings.resourceStrings,
+    requestPrefix: runConventionsOf(manifest, opts)?.requestPrefix,
   });
 }
 // ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
@@ -1023,6 +1027,9 @@ export function placementIssues(manifest) {
   return issues;
 }
 const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+// The run's project conventions: this bundle's own block, else the one the ROOT manifest recorded (a fold's child
+// bundle carries none). null when neither is resolved — the mapper then names requests in the engine default.
+const runConventionsOf = (manifest, opts = {}) => conventionsOf(manifest) || opts.inheritedConventions || null;
 const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
 // `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
 // target package and the host decision are required. The ONE source for both the gate above and the keys the
@@ -1110,6 +1117,9 @@ export function checklistOpts(manifest, opts = {}) {
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
+    // PROJECT CONVENTIONS (conventions.mjs) — gated like placement, and inherited by every fold like the signals.
+    projectConventions: runConventionsOf(manifest, opts),
+    conventionsBlockers: projectConventionsIssues(manifest),
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
     placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
@@ -2871,6 +2881,8 @@ export function runMigration(manifest, opts = {}) {
   // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  // The project's conventions, recorded once on the ROOT manifest and inherited by every fold like the signals.
+  const runConventions = runConventionsOf(manifest, opts);
   const pageStrings = pageStringsOf(manifest);
   const runRegistry = runRegistryFor(manifest, baseDir, opts.inheritedRunRegistry);
   const changeSet = mapToFreedom(eff, {
@@ -2884,6 +2896,7 @@ export function runMigration(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
+    requestPrefix: runConventions?.requestPrefix, // the project's request namespace (projectConventions); the engine default when none is recorded
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
@@ -3003,7 +3016,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, conventions: runConventions, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -3144,6 +3157,8 @@ export function runMigration(manifest, opts = {}) {
     specOpts.placementBlockers = [...specOpts.placementBlockers, `placement.sectionHost.mode is 'existing-section' but '${out.entity}' has ${out.typedPages.length} typed form pages — this mode extends one list page and one form page only. Record the case in decisions.md and plan it with the user as a reconcile of each form page outside this mode.`];
   }
   out.placementBlockers = specOpts.placementBlockers;
+  out.projectConventions = specOpts.projectConventions;
+  out.conventionsBlockers = specOpts.conventionsBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
   out.translationsMissing = translationsMissing(manifest);
@@ -4786,7 +4801,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const structBad = result.structure && !result.structure.complete;
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
-  const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0));
+  const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0)
+    || (result.conventionsBlockers?.length > 0));
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
@@ -4910,6 +4926,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  if (planMode && result.conventionsBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — project conventions not settled: " + result.conventionsBlockers.join(" | ") + "\n");
   // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
   // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
   // the built pages and nothing about who built them.

@@ -550,6 +550,24 @@ function findFactoryReturn(factory) {
   return null;
 }
 
+// A client-unit module body (`define("Name", [deps], function (…) { … return {…}; })`) as AST nodes, for a reader
+// that walks a module rather than a page: the project-conventions GUID index reads a constants module's literals
+// through it. Same supply-chain gate and parser options as `parseSchema`; nothing is evaluated. Returns
+// `{ error }` on a body it cannot read, else `{ error: null, deps, factory, returned }` (`returned` may be null).
+export function parseDefineModule(src) {
+  const acornParse = getAcornParse();
+  let ast;
+  try { ast = acornParse(String(src ?? ""), { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
+  catch (e) { return { error: "acorn parse failed: " + String(e?.message || e) }; }
+  const call = findDefineCall(ast);
+  if (!call) return { error: "no define() call found" };
+  const depsNode = call.arguments.find((a) => a.type === "ArrayExpression");
+  const deps = depsNode ? depsNode.elements.filter((el) => el?.type === "Literal" && typeof el.value === "string").map((el) => el.value) : [];
+  const factory = call.arguments.find((a) => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
+  if (!factory) return { error: "define() has no factory function" };
+  return { error: null, deps, factory, returned: findFactoryReturn(factory) };
+}
+
 // Parse a Classic schema body into the effective-page inputs, WITHOUT executing it (AST + static eval).
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
