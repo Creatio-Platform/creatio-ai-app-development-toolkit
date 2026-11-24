@@ -6658,6 +6658,77 @@ check("dedup signal: the On-stand signals section states which of the two servic
   /\*\*On-save duplicate check:\*\* active/.test(dedupNoSvc.plan)
   && !/\*\*On-save duplicate check:\*\* present.*build it/.test(dedupNoSvc.plan),
   () => dedupNoSvc.plan.split("\n").filter((l) => /On-save duplicate check/.test(l)));
+
+/* ---- `manifest.siblingOf` — a page that matches one an EARLIER migration already built. A process page migrated
+   in a second run, with the user saying it is identical to the first apart from its buttons, came out as a ~22 KB
+   copy of the first page's handlers in two independent runs. Recorded at discovery, the fact becomes a ⚠ Confirm
+   offering reuse / one shared module / a separate page, so the copy is a question and never a default. */
+const siblingRun = (siblingOf) => runMigration({ ...sigBase, signals: FULL_SIGNALS, siblingOf });
+const siblingRows = (r) => (r.changeSet?.needsDecision || []).filter((d) => d.kind === "sibling-page");
+const siblingNone = siblingRun(undefined);
+check("siblingOf: absent → no sibling-page row (a page with no earlier twin is never asked about one)",
+  siblingRows(siblingNone).length === 0 && !/\[sibling-page\]/.test(siblingNone.plan),
+  () => siblingRows(siblingNone));
+const siblingArg = { folder: "migrations/OrderPage", page: "UsrOrder_FormPage", reason: "the user: the two pages are identical except for their buttons" };
+const siblingSet = siblingRun(siblingArg);
+const siblingRow = siblingRows(siblingSet)[0];
+const siblingReason = siblingRow?.reason ?? "";
+check("siblingOf: present → ONE sibling-page row naming the earlier page and its migration folder, with the user's reason",
+  siblingRows(siblingSet).length === 1 && siblingRow.item === "UsrOrder_FormPage"
+  && siblingReason.includes("migrations/OrderPage") && siblingReason.includes("identical except for their buttons"),
+  () => siblingRows(siblingSet));
+check("siblingOf: the row offers all three answers — reuse the built page, one shared module, a separate page — and says copying is none of them",
+  [/REUSE/, /SHARED MODULE/, /SEPARATE PAGE/, /never cop/i].every((re) => re.test(siblingReason)),
+  () => siblingReason);
+check("siblingOf: the row reaches the RENDERED plan's ⚠ Confirm worklist, and its identifiers survive `esc` (no backticks in the reason)",
+  /\[sibling-page\]/.test(siblingSet.plan) && siblingSet.plan.includes("UsrOrder_FormPage")
+  && !siblingSet.plan.split("\n").some((l) => /\[sibling-page\]/.test(l) && /\u02cb/.test(l)),
+  () => siblingSet.plan.split("\n").filter((l) => /sibling-page/.test(l)));
+const siblingLabels = checklistGroups(siblingSet, checklistOpts({ ...sigBase, signals: FULL_SIGNALS, siblingOf: siblingArg }))
+  .flatMap((g) => g.rows.map((r) => r.label));
+check("siblingOf: the Plan-vs-Done checklist carries a row for it, so the answer is reported, not just asked",
+  siblingLabels.some((l) => /sibling-page/.test(l) && /UsrOrder_FormPage/.test(l)),
+  () => siblingLabels.filter((l) => /Confirm|sibling/i.test(l)));
+// The answer closes the row the way every ⚠ Confirm row closes (manifest-conditional-inputs.md → siblingOf): an
+// evidence record under its id, then an independent judge. A record nobody judged keeps it open.
+{
+  const id = "main#confirm:sibling-page:UsrOrder_FormPage";
+  const page = { viewConfig: { items: [] }, parentSchemaName: "T", schemaUId: "11111111-1111-4111-8111-111111111111" };
+  const rec = { referencePage: "UsrOrder_FormPage", components: ["UsrOrderFormPageModule"], findings: ["SHARED MODULE chosen by the user"] };
+  const rowOf = (evidence, judge) => renderVerify(siblingSet, {}, { pages: { main: page }, evidence, judge })
+    .markdown.split("\n").find((l) => /\[sibling-page\]/.test(l)) || "";
+  check("siblingOf: the answer closes the row — open with no record, still open with an unjudged record, ✅ Done once the record is judged convincing",
+    () => !/✅ Done/.test(rowOf({}, {})) && /NOT judged/.test(rowOf({ [id]: rec }, {}))
+      && /✅ Done/.test(rowOf({ [id]: rec }, { [id]: { convincing: true, why: "both pages import the module" } })),
+    () => [rowOf({}, {}), rowOf({ [id]: rec }, {}), rowOf({ [id]: rec }, { [id]: { convincing: true } })]);
+}
+// `siblingOf` is the bundle's own fact: a typed page folded into the same run must not raise a second question.
+{
+  const pg = (n) => ({ pkg: "P", body: `define("${n}",[],function(){return{entitySchemaName:"X",diff:[]};});` });
+  const folded = runMigration({ ...sigBase, signals: FULL_SIGNALS, siblingOf: siblingArg,
+    typedPages: [{ schema: "XTypedPage" }], typedPageSchemas: { XTypedPage: { entity: "X", noParentTemplate: true, schemas: [pg("XTypedPage")] } } });
+  const hits = [];
+  const walk = (o) => {
+    if (!o || typeof o !== "object") return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (o.kind === "sibling-page") hits.push(o);
+    for (const [k, v] of Object.entries(o)) if (k !== "plan") walk(v);
+  };
+  walk(folded);
+  check("siblingOf: a folded typed page does not inherit it — the whole result carries the root's one sibling-page row and no other",
+    () => folded.typedPages?.[0]?.resolved === "fold" && siblingRows(folded).length === 1 && hits.length === 1,
+    () => ({ typed: folded.typedPages?.[0]?.resolved, hits: hits.length }));
+}
+check("siblingOf: a bare value (not an object) is reported as the wrong shape, not as a missing page",
+  () => ["UsrOrder_FormPage", ["UsrOrder_FormPage"]].every((v) => siblingRows(siblingRun(v)).length === 1
+    && /must be an object/.test(siblingRows(siblingRun(v))[0].reason) && !/no page/.test(siblingRows(siblingRun(v))[0].reason)));
+check("siblingOf: the SHARED MODULE answer tells the user it edits the earlier page",
+  /SHARED MODULE[^;]*edits UsrOrder_FormPage to import it/.test(siblingReason), () => siblingReason);
+const siblingBad = siblingRun({ folder: "migrations/OrderPage" });
+check("siblingOf: recorded without a page → still a row, saying what is missing — a malformed fact is never dropped in silence",
+  siblingRows(siblingBad).length === 1 && /no page/i.test(siblingRows(siblingBad)[0].reason),
+  () => siblingRows(siblingBad));
+
 // review finding 1 (child half) — a child edit page migrates a DIFFERENT entity, so the parent's verdict would
 // state a fact about the wrong entity; but silence is the exact silent loss this row exists to prevent. So the
 // child branch carries a child-scoped INSTRUCTION (the `processActionNote`/`printActionNote` convention), gated

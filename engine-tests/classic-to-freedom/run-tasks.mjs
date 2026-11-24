@@ -27,12 +27,14 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
-import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE, isFiledGateRow } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { approvePlan } from "./_testkit.mjs";
+import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
+  from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -11662,6 +11664,349 @@ console.log("\n===== project conventions: every writer of a task file carries th
         return !(res.problems || []).length && taskFiles(dir).some((t) => /orch-render-blocker/.test(t)) && taskFiles(dir).every(carries);
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
+}
+
+/* ================================================================================================
+   USER DIRECTIVES AND DECISION PROVENANCE. A `## D<N>` entry in decisions.md may carry `Kind:`,
+   `Decided by:`, `Quote:`, `Asked:`, `Scope:` and `Expectation:` lines. A directive becomes a filed +
+   judged evidence pair on every page it names, reaches every builder of those pages through the task
+   file, counts as cited for the unaccounted-decisions gate, and closes only on a filed record AND a
+   convincing verdict. Entries decided by the orchestrator are listed in the final report.
+   ================================================================================================ */
+{
+  console.log("\n[user directives and decision provenance]");
+  const SUMMARIES = [
+    "# Decisions And Approvals",
+    "",
+    "## D1 — Product summaries use the Summaries component",
+    "- Kind: directive",
+    "- Decided by: user",
+    "- Quote: \"use the Summaries component\"",
+    "- Scope: main",
+    "- Expectation: the page shows its totals in a crt.Summaries component, not in labels",
+    "",
+    "## D2 — Amount stays a decimal",
+    "- **Kind:** answer",
+    "- **Decided by:** User",
+    "- **Quote:** «zostaw to pole jako liczbę dziesiętną»",
+    "- **Asked:** How should the multi-currency amount look?",
+    "",
+    "## D3 — No PrimaryAmount recalculation",
+    "- Decided by: orchestrator",
+    "- Rationale: follows from D2",
+    "",
+    "## D4 — Plan approved",
+    "- Approved by: test",
+    "",
+  ].join("\n");
+  const records = parseDecisionRecords(SUMMARIES);
+  const byId = new Map(records.map((r) => [r.id, r]));
+
+  check("directives (parse): heading entries are read in order with their provenance fields; quote marks and bold labels are formatting",
+    () => records.map((r) => r.id).join() === "D1,D2,D3,D4"
+      && byId.get("D1").fields.kind === "directive" && byId.get("D1").fields.quote === "use the Summaries component"
+      && byId.get("D2").fields.decidedBy === "user" && byId.get("D2").fields.quote === "zostaw to pole jako liczbę dziesiętną"
+      && byId.get("D2").fields.asked === "How should the multi-currency amount look?"
+      && byId.get("D3").fields.decidedBy === "orchestrator" && !("quote" in byId.get("D3").fields),
+    () => records);
+  check("directives (parse): an entry with no provenance lines is a plain decision, and a later non-D heading ends the entry",
+    () => {
+      const r = parseDecisionRecords("## D9 — Legacy\n- Decision: keep it\n## Notes\n- Quote: not D9's");
+      return r.length === 1 && Object.keys(r[0].fields).length === 0;
+    });
+  check("directives (parse): only ONE wrapping pair of quote marks is removed, so a quotation ending in a quoted word stays verbatim",
+    () => {
+      const [r] = parseDecisionRecords("## D1 — t\n- Quote: \"label it 'Total'\"\n");
+      const [s] = parseDecisionRecords("## D2 — t\n- Quote: 'Total' stays\n");
+      return r.fields.quote === "label it 'Total'" && s.fields.quote === "'Total' stays";
+    });
+  check("directives (parse): a long field line with no colon is read in linear time and yields no field",
+    () => {
+      const t0 = Date.now();
+      const [r] = parseDecisionRecords("## D1 — t\n- " + "a ".repeat(50000) + "\n");
+      return Object.keys(r.fields).length === 0 && Date.now() - t0 < 2000;
+    });
+  check("directives (parse): `Scope:` takes comma-separated page keys, backticks stripped",
+    () => scopeKeys("`main`, typed:Product ,list").join("|") === "main|typed:Product|list");
+  check("directives (provenance): a complete directive, a quoted answer, an orchestrator decision and a legacy entry raise no issue",
+    () => provenanceIssues(records, ["main", "list"]).length === 0,
+    () => provenanceIssues(records, ["main", "list"]));
+  {
+    const bad = parseDecisionRecords([
+      "## D1 — directive with nothing", "- Kind: directive", "- Decided by: user",
+      "## D2 — directive the orchestrator owns", "- Kind: directive", "- Decided by: orchestrator",
+      "- Quote: x", "- Scope: main", "- Expectation: y",
+      "## D3 — answer with no question", "- Kind: answer", "- Decided by: user", "- Quote: yes",
+      "## D4 — a user decision with no words", "- Decided by: user",
+      "## D5 — a directive for a page the plan does not have", "- Kind: directive", "- Decided by: user",
+      "- Quote: x", "- Scope: typed:Nope", "- Expectation: y",
+      "## D6 — typo in the values", "- Kind: directiv", "- Decided by: agent",
+    ].join("\n"));
+    const issues = provenanceIssues(bad, ["main", "list"]);
+    const of = (id) => issues.filter((i) => i.key === id).map((i) => i.problem).join(" / ");
+    check("directives (provenance): a directive needs a quote, an expectation and a scope",
+      () => /Quote/.test(of("D1")) && /Expectation/.test(of("D1")) && /Scope/.test(of("D1")), () => of("D1"));
+    check("directives (provenance): a directive or an answer recorded as the orchestrator's is refused — they are the user's own words",
+      () => /Decided by: user/.test(of("D2")), () => of("D2"));
+    check("directives (provenance): an answer needs the question it replies to",
+      () => /Asked/.test(of("D3")) && !/Quote/.test(of("D3")), () => of("D3"));
+    check("directives (provenance): `Decided by: user` with no quote is refused — a decision the user did not state is the orchestrator's",
+      () => /Quote/.test(of("D4")), () => of("D4"));
+    check("directives (provenance): a scope naming a page the plan does not publish is named, with the published keys",
+      () => /typed:Nope/.test(of("D5")) && /`main`/.test(of("D5")), () => of("D5"));
+    check("directives (provenance): an unknown `Kind:` or `Decided by:` value is named rather than read as a plain decision",
+      () => /directiv/.test(of("D6")) && /agent/.test(of("D6")), () => of("D6"));
+  }
+  check("directives (provenance): orchestratorDecisions lists only the entries the orchestrator decided",
+    () => orchestratorDecisions(records).map((d) => d.id).join() === "D3");
+
+  // A first message that named one component for the main page: one directive scoped to `main`.
+  const runD = runMigration(MANIFEST, { decisionRecords: records });
+  const groupsD = checklistGroups(runD, OPTS);
+  const dRows = groupsD.flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, group: g.baseTitle || g.title })))
+    .filter((r) => r.directive?.id === "D1");
+  check("directives (plan): a directive scoped to `main` publishes ONE evidence id with a filed and a judged row, in main's `Quality gates`, and on no other page",
+    () => dRows.length === 2 && dRows.every((r) => r.pageKey === "main" && r.group === "Quality gates" && r.id === "main#directive:D1")
+      && dRows.filter((r) => r.vk.part === "filed").length === 1 && dRows.filter((r) => r.vk.part === "judged").length === 1
+      && dRows.every((r) => r.vk.requires.join() === "howFollowed,components")
+      && dRows.filter(isFiledGateRow).length === 1,
+    () => dRows.map((r) => ({ id: r.id, page: r.pageKey, group: r.group, part: r.vk?.part })));
+  {
+    const gate = groupsD.find((g) => g.pageKey === "main" && (g.baseTitle || g.title) === "Quality gates");
+    const parts = gate.rows.map((r) => r.deliverableId);
+    check("directives (plan): main's `Quality gates` lists every filed row before every judged row, so `@Quality gates[2]` claims exactly the two filed rows",
+      () => parts.join() === "quality:ran,directive:D1:filed,quality:judged,directive:D1:judged", () => parts);
+  }
+  check("directives (plan): the plan shows the user's words, the expectation and the pages in a `### User directives` table",
+    () => /### User directives/.test(runD.plan) && runD.plan.includes("“use the Summaries component”")
+      && runD.plan.includes("crt.Summaries component") && planGaps(runD).length === 0,
+    () => planGaps(runD));
+  check("directives (plan): a run without directives renders no section and no directive row",
+    () => !/### User directives/.test(RUN.plan) && !GROUPS.some((g) => g.rows.some((r) => r.directive)));
+  {
+    const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
+    const g = checklistGroups(runMigration(MANIFEST, { decisionRecords: everyPage }), OPTS);
+    const ids = new Set(g.flatMap((x) => x.rows.filter((r) => r.directive).map((r) => r.id)));
+    const keys = new Set(g.map((x) => x.pageKey));
+    check("directives (plan): `Scope: run` puts the pair on every page the plan publishes",
+      () => ids.size === keys.size && [...keys].every((k) => ids.has(`${k}#directive:D1`)), () => ({ ids: [...ids], keys: [...keys] }));
+  }
+  {
+    const lost = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: typed:Missing\n- Expectation: e");
+    const r = runMigration(MANIFEST, { decisionRecords: lost });
+    check("directives (plan): a directive whose scope names no published page is a plan gap — the plan says so and `--tasks` refuses",
+      () => planGaps(r).some((x) => /provenance INVALID/.test(x) && /typed:Missing/.test(x)) && /PLAN INCOMPLETE/.test(r.plan),
+      () => planGaps(r));
+  }
+
+  {
+    const versionOf = (text) => runMigration(MANIFEST, { decisionRecords: parseDecisionRecords(text) }).planVersion;
+    const D1 = "## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: main\n- Expectation: e\n";
+    check("directives (plan version): a plan with no directive keeps the manifest's version; adding one, or rewriting its expectation or scope, moves it",
+      () => versionOf("## D9 — Legacy\n- Decision: keep it\n") === RUN.planVersion
+        && versionOf(D1) !== RUN.planVersion
+        && versionOf(D1.replace("Expectation: e", "Expectation: e, widened")) !== versionOf(D1)
+        && versionOf(D1.replace("Scope: main", "Scope: run")) !== versionOf(D1));
+    check("directives (plan version): who recorded an entry, an orchestrator entry and the approval entry do not move it",
+      () => versionOf(D1 + "## D2 — mine\n- Decided by: orchestrator\n## Plan approved\n- Approved by: test\n") === versionOf(D1));
+    check("directives (provenance): an older entry with a free-text `Decided by:` and no other provenance line is a plain decision, not a refusal",
+      () => provenanceIssues(parseDecisionRecords("## D3 — Old\n- Decided by: Jane Doe\n- Rationale: x\n"), ["main"]).length === 0
+        && provenanceIssues(parseDecisionRecords("## D3 — New\n- Kind: answer\n- Decided by: Jane Doe\n- Quote: x\n- Asked: y\n"), ["main"]).length > 0);
+    check("directives (plan): a sub-scope run carries no directive — the root owns them",
+      () => runMigration(MANIFEST, { decisionRecords: parseDecisionRecords(D1), scopeSchema: "MPage" }).directives.length === 0);
+  }
+
+  // Delivery: the builder of every task on `main` reads the directive; the filed row goes to a build task and the
+  // judged row to the review.
+  const setD = buildTaskSet(runD, OPTS);
+  const withRow = (id) => setD.tasks.filter((t) => t.rows.some((r) => r.deliverableId === id));
+  const filedIn = withRow("directive:D1:filed");
+  const judgedIn = withRow("directive:D1:judged");
+  check("directives (cut): the filed row lands in a build task of `main`, the judged row in the read-only review",
+    () => filedIn.length === 1 && filedIn[0].writesTo && !filedIn[0].writesTo.startsWith("review:")
+      && judgedIn.length === 1 && !judgedIn[0].writesTo,
+    () => ({ filed: filedIn.map((t) => [t.id, t.writesTo]), judged: judgedIn.map((t) => [t.id, t.writesTo]) }));
+  const mainTasks = setD.tasks.filter((t) => t.pageKey === "main" || t.rows.some((r) => r.pageKey === "main"));
+  const otherTasks = setD.tasks.filter((t) => !mainTasks.includes(t));
+  check("directives (cut): every task on `main` carries the directive in its file — the user's words and the expectation — and no task of another page does",
+    () => mainTasks.length > 0 && mainTasks.every((t) => {
+      const text = renderTaskFile(t, setD);
+      return text.includes("User directives") && text.includes("“use the Summaries component”") && text.includes("crt.Summaries component");
+    }) && otherTasks.every((t) => !renderTaskFile(t, setD).includes("User directives")),
+    () => ({ main: mainTasks.map((t) => t.id), other: otherTasks.map((t) => t.id) }));
+  check("directives (cut): a directive delivered to a task is cited — the unaccounted-decisions gate does not hold it",
+    () => {
+      const decisions = new Map([["D1", "Product summaries use the Summaries component"]]);
+      const delivered = TASKS_MODULE.unaccountedDecisions(decisions, { tasks: setD.tasks });
+      const notDelivered = TASKS_MODULE.unaccountedDecisions(decisions, { tasks: SET.tasks });
+      return delivered.length === 0 && notDelivered.map((d) => d.id).join() === "D1";
+    });
+
+  // A split cuts a directive page with group claims: the page's last writer claims the filed rows, which open the
+  // `Quality gates` group, and the review claims the rest.
+  {
+    const keys = bodyOrder(setD);
+    const rowsOf = (k) => groupsD.filter((g) => g.pageKey === k && (g.baseTitle || g.title) !== "Quality gates")
+      .flatMap((g) => g.rows.map((r) => r.label));
+    const filedOf = (k) => groupsD.filter((g) => g.pageKey === k && (g.baseTitle || g.title) === "Quality gates")
+      .flatMap((g) => g.rows).filter(isFiledGateRow).length;
+    const splitWith = (mainClaim) => ({ planVersion: runD.planVersion, items: [
+      ...keys.map((k) => splitItem(`build-${slugKey(k)}`, k, k, [...rowsOf(k), k === "main" ? mainClaim : `@Quality gates[${filedOf(k)}]`])),
+      splitItem("review", "main", "", keys.map((k) => (k === "main" ? "@Quality gates" : `${k}::@Quality gates`))),
+    ] });
+    const good = buildTaskSetFromSplit(runD, splitWith("@Quality gates[2]"), OPTS);
+    const bad = buildTaskSetFromSplit(runD, splitWith("@Quality gates[1]"), OPTS);
+    const holder = (set, id) => set.tasks?.find((t) => t.rows.some((r) => r.deliverableId === id))?.id;
+    check("directives (split): `@Quality gates[2]` in main's writer and `@Quality gates` in the review cut a directive page — the filed row to the writer, the judged row to the review",
+      () => !good.refused && holder(good, "directive:D1:filed") === "build-main" && holder(good, "directive:D1:judged") === "review",
+      () => ({ problems: good.problems, filed: holder(good, "directive:D1:filed"), judged: holder(good, "directive:D1:judged") }));
+    check("directives (split): a split that leaves the directive's filed row to the review is refused, and the refusal names the claim that cuts it",
+      () => bad.refused && bad.problems.some((p) => p.includes("directive:D1:filed") && p.includes("`@Quality gates[2]`")),
+      () => bad.problems);
+    check("directives (split): both the writer and the review cut from a split carry the directive in their files",
+      () => ["build-main", "review"].every((id) => renderTaskFile(good.tasks.find((t) => t.id === id), good).includes("“use the Summaries component”")));
+  }
+
+  // Repair rounds and declared tasks are task files of the page too, so they carry the directive.
+  {
+    const dir = tmp("directives-repair");
+    syncTaskDir(dir, runD, OPTS);
+    const repair = syncRepairDir(dir, runD, VERIFY_PAGES, OPTS);
+    const repairTexts = (repair.written || []).map((w) => fs.readFileSync(path.join(dir, w.file || w), "utf8"));
+    check("directives (repair): a repair task of `main` carries the directive",
+      () => repairTexts.length > 0 && repairTexts.every((t) => t.includes("“use the Summaries component”")),
+      () => ({ written: repair.written }));
+    const declared = addTasks(dir, runD, { ...DECL, id: "orch-main-extra", pageKey: "main", writesTo: "page:main" }, OPTS);
+    const declaredText = declared.refused ? "" : fs.readFileSync(path.join(dir, declared.written[0].file), "utf8");
+    check("directives (declared): a task the orchestrator declares on `main` carries the directive",
+      () => declaredText.includes("“use the Summaries component”"), () => declared.problems || declaredText.slice(0, 600));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // The CLI reads decisions.md from the migration folder: no orchestrator pastes the directive anywhere.
+  {
+    const folder = tmp("directives-cli");
+    const dir = path.join(folder, "build-tasks");
+    const D1_ONLY = SUMMARIES.split("\n## D2")[0] + "\n";
+    fs.writeFileSync(path.join(folder, "decisions.md"), D1_ONLY);
+    const plan = cliUnapproved(["--plan", "--out", path.join(folder, "plan.md")], MANIFEST);
+    // The approval names the version that covers the directive, which is not the manifest-only version.
+    const withD1 = runMigration(MANIFEST, { baseDir: DIR, decisionRecords: parseDecisionRecords(D1_ONLY) });
+    approvePlan(dir, withD1.planVersion);
+    const cut = cliUnapproved(["--tasks", dir], MANIFEST);
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE) : [];
+    const withBlock = files.filter((f) => fs.readFileSync(path.join(dir, f), "utf8").includes("“use the Summaries component”"));
+    const touchesMain = buildTaskSet(withD1, checklistOpts(MANIFEST)).tasks
+      .filter((t) => t.pageKey === "main" || t.rows.some((r) => r.pageKey === "main")).length;
+    check("directives (CLI): every task file that touches `main` carries the directive",
+      () => touchesMain > 0 && withBlock.length === touchesMain, () => ({ touchesMain, withBlock, files }));
+    // The fixture's plan carries unrelated planning gaps (exit 2); the file it writes is what is checked here.
+    const planText = fs.existsSync(path.join(folder, "plan.md")) ? fs.readFileSync(path.join(folder, "plan.md"), "utf8") : "";
+    check("directives (CLI): `--plan --out` reads decisions.md beside the plan and writes the `### User directives` table",
+      () => planText.includes("### User directives") && planText.includes("“use the Summaries component”") && !/provenance problem/.test(planText),
+      () => ({ status: plan.status, stderr: (plan.stderr || "").slice(0, 600) }));
+    check("directives (CLI): `--tasks` writes the directive into main's task files from decisions.md alone",
+      () => cut.status === 0 && withBlock.length > 0,
+      () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 800), files, withBlock }));
+    const builtPath = path.join(folder, "built.json");
+    fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: false } }));
+    const verified = cliUnapproved(["--verify", "--built", builtPath], MANIFEST);
+    const elsewhere = tmp("directives-cli-built-alone");
+    fs.writeFileSync(path.join(elsewhere, "built.json"), JSON.stringify({ pages: { main: false } }));
+    const alone = cliUnapproved(["--verify", "--built", path.join(elsewhere, "built.json")], MANIFEST);
+    check("directives (CLI): a per-page `--verify --built` reads the decisions.md beside the built file, so the directive's rows are checked; a built file with none beside it carries no directive row",
+      () => (verified.stdout || "").includes("main#directive:D1") && !(alone.stdout || "").includes("#directive:"),
+      () => ({ status: verified.status, stdout: (verified.stdout || "").slice(0, 400), stderr: (verified.stderr || "").slice(0, 400) }));
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+    // `--reads <migration-folder>` reads that folder's decisions.md and seeds each directive id with the fields its
+    // record needs, not the design pass's.
+    const readsRun = cliUnapproved(["--reads", folder], MANIFEST);
+    const evidence = (() => { try { return JSON.parse(fs.readFileSync(path.join(folder, "evidence.json"), "utf8")); } catch { return {}; } })();
+    check("directives (CLI): `--reads <folder>` reads its decisions.md and seeds `main#directive:D1` in evidence.json as { howFollowed, components }",
+      () => Object.keys(evidence["main#directive:D1"] || {}).sort((a, b) => a.localeCompare(b)).join() === "components,howFollowed"
+        && "referencePage" in (evidence["main#quality-gates"] || {}),
+      () => ({ status: readsRun.status, stderr: (readsRun.stderr || "").slice(0, 400), keys: Object.keys(evidence) }));
+    // An approval of the manifest-only version does not authorise a plan that carries a directive.
+    const stale = tmp("directives-cli-stale");
+    const dir3 = path.join(stale, "build-tasks");
+    fs.writeFileSync(path.join(stale, "decisions.md"), D1_ONLY);
+    approvePlan(dir3, RUN.planVersion);
+    const staleCut = cliUnapproved(["--tasks", dir3], MANIFEST);
+    check("directives (CLI): an approval recorded before a directive was added does not authorise the cut — the directive moved the plan version",
+      () => staleCut.status === 2 && !fs.existsSync(path.join(dir3, TASK_INDEX_FILE)),
+      () => ({ status: staleCut.status, stdout: (staleCut.stdout || "").slice(0, 500) }));
+    fs.rmSync(stale, { recursive: true, force: true });
+    // A decisions.md that exists but cannot be read stops the run with a message naming it, not a stack trace.
+    const broken = tmp("directives-cli-unreadable");
+    fs.mkdirSync(path.join(broken, "decisions.md"));
+    const unreadable = cliUnapproved(["--plan", "--out", path.join(broken, "plan.md")], MANIFEST);
+    check("directives (CLI): an unreadable decisions.md (a directory here) exits with a message naming decisions.md, not an uncaught exception",
+      () => unreadable.status !== 0 && (unreadable.stderr || "").includes("decisions.md")
+        && !(unreadable.stderr || "").includes("    at "),
+      () => ({ status: unreadable.status, stderr: (unreadable.stderr || "").slice(0, 500) }));
+    const repBroken = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: path.join(broken, "build-tasks") }).markdown;
+    check("directives (report): an unreadable decisions.md leaves the report standing and says the section could not be listed",
+      () => /## Decided without you/.test(repBroken) && /could not be read/.test(repBroken));
+    fs.rmSync(broken, { recursive: true, force: true });
+    fs.rmSync(folder, { recursive: true, force: true });
+
+    const refused = tmp("directives-cli-refused");
+    const dir2 = path.join(refused, "build-tasks");
+    fs.writeFileSync(path.join(refused, "decisions.md"), "## D1 — Hide the Add button\n- Decided by: user\n");
+    const run = cliTasks(["--tasks", dir2], MANIFEST);
+    check("directives (CLI): a `Decided by: user` entry with no quote makes `--tasks` exit 2 and write nothing",
+      () => run.status === 2 && !fs.existsSync(dir2) && /provenance INVALID/.test(run.stdout || ""),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 800), wrote: fs.existsSync(dir2) }));
+    fs.rmSync(refused, { recursive: true, force: true });
+  }
+
+  // Verification: the pair closes on a filed record AND a convincing verdict, and a rejected record stays open.
+  {
+    const id = "main#directive:D1";
+    const rowsFor = (built) => renderVerify(runD, OPTS, built).rows.filter((r) => r.id === id);
+    const rec = { howFollowed: "the products detail totals are a crt.Summaries with two items", components: ["ProductSummaries"] };
+    const none = rowsFor({});
+    const filedOnly = rowsFor({ evidence: { [id]: rec } });
+    const judged = rowsFor({ evidence: { [id]: rec }, judge: { [id]: { convincing: true, why: "crt.Summaries ProductSummaries is on the page" } } });
+    const rejected = rowsFor({ evidence: { [id]: rec }, judge: { [id]: { convincing: false, why: "the totals are eight labels" } } });
+    const labelsOnly = rowsFor({ evidence: { [id]: { components: ["Label1"] } } });
+    check("directives (verify): with no record both rows are open",
+      () => none.length === 2 && none.every((r) => r.outcome !== "ok"), () => none);
+    const filedRow = (rows) => rows.find((r) => r.deliverable.includes("the builder FOLLOWED it"));
+    const judgedRow = (rows) => rows.find((r) => r.deliverable.includes("INDEPENDENTLY JUDGED"));
+    check("directives (verify): a filed record closes the filed row; the judged row waits for a verdict",
+      () => filedRow(filedOnly)?.outcome === "ok" && judgedRow(filedOnly)?.outcome === "unverified", () => filedOnly);
+    check("directives (verify): a convincing verdict on a complete record closes both rows",
+      () => judged.length === 2 && judged.every((r) => r.outcome === "ok"), () => judged);
+    check("directives (verify): a rejected record keeps the filed row closed and leaves the judged row MISSING with the judge's reason",
+      () => filedRow(rejected)?.outcome === "ok" && judgedRow(rejected)?.outcome === "missing"
+        && /eight labels/.test(judgedRow(rejected).evidence), () => rejected);
+    check("directives (verify): a record that does not say how the directive was followed is incomplete",
+      () => labelsOnly.every((r) => r.outcome !== "ok"), () => labelsOnly);
+  }
+
+  // The final report names every choice the orchestrator made on its own.
+  {
+    const folder = tmp("directives-report");
+    const dir = path.join(folder, "build-tasks");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(folder, "decisions.md"), SUMMARIES);
+    const rep = renderFinalReport({ result: runD, verifyRes: renderVerify(runD, OPTS, {}), set: { tasks: [], planVersion: runD.planVersion }, dir }).markdown;
+    check("directives (report): `## Decided without you` lists each `Decided by: orchestrator` entry and nothing the user decided",
+      () => /## Decided without you \(1\)/.test(rep) && rep.includes("**D3** — No PrimaryAmount recalculation") && !rep.includes("**D1**"),
+      () => rep.split("\n").filter((l) => /Decided without|\*\*D\d/.test(l)));
+    const plain = tmp("directives-report-plain");
+    const dir2 = path.join(plain, "build-tasks");
+    fs.mkdirSync(dir2, { recursive: true });
+    fs.writeFileSync(path.join(plain, "decisions.md"), "## D1 — Legacy\n- Decision: keep it\n");
+    const rep2 = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: dir2 }).markdown;
+    check("directives (report): a decisions.md with no orchestrator entries adds no section",
+      () => !/Decided without you/.test(rep2));
+    fs.rmSync(folder, { recursive: true, force: true });
+    fs.rmSync(plain, { recursive: true, force: true });
+  }
+  check("directives (directivesOf): only `Kind: directive` entries are directives",
+    () => directivesOf(records).map((d) => d.id).join() === "D1");
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

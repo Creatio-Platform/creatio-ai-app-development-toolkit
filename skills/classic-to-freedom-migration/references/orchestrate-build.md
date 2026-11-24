@@ -141,9 +141,10 @@ onto). Per-mode placement procedure: `./references/existing-freedom-reconcile.md
    done together in one item (a related list and the handler that filters it; a folded handler chain
    and its helpers; the containers before what goes in them; a page's `[attribute-virtual] X` row in
    the same item as, or an item before, every handler that sets X — a handler writing an attribute
-   that does not exist yet is inert; each page's FILED `Quality gates` row — the first of its two,
-   so `@Quality gates[1]` claims it — in the LAST item that writes that page, and the judged row in
-   the read-only review), mark an item `"stopGate": true` when
+   that does not exist yet is inert; each page's FILED `Quality gates` rows — they come first, one
+   for the design pass plus one per user directive on the page, so `@Quality gates[1+N]` claims them
+   for N directives — in the LAST item that writes that page, and the judged rows in the read-only
+   review), mark an item `"stopGate": true` when
    it could legitimately halt the run rather than finish (it is carried into the task's front matter
    and shown as `⏸ stop-gate` in `index.md`, so the orchestrator sees it before dispatching), and
    give an item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns
@@ -430,11 +431,11 @@ answered on the stand is recorded there and is not repeated in its own file.
 | --- | --- | --- | --- |
 | Reference cache — the run's first task | `group: Reference cache` (read-only, `writesTo:` empty) | `./references/reference-cache-brief.md` | — |
 | Scaffolding — app, package, section, page shells | `group: Scaffolding`, `writesTo: scaffold` | `./references/build-task-execution.md`, `./references/build-scaffolding.md` | — |
-| Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
+| Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Child page wiring — the RelatedPage bindings for one page's related lists | `group: Child page wiring`, `writesTo: wiring:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` | `./references/classic-to-freedom-mapping.md` |
-| Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
-| Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when the plan lists dashboards | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
-| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
+| Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
+| Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when the plan lists dashboards | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
+| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Quality gates — the review that judges a page | `group: Quality gates` (read-only, `writesTo:` empty) | `./references/judge-brief.md` | — |
 | Read-back (7.4) — not a task file | the driver's own read-back pass over `--reads` | `./references/read-back-brief.md` | — |
 

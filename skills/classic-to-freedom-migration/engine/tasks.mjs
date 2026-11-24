@@ -39,8 +39,9 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
+import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
 import { RECONCILE_MODES } from "./reconcile-modes.mjs";
@@ -612,7 +613,8 @@ function artifactRows(groups, B) {
 // The run-level fields every task set and every task file carries: the plan version an approval names, and the
 // project conventions approved with that plan (the block each build and fix task file shows). ONE place, so the
 // next run-level field cannot be added to some writers and missed at others.
-const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null });
+const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null,
+  directives: result.directives });
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -1096,6 +1098,22 @@ function markersBlock() {
       + " can follow without reading the rest of your notes.",
   ];
 }
+// THE USER'S DIRECTIVES, in every task that builds or reviews a page they apply to. The file is the sub-agent's
+// prompt, so a directive reaches the builder only by being written here: an instruction left in decisions.md, or in
+// the orchestrator's memory, is one the builder never reads. Each directive's own rows (filed and judged) sit in
+// the page's last build task and its review; this block is what keeps every EARLIER builder of the page from
+// building something the user ruled out.
+function directivesBlock(task, directives) {
+  const pages = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
+  const own = (directives || []).filter((d) => [...pages].some((k) => directiveCovers(d, k)));
+  if (!own.length) return [];
+  return [
+    "- **User directives — the user's own words. Build to them on every page they name:**",
+    ...own.map((d) => `  - \`${d.id}\` (${d.scope.map((k) => "`" + esc(k) + "`").join(", ")}): “${esc(d.quote)}” → expected: ${esc(d.expectation)}`),
+    "  - Cannot follow one here? Do not build something else in its place. Say so under `## Notes`, naming the"
+      + " directive: its own row stays `not-built — needs-decision` until a person decides.",
+  ];
+}
 function outcomeBlock(repair = false) {
   // THE RENDERED FILE IS THE SUB-AGENT'S PROMPT, so it names the field the engine actually reads. `status:`
   // is the engine's output and a word typed there is discarded and reported; `declared:` is the agent's only
@@ -1183,6 +1201,7 @@ export function renderTaskFile(task, set = {}) {
     ...outcomeBlock(task.kind === REPAIR_KIND),
     ...markersBlock(),
     ...oneAgentBlock(task),
+    ...directivesBlock(task, set.directives),
     "",
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
     ...conventionsTaskLines(set.projectConventions, cell),
@@ -4689,9 +4708,14 @@ function clearStaleStatusCells(tasks) {
   }
   return cleared;
 }
+// The `D<N>` each directive row of `rows` carries to a builder.
+function citedDirectives(rows) {
+  return (rows || []).map((r) => parseDirectiveRowId(r.deliverableId)?.id).filter(Boolean);
+}
 // The `D<N>` entries of `decisions` (the Map from readDecisions) that nothing cites: no task `decisions:` entry,
-// no `deliverableStatus` entry and no `withoutDeliverable` item. `{ id, title }` in file order; `Adjustment N`
-// keys are never returned.
+// no `deliverableStatus` entry, no `withoutDeliverable` item and no directive row. `{ id, title }` in file order;
+// `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
+// directive whose scope reached no task stays unaccounted and the first dispatch is refused.
 export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
   const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
   for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
@@ -4699,6 +4723,7 @@ export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus 
     if (t.unread) continue;
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     for (const d of map.values()) cited.add(decisionOf(d));
+    for (const id of citedDirectives(t.rows)) cited.add(id);
   }
   return [...(decisions || new Map()).entries()]
     .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))

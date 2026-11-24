@@ -133,7 +133,9 @@ you.
   validated before the next one starts. Your task belongs to exactly one section — never reach into
   another.
 - Your `writesTo:` names the one artifact you may write. Write that artifact and no other: reaching
-  into another task's artifact is how two sub-agents write the same schema.
+  into another task's artifact is how two sub-agents write the same schema. A page artifact
+  (`page:<…>`) includes the page's own logic module, `<SchemaPrefix><Page>Module`
+  (`./references/page-code-architecture.md`): the page's tasks write both, one at a time.
 - **Re-check for an existing Freedom artifact before every create** — an app, a section, a page, a
   rule — a second run over the same folder must not duplicate one that is already there.
 
@@ -276,7 +278,7 @@ whole file.
 
 **Report the count.** Every task that saved a page writes one line under `## Notes`, verbatim in
 this shape: `Browser checks: N — <what each check answered>`, e.g. `Browser checks: 2 — 1: loads
-clean, Owner populated, Visa detail filtered by Id, AC-2 UpdateQuery wrote Status; 2: confirms the
+clean, Owner populated, Visa detail filtered by Id, <card id>·AC-2 UpdateQuery wrote Status; 2: confirms the
 Status caption fix`. Write it even when you opened nothing (`Browser checks: 0 — <the runtime render
 check used instead, or why no browser surface was available>`): N=0 is valid only when the required
 post-save check ran as a runtime render check or no browser surface was available, never because the
