@@ -88,7 +88,7 @@ export function previousDifferences(c) {
   const p = c?.previous;
   if (!p) return [];
   const out = [];
-  if (p.requestPrefix && p.requestPrefix !== c.requestPrefix) out.push(`request prefix \`${p.requestPrefix}.\` → \`${c.requestPrefix}.\``);
+  if (p.requestPrefix && p.requestPrefix !== c.requestPrefix) out.push(`request prefix ${p.requestPrefix}. → ${c.requestPrefix}.`);
   for (const key of ["helperModules", "constantsModules"]) {
     const was = new Set(p[key]);
     const now = new Set(c[key]);
@@ -301,4 +301,98 @@ export function foreignNames(names, c) {
     }
   }
   return out;
+}
+
+// ---- rendering: the plan section and the block every build/fix task carries ----
+//
+// One line of stand- or agent-supplied text, made inert for a Markdown table cell: no line break, no pipe, no
+// backtick (the values are wrapped in code spans by the caller).
+const cell = (v) => String(v ?? "").replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|").replace(/`/g, "'").trim();
+const code = (v) => `\`${cell(v)}\``;
+const moduleList = (list) => (list.length ? list.map(code).join(", ") : "none");
+const SOURCE_TEXT = Object.freeze({
+  "freedom-pages": "custom requests in the existing Freedom pages of the target packages",
+  "schema-prefix": "the name prefix of the team's own schemas",
+  "sys-setting": "the `SchemaNamePrefix` system setting",
+  "fallback": "verified fallback — no project namespace found",
+});
+const CONFIRMED_TEXT = Object.freeze({ plan: "the plan approval", user: "the user's answer" });
+
+// The plan's `### Project conventions` section. `guidIndex` is `constantsGuidIndex(manifest)`, `planText` the plan
+// rendered so far, `sourceTexts` what the builders port from (the mapped change set, the Classic bodies). Listed:
+// every record id the plan text shows, and every id the sources use that a declared constants module holds — the
+// rule conditions and Classic methods compare against ids the plan tables never print.
+export function conventionsPlanLines(c, guidIndex, planText, sourceTexts = []) {
+  if (!c) return ["### Project conventions", "- ⚠ not resolved — see the ⛔ banner at the top of this plan", ""];
+  const L = [
+    "### Project conventions",
+    "Approved with this plan. Every build and fix task carries this block, and it overrides any generic guidance that names `usr.` as the namespace.",
+    "",
+    "| Convention | Value |",
+    "|---|---|",
+    `| Request prefix | ${code(c.requestPrefix + ".")} |`,
+    `| Validator prefix | ${code(c.validatorPrefix + ".")} |`,
+    `| Converter prefix | ${code(c.converterPrefix + ".")} |`,
+    `| Helper modules | ${moduleList(c.helperModules)} |`,
+    `| Constants modules | ${moduleList(c.constantsModules)} |`,
+    `| Decided by | ${SOURCE_TEXT[c.source] || cell(c.source)} — ${cell(c.evidence)} |`,
+    `| Confirmed by | ${CONFIRMED_TEXT[c.confirmedBy] || cell(c.confirmedBy)} |`,
+    "",
+    ...conflictLines(c),
+    ...previousLines(c),
+    ...guidLines(guidIndex, planGuids(guidIndex, planText, sourceTexts)),
+  ];
+  return L;
+}
+function conflictLines(c) {
+  if (!c.conflict) return [];
+  const counts = c.conflict.map(([ns, n]) => `${code(ns + ".")} × ${n}`).join(", ");
+  return c.confirmedBy === "user"
+    ? [`> **Namespace conflict, answered by the user:** the target packages use ${counts}; this migration uses ${code(c.requestPrefix + ".")}.`, ""]
+    : [`> ⚠ **Question for the user — namespace conflict:** the target packages use ${counts}. Which one does this migration use? Record the answer with \`confirmedBy: "user"\` and re-run \`--plan\`.`, ""];
+}
+function previousLines(c) {
+  if (!c.previous) return [];
+  const where = c.previous.folder ? ` (${code(c.previous.folder)})` : "";
+  const diff = previousDifferences(c);
+  if (!diff.length) return [`- **Earlier migration${where}:** the same conventions — reused without a question.`, ""];
+  const was = `${code(c.previous.requestPrefix + ".")}, helpers ${moduleList(c.previous.helperModules)}, constants ${moduleList(c.previous.constantsModules)}`;
+  const verdict = c.confirmedBy === "user"
+    ? "the user chose the values in the table above."
+    : "⚠ **Question for the user:** keep the earlier values or take this run's? Record the answer with `confirmedBy: \"user\"` and re-run `--plan`.";
+  return [`- **Earlier migration${where}:** ${was} — differs (${cell(diff.join("; "))}); ${verdict}`, ""];
+}
+function planGuids(guidIndex, planText, sourceTexts) {
+  const shown = guidsInText(planText);
+  const used = guidsInText(sourceTexts.join("\n")).filter((g) => guidIndex?.has(g));
+  return [...new Set([...shown, ...used])];
+}
+function guidLines(guidIndex, guids) {
+  if (!guids.length) return ["No record id appears in this plan.", ""];
+  const L = ["#### Record ids in this plan", "", "Reference each through its constants module (add the module to the page's SCHEMA_DEPS and use the named value) — never paste the GUID.", "",
+    "| Record id | Constants path |", "|---|---|"];
+  for (const g of guids) {
+    const paths = guidIndex?.get(g) || [];
+    L.push(`| ${code(g)} | ${paths.length ? paths.map(code).join(" · ") : "⚠ not in a declared constants module"} |`);
+  }
+  L.push("");
+  return L;
+}
+
+// The block every build and fix task file carries, so a builder that reads only its task still follows the
+// project. Empty when the run recorded no conventions.
+export function conventionsTaskLines(c) {
+  if (!c) return [];
+  return [
+    "## Project conventions",
+    "",
+    "<!-- ENGINE-OWNED: the conventions approved with the plan. They override any generic guidance that names `usr.`. -->",
+    "",
+    `- **Custom requests:** name them ${code(c.requestPrefix + ".<Name>Request")} — never \`usr.\` unless that is the prefix here.`,
+    `- **Validators / converters:** ${code(c.validatorPrefix + ".")} / ${code(c.converterPrefix + ".")}.`,
+    `- **Helper modules:** ${moduleList(c.helperModules)} — reuse what they already provide instead of writing it again.`,
+    `- **Constants modules:** ${moduleList(c.constantsModules)} — reference existing record ids through them: add the module to the page's SCHEMA_DEPS and use the named value; never paste a GUID. The plan's *Project conventions* section maps each id to its path.`,
+    "- Freedom pages CAN import these client-unit modules: list the module in SCHEMA_DEPS and take it as a factory argument.",
+    "",
+  ];
 }

@@ -40,6 +40,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
+import { conventionsTaskLines } from "./conventions.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
 import { RECONCILE_MODES } from "./reconcile-modes.mjs";
@@ -662,6 +663,8 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
+    // the project conventions approved with the plan — every build and fix task file carries them
+    projectConventions: result.projectConventions || null,
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -1179,6 +1182,8 @@ export function renderTaskFile(task, set = {}) {
     ...markersBlock(),
     ...oneAgentBlock(task),
     "",
+    // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
+    ...conventionsTaskLines(set.projectConventions),
     ENGINE_BODY_HEADING,
     "",
     "<!-- ENGINE-OWNED except the `Outcome` column, which is YOURS and is carried across re-runs. -->",
@@ -2534,6 +2539,8 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
+    // the project conventions approved with the plan — every build and fix task file carries them
+    projectConventions: result.projectConventions || null,
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2850,7 +2857,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode, projectConventions: result.projectConventions || null }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4108,7 +4115,7 @@ function mintDeclared(dir, result, decls, written) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, projectConventions: result.projectConventions || null }));
     written.push(task);
   }
 }

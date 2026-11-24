@@ -173,3 +173,7 @@ the supplied chain defines it stays `correctness` and blocks.
 - **A field with no entity column behind it** is labelled, in every culture, by the page string its
   own caption names (`caption`, then `labelConfig.caption`), else the page string of the field's
   name, else `<Field>Caption`; a column-bound field auto-labels from the column title.
+
+## enumVocabulary — the drift guard's only input
+
+the TARGET STAND's own enum values, as `{ "ViewItemType": {…}, "ContentType": {…}, "DataValueType": {…} }` (member name → number). The engine pins these three enums from core `sysenums.js` and reads them to identify every Classic element, so a stand on a different platform line can disagree. Supply this and the engine diffs it against its pinned tables: a **value mismatch BLOCKS** (every element of that kind would be mis-identified), a member only the **stand** carries surfaces as the non-blocking `enum-drift-advisory` (so a release that merely adds a member cannot halt every migration), and a member only the engine carries is not a finding. **Omit it and the guard reports nothing at all** — that is the documented behaviour, not a silent pass, and it is the current state: the clio-side `get-classic-page-sources` echo that would produce this key has not shipped yet. Nothing validates the shape, so a misspelled key is indistinguishable from omitting it.

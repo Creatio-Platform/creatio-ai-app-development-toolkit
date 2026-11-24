@@ -76,7 +76,7 @@ import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions } from "./report.mjs";
-import { conventionsOf, projectConventionsIssues } from "./conventions.mjs";
+import { conventionsOf, projectConventionsIssues, constantsGuidIndex } from "./conventions.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -1120,6 +1120,7 @@ export function checklistOpts(manifest, opts = {}) {
     // PROJECT CONVENTIONS (conventions.mjs) — gated like placement, and inherited by every fold like the signals.
     projectConventions: runConventionsOf(manifest, opts),
     conventionsBlockers: projectConventionsIssues(manifest),
+    constantsGuidIndex: constantsGuidIndex(manifest),
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
     placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
@@ -3175,7 +3176,10 @@ export function runMigration(manifest, opts = {}) {
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics });
+  // What the builders port from, for the plan's record-id table: the mapped change sets and the Classic bodies.
+  const guidSources = specOpts.projectConventions ? [JSON.stringify(out.changeSet || {}), JSON.stringify(out.listChangeSet || {}),
+    ...(Array.isArray(manifest.schemas) ? manifest.schemas : []).map((e) => { try { return bodyOf(e); } catch { return ""; } })] : [];
+  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics, guidSources });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
