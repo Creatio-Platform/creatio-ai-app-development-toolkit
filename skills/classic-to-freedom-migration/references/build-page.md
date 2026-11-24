@@ -239,8 +239,10 @@ localizable resource string.
 
 The rule covers lock and permission flags only. Any other read — a tooltip, a counter, a
 default value — may still fail without blocking the page. Test the closed path as one of the row's
-ACs: one record in a status the lock does not allow is enough to show that the field stays locked;
-setting up a user without read rights is not required.
+ACs: one record in a status the lock does not allow shows that the field stays locked on a negative
+answer. That record does not exercise a check that throws or comes back empty, so confirm that path
+in the code: the flag's default is restrictive and every `catch` and empty branch shows the message.
+Setting up a user without read rights is not required.
 
 **A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
 verified only when a record that MUST match it comes back, and — for each AC that says a record
@@ -253,8 +255,8 @@ outside it). Each of these leaves the row **unverified**, reported as `⚠ Parti
 - the query fails (a SQL or request error);
 - the stand has no record that should match, so no positive control exists;
 - the card has a negative AC ("an expired record must NOT be shown") and the stand has no record
-  that must not match — that AC gets no Evidence line, and the row is `⚠ Partial` naming it. Do not
-  create a record to fill the gap.
+  that must not match — that AC gets no Evidence line, and the row is `⚠ Partial — unverified`
+  naming it. Do not create a record to fill the gap.
 
 The row's Evidence line names the control records (their ids or display values) and what each
 returned: `✅ Done — AC-2 inside range → returned; just after the end date → not returned`.
