@@ -25,6 +25,14 @@ not a process page.
   | the above with no element entry: any other tag (`ClosePage` too) | ⚠ template default: closes the page; the step keeps waiting | `crt.ClosePageRequest`, NOT selected as completing |
 
   A button hidden by default is still a process button: a rule or binding may show it.
+
+  Two processes may treat the same tag differently (their elements' `Buttons` differ). The plan then says the
+  behaviour differs by step, and each re-pointed step is checked against its own element: the button closes the
+  page with `crt.ClosePageRequest` and is selected as completing only where that step's entry completes it.
+
+  A button the template does not route — a customer click handler among the process buttons, or one whose body
+  calls the template's process API (`cancelProcessElement`, `completeExecution`, …) — is listed with ⚠: read its
+  handler, decide what it does to the step, and record the decision. Its body is ported like any handler meanwhile.
 - **The page always keeps a way out:** at least one completing button and one exit that leaves the step open (the
   Freedom template's `BackButton` / `CloseButton`), even where the Classic page removed its Close. A hide rule never
   removes that exit.

@@ -2894,6 +2894,15 @@ function collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSc
   ];
 }
 
+// A pre-configured process page (process-page.mjs): read off the parsed seed chain, never on a nested fold, and
+// recorded on the manifest so `checklistOpts` gives the same answer. Null for any other page.
+function processPageOfRun(manifest, opts, { seedTemplate, schemas, eff }) {
+  if (isNestedFold(opts)) return null;
+  const template = processTemplateOf(seedTemplate.map((l) => l.moduleName));
+  recordProcessTemplate(manifest, template);
+  return processPageInfo({ template, pageName: schemas.at(-1)?.moduleName, items: eff.items, methods: eff.methods, manifest });
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
   const bodyOf = (e) => readSchemaBody(e, baseDir);
@@ -2919,11 +2928,7 @@ export function runMigration(manifest, opts = {}) {
   const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
   const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
   const eff = mergeHierarchy(schemas, { seedTemplate, noParentTemplate: manifest.noParentTemplate === true }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
-  // A pre-configured process page (process-page.mjs): read off the parsed seed chain, never on a nested fold, and
-  // recorded on the manifest so `checklistOpts` gives the same answer.
-  const processTemplate = isNestedFold(opts) ? null : processTemplateOf(seedTemplate.map((l) => l.moduleName));
-  if (!isNestedFold(opts)) recordProcessTemplate(manifest, processTemplate);
-  const processPage = processPageInfo({ template: processTemplate, pageName: schemas.at(-1)?.moduleName, items: eff.items, manifest });
+  const processPage = processPageOfRun(manifest, opts, { seedTemplate, schemas, eff });
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // the embedded profile schemas a profile card renders (profiled entity + displayed columns).

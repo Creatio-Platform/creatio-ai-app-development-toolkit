@@ -83,8 +83,8 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
   check("process page: with no element read, SaveData completes and every other tag only closes the page — marked as the template default",
     () => saveDefault.behaviour === PROCESS_BEHAVIOUR.COMPLETE_SAVE && closeDefault.behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN
       && closeDefault.source === "page-default" && saveDefault.source === "page-default");
-  check("process page: steps that disagree on a tag's Buttons entry are reported, the first is used",
-    () => conflict.source === "element-conflict" && conflict.behaviour === PROCESS_BEHAVIOUR.COMPLETE_NO_SAVE);
+  check("process page: steps whose Buttons entries differ for a tag keep one behaviour per step",
+    () => conflict.source === "element-per-step" && conflict.perStep.map((p) => p.behaviour).join() === "complete-no-save,close-open");
 
   // The mapper: a process button gets no generated request handler.
   check("process page: the custom Cancel is built with no request and no `usr.` handler on the worklist",
@@ -170,6 +170,13 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
   check("process page: a process button hidden by default is still planned and gets no generated handler",
     () => hiddenCancel !== PAGE && hiddenRun.processPage.buttons.some((b) => b.classic === CANCEL)
       && !(hiddenRun.changeSet.requestHandlers || []).some((h) => h.element === CANCEL), () => hiddenRun.processPage.buttons);
+  check("process page: the template's save button is found by its SaveData tag, not only by its element id",
+    () => processButtonsOf([{ name: "Button-renamed", itemType: 5, templateOwned: true, tag: "SaveData", handlers: { click: "onProcessActionButtonClick" } }])[0]?.freedom === "SaveButton");
+  check("process page: the Freedom template's own Back/Close, as get-page returns them (visibility bound to page state), count as the way out",
+    () => /✅ Done/.test(rowOf(verify({ ...built(), pages: { main: { viewConfig: [...viewConfig(undefined, false),
+      { name: "CloseButton", type: "crt.Button", clicked: { request: "crt.ClosePageRequest" }, visible: "$HasUnsavedData | crt.InvertBooleanValue" }] } } }), "keeps a completing button and an exit")));
+  check("process page: without a recorded answer the plan options read the inline seed bodies",
+    () => checklistOpts(structuredClone(manifest())).processPage === true && checklistOpts(structuredClone({ ...manifest(), seed: CLEAN_SEED })).processPage === false);
   check("process page: the Classic template's save button maps onto the Freedom template's SaveButton — no element, no handler",
     () => run.processPage.buttons.find((b) => b.classic === SAVE)?.freedom === "SaveButton"
       && !(run.changeSet.requestHandlers || []).some((h) => h.element === SAVE) && !run.changeSet.tableElements.some((e) => e.classic === SAVE));
@@ -179,9 +186,35 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
     () => onlyClose !== closePage && onlyCloseRun.processPage.completing === 0
       && /❌ MISSING.*no Classic button completes the step/.test(rowOf(renderVerify(onlyCloseRun, checklistOpts(manifest({}, onlyClose)), built()).markdown, "keeps a completing button and an exit")),
     () => onlyCloseRun.processPage.buttons);
-  const noButtons = runMigration(manifest({}, onlyClose.replace('"bindTo": "onProcessActionButtonClick"', '"bindTo": "onUsrOwnClick"')));
+  const ownHandler = onlyClose.replace('"bindTo": "onProcessActionButtonClick"', '"bindTo": "onUsrOwnClick"');
+  const ownRun = runMigration(manifest({}, ownHandler));
+  check("process page: a customer handler among the process buttons is planned as a ⚠ decision, keeps its ported handler, and its verify row stays open",
+    () => { const b = ownRun.processPage.buttons.find((x) => x.classic === CANCEL);
+      return b?.behaviour === PROCESS_BEHAVIOUR.UNKNOWN && b.source === "custom-handler" && /⚠ a customer handler the profile cannot read/.test(ownRun.plan)
+        && (ownRun.changeSet.requestHandlers || []).some((h) => h.element === CANCEL)
+        && /⚠ verify.*customer handler the profile cannot read/.test(rowOf(renderVerify(ownRun, checklistOpts(manifest({}, ownHandler)), built()).markdown, "[process button]")); },
+    () => ownRun.processPage.buttons);
+  const apiCaller = PAGE.replace('"parentName": "ProcessActionButtons"', '"parentName": "Header"')
+    .replace('"bindTo": "onCancelProcessElementClick"', '"bindTo": "onUsrCancelClick"')
+    .replace('methods: {},', 'methods: { onUsrCancelClick: function() { this.cancelProcessElement(this.get("Tag")); } },');
+  check("process page: a button outside the process buttons whose handler calls the template's process API is a ⚠ decision too",
+    () => apiCaller.includes("onUsrCancelClick: function") && runMigration(manifest({}, apiCaller)).processPage.buttons.some((b) => b.classic === CANCEL && b.source === "custom-handler"));
+  const noButtons = runMigration(manifest({}, ownHandler.replace('"parentName": "ProcessActionButtons"', '"parentName": "Header"')));
   check("process page: a page with no process button left says so in the plan",
-    () => noButtons.processPage.buttons.length === 0 && /⚠ the page has no process button left/.test(noButtons.plan));
+    () => noButtons.processPage.buttons.length === 0 && /⚠ the page has no process button left/.test(noButtons.plan), () => noButtons.processPage.buttons);
+  // Two processes open the page and treat the same tag differently: each re-pointed step is held to its own element.
+  const twoSteps = { processPage: { stepsResolved: true, steps: [
+    { ...STEP, buttons: [{ tag: "ClosePage", performClosePage: true, performSaveData: true }] },
+    { process: "UsrReturnProcess", element: "CheckReturn", consent: "approved", buttons: [{ tag: "ClosePage", performClosePage: true }] }] } };
+  const twoRun = runMigration(manifest(twoSteps, closePage));
+  const twoBuilt = (validates) => ({ pages: { main: { viewConfig: [{ name: "SaveButton", type: "crt.Button", clicked: { request: "crt.SaveRecordRequest" } },
+    { name: CANCEL, type: "crt.Button", clicked: { request: "crt.ClosePageRequest" } }, { name: "BackButton", type: "crt.Button", clicked: { request: "crt.ClosePageRequest" } }] } },
+    processSteps: [{ ...STEP, page: "P", active: true, buttons: [{ name: "SaveButton", validate: true }, { name: CANCEL, validate: validates[0] }] },
+      { process: "UsrReturnProcess", element: "CheckReturn", page: "P", active: true, buttons: [{ name: "SaveButton", validate: true }, { name: CANCEL, validate: validates[1] }] }] });
+  const twoRow = (v) => rowOf(renderVerify(twoRun, checklistOpts(manifest(twoSteps, closePage)), twoBuilt(v)).markdown, "[process button] Cancel");
+  check("process page: two steps re-pointed each with its own validate both pass; holding both to one validate is ❌",
+    () => /✅ Done/.test(twoRow([true, false])) && /❌ MISSING.*UsrReturnProcess.*validate: true/.test(twoRow([true, true])),
+    () => [twoRow([true, false]), twoRow([true, true])]);
 
   // `--verify --from` composes the payload from the migration folder: the process side comes from process.json.
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "process-page-"));
