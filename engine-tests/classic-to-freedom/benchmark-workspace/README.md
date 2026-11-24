@@ -24,7 +24,7 @@ document pages. Each part is there because migrations get it wrong:
 | Code-owned rules | `rules` of `MbContractPage`: Customer and End date editable only while `MbCanEditFields` is true (false when the contract is Closed) | Read-only state driven by an attribute survives the migration |
 | Sister pages with shared logic | `MbDeliveryNotePage` and `MbReturnNotePage` both use `MbDocumentTotalsMixin` for the **Post** button | The shared logic stays shared, not copied into each page |
 | Page that writes data when it opens | `MbContractPage.mbAssignNumber` increments the `MbContractLastNumber` system setting when a new contract card opens | A browser check of the new-record page changes data; the migration has to say so |
-| Process page | `MbApproveContractProcessPage` (parent `BasePageProcessTemplate`) | The page is recognised as a process page |
+| Process with a Classic process page | The **Start approval** button on the contract page runs `MbApproveContractProcess`: Start, then a pre-configured page step that opens `MbApproveContractProcessPage` (parent `BasePageProcessTemplate`), then End. The step passes the `ContractId` process parameter to the page, which declares it as an attribute; the page's **Approve** button writes the comment and the approved flag, then completes the step | The page is recognised as a process page, and the process that opens it is found and decided on |
 | Section action and selection | "Close selected contracts" in the section actions | The action is migrated or listed |
 
 Demo data ships with the package:
@@ -64,6 +64,10 @@ Open the section in Classic UI at `<stand>/0/Nui/ViewModule.aspx#SectionModuleV2
 
 A schema without a parent (the mixin) must keep its full JSON `metadata.json`. The diff form that
 pages with a parent use fails to install for it.
+
+The process was generated from a template, not drawn in the process designer. In its
+`metadata.json`, each mapping of the page step keeps, in `GT5`, the id that the pre-configured page task
+gives to that parameter. With any other value the step gets no page and the process fails when it starts.
 
 ## Tested on
 

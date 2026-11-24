@@ -1,6 +1,10 @@
 define("MbApproveContractProcessPage", [], function() {
 	return {
 		attributes: {
+			"ContractId": {
+				"dataValueType": Terrasoft.DataValueType.GUID,
+				"type": Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN
+			},
 			"MbComment": {
 				"dataValueType": Terrasoft.DataValueType.TEXT,
 				"type": Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN,

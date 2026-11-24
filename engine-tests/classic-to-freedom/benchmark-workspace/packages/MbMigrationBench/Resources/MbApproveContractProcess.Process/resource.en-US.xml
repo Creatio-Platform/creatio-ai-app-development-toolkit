@@ -1,0 +1,62 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="BaseElements.ApproveContractPageUserTask.Caption" Value="Approve contract" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ActivityPriority.Caption" Value="Priority" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ActivityPriority.DisplayValue" Value="ab96fa02-7fe6-df11-971b-001d60e938c6" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ActivityResult.Caption" Value="Result of activity" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ClientUnitSchemaUId.Caption" Value="Module" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ClientUnitSchemaUId.DisplayValue" Value="Approve contract (process page) | MbApproveContractProcessPage" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ContractId.Caption" Value="Contract Id" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ContractId.DisplayValue" Value="[#Contract Id#]" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.CreateActivity.Caption" Value="Create activity" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.CreateActivity.DisplayValue" Value="false" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.CurrentActivityId.Caption" Value="Task Id" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Duration.Caption" Value="Duration" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Duration.DisplayValue" Value="5" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.DurationPeriod.Caption" Value="Duration (period)" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.DurationPeriod.DisplayValue" Value="0" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.EntityId.Caption" Value="Object" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.EntitySchemaUId.Caption" Value="Object schema" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.EntryPointId.Caption" Value="Entry point" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.InformationOnStep.Caption" Value="Information on step" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.IsActivityCompleted.Caption" Value="Activity completed" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.IsActivityCompleted.DisplayValue" Value="false" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.IsRunning.Caption" Value="Running" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Module.Caption" Value="Card module" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Module.DisplayValue" Value="[#Lookup.Schema used in workspace (view) .Process page display module.eb89c336-08b9-4951-bffd-3f5abc433174#]" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.OwnerId.Caption" Value="Owner" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.OwnerId.DisplayValue" Value="[#System variable.Current user contact#]" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.PressedButtonCode.Caption" Value="Code of the button that the user clicked" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Recommendation.Caption" Value="Recommendation" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.RemindBefore.Caption" Value="Remind owner in advance" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.RemindBefore.DisplayValue" Value="0" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.RemindBeforePeriod.Caption" Value="Remind owner in advance (period)" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.RemindBeforePeriod.DisplayValue" Value="0" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ShowExecutionPage.Caption" Value="Show execution page automatically" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ShowExecutionPage.DisplayValue" Value="true" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ShowInScheduler.Caption" Value="Show in calendar" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.ShowInScheduler.DisplayValue" Value="false" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.StartIn.Caption" Value="Start executing in" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.StartIn.DisplayValue" Value="0" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.StartInPeriod.Caption" Value="Start executing in (period)" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.StartInPeriod.DisplayValue" Value="0" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Template.Caption" Value="Template" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Template.DisplayValue" Value="[#Lookup.Schema used in workspace (view) .Tabbed page with area on top.21620f25-166f-42f1-8b4d-224a959040a3#]" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Title.Caption" Value="Title" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Title.DisplayValue" Value="Approve contract" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Title.Value" Value="Approve contract" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Url.Caption" Value="Url" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.Url.DisplayValue" Value="&amp;quot;[Module]/[Page]/add&amp;quot;" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.UseCardProcessModule.Caption" Value="Use standard page generator" />
+			<Item Name="BaseElements.ApproveContractPageUserTask.Parameters.UseCardProcessModule.DisplayValue" Value="false" />
+			<Item Name="Caption" Value="Approve contract" />
+			<Item Name="LaneSets.LaneSet1.Caption" Value="LaneSet 1" />
+			<Item Name="LaneSets.LaneSet1.Lanes.Lane1.Caption" Value="Lane 1" />
+			<Item Name="NotificationCaption.Caption" Value="Process instance caption" />
+			<Item Name="NotificationCaption.DisplayValue" Value="[#Process name#]" />
+			<Item Name="Parameters.ContractId.Caption" Value="Contract Id" />
+		</Items>
+	</Group>
+</Resources>
