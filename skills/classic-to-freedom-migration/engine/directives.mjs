@@ -172,11 +172,14 @@ export function orchestratorDecisions(records) {
 }
 
 const blank = (v) => typeof v !== "string" || v.trim() === "";
+// Does the entry use the provenance format at all? An older entry may carry a free-text `Decided by:` (a person's
+// name) and nothing else; it is a plain decision, and its value is not checked against `user` / `orchestrator`.
+const usesProvenance = (f) => ["kind", "quote", "asked", "scope", "expectation"].some((k) => !blank(f[k]));
 function fieldIssues(r) {
   const f = r.fields;
   const out = [];
   if (!blank(f.kind) && !KINDS.has(f.kind)) out.push(`\`Kind: ${f.kind}\` is not one of \`${KIND_DIRECTIVE}\` / \`${KIND_ANSWER}\``);
-  if (!blank(f.decidedBy) && !DECIDERS.has(f.decidedBy)) {
+  if (usesProvenance(f) && !blank(f.decidedBy) && !DECIDERS.has(f.decidedBy)) {
     out.push(`\`Decided by: ${f.decidedBy}\` is not one of \`${DECIDED_BY_USER}\` / \`${DECIDED_BY_ORCHESTRATOR}\``);
   }
   return out;

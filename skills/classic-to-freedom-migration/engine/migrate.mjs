@@ -2637,10 +2637,19 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // The one key left out is `runDiagnostics`: it records the machine the plan was produced on (skill build, clio,
 // stand), not what the plan says, so a plugin or clio update between plan and build does not ask for re-approval.
 const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics"]);
-function computePlanVersion(manifest, readBody) {
+// The user's directives (decisions.md) are covered too: each one adds rows to the pages it names, so adding one, or
+// rewriting its quote, expectation or scope after approval, is a plan the user has not approved. Only those four
+// fields are hashed — who recorded it and the approval entry itself stay out, or approving would move the version it
+// approves. A plan with no directive hashes exactly as the manifest alone does.
+function computePlanVersion(manifest, readBody, directives = []) {
   const h = createHash("sha256");
   const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
   feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
+  if (directives.length) {
+    h.update("\u0001D");
+    feedPlanVersion(h, directives.map(({ id, quote, expectation, scope }) => ({ id, quote, expectation, scope })),
+      null, readBody, { nodes: 0 }, 0);
+  }
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
@@ -3145,15 +3154,16 @@ export function runMigration(manifest, opts = {}) {
     specOpts.placementBlockers = [...specOpts.placementBlockers, `placement.sectionHost.mode is 'existing-section' but '${out.entity}' has ${out.typedPages.length} typed form pages — this mode extends one list page and one form page only. Record the case in decisions.md and plan it with the user as a reconcile of each form page outside this mode.`];
   }
   out.placementBlockers = specOpts.placementBlockers;
+  // The user's directives ride on the ROOT result, which every later mode re-derives its groups from, so the plan,
+  // the cut and `--verify` all carry the same directive rows. They are read before the plan version, which covers
+  // them: a directive changes what the plan builds.
+  const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
+  out.directives = directivesOf(decisionRecords);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
-  out.planVersion = computePlanVersion(manifest, bodyOf);
+  out.planVersion = computePlanVersion(manifest, bodyOf, out.directives);
   out.translationsMissing = translationsMissing(manifest);
   // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
-  // The user's directives ride on the ROOT result, which every later mode re-derives its groups from, so the plan,
-  // the cut and `--verify` all carry the same directive rows.
-  const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
-  out.directives = directivesOf(decisionRecords);
   const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
   if (!opts.scopeSchema) {
     out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
@@ -4504,7 +4514,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // The decision titles and their provenance records (the directives, who decided what) come from the same file.
   const decisionsFolder = planDecisionsFolder({ outFile, tasksDir, fromDir, readsDir, builtFile });
   const decisions = decisionsFolder ? readDecisions(decisionsFolder) : null;
-  const decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : [];
+  let decisionRecords = [];
+  try { decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : []; }
+  catch (e) { fail(`cannot read ${path.join(decisionsFolder, "decisions.md")}: ${e.message}`); }
   const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist

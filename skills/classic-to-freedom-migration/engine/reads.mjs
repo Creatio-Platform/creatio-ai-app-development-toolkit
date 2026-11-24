@@ -146,9 +146,12 @@ export function readPlan(result, opts = {}) {
 // `dir` is the MIGRATION FOLDER, the one holding `build-tasks/`. Returns the files written (created or
 // extended), the files left unread, and the files another writer kept changing under the merge.
 export function ensureRecordFiles(dir, plan) {
-  // Each file with the empty value written beside a key it lacks.
+  // Each file with the empty value written beside a key it lacks. A user directive's record has its own fields
+  // (`howFollowed` + `components`), so its skeleton is the shape that completes it, not the design pass's.
   const slots = (plan.evidenceIds?.length ? [
-    [EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
+    [EVIDENCE_SKELETON_FILE, (id) => (id.includes("#directive:")
+      ? { howFollowed: "", components: [] }
+      : { referencePage: "", components: [], findings: [], findingsRaised: [] })],
     [JUDGE_SKELETON_FILE, { convincing: null }],
   ] : []).map(([file, empty]) => [file, plan.evidenceIds, empty]);
   // `null`, not `false`: nothing has been recorded yet, and `false` is an answer — the row stays unconfirmed until
@@ -197,7 +200,7 @@ function mergeOnce(full, keys, empty) {
   if (!doc) return sameBytes(readBytes(full), seen) ? MERGE_UNREADABLE : MERGE_RACED;
   const missing = keys.filter((k) => !Object.hasOwn(doc, k));
   if (!missing.length && seen !== null) return MERGE_UNCHANGED;
-  for (const k of missing) doc[k] = structuredClone(empty);
+  for (const k of missing) doc[k] = typeof empty === "function" ? empty(k) : structuredClone(empty);
   return replaceIfUnchanged(full, seen, JSON.stringify(doc, null, 2) + "\n");
 }
 // Writes `text` to a temp file in the same folder and renames it over `full`, so a reader sees the old file or

@@ -11765,6 +11765,23 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       () => planGaps(r));
   }
 
+  {
+    const versionOf = (text) => runMigration(MANIFEST, { decisionRecords: parseDecisionRecords(text) }).planVersion;
+    const D1 = "## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: main\n- Expectation: e\n";
+    check("directives (plan version): a plan with no directive keeps the manifest's version; adding one, or rewriting its expectation or scope, moves it",
+      () => versionOf("## D9 — Legacy\n- Decision: keep it\n") === RUN.planVersion
+        && versionOf(D1) !== RUN.planVersion
+        && versionOf(D1.replace("Expectation: e", "Expectation: e, widened")) !== versionOf(D1)
+        && versionOf(D1.replace("Scope: main", "Scope: run")) !== versionOf(D1));
+    check("directives (plan version): who recorded an entry, an orchestrator entry and the approval entry do not move it",
+      () => versionOf(D1 + "## D2 — mine\n- Decided by: orchestrator\n## Plan approved\n- Approved by: test\n") === versionOf(D1));
+    check("directives (provenance): an older entry with a free-text `Decided by:` and no other provenance line is a plain decision, not a refusal",
+      () => provenanceIssues(parseDecisionRecords("## D3 — Old\n- Decided by: Jane Doe\n- Rationale: x\n"), ["main"]).length === 0
+        && provenanceIssues(parseDecisionRecords("## D3 — New\n- Kind: answer\n- Decided by: Jane Doe\n- Quote: x\n- Asked: y\n"), ["main"]).length > 0);
+    check("directives (plan): a sub-scope run carries no directive — the root owns them",
+      () => runMigration(MANIFEST, { decisionRecords: parseDecisionRecords(D1), scopeSchema: "MPage" }).directives.length === 0);
+  }
+
   // Delivery: the builder of every task on `main` reads the directive; the filed row goes to a build task and the
   // judged row to the review.
   const setD = buildTaskSet(runD, OPTS);
@@ -11812,17 +11829,43 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     check("directives (split): a split that leaves the directive's filed row to the review is refused, and the refusal names the claim that cuts it",
       () => bad.refused && bad.problems.some((p) => p.includes("directive:D1:filed") && p.includes("`@Quality gates[2]`")),
       () => bad.problems);
+    check("directives (split): both the writer and the review cut from a split carry the directive in their files",
+      () => ["build-main", "review"].every((id) => renderTaskFile(good.tasks.find((t) => t.id === id), good).includes("“use the Summaries component”")));
+  }
+
+  // Repair rounds and declared tasks are task files of the page too, so they carry the directive.
+  {
+    const dir = tmp("directives-repair");
+    syncTaskDir(dir, runD, OPTS);
+    const repair = syncRepairDir(dir, runD, VERIFY_PAGES, OPTS);
+    const repairTexts = (repair.written || []).map((w) => fs.readFileSync(path.join(dir, w.file || w), "utf8"));
+    check("directives (repair): a repair task of `main` carries the directive",
+      () => repairTexts.length > 0 && repairTexts.every((t) => t.includes("“use the Summaries component”")),
+      () => ({ written: repair.written }));
+    const declared = addTasks(dir, runD, { ...DECL, id: "orch-main-extra", pageKey: "main", writesTo: "page:main" }, OPTS);
+    const declaredText = declared.refused ? "" : fs.readFileSync(path.join(dir, declared.written[0].file), "utf8");
+    check("directives (declared): a task the orchestrator declares on `main` carries the directive",
+      () => declaredText.includes("“use the Summaries component”"), () => declared.problems || declaredText.slice(0, 600));
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   // The CLI reads decisions.md from the migration folder: no orchestrator pastes the directive anywhere.
   {
     const folder = tmp("directives-cli");
     const dir = path.join(folder, "build-tasks");
-    fs.writeFileSync(path.join(folder, "decisions.md"), SUMMARIES.split("\n## D2")[0] + "\n");
+    const D1_ONLY = SUMMARIES.split("\n## D2")[0] + "\n";
+    fs.writeFileSync(path.join(folder, "decisions.md"), D1_ONLY);
     const plan = cliUnapproved(["--plan", "--out", path.join(folder, "plan.md")], MANIFEST);
-    const cut = cliTasks(["--tasks", dir], MANIFEST);
+    // The approval names the version that covers the directive, which is not the manifest-only version.
+    const withD1 = runMigration(MANIFEST, { baseDir: DIR, decisionRecords: parseDecisionRecords(D1_ONLY) });
+    approvePlan(dir, withD1.planVersion);
+    const cut = cliUnapproved(["--tasks", dir], MANIFEST);
     const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE) : [];
     const withBlock = files.filter((f) => fs.readFileSync(path.join(dir, f), "utf8").includes("“use the Summaries component”"));
+    const touchesMain = buildTaskSet(withD1, checklistOpts(MANIFEST)).tasks
+      .filter((t) => t.pageKey === "main" || t.rows.some((r) => r.pageKey === "main")).length;
+    check("directives (CLI): every task file that touches `main` carries the directive",
+      () => touchesMain > 0 && withBlock.length === touchesMain, () => ({ touchesMain, withBlock, files }));
     // The fixture's plan carries unrelated planning gaps (exit 2); the file it writes is what is checked here.
     const planText = fs.existsSync(path.join(folder, "plan.md")) ? fs.readFileSync(path.join(folder, "plan.md"), "utf8") : "";
     check("directives (CLI): `--plan --out` reads decisions.md beside the plan and writes the `### User directives` table",
@@ -11841,6 +11884,35 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       () => (verified.stdout || "").includes("main#directive:D1") && !(alone.stdout || "").includes("#directive:"),
       () => ({ status: verified.status, stdout: (verified.stdout || "").slice(0, 400), stderr: (verified.stderr || "").slice(0, 400) }));
     fs.rmSync(elsewhere, { recursive: true, force: true });
+    // `--reads <migration-folder>` reads that folder's decisions.md and seeds each directive id with the fields its
+    // record needs, not the design pass's.
+    const readsRun = cliUnapproved(["--reads", folder], MANIFEST);
+    const evidence = (() => { try { return JSON.parse(fs.readFileSync(path.join(folder, "evidence.json"), "utf8")); } catch { return {}; } })();
+    check("directives (CLI): `--reads <folder>` reads its decisions.md and seeds `main#directive:D1` in evidence.json as { howFollowed, components }",
+      () => Object.keys(evidence["main#directive:D1"] || {}).sort((a, b) => a.localeCompare(b)).join() === "components,howFollowed"
+        && "referencePage" in (evidence["main#quality-gates"] || {}),
+      () => ({ status: readsRun.status, stderr: (readsRun.stderr || "").slice(0, 400), keys: Object.keys(evidence) }));
+    // An approval of the manifest-only version does not authorise a plan that carries a directive.
+    const stale = tmp("directives-cli-stale");
+    const dir3 = path.join(stale, "build-tasks");
+    fs.writeFileSync(path.join(stale, "decisions.md"), D1_ONLY);
+    approvePlan(dir3, RUN.planVersion);
+    const staleCut = cliUnapproved(["--tasks", dir3], MANIFEST);
+    check("directives (CLI): an approval recorded before a directive was added does not authorise the cut — the directive moved the plan version",
+      () => staleCut.status === 2 && !fs.existsSync(path.join(dir3, TASK_INDEX_FILE)),
+      () => ({ status: staleCut.status, stdout: (staleCut.stdout || "").slice(0, 500) }));
+    fs.rmSync(stale, { recursive: true, force: true });
+    // A decisions.md that exists but cannot be read stops the run with a message naming it, not a stack trace.
+    const broken = tmp("directives-cli-unreadable");
+    fs.mkdirSync(path.join(broken, "decisions.md"));
+    const unreadable = cliUnapproved(["--plan", "--out", path.join(broken, "plan.md")], MANIFEST);
+    check("directives (CLI): an unreadable decisions.md (a directory here) exits with a message naming decisions.md, not an uncaught exception",
+      () => unreadable.status !== 0 && /decisions\.md/.test(unreadable.stderr || "") && !/\n\s+at /.test(unreadable.stderr || ""),
+      () => ({ status: unreadable.status, stderr: (unreadable.stderr || "").slice(0, 500) }));
+    const repBroken = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: path.join(broken, "build-tasks") }).markdown;
+    check("directives (report): an unreadable decisions.md leaves the report standing and says the section could not be listed",
+      () => /## Decided without you/.test(repBroken) && /could not be read/.test(repBroken));
+    fs.rmSync(broken, { recursive: true, force: true });
     fs.rmSync(folder, { recursive: true, force: true });
 
     const refused = tmp("directives-cli-refused");

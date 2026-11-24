@@ -107,7 +107,10 @@ writes a folder rather than printing, so silent precedence would report a plan w
 deterministic short hash over EVERY key the manifest carries — `entity`, `schemas` (package + body CONTENT, in
 order), `planMeta`, and equally `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`,
 `signals` and `behaviourIndex` — except `runDiagnostics`, which describes the machine the plan was made on, so a
-plugin or clio update does not force re-approval. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
+plugin or clio update does not force re-approval. It also covers the user directives read from `decisions.md` (each
+one's id, quote, expectation and scope): a directive added or rewritten after approval is a new version to approve.
+Who recorded an entry and the approval entry itself stay out of it, and a plan with no directive hashes as the
+manifest alone does. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
 contributes its CONTENT wherever it sits), so the same manifest always yields the same version and re-planning is
 not a new version to approve. An earlier version hashed an ALLOWLIST of three keys, and that is what this replaced:
 the unit set could change materially (a detail marked `editPage:false` drops a whole child page) while the version

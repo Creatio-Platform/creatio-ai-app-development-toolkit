@@ -2280,7 +2280,7 @@ function renderPlanWith(result, opts) {
   const childMappings = renderChildMappings(childs, opts.targetPackage);
   // Rendered after every other section: the list names only the closed deliverables no line above printed.
   const wontDo = renderWontDoList(opts);
-  P.push(...childMappings, ...renderDirectivesSection(result), ...wontDo,"> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
+  P.push(...childMappings, ...renderDirectivesSection(result), ...wontDo,"> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings · User directives).");
   return P.join("\n");
 }
 

@@ -226,11 +226,15 @@ class EvidenceRecordContractTests(unittest.TestCase):
         # until the briefs name it too.
         designspec = read(SKILL_DIR / "engine/designspec.mjs")
         reads = read(SKILL_DIR / "engine/reads.mjs")
-        skeleton = re.search(r"\[EVIDENCE_SKELETON_FILE, \{([^}]*)\}\]", reads)
+        # The skeleton entry may hold one record shape or one per id kind (a directive's record has its own
+        # fields); every shape it seeds is read.
+        skeleton = re.search(r"\[EVIDENCE_SKELETON_FILE,(.*?)\],\s*\[JUDGE_SKELETON_FILE", reads, re.S)
         self.assertIsNotNone(skeleton, "the evidence skeleton in reads.mjs no longer has the shape this test reads")
+        shapes = re.findall(r"\{([^}]*)\}", skeleton.group(1))
+        self.assertTrue(shapes, "read no record shape from the evidence skeleton in reads.mjs")
         required = re.search(r"export const EVIDENCE_REQUIRES = \[([^\]]*)\]", designspec)
         self.assertIsNotNone(required, "EVIDENCE_REQUIRES is no longer where this test reads it")
-        fields = set(re.findall(r"(\w+):", skeleton.group(1))) | set(re.findall(r'"(\w+)"', required.group(1)))
+        fields = {f for shape in shapes for f in re.findall(r"(\w+):", shape)} | set(re.findall(r'"(\w+)"', required.group(1)))
         self.assertIn("noChangesReason", designspec)
         fields.add("noChangesReason")
         shapes_block = section(designspec, "SIX shapes:", "// Built from")

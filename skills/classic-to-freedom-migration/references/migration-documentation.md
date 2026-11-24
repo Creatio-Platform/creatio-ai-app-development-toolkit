@@ -124,7 +124,7 @@ Append-only. Every entry has a date.
 - plan approval, switch-over approval, package-placement decision, template choices that were not obvious, dropped artifacts with reason, and any re-approval after a scope change
 - one row/section per decision: date, decision, rationale, who approved, affected tasks
 - **the plan-approval entry names the plan VERSION** alongside the date and who approved. The build reads that entry as a precondition and refuses to run without a matching version — approving one plan does not authorise building another. At single-section scope this entry may be the file's only content.
-- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over every manifest key except `runDiagnostics` (the machine the plan was made on) — see "The plan version" in `engine/README.md` — so re-running the planner is not a new version to re-approve, while a changed manifest input is; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
+- **The version is the ENGINE's, and it is copied, never composed.** `migrate.mjs` computes a deterministic short hash over every manifest key except `runDiagnostics` (the machine the plan was made on), plus the user directives in `decisions.md`, so adding or rewriting a directive after approval needs re-approval — see "The plan version" in `engine/README.md` — so re-running the planner is not a new version to re-approve, while a changed manifest input is; a scope change still needs its own `decisions.md` entry and re-approval whether or not the string moved. `--plan` prints it into `plan.md` as its first Overview line:
 
   ```
   **Plan version:** `plan-4f9c2ab17e03` — record THIS string in the `decisions.md` approval entry; …
@@ -303,6 +303,8 @@ without them is a plain decision and reads exactly as before.
   did not state in words is yours: record it `Decided by: orchestrator`. Never fold your own addition into the
   user's entry; it is a new question before the build, or its own orchestrator entry.
 - **`Decided by: orchestrator`** entries are listed in the final report under *Decided without you*.
+- **An older entry** that carries only a free-text `Decided by:` (a person's name) and none of the other lines is
+  a plain decision and reads as before. Rewrite it in this format only when you add a quote or a kind to it.
 - **Record a directive when the user gives it.** The instructions in the first message go in before the first
   `--plan --out`, so the plan the user approves already shows them. A directive kept only in your context
   reaches no builder.

@@ -563,7 +563,12 @@ function decidedWithoutYouSection(entries) {
 // would name whatever folder the process happens to run in.
 function decidedWithoutYouFor(dir) {
   if (!dir) return [];
-  return decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, ".."))));
+  try {
+    return decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, ".."))));
+  } catch (e) {
+    // An unreadable decisions.md does not stop the report; the section says it could not be listed.
+    return ["## Decided without you", "", `⚠ decisions.md could not be read (${esc(e.message)}), so the choices the agent made without asking are not listed.`];
+  }
 }
 function carryOverSection(items, pageName) {
   if (!items.length) return [];
