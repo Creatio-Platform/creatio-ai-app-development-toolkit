@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, readDecisionTexts } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
@@ -665,15 +665,39 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
       const rows = [
         { label: "Handler — `onSaved`", group: "⚠ Custom methods worklist", vk: "handler",
           behaviour: { card: "main/C03", ac: ["AC-1 saving keeps the owner"], whatItDoes: "Re-reads the owner after save.", useCase: "The user saves; the owner field refreshes." } },
-        { label: "[mixin] CompletenessMixin", group: "⚠ Confirm worklist", vk: null },
+        { label: "[mixin] CompletenessMixin", group: "⚠ Confirm worklist", vk: null, confirm: true },
         { label: "Dashboards", group: "Pages", vk: null, na: "another section owns it" },
       ];
       const text = renderTaskFile({ ...SAMPLE, rows }, { ...SET, cardDecisions: decisions });
       const c = text.slice(text.indexOf(TASK_CARD_HEADING), text.indexOf("## Deliverables"));
       return c.includes("- `main/C03` — does: Re-reads the owner after save. · use case: The user saves; the owner field refreshes. · acceptance: AC-1 saving keeps the owner")
-        && c.includes("1 ⚠ Confirm item(s)") && c.includes("1 plan boundary row(s)")
+        && c.includes("**⚠ Confirm — answer each on the stand before you build**") && c.includes("  - [mixin] CompletenessMixin")
+        && c.includes("**Plan boundaries — never built**") && c.includes("  - Dashboards — another section owns it")
         && c.includes("`customizations-*`") && !/read by its id in its part file/.test(c);
     }, () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions }));
+  check("task card: each decision carries its full text under its title, indented so no line of it can open a heading of the file",
+    () => {
+      const texts = new Map([["D4", "Decided by: the user\n## not a heading here\nHide Back, Close and Export too."]]);
+      const t = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions, cardDecisionTexts: texts });
+      return t.includes("  - `D4` — Hide every element the Classic page did not have\n    Decided by: the user\n    ## not a heading here\n    Hide Back, Close and Export too.")
+        && !/^## not a heading here$/m.test(t);
+    });
+  check("decision texts: the lines under a `D<N>` heading and the text of a plan Adjustment are read in full; a decision with no body has no entry",
+    () => {
+      const base = tmp("decision-texts");
+      fs.writeFileSync(path.join(base, "decisions.md"), "# Decisions\n\n## D4 — Hide Freedom-only elements\nDecided by: the user\nKeep Back, Close and Export.\n\n## D5 — Bare\n## Plan approval\nApproved by: someone\n");
+      fs.writeFileSync(path.join(base, "plan.md"), "# Plan\n\n### Adjustments\n\n1. **Keep the Notes tab** — the user asked for it.\n   It stays on the main page.\n2. **Drop History**\n");
+      const t = readDecisionTexts(base);
+      fs.rmSync(base, { recursive: true, force: true });
+      return t.get("D4") === "Decided by: the user\nKeep Back, Close and Export." && !t.has("D5")
+        && t.get("Adjustment 1") === "the user asked for it.\nIt stays on the main page." && !t.has("Adjustment 2");
+    });
+  check("task card: a collapsed whole-run task carries the card with the decisions in force",
+    () => {
+      const whole = buildTaskSet(RUN, { ...OPTS, decisions, taskBudget: { run: 100000 } }).tasks.find((t) => t.writesTo === ARTIFACT_WHOLE);
+      const t = whole && renderTaskFile(whole, { ...SET, cardDecisions: decisions });
+      return !!t && t.includes(TASK_CARD_HEADING) && t.includes("- `D4` — Hide every element the Classic page did not have");
+    });
   check("task card: a read-only review task has no card — it owns no page code",
     () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes(TASK_CARD_HEADING));
   check("task card: the decisions ride on the task set itself, so every path that renders the set — sync, start, decide, revoke — writes the same card",
@@ -8862,8 +8886,8 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
-  // `3ea0cd8a` carries the page's `Page code` row, so its digest covers that row as well.
-  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "2e621853" };
+  // `3ea0cd8a` also carries the page's `Page code` row, which no digest reads.
+  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "ce526a7f" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
     () => Object.entries(PINNED_HANDLER_DIGESTS).every(([id, digest]) => chunked.tasks.find((t) => t.id === id)?.rowsDigest === digest),
@@ -8872,7 +8896,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
   // A split of the real plan: every row placed, the review last, the list page in its own item. Each page's last
   // writer takes the filed gate row — the first row of its `Quality gates` group, so `[1]` claims it — and the
   // review takes the rest of the group.
-  const withFiledGate = (it) => ({ ...it, rows: [...it.rows, ...(it.pageKey === "main" ? ["@Page code"] : []), "@Quality gates[1]"] });
+  const withFiledGate = (it) => ({ ...it, rows: [...it.rows, "@Quality gates[1]"] });
   const planSplit = (mainItems) => ({ planVersion: wRun.planVersion, items: [
     ...mainItems.slice(0, -1), withFiledGate(mainItems.at(-1)),
     withFiledGate({ id: "list-page", title: "list", pageKey: "list", writesTo: "list", rows: ["@List page", "@⚠ Confirm worklist"] }),
@@ -8887,6 +8911,26 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER] },
     { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
   ]);
+  check("split: a split that never names the `Page code` row still resolves — the row rides with the last item writing its page, the split's cards carry the decisions, and the row moves no digest",
+    () => {
+      const good = buildTaskSetFromSplit(wRun, goodSplit, { ...wOpts, decisions: new Map([["D1", "Keep the layout"]]) });
+      const logic = good.tasks?.find((t) => t.id === "main-logic");
+      const card = logic && renderTaskFile(logic, good);
+      const digestWithout = TASKS_MODULE.rowsDigest(checklistGroups(wRun, wOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type !== "pagecode" && r.pageKey === "main"));
+      const digestWith = TASKS_MODULE.rowsDigest(checklistGroups(wRun, wOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "main"));
+      return !good.refused && logic.rows.some((r) => r.vk === "pagecode") && good.cardDecisions instanceof Map
+        && card.includes("- `D1` — Keep the layout") && digestWith === digestWithout;
+    }, () => buildTaskSetFromSplit(wRun, goodSplit, wOpts).problems);
+  check("split: a split that NAMES the `Page code` row keeps the item it chose",
+    () => {
+      const named = planSplit([
+        { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER, "@Page code"] },
+        { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
+      ]);
+      const set = buildTaskSetFromSplit(wRun, named, wOpts);
+      return !set.refused && set.tasks.find((t) => t.id === "main-layout").rows.some((r) => r.vk === "pagecode")
+        && !set.tasks.find((t) => t.id === "main-logic").rows.some((r) => r.vk === "pagecode");
+    }, () => buildTaskSetFromSplit(wRun, planSplit([]), wOpts).problems);
   check("split (real plan): the attribute placed after the handler that sets it is refused; the same plan split with only an unrelated handler earlier is cut",
     () => {
       const bad = buildTaskSetFromSplit(wRun, badSplit, wOpts);

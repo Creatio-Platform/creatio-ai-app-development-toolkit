@@ -63,6 +63,11 @@ check("counts three findings", () => findingCount(relay) === 3, () => findingPhr
 check("lists every handler with its line count and helpers", () => relay.handlers.length === 4
   && relay.handlers[2].helpers.join(",") === "idOf,readLookup", () => relay.handlers);
 
+check("a helper over the limit is reported under its own name, beside the handler that holds it",
+  () => { const big = `const big = () => {\n${"  1;\n".repeat(160)}};`;
+    const a = analyzePageCode(`[{ request: "usr.Short", handler: async (request, next) => { ${big} return next?.handle(request); } }]`, []);
+    return a.longFunctions.map((f) => f.name).join() === "usr.Short,usr.Short › big"; });
+
 console.log("— analysis of a clean body");
 const clean = analyzePageCode(CLEAN, VIEW_SENDS_OPEN_HISTORY);
 check("a clean body has no findings", () => findingCount(clean) === 0, () => findingPhrases(clean));
@@ -128,6 +133,12 @@ console.log("— the `Page code` row of --verify");
   const twoPages = renderVerify(res, {}, { pages: { main: built(RELAY), mini: { handlers: mini, viewConfig: [] } }, ...QG });
   check("a request declared here and sent from another built page (its mini page) is not reported as unsent",
     () => /⚠ verify/.test(line(twoPages)) && !line(twoPages).includes("usr.RefreshTotals") && line(twoPages).includes("`idOf`"), () => line(twoPages));
+  const notBuilt = renderVerify(res, {}, { pages: { main: false }, ...QG });
+  check("a page reported NOT BUILT leaves the row to confirm — it has no code to check", () => /☐ confirm on-stand/.test(line(notBuilt))
+    && /NOT BUILT/.test(line(notBuilt)), () => line(notBuilt));
+  const absent = renderVerify(res, {}, { pages: { other: { handlers: CLEAN, viewConfig: [] } }, ...QG });
+  check("a payload with no entry for the page says the page was not read, never that its code is clean", () => !/✅ Done/.test(line(absent))
+    && /handler code/.test(line(absent)), () => line(absent));
   const none = renderVerify(res, {}, { ops: [{ name: "Notes", type: "crt.Input" }], ...QG });
   check("no handler source in the payload leaves the row to confirm, never a failure", () => /☐ confirm on-stand/.test(line(none)) && none.complete === true,
     () => ({ row: line(none), complete: none.complete }));

@@ -263,7 +263,25 @@ export function resolveSplit(split, groups, identity = new Map()) {
   errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
     ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...filedGateOutsideLastWriter(items),
     ...attributeAfterItsWriter(items), ...wiringBeforeChildPage(items));
+  placePageCodeRows(items, index);
   return { items, errors, unplaced: unconsumed(index) };
+}
+
+// THE `Page code` ROW RIDES WITH ITS PAGE'S LAST WRITER. The engine adds it to every page and it weighs nothing: it
+// checks the code the page's other rows produce. A split written before the row existed cannot name it, and an
+// in-flight folder must not stop for a row nobody could have placed, so an unclaimed one goes to the last item that
+// writes a row of its page. A split that names it keeps the item it chose.
+function placePageCodeRows(items, index) {
+  for (const m of index.values()) {
+    const pageRows = new Set([...m.values()].flat());
+    for (const r of pageRows) {
+      if (r.claimedBy || r.vk?.type !== "pagecode") continue;
+      const owner = items.findLast((it) => it.writesTo && it.rows.some((x) => pageRows.has(x)));
+      if (!owner) continue;
+      owner.rows.push(r);
+      r.claimedBy = owner.id;
+    }
+  }
 }
 
 // ONE SEAM THE ENGINE CAN CHECK RATHER THAN TRUST. A helper the plan folded under a caller says so in its own row

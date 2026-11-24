@@ -73,7 +73,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
-import { renderFinalReport, readDecisions } from "./report.mjs";
+import { renderFinalReport, readDecisions, readDecisionTexts } from "./report.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -3523,6 +3523,12 @@ function splitDriftLines(set) {
 // The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
 // migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
 // require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
+// The text under each decision, read from the same folder as `planDecisions`; only the task card uses it.
+function planDecisionTexts(outFile, tasksDir) {
+  if (tasksDir) return readDecisionTexts(path.join(path.resolve(tasksDir), ".."));
+  if (outFile) return readDecisionTexts(path.dirname(path.resolve(outFile)));
+  return null;
+}
 function planDecisions(outFile, tasksDir) {
   if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
   if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
@@ -4492,7 +4498,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (reconcileModeArg && !manifest.planMeta?.freedomExists) fail(`\`${RECONCILE_MODE_FLAG}\` applies only to an existing-Freedom reconcile (planMeta.freedomExists); this plan rebuilds the page from scratch, where there is nothing to reconcile onto.`);
   let result;
   const decisions = planDecisions(outFile, tasksDir);
-  const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
+  const decisionTexts = planDecisionTexts(outFile, tasksDir);
+  const taskOpts = () => ({ ...checklistOpts(manifest), decisions, decisionTexts });
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
@@ -4754,7 +4761,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest), decisions });
+        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest), decisions, decisionTexts });
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing

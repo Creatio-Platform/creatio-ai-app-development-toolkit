@@ -518,7 +518,9 @@ const rowDigestInput = (r) => {
   const boundary = r.na ? "|na" : "";
   return `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}${boundary}`;
 };
-export const rowsDigest = (rows) => shortHash(rows.map(rowDigestInput).join(" "));
+// The `Page code` row is left out: it checks the code the other rows produce, so a task that gains it has no new
+// deliverable, and a `done` task must not read as drifted (and be re-dispatched) because the engine added it.
+export const rowsDigest = (rows) => shortHash(rows.filter((r) => r.vk?.type !== "pagecode").map(rowDigestInput).join(" "));
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -551,6 +553,7 @@ function taskOf(chunk, order) {
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
     ...(r.subject ? { subject: r.subject } : {}),
     ...(r.behaviour ? { behaviour: r.behaviour } : {}),
+    ...(r.confirm ? { confirm: true } : {}),
     ...statusFields(r),
   }));
   const task = {
@@ -671,6 +674,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
     // The decisions in force, carried on the set so every render of it — sync, start, decide, revoke — writes the
     // same task card. `mergeTaskSet` keeps it with the rest of the fresh set.
     cardDecisions: opts.decisions ?? null,
+    cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -1086,19 +1090,31 @@ function taskCardBlock(task, set = {}) {
   else {
     L.push("- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
       + " also in its `Outcome` cell):");
-    for (const [id, title] of decisions) L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
+    const texts = set.cardDecisionTexts instanceof Map ? set.cardDecisionTexts : new Map();
+    for (const [id, title] of decisions) {
+      L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
+      // The text under the decision, indented into its item so no line of it can open a heading of the file.
+      for (const line of String(texts.get(id) || "").split("\n")) if (line.trim()) L.push(`    ${line.trimEnd()}`);
+    }
   }
   return L;
 }
 
 // Where the plan's worklist for THIS task sits: its ⚠ Confirm items and its boundaries are rows of the table below.
 function worklistLines(rows) {
-  const confirms = rows.filter((r) => /Confirm/.test(String(r.group || "")) && !r.na).length;
-  const boundaries = rows.filter((r) => r.na).length;
-  if (!confirms && !boundaries) return [];
-  return [`- **The plan's worklist for these rows is in the table below:** ${confirms} ⚠ Confirm item(s) — answer each`
-    + ` on the stand before you build — and ${boundaries} plan boundary row(s), pre-filled \`not-applicable\` — the`
-    + " plan's own limit, never built."];
+  const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();
+  const confirms = rows.filter((r) => r.confirm && !r.na);
+  const boundaries = rows.filter((r) => r.na);
+  const L = [];
+  if (confirms.length) {
+    L.push("- **⚠ Confirm — answer each on the stand before you build** (its row is in the table below):",
+      ...confirms.map((r) => `  - ${one(r.label)}`));
+  }
+  if (boundaries.length) {
+    L.push("- **Plan boundaries — never built** (their rows are pre-filled `not-applicable` below):",
+      ...boundaries.map((r) => `  - ${one(r.label)} — ${one(r.na)}`));
+  }
+  return L;
 }
 // The behaviour cards the task's rows cite, with their content: what the item does, its use case and its acceptance
 // criteria. A handler is ported against its card's criteria, so the card travels with the row that needs it.
@@ -2592,7 +2608,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
       rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
-        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...statusFields(r) })),
+        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...(r.confirm ? { confirm: true } : {}), ...statusFields(r) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,
@@ -2613,6 +2629,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
     cardDecisions: opts.decisions ?? null,
+    cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2926,11 +2943,13 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   const reconcileMode = effectiveFrozenMode(dir);
   const written = [];
   for (const t of tasks) {
+    // The file's task card is the exception to "never rewritten": it is derived from the decisions in force, so
+    // every sync re-renders that block alone (`refreshTaskCard`) and a later round's writer reads current decisions.
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
     writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode,
-      cardDecisions: opts.decisions }));
+      cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4159,7 +4178,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
   try {
-    mintDeclared(dir, result, decls, written, opts.decisions);
+    mintDeclared(dir, result, decls, written, { cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts });
   } catch (e) {
     const refusal = ledgerRefusal(e);
     if (!refusal) {
@@ -4192,7 +4211,7 @@ function unmint(dir, written) {
 
 // Writes one task file per declaration, pushing each onto `written` once it is on disk, so a write that throws
 // part-way leaves `written` naming exactly the files that exist.
-function mintDeclared(dir, result, decls, written, cardDecisions = null) {
+function mintDeclared(dir, result, decls, written, card = {}) {
   const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
@@ -4206,7 +4225,7 @@ function mintDeclared(dir, result, decls, written, cardDecisions = null) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, cardDecisions }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode, ...card }));
     written.push(task);
   }
 }
