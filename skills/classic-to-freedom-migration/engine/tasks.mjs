@@ -266,23 +266,26 @@ const writesToOf = (artifact) =>
 // ---8<--- THE BUDGET: how much work one sub-agent is handed ---8<---
 
 // DECLARED, not hard-coded at the call site, because these are calibration and calibration changes with evidence.
-// The unit is nominal build effort, sized so a chunk is one sitting for one sub-agent: the measured runs put a
-// builder at roughly half an hour for about this much, and a task that outgrows a sitting is the task an agent
-// silently splits or silently merges. Override per run with `opts.taskBudget`.
+// The unit is nominal build effort. A chunk was first sized to one sitting (40, about half an hour); ENG-107286
+// doubled it, because every extra task on one page is a fresh context that re-reads the briefs and the page before
+// it writes a line, and the measured cost of that relay was larger than the cost of a long sitting: one big page
+// had 11–15 writers, each starting at ~100k tokens, and a page built by one builder cost 16M tokens against 118M
+// for its relay-built neighbour. What a longer sitting costs when a session is lost is the open number; the
+// follow-up measurement on a live run decides whether 80 stays. Override per run with `opts.taskBudget`.
 export const TASK_BUDGET = {
-  chunk: 40,        // max weight in one task
+  chunk: 80,        // max weight in one task
   // A WHOLE RUN worth no more than this is ONE build task plus ONE review, not one task per artifact. The
   // artifact rule exists so two sub-agents never write one page body; on a run this small there is only ever one
   // builder, so the rule protects nothing and each extra task is a fresh context that re-reads everything the
   // last one just read. Measured: a 31-row section (write weight 60) came out as six tasks — reference cache,
   // scaffolding, two page builds, two reviews — whose five sub-agents cost 4.5M weighted tokens, of which the
   // cache alone was 0.78M for work no second builder read.
-  // TWO CHUNKS, NOT ONE, AND DELIBERATELY: `chunk` is sized to one sitting, so this hands a single sub-agent more
-  // than a sitting's work. It is the lesser cost. A chunk boundary buys protection only when another task writes
-  // the same artifact afterwards; a collapsed run has no such task, so an agent that runs long is re-dispatched
-  // against a folder of two files rather than against a chain of six. At 60 the smoke section sat exactly on the
-  // line, which is not a calibration; 80 is the round number above it that still leaves every measured multi-page
-  // plan (the smallest was 160) on the per-artifact cut.
+  // Set when a chunk was 40, so it handed a single sub-agent two sittings' work as the lesser cost; at `chunk: 80`
+  // it is one chunk. A chunk boundary buys protection only when another task writes the same artifact afterwards;
+  // a collapsed run has no such task, so an agent that runs long is re-dispatched against a folder of two files
+  // rather than against a chain of six. At 60 the smoke section sat exactly on the line, which is not a
+  // calibration; 80 is the round number above it that still leaves every measured multi-page plan (the smallest
+  // was 160) on the per-artifact cut.
   run: 80,
   field: 1,         // one field inside a layout row
   relatedList: 4,   // a related list carries its own binding and its own child page
@@ -310,6 +313,9 @@ function rowWeight(row, baseTitle, B) {
   // so a page's item rows pack as the one aggregate row did and never cut a page into many small tasks.
   if (row.vk?.item) return 0;
   if (row.vk?.type === "rule") return (Number(row.vk.n) || 1) * B.rule;
+  // The `Page code` row checks the code the page's other rows produce; it adds no work of its own, so it never
+  // moves a cut (a run on the collapse line stays one task when the row appears).
+  if (row.vk?.type === "pagecode") return 0;
   // The binding is already in the related list's weight (`relatedList` carries its binding and its child page), so
   // the row that checks it adds none — like the per-item rows above.
   if (row.vk?.type === "relatedpage") return 0;

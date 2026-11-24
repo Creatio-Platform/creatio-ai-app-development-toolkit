@@ -560,8 +560,11 @@ check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that 
     const a = tasksOn(SET5, "page:main"), b = tasksOn(SET6, "page:main");
     const la = a.flatMap((t) => t.rows.map((r) => r.label)).join("|");
     const lb = b.flatMap((t) => t.rows.map((r) => r.label)).join("|");
+    // Only a chunk that STARTS on a count row is asked about: a chunk may also start on a handler whose own name
+    // carries a digit (`onBulk7`), and that digit is a name, not a count the mask is for.
+    const counted = a.filter((t) => /\d+ fields?/.test(t.rows[0].label));
     return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
-      && a.some((t) => /\d/.test(t.rows[0].label)) && a.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
+      && counted.length > 0 && counted.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
   }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
 check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the renamed field is its own deliverable row, so the task that carries it reads as changed and its id is kept",
   () => {
@@ -8750,7 +8753,8 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
-  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "ce526a7f" };
+  // `3ea0cd8a` moved once, deliberately: the page's `Page code` row (ENG-107286) joined that task — a row added.
+  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "2e621853" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
     () => Object.entries(PINNED_HANDLER_DIGESTS).every(([id, digest]) => chunked.tasks.find((t) => t.id === id)?.rowsDigest === digest),
@@ -8759,7 +8763,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
   // A split of the real plan: every row placed, the review last, the list page in its own item. Each page's last
   // writer takes the filed gate row — the first row of its `Quality gates` group, so `[1]` claims it — and the
   // review takes the rest of the group.
-  const withFiledGate = (it) => ({ ...it, rows: [...it.rows, "@Quality gates[1]"] });
+  const withFiledGate = (it) => ({ ...it, rows: [...it.rows, ...(it.pageKey === "main" ? ["@Page code"] : []), "@Quality gates[1]"] });
   const planSplit = (mainItems) => ({ planVersion: wRun.planVersion, items: [
     ...mainItems.slice(0, -1), withFiledGate(mainItems.at(-1)),
     withFiledGate({ id: "list-page", title: "list", pageKey: "list", writesTo: "list", rows: ["@List page", "@⚠ Confirm worklist"] }),

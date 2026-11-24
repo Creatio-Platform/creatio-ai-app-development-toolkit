@@ -44,7 +44,7 @@ export function __setVendorIntegrityForTest(result) {
 // runs. The CommonJS build (`vendor/acorn.cjs`) loads via a plain synchronous `require()` on ANY supported Node
 // (no `require(esm)` floor), keeping parseSchema sync. Memoized: the check + require run once per process.
 let __acornParse = null;
-function getAcornParse() {
+export function getAcornParse() {
   if (__acornParse) return __acornParse;
   ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
   // Defense-in-depth: the gate above passes when every LISTED pin matches, but never asserts that the file we are
