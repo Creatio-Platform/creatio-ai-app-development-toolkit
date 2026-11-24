@@ -27,6 +27,21 @@ define("MbContractSection", [], function() {
 				}, this);
 			}
 		},
-		diff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/
+		diff: /**SCHEMA_DIFF*/[
+			{
+				"operation": "insert",
+				"name": "MbStartApprovalButton",
+				"values": {
+					"itemType": Terrasoft.ViewItemType.BUTTON,
+					"caption": {"bindTo": "Resources.Strings.MbStartApprovalButtonCaption"},
+					"click": {"bindTo": "onCardAction"},
+					"tag": "mbStartApproval",
+					"style": Terrasoft.controls.ButtonEnums.style.GREEN
+				},
+				"parentName": "CombinedModeActionButtonsCardLeftContainer",
+				"propertyName": "items",
+				"index": 5
+			}
+		]/**SCHEMA_DIFF*/
 	};
 });

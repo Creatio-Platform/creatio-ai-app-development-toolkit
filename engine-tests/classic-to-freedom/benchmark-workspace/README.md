@@ -16,7 +16,7 @@ document pages. Each part is there because migrations get it wrong:
 |---|---|---|
 | Package prefix that differs from the stand setting | Every schema is `Mb…`, every column `Mb…`; the stand's `SchemaNamePrefix` stays `Usr` | Generated names follow the package convention (`Mb…`, `mb.` for requests), not the stand setting |
 | Section with an edit page | `MbContractSection`, `MbContractPage`; registered in `SysModule` / `SysModuleEntity` / `SysModuleEdit` | List page and record page, both reachable from the app |
-| Detail registered on a base page | `MbBaseDocumentPage` adds the **History** tab and `MbDocumentLogDetail`; `MbContractPage` inherits them | A detail that the page's own layer never declares is still found and decided on |
+| Detail registered on a base page | `MbBaseDocumentPage` adds the **History** tab with `MbDocumentLogDetail` inside the tab insert; `MbContractPage` and both document pages inherit them | A detail that the page's own layer never declares is still found and decided on |
 | Detail with summaries, quick filters and a menu | `MbContractItemDetail`: a "Total / Active items" label, the "Active only" and "Due in 30 days" toggles saved to the user profile, and a "Deactivate selected" menu item | Each feature gets a Freedom counterpart or an explicit decision |
 | Read-only detail | `MbContractPaymentDetail` (no add, edit, copy, delete or open) | The detail stays read-only |
 | Static disabled fields | `MbAmount` and `MbApproved` on the contract page, `MbTotal` on the item page, `MbIsPosted` on the document pages (`"enabled": false` in the diff) | Fields stay read-only |
@@ -24,7 +24,7 @@ document pages. Each part is there because migrations get it wrong:
 | Code-owned rules | `rules` of `MbContractPage`: Customer and End date editable only while `MbCanEditFields` is true (false when the contract is Closed) | Read-only state driven by an attribute survives the migration |
 | Sister pages with shared logic | `MbDeliveryNotePage` and `MbReturnNotePage` both use `MbDocumentTotalsMixin` for the **Post** button | The shared logic stays shared, not copied into each page |
 | Page that writes data when it opens | `MbContractPage.mbAssignNumber` increments the `MbContractLastNumber` system setting when a new contract card opens | A browser check of the new-record page changes data; the migration has to say so |
-| Process with a Classic process page | The **Start approval** button on the contract page runs `MbApproveContractProcess`: Start, then a pre-configured page step that opens `MbApproveContractProcessPage` (parent `BasePageProcessTemplate`), then End. The step passes the `ContractId` process parameter to the page, which declares it as an attribute; the page's **Approve** button writes the comment and the approved flag, then completes the step | The page is recognised as a process page, and the process that opens it is found and decided on |
+| Process with a Classic process page | The **Start approval** button (declared on the contract page, and again on `MbContractSection` for a card opened from the list) runs `MbApproveContractProcess`: Start, then a pre-configured page step that opens `MbApproveContractProcessPage` (parent `BasePageProcessTemplate`), then End. The step passes the `ContractId` process parameter to the page, which declares it as an attribute; the page's **Approve** button writes the comment and the approved flag, then completes the step | The page is recognised as a process page, and the process that opens it is found and decided on |
 | Section action and selection | "Close selected contracts" in the section actions | The action is migrated or listed |
 
 Demo data ships with the package:
@@ -64,6 +64,14 @@ Open the section in Classic UI at `<stand>/0/Nui/ViewModule.aspx#SectionModuleV2
 
 A schema without a parent (the mixin) must keep its full JSON `metadata.json`. The diff form that
 pages with a parent use fails to install for it.
+
+A detail that a base page adds must sit inside the tab insert, not in an insert of its own. The
+generated content of a child page applies the base page's diff twice, and the duplicate removal keeps
+the second copy of the tab, so a separate detail insert ends up in the copy that is thrown away.
+
+A card opened from the section list shows the section's card buttons, not the page's own
+`LeftContainer` buttons, so a page button also needs an entry in the section's
+`CombinedModeActionButtonsCardLeftContainer` that calls it through `onCardAction`.
 
 The process was generated from a template, not drawn in the process designer. In its
 `metadata.json`, each mapping of the page step keeps, in `GT5`, the id that the pre-configured page task

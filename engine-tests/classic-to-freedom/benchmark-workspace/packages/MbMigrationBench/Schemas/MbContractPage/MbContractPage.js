@@ -154,6 +154,9 @@ define("MbContractPage", ["BusinessRuleModule", "ProcessModuleUtilities"], funct
 			},
 
 			mbStartApproval: function() {
+				if (!this.mbIsStartApprovalEnabled()) {
+					return;
+				}
 				ProcessModuleUtilities.executeProcess({
 					sysProcessName: "MbApproveContractProcess",
 					parameters: {
