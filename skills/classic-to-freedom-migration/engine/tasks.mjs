@@ -1083,23 +1083,25 @@ function taskCardBlock(task, set = {}) {
       + " you write. Either way, extend the handler the map lists for a request instead of adding a second one, and"
       + " move a part two handlers share into one helper.",
   ];
-  L.push(...behaviourLines(task.rows || []));
-  const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
-  if (!decisions) L.push("- **Decisions in force:** not available to this render — ask the orchestrator to re-run `--tasks` before you build.");
-  else if (!decisions.length) L.push("- **Decisions in force:** none recorded.");
-  else {
-    L.push("- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
-      + " also in its `Outcome` cell):");
-    const texts = set.cardDecisionTexts instanceof Map ? set.cardDecisionTexts : new Map();
-    for (const [id, title] of decisions) {
-      L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
-      // The text under the decision, indented into its item so no line of it can open a heading of the file.
-      for (const line of String(texts.get(id) || "").split("\n")) if (line.trim()) L.push(`    ${line.trimEnd()}`);
-    }
-  }
+  L.push(...behaviourLines(task.rows || []), ...decisionLines(set));
   return L;
 }
 
+// The decisions in force with their text, or why the card has none.
+function decisionLines(set) {
+  const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
+  if (!decisions) return ["- **Decisions in force:** not available to this render — ask the orchestrator to re-run `--tasks` before you build."];
+  if (!decisions.length) return ["- **Decisions in force:** none recorded."];
+  const texts = set.cardDecisionTexts instanceof Map ? set.cardDecisionTexts : new Map();
+  const L = ["- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
+    + " also in its `Outcome` cell):"];
+  for (const [id, title] of decisions) {
+    L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
+    // The text under the decision, indented into its item so no line of it can open a heading of the file.
+    for (const line of String(texts.get(id) || "").split("\n")) if (line.trim()) L.push(`    ${line.trimEnd()}`);
+  }
+  return L;
+}
 // Where the plan's worklist for THIS task sits: its ⚠ Confirm items and its boundaries are rows of the table below.
 function worklistLines(rows) {
   const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();

@@ -153,9 +153,9 @@ export function readDecisionTexts(migrationDir) {
     const at = plan.search(/^###\s+Adjustments/m);
     if (at >= 0) {
       const lines = plan.slice(at).split(/\r?\n/).slice(1);
-      collect(lines, (l) => { const m = /^(\d+)\.\s+\*\*.+?\*\*/.exec(l); return m ? `Adjustment ${m[1]}` : null; }, heading);
+      collect(lines, (l) => { const m = /^(\d+)\. +\*\*[^*\n]+\*\*/.exec(l); return m ? `Adjustment ${m[1]}` : null; }, heading);
       // An Adjustments item's first line is its title AND its text: keep that line as the start of the body.
-      for (const m of plan.slice(at).matchAll(/^(\d+)\.\s+\*\*(.+?)\*\*(.*)$/gm)) {
+      for (const m of plan.slice(at).matchAll(/^(\d+)\. +\*\*([^*\n]+)\*\*([^\n]*)$/gm)) {
         const rest = m[3].replace(/^[\s—–:.-]+/, "").trim();
         const key = `Adjustment ${m[1]}`;
         if (rest) out.set(key, [rest, out.get(key)].filter(Boolean).join("\n"));
