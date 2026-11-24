@@ -25,7 +25,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
-  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
@@ -642,9 +642,9 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
 {
   const decisions = new Map([["D4", "Hide every element the Classic page did not have"], ["Adjustment 1", "Keep the Notes tab"]]);
   const carded = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions });
-  const card = carded.slice(carded.indexOf("## Task card"), carded.indexOf("## Deliverables"));
+  const card = carded.slice(carded.indexOf(TASK_CARD_HEADING), carded.indexOf("## Deliverables"));
   check("task card: a page task carries the card — its brief is this file and the spec section, NOT plan.md / decisions.md / worklog.md, and it runs the code map before and after it writes",
-    () => card.startsWith("## Task card") && /Your brief is this file/.test(card)
+    () => card.startsWith(TASK_CARD_HEADING) && /Your brief is this file/.test(card)
       && /Do not read `plan\.md`, `decisions\.md` or `worklog\.md`/.test(card)
       && card.includes(`node engine/codemap.mjs <file> --page ${SAMPLE.pageKey}`) && /One place per behaviour/.test(card),
     () => card);
@@ -655,7 +655,9 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
     () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: new Map() }).includes("**Decisions in force:** none recorded.")
       && /\*\*Decisions in force:\*\* not read for this render/.test(SAMPLE_TEXT));
   check("task card: a read-only review task has no card — it owns no page code",
-    () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes("## Task card"));
+    () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes(TASK_CARD_HEADING));
+  check("task card: the decisions ride on the task set itself, so every path that renders the set — sync, start, decide, revoke — writes the same card",
+    () => buildTaskSet(RUN, { ...OPTS, decisions }).cardDecisions === decisions && mergeTaskSet(buildTaskSet(RUN, { ...OPTS, decisions }), []).cardDecisions === decisions);
 }
 check("renderTaskFile: a read-only task says so instead of naming an artifact — a review that claimed a `writesTo` would block every task that shares its page for no reason",
   () => {
@@ -9268,8 +9270,10 @@ check("identity digest guard: rendering the identity condition does NOT move any
 // ============================================================================================================
 console.log("\n===== --decide --build and the decision-waiting --route report =====");
 {
-  const BO = checklistOpts(MANIFEST);
   const BUILD_DECISIONS = new Map([["D5", "build the typed forms"]]);
+  // The decisions are part of the options, as the CLI passes them on every mode: the task card lists them, so a
+  // sync and a decide that read different decisions would rewrite every card between them.
+  const BO = { ...checklistOpts(MANIFEST), decisions: BUILD_DECISIONS };
   const NEEDS_DECISION = "not-built — needs-decision";
   const MANIFEST_FILE = (base) => { const f = path.join(base, "m.json"); fs.writeFileSync(f, JSON.stringify(MANIFEST)); return f; };
   const cliB = (base, ...args) => cliFileApproved(MANIFEST_FILE(base), ...args);
@@ -9725,7 +9729,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       const f = taskFilePath(dir, x.id);
       fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, NEEDS_DECISION));
     }
-    syncTaskDir(dir, RUN5, { ...OPTS5, now: AT(903) });
+    syncTaskDir(dir, RUN5, { ...OPTS5, decisions: BUILD_DECISIONS, now: AT(903) });
     const otherPath = taskFilePath(dir, other.id);
     const otherBefore = fs.readFileSync(otherPath, "utf8");
     const res = applyDecision(dir, RUN5, { ...OPTS5, decision: "D5", mode: "build", decisions: BUILD_DECISIONS, pages: ["main"] });
@@ -10622,8 +10626,8 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
       () => ({ status: remedied.status, out: remedied.stdout.slice(0, 400), rows: closedLists.map(([, n]) => [closed?.rows[n - 1]?.outcome, closedMap.get(n)]) }));
     const written = fs.readFileSync(path.join(dir, FILE), "utf8");
     check("task card: a folder synced by the CLI with decisions.md in place writes the decisions in force into the task file — the writer does not re-read decisions.md",
-      () => written.includes("## Task card") && written.includes("- `D3` — not carried over"),
-      () => written.slice(written.indexOf("## Task card"), written.indexOf("## Deliverables")));
+      () => written.includes(TASK_CARD_HEADING) && written.includes("- `D3` — not carried over"),
+      () => written.slice(written.indexOf(TASK_CARD_HEADING), written.indexOf("## Deliverables")));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {

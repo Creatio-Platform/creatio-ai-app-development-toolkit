@@ -4561,8 +4561,9 @@ export function resolvePageCodeVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the page's handler code");
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
   if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass get-page's `bundle.handlers` to auto-check this", "skip"];
-  const a = ctx._pageCode ?? (ctx._pageCode = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig));
-  if (a.error) return ["⚠ verify", `${esc(a.error)} — re-read the page with get-page and check the saved body`, "unverified"];
+  // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
+  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig);
+  if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   if (!findingCount(a)) return ["✅ Done", `${a.handlers.length} handler(s): none over ${MAX_FUNCTION_LINES} lines, no helper defined twice, every declared request is sent`, "ok"];
   return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception`, "unverified"];
 }

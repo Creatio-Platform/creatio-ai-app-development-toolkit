@@ -7,9 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { analyzePageCode, renderCodeMap, findingCount, findingPhrases, pageCodeInput, MAX_FUNCTION_LINES }
+import { analyzePageCode, renderCodeMap, findingCount, findingPhrases, codeMapRoot, MAX_FUNCTION_LINES }
   from "../../skills/classic-to-freedom-migration/engine/codemap.mjs";
-import { renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderVerify, esc } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.resolve(here, "../../skills/classic-to-freedom-migration/engine/codemap.mjs");
@@ -74,7 +74,9 @@ check("an empty body has no handlers and no findings", () => { const a = analyze
 console.log("— input that cannot be read");
 check("a body that does not parse gives an error, not a throw", () => /does not parse/.test(analyzePageCode("[ { request: ").error || ""));
 check("a body that is not an array gives an error", () => /not an array/.test(analyzePageCode("{ a: 1 }").error || ""));
-check("an error renders as a map that says so", () => renderCodeMap({ error: "boom" }, "P").includes("⛔ boom"));
+check("a handler body past the engine's walk budget is an error, never a half-analysed map",
+  () => /too large or too deeply nested/.test(analyzePageCode(`[{ request: "usr.Deep", handler: () => { const deep = ${"[".repeat(500)}1${"]".repeat(500)}; } }]`).error || ""));
+check("a computed `[request]` key is not read as the request", () => analyzePageCode(`[{ ["request"]: "usr.X", handler: () => {} }]`).unsent.length === 0);
 
 console.log("— the map");
 const map = renderCodeMap(relay, "PIS_FormPage");
@@ -82,13 +84,15 @@ check("the map names the page and the finding count", () => map.startsWith("# PI
 check("the map lists the duplicate helper with its handlers", () => /\| `idOf` \| `crt\.HandleViewModelInitRequest`, `crt\.SaveRecordRequest`, `usr\.LoadSubscriptionState` \|/.test(map), () => map);
 check("the map flags the long handler", () => /\| `crt\.HandleViewModelInitRequest` \| \d+ ⚠ \|/.test(map), () => map);
 check("a clean map says the verify row will pass", () => renderCodeMap(clean, "P").includes("No findings"));
+check("names from the page body are escaped in the map — a backtick or a pipe cannot break the table", () => {
+  const odd = renderCodeMap({ handlers: [{ request: "usr.A|B`C", lines: 3, helpers: [] }], duplicates: [], longFunctions: [], unsent: [] }, "P", esc);
+  return odd.includes(String.raw`usr.A\|BˋC`) && !odd.includes("A|B");
+}, () => renderCodeMap({ handlers: [{ request: "usr.A|B`C", lines: 3, helpers: [] }], duplicates: [], longFunctions: [], unsent: [] }, "P", esc));
 
 console.log("— input shapes");
-check("a saved get-page response is read from its bundle", () => pageCodeInput(JSON.stringify({ bundle: { handlers: CLEAN, viewConfig: [] } })).handlers === CLEAN);
-check("a built.json needs the page key", () => /--page/.test(pageCodeInput(JSON.stringify({ pages: { a: { handlers: CLEAN } } })).error || "")
-  && pageCodeInput(JSON.stringify({ pages: { a: { handlers: CLEAN } } }), "a").handlers === CLEAN);
-check("a raw handler source file is read as is", () => pageCodeInput(CLEAN).handlers === CLEAN);
-check("a parsed handlers array is refused with a reason", () => /not the handler source/.test(pageCodeInput(JSON.stringify({ handlers: [] })).error || ""));
+check("a saved get-page response is its bundle", () => codeMapRoot(JSON.stringify({ bundle: { handlers: CLEAN } })).handlers === CLEAN);
+check("a built.json is read as it is, pages and all", () => codeMapRoot(JSON.stringify({ pages: { a: { handlers: CLEAN } } })).pages.a.handlers === CLEAN);
+check("a file that is not JSON is the handler source itself", () => codeMapRoot(CLEAN).handlers === CLEAN);
 
 console.log("— the `Page code` row of --verify");
 {
@@ -129,6 +133,13 @@ const r3 = run(write("broken.js", "[ { request: "));
 check("an unparsable body exits 1 with the reason", () => r3.status === 1 && /does not parse/.test(r3.stderr), () => ({ status: r3.status, err: r3.stderr }));
 const r4 = run();
 check("no file exits 1 with the usage", () => r4.status === 1 && /usage/.test(r4.stderr));
+const built = write("built.json", JSON.stringify({ pages: { main: { handlers: CLEAN, viewConfig: VIEW_SENDS_OPEN_HISTORY }, child: { handlers: RELAY } } }));
+const r5 = run(built, "--page", "child");
+check("a built.json is read per page, the way --verify reads it", () => r5.status === 2 && run(built).status === 0, () => ({ status: r5.status, err: r5.stderr }));
+const r6 = run(built, "--page");
+check("`--page` without a key exits 1 instead of silently reading another page", () => r6.status === 1 && /needs a page key/.test(r6.stderr));
+const r7 = run(built, "--page", "nope");
+check("a page the file does not hold exits 1 naming it", () => r7.status === 1 && /`nope`/.test(r7.stderr), () => r7.stderr);
 fs.rmSync(dir, { recursive: true, force: true });
 
 console.log(`\n=================\nCODE-MAP GOLDEN: ${pass} passed, ${fail} failed`);

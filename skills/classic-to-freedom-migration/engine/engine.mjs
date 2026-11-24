@@ -718,6 +718,20 @@ function pushChildren(node, depth, stack) {
     } else if (v?.type) stack.push([v, depth + 1]);
   }
 }
+// The same bounded walk for any other untrusted body (a built Freedom page's handlers): `visit` sees every node once,
+// in no particular order, and the result says whether the node budget or the depth cap cut the walk short.
+export function walkAstBounded(root, visit) {
+  let nodes = 0;
+  const stack = [[root, 0]];
+  while (stack.length) {
+    const [node, depth] = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (++nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) return { truncated: true };
+    visit(node);
+    pushChildren(node, depth, stack);
+  }
+  return { truncated: false };
+}
 
 // Walk one method body, collecting the facts above. Iterative (explicit stack) so a deeply nested body cannot
 // blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH.
@@ -783,13 +797,13 @@ function objectNodeOf(node, scope) {
 // `methods: { … }` facts for one schema body. Empty array when the block is absent or not statically readable —
 // the method NAMES still come from the evaluated object, so an unreadable body loses evidence, never members.
 // an object-literal property's static key, or null when it is a spread / computed / unreadable key
-function staticPropKey(p) {
+export function staticPropKey(p) {
   if (p.type === "SpreadElement" || p.computed) return null;
   if (p.key?.type === "Identifier") return p.key.name;
   return p.key == null ? null : String(p.key.value);
 }
 
-const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
 
 // `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is not in
 // this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the module is a

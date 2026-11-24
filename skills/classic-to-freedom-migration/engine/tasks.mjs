@@ -667,6 +667,9 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
+    // The decisions in force, carried on the set so every render of it — sync, start, decide, revoke — writes the
+    // same task card. `mergeTaskSet` keeps it with the rest of the fresh set.
+    cardDecisions: opts.decisions ?? null,
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -2582,6 +2585,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
+    cardDecisions: opts.decisions ?? null,
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2899,7 +2903,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
     writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode,
-      cardDecisions: opts.decisions instanceof Map ? opts.decisions : null }));
+      cardDecisions: opts.decisions }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -4828,7 +4832,6 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
     // reads off the clocks. The parent's own clock is untouched — `partial` already settled it, and `done` is the
     // same side of `SETTLED`.
     resolvePartials(merged);
-    merged.cardDecisions = opts.decisions instanceof Map ? opts.decisions : null;
     persistTaskSet(dir, merged);
   } catch (e) {
     const refusal = ledgerRefusal(e);
