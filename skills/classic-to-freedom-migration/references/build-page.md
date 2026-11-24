@@ -198,7 +198,8 @@ page handler is client-side: it fires on a UI save in the browser, not on an ODa
 of that save is its captured `UpdateQuery` (the columns it wrote); where a behaviour writes data, read
 the record back and check the mapped values; a detail's link shows in its captured `SelectQuery` filter
 — each with one value change per AC, as `build-task-execution.md` → *Evidence, cheapest first* says.
-The AC lines go in the Evidence cell, the task's Notes and the evidence record. The page's code
+The AC lines go in the Evidence cell, where a bare `AC-n` is scoped by the row's **Described in**
+card; in the task's Notes cite them card-qualified (`<card id>·AC-n`). The page's code
 carries no card id, AC number, decision id or task id — not in a comment, a name or a string
 (`classic-ui-expert` → `08-card-contract.md`, *Shipped code cites nothing*).
 
@@ -246,8 +247,8 @@ leaves the row **unverified**, reported as `⚠ Partial — unverified` with its
 - the query fails (a SQL or request error);
 - the stand has no record that should match, so no positive control exists.
 
-The Evidence line and the evidence record name the control records (their ids or display values)
-and what each returned: `✅ Done — AC-2 inside range → returned; just after the end date → not returned`.
+The row's Evidence line names the control records (their ids or display values) and what each
+returned: `✅ Done — AC-2 inside range → returned; just after the end date → not returned`.
 
 **Gate-toggle safety (shared stand).** If a **system setting** gates the behaviour, name the exact
 `SysSettingsValue` row you are testing — its culture/user/role — since a per-role override beats the
