@@ -294,12 +294,56 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
     () => valDiff.conventionsBlockers.length === 1 && /validator prefix ab\. → abv\./.test(valDiff.conventionsBlockers[0]),
     () => valDiff.conventionsBlockers);
 
-  // AC 8 — a declared module the Classic page never imported still has its (informational) row.
-  check("conventions: a declared constants module the Classic page never imported gets an informational row, not a blocking one",
-    () => /\[module-dep\] AbCommonConstants — project constants module, not in the Classic page's define\(\) dependencies/.test(ab.checklist)
+  // AC 8 — a declared constants module the Classic page never imported, but whose ids the plan maps the page's record
+  // ids to, is a module the built page must import: a checked row, closed only by SCHEMA_DEPS or a decision.
+  const commonRow = /\[module-dep\] AbCommonConstants/;
+  const withCommon = renderVerify(ab, opts, { pages: { main: page({ handlers: "[]", validators: "{}", converters: "{}",
+    deps: '["@creatio-devkit/common", "AbConstants", "AbCommonConstants"]' }) } });
+  check("conventions: a constants module the Classic page never imported but the plan maps its record ids to is a CHECKED row — ⚠ until the built page imports it",
+    () => /\[module-dep\] AbCommonConstants — project constants module: the plan maps this page's record ids to it/.test(ab.checklist)
       && rowIds(ab, opts).includes("module-dep:project:AbCommonConstants")
-      && !/⚠ verify/.test(rowLine(foreign.markdown, /\[module-dep\] AbCommonConstants/)),
-    () => [ab.checklist.split("\n").filter((l) => /AbCommonConstants/.test(l)), rowLine(foreign.markdown, /\[module-dep\] AbCommonConstants/)]);
+      && /⚠ verify/.test(rowLine(foreign.markdown, commonRow)) && /✅ Done/.test(rowLine(withCommon.markdown, commonRow)),
+    () => [ab.checklist.split("\n").filter((l) => /AbCommonConstants/.test(l)), rowLine(foreign.markdown, commonRow), rowLine(withCommon.markdown, commonRow)]);
+  // …and a declared module none of the page's ids maps to stays informational.
+  {
+    const OTHER = 'define("AbOtherConstants", [], function() { return { Misc: { X: "5e5e5e5e-0000-4000-8000-000000000005" } }; });';
+    const m = manifest({ ...DW, constantsModules: [...DW.constantsModules, "AbOtherConstants"] }, {
+      constantsModules: { AbConstants: { body: body("AbConstants.js") }, AbCommonConstants: body("AbCommonConstants.js"), AbOtherConstants: OTHER } });
+    const r = runMigration(m, { baseDir: dir });
+    const v = renderVerify(r, checklistOpts(m), { pages: { main: page({ handlers: "[]", validators: "{}", converters: "{}", deps: '["@creatio-devkit/common"]' }) } });
+    check("conventions: a declared constants module neither imported by the Classic page nor holding any of its record ids gets an informational row, not a blocking one",
+      () => /\[module-dep\] AbOtherConstants — project constants module, not in the Classic page's define\(\) dependencies/.test(r.checklist)
+        && !/⚠ verify/.test(rowLine(v.markdown, /\[module-dep\] AbOtherConstants/)),
+      () => [r.checklist.split("\n").filter((l) => /AbOtherConstants/.test(l)), rowLine(v.markdown, /\[module-dep\] AbOtherConstants/)]);
+  }
+
+  // AC 7 — the list page is a built page too: its own namespace row, and a checked module row for the constants
+  // module its record ids map to.
+  {
+    const SECTION = 'define("UsrOrder1Section",[],function(){return{entitySchemaName:"UsrOrder",methods:{'
+      + 'getGridDataColumns:function(){return {Name:{path:"Name"}};},'
+      + 'initFixedFiltersConfig:function(){this.set("FixedFilterConfig",{filters:[{name:"StatusFilter",value:"3e7f3a3c-1a2b-4c5d-8e9f-0a1b2c3d4e5f",columnName:"Status"}]});}},diff:[]};});';
+    const m = manifest(DW, { planMeta: { ...FULL_PLANMETA, sectionSchema: "UsrOrder1Section", listTemplate: "ListFreedomTemplate" },
+      section: [{ pkg: "UsrOrders", body: SECTION }] });
+    const r = runMigration(m, { baseDir: dir });
+    const o = checklistOpts(m);
+    const listRows = checklistGroups(r, o).flatMap((g) => g.rows || []).filter((x) => x.pageKey === "list");
+    const listPage = (extra) => ({ viewConfig: { items: [{ name: "DataTable", type: "crt.DataGrid", columns: [{ code: "PDS_Name" }] }] }, ...extra });
+    const v = (list) => renderVerify(r, o, { pages: { main: page({ handlers: "[]", validators: "{}", converters: "{}", deps: "[]" }), list } });
+    const listLine = (md, re) => { const at = md.indexOf("\n### ", md.search(/list page|`list`/i)); return rowLine(at < 0 ? md : md.slice(md.search(/`list`/)), re); };
+    const bad = v(listPage({ handlers: '[{ request: "usr.RefreshList", handler: async (q, n) => n?.handle(q) }]', validators: "{}", converters: "{}", deps: "[]" }));
+    const good = v(listPage({ handlers: '[{ request: "ab.RefreshList", handler: async (q, n) => n?.handle(q) }]', validators: "{}", converters: "{}",
+      deps: '["AbConstants", "AbCommonConstants"]' }));
+    check("conventions (list page): a published list page carries its own namespace row and checked rows for the constants modules its record ids map to",
+      () => listRows.some((x) => x.deliverableId === "conventions:namespace" && x.vk?.type === "namespace")
+        && ["AbConstants", "AbCommonConstants"].every((mod) => listRows.some((x) => x.deliverableId === `module-dep:project:${mod}` && x.vk?.type === "moduledep")),
+      () => listRows.map((x) => [x.deliverableId, x.vk?.type]));
+    check("conventions (list page): a `usr.` handler on the built list page under an `ab` convention is a blocking ⚠ on the list page; an `ab.` one with the modules imported closes ✅",
+      () => (bad.pages?.list?.unverified || 0) > (good.pages?.list?.unverified || 0)
+        && /⚠ verify/.test(listLine(bad.markdown, /request .usr\.RefreshList./))
+        && !/usr\.RefreshList/.test(good.markdown),
+      () => ({ bad: bad.pages?.list, good: good.pages?.list, line: listLine(bad.markdown, /RefreshList/) }));
+  }
 
   // The per-module rows carry their own id, never one the aggregate can hold; the aggregate's id stays bound.
   const ONLY_DECLARED = { resolved: true, requestPrefix: "ab", helperModules: [], constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "e", confirmedBy: "plan" };

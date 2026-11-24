@@ -2769,20 +2769,28 @@ function memberWorklistRows(cs, opts = {}) {
       const label = `[${esc(d.kind)}] ${esc(d.item)}`;
       const deliverableId = memberId(d);
       if (d.kind === "attribute-virtual") return [{ deliverableId, label, ...cardField(d), vk: { type: "vmattr", name: d.item } }];
-      if (d.kind === "module-dep") return moduleDepRows(d, opts.projectConventions);
+      if (d.kind === "module-dep") return moduleDepRows(d, opts.projectConventions, opts.requiredModules);
       return [{ deliverableId, label, ...cardField(d) }];
     });
-  if (opts.declaredModuleRows && !members.some((d) => d.kind === "module-dep")) rows.push(...moduleDepRows(null, opts.projectConventions));
+  if (opts.declaredModuleRows && !members.some((d) => d.kind === "module-dep")) rows.push(...moduleDepRows(null, opts.projectConventions, opts.requiredModules));
   return rows;
+}
+// The declared constants modules a page's record ids map to (`AbConstants.Status.New` → `AbConstants`): the plan
+// tells the builder to write those ids as `Module.Path`, so the page imports the module.
+function requiredModulesOf(recordIds, conventions) {
+  const declared = conventions?.constantsModules || [];
+  const paths = (recordIds || []).flatMap((r) => r.paths || []);
+  return new Set(declared.filter((m) => paths.some((p) => p === m || p.startsWith(m + "."))));
 }
 // The Classic page's define() dependencies (`d`, the `module-dep` member; null when the page has none), split by the
 // project's conventions. A helper or constants module the conventions declare is a real dependency of the Freedom
-// page too — Freedom pages import client-unit modules through SCHEMA_DEPS — so one the Classic page imported gets
-// its own CHECKED row: `--verify` closes it when the built page imports the module, or a decision records why this
-// page does not need it. A declared module the Classic page did not import gets an informational row. The
+// page too — Freedom pages import client-unit modules through SCHEMA_DEPS — so one the Classic page imported, or
+// one the plan maps this page's record ids to (`required`), gets its own CHECKED row: `--verify` closes it when the
+// built page imports the module, or a decision records why this page does not need it. Any other declared module
+// gets an informational row. The
 // per-module rows carry their own id (`module-dep:project:<Module>`), never one the aggregate could also hold, so a
 // status recorded against the aggregate cannot close a checked row.
-function moduleDepRows(d, conventions) {
+function moduleDepRows(d, conventions, required = new Set()) {
   let deps = [];
   if (d) deps = Array.isArray(d.modules) ? d.modules : String(d.item).split(",").map((x) => x.trim()).filter(Boolean);
   const role = new Map([
@@ -2794,6 +2802,7 @@ function moduleDepRows(d, conventions) {
   for (const [m, kind] of role) {
     const deliverableId = `module-dep:project:${m}`;
     if (deps.includes(m)) rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}: import it in the page's SCHEMA_DEPS`, ...card, vk: { type: "moduledep", module: m } });
+    else if (required.has(m)) rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}: the plan maps this page's record ids to it, import it in the page's SCHEMA_DEPS`, ...card, vk: { type: "moduledep", module: m } });
     // Nothing on the Classic page says this page needs it, so it cannot block; the builder learns of it from the
     // task's conventions block.
     else rows.push({ deliverableId, label: `[module-dep] ${esc(m)} — project ${kind}, not in the Classic page's define() dependencies`, ...card,
@@ -3379,6 +3388,9 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
     const listConfirm = confirmWorklistRows(LIST_PAGE_KEY, result.listChangeSet || {});
     if (listConfirm.length) groups.push(pageGroup(LIST_PAGE_KEY, "⚠ Confirm worklist", listConfirm, opts));
     sectionLogicKey = LIST_PAGE_KEY;
+    // AC-7 covers every built page: the list page declares its own handlers, validators and converters.
+    const listConventions = [...conventionRows(opts), ...listModuleRows(result, opts)];
+    if (listConventions.length) groups.push(pageGroup(LIST_PAGE_KEY, "Project conventions", listConventions, opts));
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY), opts));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
@@ -3450,7 +3462,8 @@ export function checklistGroups(result, opts = {}) {
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Other declared logic worklist", memberWorklistRows(cs, { ...opts, declaredModuleRows: true }));
+  G("⚠ Other declared logic worklist", memberWorklistRows(cs, { ...opts, declaredModuleRows: true,
+    requiredModules: requiredModulesOf(result.pageRecordIds?.form, opts.projectConventions) }));
   // The project's namespace, checked on every page that is built: a custom request, validator or converter outside
   // it is a blocking row until it is renamed or a decision accepts it.
   G("Project conventions", conventionRows(opts));
@@ -4821,6 +4834,12 @@ export function resolveCardNativeVk(vk, ctx) {
   });
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
+}
+// The list page's checked module rows: only the constants modules its own record ids map to (the section's define()
+// list is the list analyzer's, carried by the section's member worklist).
+function listModuleRows(result, opts) {
+  const required = requiredModulesOf(result.pageRecordIds?.list, opts.projectConventions);
+  return moduleDepRows(null, opts.projectConventions, required).filter((r) => r.vk);
 }
 // The namespace row of one page. Absent when the run recorded no conventions (the plan is gated on them anyway).
 function conventionRows(opts) {

@@ -3199,10 +3199,16 @@ export function runMigration(manifest, opts = {}) {
   out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
     ...folded.flatMap((f) => f.conventionsBlockers || [])])];
   // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
-  // constants module holds — this page's, and every folded sub-page's. `recordIdsUsed` touches no source when the
+  // constants module holds — this page's (its Classic page and section bodies too), and every folded sub-page's. `recordIdsUsed` touches no source when the
   // index is empty (no constants module declared).
-  out.recordIds = mergeRecordIds([recordIdsUsed(runConventions.guidIndex, [out.changeSet, out.listChangeSet,
-    () => (Array.isArray(manifest.schemas) ? manifest.schemas : []).map(bodyOf)]), ...folded.map((f) => f.recordIds || [])]);
+  const schemaBodies = () => (Array.isArray(manifest.schemas) ? manifest.schemas : []).map(bodyOf);
+  const sectionBodies = () => sectionData.schemas.map(bodyOf);
+  out.recordIds = mergeRecordIds([recordIdsUsed(runConventions.guidIndex, [out.changeSet, out.listChangeSet, schemaBodies, sectionBodies]),
+    ...folded.map((f) => f.recordIds || [])]);
+  // The same ids split by the page that ports them: a constants module the plan maps a page's ids to is a module that
+  // page must import (its `moduledep` row is checked), whether or not the Classic page imported it.
+  out.pageRecordIds = { form: recordIdsUsed(runConventions.guidIndex, [out.changeSet, schemaBodies]),
+    list: recordIdsUsed(runConventions.guidIndex, [out.listChangeSet, sectionBodies]) };
   // The user's directives ride on the ROOT result, which every later mode re-derives its groups from, so the plan,
   // the cut and `--verify` all carry the same directive rows. They are read before the plan version, which covers
   // them: a directive changes what the plan builds.

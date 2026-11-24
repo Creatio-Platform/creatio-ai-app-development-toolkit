@@ -84,11 +84,14 @@ earlier migration, read the `### Project conventions` table of the newest earlie
 - Every build and fix task file carries a `## Project conventions` block before its deliverables: use the
   prefix, reuse the helpers, reference record ids through the constants modules. Freedom pages CAN import
   client-unit modules — list the module in SCHEMA_DEPS and take it as a factory argument.
-- A declared helper or constants module the Classic page imported gets its own checked row: `--verify` closes
-  it when the built page's SCHEMA_DEPS (`bundle.deps`) list it, or a decision (`--decide D<N>`) says why the page
-  does not need it. A declared module the Classic page did not import gets an informational row on the form
-  page, also when the Classic page has no other define() dependency.
-- `--verify` reads the built page's `handlers`, `validators` and `converters`: a custom name the page declares
+- A declared helper or constants module the Classic page imported, or a constants module the plan maps the
+  page's record ids to (its Classic page or section body holds one of the module's ids), gets its own checked
+  row: `--verify` closes it when the built page's SCHEMA_DEPS (`bundle.deps`) list it, or a decision
+  (`--decide D<N>`) says why the page does not need it. The form page and a published list page each get these
+  rows for their own ids. Any other declared module gets an informational row on the form page, also when the
+  Classic page has no other define() dependency.
+- `--verify` reads every built page's `handlers`, `validators` and `converters` (the form page, each sub-page and a
+  published list page): a custom name the page declares
   (a handler entry's `request`, a validator or converter key) outside the confirmed namespace keeps the page
   from COMPLETE until it is renamed or a decision accepts it. A request a handler only dispatches is not read.
 - Record the block on the root manifest only: a child bundle's own block is ignored and blocks the plan.
