@@ -29,8 +29,9 @@ export function runConventionsChecks({ check, runMigration, runMigrate, renderVe
   const section = (plan) => {
     const lines = plan.split("\n");
     const at = lines.indexOf("### Project conventions");
-    const end = lines.findIndex((l, i) => i > at && /^### /.test(l));
-    return at < 0 ? "" : lines.slice(at, end < 0 ? undefined : end).join("\n");
+    if (at < 0) return "";
+    const end = lines.findIndex((l, i) => i > at && l.startsWith("### "));
+    return lines.slice(at, end < 0 ? undefined : end).join("\n");
   };
   const dwSection = section(ab.plan);
 

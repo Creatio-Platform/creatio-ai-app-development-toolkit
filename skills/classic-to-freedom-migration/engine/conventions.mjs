@@ -47,7 +47,12 @@ const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const blank = (v) => typeof v !== "string" || v.trim() === "";
 // `ab`, `ab.`, ` Ab ` and `AB` are one namespace: recorded lower-case, as the reference tells the agent to write it
 // (a `SchemaNamePrefix` of `Usr` is the namespace `usr`), so the mapper emits and `--verify` reads the same spelling.
-export const normalizePrefix = (v) => (typeof v === "string" ? v.trim().replace(/\.+$/, "").toLowerCase() : "");
+export const normalizePrefix = (v) => (typeof v === "string" ? stripTrailingDots(v.trim()).toLowerCase() : "");
+function stripTrailingDots(s) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === ".") end--;
+  return s.slice(0, end);
+}
 const nameList = (v) => (Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()))] : []);
 
 // The recorded block, normalized; null when there is none to read. Missing validator/converter prefixes take the
@@ -162,11 +167,13 @@ function questionIssues(c) {
   if (c.confirmedBy === "user") return [];
   const issues = [];
   if (c.conflict) {
-    issues.push(`projectConventions.conflict — the target packages use ${c.conflict.length} namespaces (${c.conflict.map(([ns, n]) => `${ns}. × ${n}`).join(", ")}); ask the user which one this migration uses and record the answer with confirmedBy: "user"`);
+    const counts = c.conflict.map(([ns, n]) => ns + ". × " + n).join(", ");
+    issues.push(`projectConventions.conflict — the target packages use ${c.conflict.length} namespaces (${counts}); ask the user which one this migration uses and record the answer with confirmedBy: "user"`);
   }
   const diff = previousDifferences(c);
   if (diff.length) {
-    issues.push(`projectConventions differ from the earlier migration${c.previous.folder ? ` in '${c.previous.folder}'` : ""} (${diff.join("; ")}); ask the user which to keep and record the answer with confirmedBy: "user"`);
+    const where = c.previous.folder ? " in '" + c.previous.folder + "'" : "";
+    issues.push(`projectConventions differ from the earlier migration${where} (${diff.join("; ")}); ask the user which to keep and record the answer with confirmedBy: "user"`);
   }
   return issues;
 }
@@ -226,23 +233,22 @@ function walkValue(node, path, st) {
   if (!node || st.onPath.has(node)) return;
   if (node.type === "Identifier") {
     if (st.vars.has(node.name)) walkValue(st.vars.get(node.name), path, st);
-    return;
-  }
-  if (node.type === "Literal") {
+  } else if (node.type === "Literal") {
     if (typeof node.value === "string" && GUID_RE.test(node.value)) st.out.push({ guid: node.value.toLowerCase(), path: path.join(".") });
-    return;
+  } else {
+    st.onPath.add(node);
+    st.reached.add(node);
+    for (const [key, child] of childEntries(node)) walkValue(child, [...path, key], st);
+    st.onPath.delete(node);
   }
-  st.onPath.add(node);
-  st.reached.add(node);
+}
+// An object's statically keyed properties or an array's elements, as `[key, node]`; nothing for any other node.
+function childEntries(node) {
   if (node.type === "ObjectExpression") {
-    for (const p of node.properties) {
-      const key = p.type === "Property" ? staticPropKey(p) : null;
-      if (key != null) walkValue(p.value, [...path, key], st);
-    }
-  } else if (node.type === "ArrayExpression") {
-    node.elements.forEach((el, i) => walkValue(el, [...path, String(i)], st));
+    return node.properties.map((p) => [p.type === "Property" ? staticPropKey(p) : null, p.value]).filter(([k]) => k != null);
   }
-  st.onPath.delete(node);
+  if (node.type === "ArrayExpression") return node.elements.map((el, i) => [String(i), el]);
+  return [];
 }
 
 // The record ids the builders will meet that a declared constants module holds, `[{ guid, paths }]` in first-seen
