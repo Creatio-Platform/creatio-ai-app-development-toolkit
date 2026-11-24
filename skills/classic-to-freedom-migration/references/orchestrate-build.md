@@ -132,6 +132,11 @@ included, runs without asking. So the question is yours, asked before the first 
    A reply that already succeeds on the first call (the answer is remembered from an earlier run)
    is recorded as `Browser: page-smoke (remembered on this machine)`.
 
+   When the question cannot be put this way — the reply carries no `browserConsent` (a clio without
+   it), it fails for another reason, or the environment has no Freedom form page to probe yet — tell
+   the user what could not be established and ask them to choose `surface` or `none` themselves.
+   Record their words as the line; never write `none` for them.
+
 The engine reads the LAST `Browser:` line: until it names one of `page-smoke` · `surface` · `none`,
 `--next` withholds and `--start` refuses every task that writes a page. **One answer about one check
 is not this answer.** A user who says "I'll check this one myself" about one page has answered for

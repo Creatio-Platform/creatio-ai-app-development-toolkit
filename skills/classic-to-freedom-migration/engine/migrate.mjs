@@ -70,13 +70,13 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, writesPage, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
-import { renderFinalReport, readDecisions, readDecisionTexts } from "./report.mjs";
+import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -3987,7 +3987,17 @@ function handoffCauses(result, dir, folder) {
       + " `Route:` line is the one read). Resolve the dispatch route first (orchestrate-build.md 7.0) and write it"
       + " there, so the fresh session dispatches every task the same way.");
   }
-  return { causes, approvalLine, route };
+  // The browser answer is a folder-level precondition too, for a folder that holds a page-writing task: without it
+  // every such task is refused, and a queue that still starts the reference cache would hand off a session whose
+  // first page `--start` is that refusal.
+  const browser = readWorklogBrowser(dir);
+  const writesAnyPage = fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && readTaskDir(dir).some((t) => writesPage(t.writesTo));
+  if (!browser && writesAnyPage) {
+    causes.push(`worklog.md in ${folder} has no \`Browser:\` line naming one of ${BROWSER_ANSWERS.join(" · ")} (the`
+      + " last `Browser:` line is the one read). Ask the browser question first (orchestrate-build.md 7.0b) and write the"
+      + " answer there, so the fresh session never asks it again and no page task is refused.");
+  }
+  return { causes, approvalLine, route, browser };
 }
 const handoffRefusalHeader = (tasksDir) =>
   `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:`;
@@ -3996,7 +4006,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   if (gapRefusal) { handoffRefusalFailure = true; return gapRefusal; }
   const tasksDir = path.resolve(dir);
   const folder = path.dirname(tasksDir);
-  const { causes, approvalLine, route } = handoffCauses(result, tasksDir, folder);
+  const { causes, approvalLine, route, browser } = handoffCauses(result, tasksDir, folder);
   if (causes.length) {
     handoffRefusalFailure = true;
     return handoffRefusalHeader(tasksDir) + "\n" + causes.map((c) => `  — ${c}`).join("\n") + "\n";
@@ -4023,7 +4033,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   const resumeFile = path.join(folder, RESUME_FILE);
   const { text, prompt } = renderResume({
     migrationDir: folder, tasksDir, manifestPath: manifestCopy, environment: ctx.environment,
-    planVersion: result.planVersion, approvalLine, route,
+    planVersion: result.planVersion, approvalLine, route, browser,
     progress: renderProgress(set, tasksDir), next: answer.startable[0] || null, verdict: answer.verdict,
     nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
   });
@@ -5010,6 +5020,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       + `${naPart} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`
       + `${blockedPart} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
   }
+  process.stderr.write(unexercisedNote(finalReport));
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");

@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
-import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowser,
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowser, browserAnswerOf,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -65,9 +65,11 @@ const BROWSER_CHECK_CAP = 2;
 // `wont-do` / `not-applicable` saved nothing, and a `postponed` one has not built yet, so neither owes a check.
 const BUILT_STATUSES = new Set([S_DONE, S_PARTIAL]);
 // WHICH BUILT PAGES A BROWSER CHECK EXERCISED. A page is the artifact its page-writing tasks write; it is exercised
-// when at least one of them reports a check. A run can be complete and still have pages nobody opened after a save,
-// and those pages are what a person has to check by hand. Under `Browser: none` the user declined the check for the
-// run, so no built page counts as exercised whatever its notes say.
+// when the LAST of them that built something, in queue order, reports a check: a page cut into chunks or repaired
+// later is opened as it finally stands, not as an earlier chunk left it. A run can be complete and still have pages
+// nobody opened after their last save, and those pages are what a person has to check by hand. Under
+// `Browser: none` the user declined the check for the run, so no built page counts as exercised whatever its notes
+// say. `tasks` arrive in queue order (`planTasks`).
 function browserExercise(tasks, declined = false) {
   const pages = new Map();
   const capBreaches = [];
@@ -76,11 +78,19 @@ function browserExercise(tasks, declined = false) {
     const n = browserChecksOf(t.notes) ?? 0;
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
     const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
-    page.exercised ||= n > 0 && !declined;
+    page.exercised = n > 0 && !declined;
     page.tasks.push(t);
     pages.set(t.writesTo, page);
   }
   return { unexercised: [...pages.values()].filter((p) => !p.exercised), capBreaches };
+}
+// BUILT, NOT EXERCISED on stderr, so a caller reading stderr alone learns which pages still need a person; "" for
+// any other verdict. It is a note, not an exit-2 leg: every task closed and every built row checks out, so the exit
+// code keeps its meaning (open work for the machine), and the unchecked pages are work for a person, as 🟠 says.
+export function unexercisedNote(report) {
+  if (!report?.complete || !report.unexercisedPages?.length) return "";
+  return `migrate.mjs: 🟠 BUILT, NOT EXERCISED — no browser check after the last save of ${report.unexercisedPages.join(", ")}.`
+    + " Check them on the stand; the migration result report lists what to check.\n";
 }
 function browserSection({ unexercised, capBreaches }, pageName, answer) {
   const L = unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [];
@@ -801,7 +811,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const postponedCount = postponedRows.length;
   const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
   const browserAnswer = dir ? readWorklogBrowser(dir) : null;
-  const exercise = browserExercise(tasks, /^Browser: none\b/.test(browserAnswer || ""));
+  const exercise = browserExercise(tasks, browserAnswerOf(browserAnswer) === "none");
   const { unexercised } = exercise;
   const { verdict, verdictColour } = verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName });
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
@@ -828,6 +838,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
   return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
+    unexercisedPages: unexercised.map((p) => pageName(p.pageKey)),
     counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount,
       unexercised: unexercised.length, capBreaches: exercise.capBreaches.length } };
 }

@@ -1071,9 +1071,11 @@ function endWithOneBlankLine(text) {
 // that writes a page: a review or the reference cache has no page code to own. `set.cardDecisions` is the
 // decisions map the caller read (`readDecisions`); without it the card says none were read rather than none exist.
 export const TASK_CARD_HEADING = "## Task card";
-const writesAPage = (task) => { const w = String(task.writesTo || ""); return w.startsWith("page:") || w === ARTIFACT_WHOLE; };
+// A task that writes a page body: a page chunk or repair round (`page:<id>`) and the whole-run build. It owns the
+// page's code, so it gets the task card, and it owes the page a post-save browser check, so the browser answer gates it.
+export const writesPage = (writesTo) => String(writesTo || "").startsWith("page:") || writesTo === ARTIFACT_WHOLE;
 function taskCardBlock(task, set = {}) {
-  if (!writesAPage(task)) return [];
+  if (!writesPage(task.writesTo)) return [];
   const pageArg = task.pageKey ? ` --page ${task.pageKey}` : "";
   const L = ["", TASK_CARD_HEADING, "",
     "- **Your brief is this file** and your page's section of the design spec (`refs/spec.md` when the reference"
@@ -4083,7 +4085,7 @@ function persistAdoptedTask(dir, t, unplaced, set = null) {
 // block alone is re-rendered on every sync — replaced where the file has one, inserted before the deliverables where
 // it has none — and every cell, front-matter line and note around it stays as it is on disk.
 function refreshTaskCard(dir, t, set) {
-  if (!set?.cardDecisions || !writesAPage(t)) return;
+  if (!set?.cardDecisions || !writesPage(t.writesTo)) return;
   const full = path.join(dir, t.file);
   let text;
   try { text = fs.readFileSync(full, "utf8"); } catch { return; }
@@ -5051,6 +5053,11 @@ export function readWorklogBrowser(tasksDir) {
   return worklogBrowser(text);
 }
 
+// The answer a `Browser:` line records — `page-smoke`, `surface` or `none` — or null for no line. Every reader of the
+// line asks this, so the start gate and the result report interpret it by one rule.
+export const browserAnswerOf = (browserLine) => (browserLine ? fieldValue(browserLine, "Browser:") : null);
+
+const fieldValue = (line, field) => line.slice(field.length).trim().split(/\s/)[0];
 function worklogField(worklogText, field, allowed) {
   let found = null;
   for (const line of String(worklogText || "").split(/\r?\n/)) {
@@ -5058,13 +5065,9 @@ function worklogField(worklogText, field, allowed) {
     if (plain.startsWith(field) && plain.slice(field.length).trim() !== "") found = plain;
   }
   if (!found) return null;
-  const value = found.slice(field.length).trim().split(/\s/)[0];
-  return allowed.includes(value) ? found : null;
+  return allowed.includes(fieldValue(found, field)) ? found : null;
 }
 
-// A task that writes a page body owes that page a post-save browser check, so it is the task the browser answer
-// gates: a page chunk or repair round (`page:<id>`) and the whole-run build.
-export const writesPage = (writesTo) => String(writesTo || "").startsWith("page:") || writesTo === ARTIFACT_WHOLE;
 
 // THE RESUME FILE, rendered from values the caller computed. Pure: no file is read here, so the goldens can hold
 // it to its fields. `next` is the first task `--next` would name, or null with the verdict that answered instead.
@@ -5091,6 +5094,8 @@ export function renderResume(f) {
     `- **Environment:** \`${f.environment || "not recorded in manifest.planMeta.environment"}\``,
     `- **Approved plan version:** \`${f.planVersion}\` — the \`decisions.md\` entry: ${f.approvalLine}`,
     `- **Route:** \`${f.route}\` (from \`worklog.md\` — dispatch every task this way; never switch mid-run)`,
+    ...(f.browser ? [`- **Browser:** \`${f.browser}\` (from \`worklog.md\` — the browser question is answered; hand this line`
+      + " to every builder and never ask it again)"] : []),
     `- **Next startable task:** ${nextLine}`,
     "",
     "## Progress",

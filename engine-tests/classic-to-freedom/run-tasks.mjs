@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport, browserChecksOf, readDecisionTexts } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, browserChecksOf, readDecisionTexts, unexercisedNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
@@ -23,7 +23,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
-  BROWSER_ANSWERS, worklogBrowser, writesPage,
+  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -5838,13 +5838,18 @@ console.log("\n===== the migration result report — one artifact, computed from
     writesTo, status: "done", notes, rows: [{ label: `Form page ${id}`, outcomeKind: "built", outcome: "built" }] });
   const exercisedRep = (tasks, dir) => renderFinalReport({ result: RUN, verifyRes: greenVerify,
     set: { planVersion: RUN.planVersion, tasks }, dir });
-  const allChecked = exercisedRep([pageTask("e-a", "main", "Browser checks: 1 — loads clean"),
-    pageTask("e-b", "main", "Browser checks: 0 — read-back only"), pageTask("e-c", "child:C1", "Browser checks: 2 — loads; fix confirmed")],
+  const allChecked = exercisedRep([pageTask("e-b", "main", "Browser checks: 0 — read-back only"),
+    pageTask("e-a", "main", "Browser checks: 1 — loads clean"), pageTask("e-c", "child:C1", "Browser checks: 2 — loads; fix confirmed")],
   tmp("result-report-exercised"));
-  check("exercised: every page with at least one task reporting `Browser checks: ≥1` keeps 🟢 COMPLETE and no browser section",
+  check("exercised: every page whose last built task reports `Browser checks: ≥1` keeps 🟢 COMPLETE, no browser section and no stderr note",
     () => allChecked.complete === true && /🟢 \*\*COMPLETE\*\*/.test(allChecked.markdown) && allChecked.verdictColour === "green"
-      && !/Not exercised in a browser/.test(allChecked.markdown),
+      && !/Not exercised in a browser/.test(allChecked.markdown) && unexercisedNote(allChecked) === "",
     () => allChecked.markdown.split("\n")[2]);
+  const lastChunkUnchecked = exercisedRep([pageTask("k-a", "main", "Browser checks: 1 — loads clean"),
+    pageTask("k-b", "main", "Browser checks: 0 — saved the handlers")], tmp("result-report-last-chunk"));
+  check("exercised: a page whose LAST built chunk reports no check is unexercised even though an earlier chunk checked it — the page is opened as it finally stands",
+    () => lastChunkUnchecked.verdictColour === "orange" && lastChunkUnchecked.counts.unexercised === 1,
+    () => lastChunkUnchecked.markdown.split("\n")[2]);
   const oneUnchecked = exercisedRep([pageTask("u-a", "main", "Browser checks: 1 — loads clean"),
     { ...pageTask("u-b", "child:C1", "Check on stand (row 1): open a C1 record → the Owner field is filled"), status: "done" }],
   tmp("result-report-unexercised"));
@@ -5855,6 +5860,11 @@ console.log("\n===== the migration result report — one artifact, computed from
       && /the Owner field is filled/.test(oneUnchecked.markdown.slice(oneUnchecked.markdown.indexOf("## Not exercised")))
       && oneUnchecked.counts.unexercised === 1,
     () => oneUnchecked.markdown.slice(0, 1600));
+  check("not exercised: the 🟠 run keeps `complete` (exit code untouched) and says the unchecked pages on stderr, by name",
+    () => /^migrate\.mjs: 🟠 BUILT, NOT EXERCISED — .*Check them on the stand/.test(unexercisedNote(oneUnchecked))
+      && unexercisedNote(oneUnchecked).includes(oneUnchecked.unexercisedPages[0]) && oneUnchecked.unexercisedPages.length === 1
+      && unexercisedNote({ ...oneUnchecked, complete: false }) === "",
+    () => ({ note: unexercisedNote(oneUnchecked), pages: oneUnchecked.unexercisedPages }));
   {
     const nbase = tmp("result-report-browser-none");
     const ndir = path.join(nbase, "build-tasks");
@@ -5876,7 +5886,7 @@ console.log("\n===== the migration result report — one artifact, computed from
     const dbase = tmp("result-report-browser-declined");
     const ddir = path.join(dbase, "build-tasks");
     fs.mkdirSync(ddir, { recursive: true });
-    fs.writeFileSync(path.join(dbase, "worklog.md"), "Browser: none (user: \"no browser\")\n");
+    fs.writeFileSync(path.join(dbase, "worklog.md"), "Browser:none (user: \"no browser\")\n");
     const declinedRep = exercisedRep([pageTask("d-a", "main", "Browser checks: 1 — opened it anyway")], ddir);
     check("not exercised: under `Browser: none` a built page counts as unexercised even when its task reports a check — the user declined the check for the run",
       () => declinedRep.verdictColour === "orange" && declinedRep.counts.unexercised === 1,
@@ -6667,6 +6677,10 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     () => DISPATCH_ROUTES.every((r) => worklogRoute(`Route: ${r}`) === `Route: ${r}`)
       && worklogRoute("- **Route:** `inline` (the host has no sub-agents)") === "Route: inline (the host has no sub-agents)",
     () => DISPATCH_ROUTES.map((r) => worklogRoute(`Route: ${r}`)));
+  check("browserAnswerOf: the value of a `Browser:` line, read by the rule the gate reads it — with or without the space, a trailing quote ignored — and null for no line",
+    () => browserAnswerOf("Browser: none (user: \"no\")") === "none" && browserAnswerOf(worklogBrowser("Browser:none")) === "none"
+      && browserAnswerOf(worklogBrowser("- **Browser:** `page-smoke`")) === "page-smoke" && browserAnswerOf(null) === null,
+    () => [browserAnswerOf("Browser: none"), browserAnswerOf(worklogBrowser("Browser:none")), worklogBrowser("- **Browser:** `page-smoke`")]);
   check("worklogBrowser: each of page-smoke · surface · none is an answer, a plain, bold or listed line is read, a trailing quote is kept, and the LAST one wins",
     () => BROWSER_ANSWERS.every((a) => worklogBrowser(`Browser: ${a}`) === `Browser: ${a}`)
       && worklogBrowser("- **Browser:** `page-smoke` (user: \"yes, use Chrome\")") === "Browser: page-smoke (user: \"yes, use Chrome\")"
@@ -6730,10 +6744,11 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     const hoManifest = path.join(path.dirname(cd), "manifest.json");
     fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
     const handoffHeld = cliFileApproved(hoManifest, "--tasks", cd, "--handoff");
-    check("browser gate (CLI): `--handoff` withholds the page task too — a fresh session would otherwise resume on a refusal",
-      () => new RegExp(`\\[${pageId}\\] — writes .*no \`Browser:\` line yet`).test(handoffHeld.stdout || "")
-        && !fs.existsSync(path.join(path.dirname(cd), "resume.md")),
-      () => (handoffHeld.stdout || "").slice(0, 1200));
+    check("browser gate (CLI): `--handoff` of a folder with a page-writing task refuses by name while worklog.md has no `Browser:` line — exit 2, step 7.0b, nothing written",
+      () => handoffHeld.status === 2 && /NOTHING WRITTEN/.test(handoffHeld.stdout || "")
+        && /no `Browser:` line naming one of page-smoke · surface · none/.test(handoffHeld.stdout || "")
+        && /7\.0b/.test(handoffHeld.stdout || "") && !fs.existsSync(path.join(path.dirname(cd), "resume.md")),
+      () => ({ status: handoffHeld.status, out: (handoffHeld.stdout || "").slice(0, 1200) }));
     recordBrowserAnswer(cd, "page-smoke");
     clearDepsOf(cd, pageId, RUN, OPTS, 50);
     const passed = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
@@ -6818,6 +6833,8 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     () => resume);
   check("--handoff (R1): resume.md records the `Route:` line from worklog.md verbatim",
     () => /\*\*Route:\*\* `Route: agent`/.test(resume), () => resume);
+  check("--handoff (R1): resume.md records the `Browser:` line from worklog.md verbatim, so the resuming session never asks the question again",
+    () => /\*\*Browser:\*\* `Browser: page-smoke`.*never ask it again/.test(resume), () => resume);
   check("--handoff (R1): resume.md carries the engine's `--- progress ---` block, as `--tasks` prints it",
     () => resume.includes("--- progress ---") && /done \d+ · running \d+ · todo \d+/.test(resume) && /dispatched \d+ of \d+/.test(resume),
     () => resume);
@@ -6877,6 +6894,8 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     /manifest .*does not exist/, /reruns step 4.*hands off/);
   refusalCase("no-route", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent\n", "")), {},
     /no `Route:` line/, /7\.0/);
+  refusalCase("no-browser", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", "")), {},
+    /no `Browser:` line naming one of page-smoke · surface · none/, /7\.0b/);
   refusalCase("route-tbd", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent", "Route: TBD")), {},
     /no `Route:` line naming one of agent · codex · copilot · inline/, /7\.0/);
   {
