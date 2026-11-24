@@ -65,10 +65,10 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
 import { readDecisionRecords, directivesOf, provenanceIssues } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
-  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
+  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, worklogBrowser, BROWSER_ANSWERS, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
@@ -3517,6 +3517,13 @@ function startRefusalText(set, startId, dir) {
       + "\nOne writer per artifact: let that task close, re-run `--tasks`, then start this one. Two open tokens on"
       + " one artifact is how a single sub-agent ends up holding both.\n";
   }
+  if (set.blockedByBrowser) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByBrowser}\`, and worklog.md in`
+      + ` ${path.dirname(path.resolve(dir))} has no \`Browser:\` line naming one of ${BROWSER_ANSWERS.join(" · ")} (the last`
+      + " `Browser:` line is the one read). A builder cannot ask the user, so ask the browser question once before the"
+      + " first build task (orchestrate-build.md 7.0b), write the answer as that line, then start this task.\n";
+  }
   if (!set.started) {
     return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
   }
@@ -3707,6 +3714,10 @@ function recordFileLines(records) {
   return lines;
 }
 
+// The browser answer step 7.0b records in `worklog.md` of the migration folder above the task folder `dir`. `--start`
+// and `--next` read it through the shared start predicate, so a page task is held until the question was asked.
+const browserGateFor = (dir) => ({ answer: worklogBrowser(readTextOr(path.join(path.dirname(path.resolve(dir)), "worklog.md"))) });
+
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
@@ -3716,6 +3727,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
   const checked = { ...opts, refuseUnaccounted: true };
+  if (startId) checked.browserGate = browserGateFor(dir);
   const set = startId ? startTask(dir, startId, result, checked, split) : syncTaskDir(dir, result, checked, split);
   if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
@@ -3786,6 +3798,10 @@ const withheldLine = (w) => {
   if (w.cause === HOLD_DECISION) {
     return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row (\`${DECIDE_FLAG} D<N> ${BUILD_FLAG}\` to build it) releases it:`,
       ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
+  }
+  if (w.cause === HOLD_BROWSER) {
+    return `   · ${taskLine(w.task)} — writes \`${w.task.writesTo}\`, and worklog.md has no \`Browser:\` line yet: ask the`
+      + " browser question once (orchestrate-build.md 7.0b) and record the answer";
   }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
   // The ledger refusal is what the GATE would answer for this id, so it is what this line says. `underlying` is
@@ -3878,7 +3894,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   const set = syncTaskDir(dir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
   const records = recordFileLines(keepRecordFiles(result, dir, opts));
-  const answer = startableTasks(set, dir);
+  const answer = startableTasks(set, dir, browserGateFor(dir));
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
   return [...nextAnswerLines(answer, dir, cmdFor), ...records].join("\n") + "\n";
@@ -3932,7 +3948,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
   const records = recordFileLines(keepRecordFiles(result, tasksDir, opts));
-  const answer = startableTasks(set, tasksDir);
+  const answer = startableTasks(set, tasksDir, browserGateFor(tasksDir));
   // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
   // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
   // `--next` names.

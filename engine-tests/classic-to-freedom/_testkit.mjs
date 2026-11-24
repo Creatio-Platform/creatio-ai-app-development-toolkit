@@ -44,6 +44,22 @@ export const makeSchema = (pkg, o = {}) => ({
 // one file every fixture on the machine shares.
 export const approvalEntry = (planVersion) =>
   `## Plan approved\n- Approved by: test\n- Plan version: \`${planVersion}\`\n`;
+// The browser answer step 7.0b records: a `Browser:` line in `worklog.md` of the migration folder above
+// `tasksDir`. `--start` of a task that writes a page refuses without one. Appended once, after whatever
+// worklog.md already holds, so a fixture that writes its own worklog keeps its lines.
+export function recordBrowserAnswer(tasksDir, answer = "page-smoke") {
+  const folder = path.dirname(path.resolve(tasksDir));
+  if (folder === path.resolve(os.tmpdir())) {
+    throw new Error(`recordBrowserAnswer: ${tasksDir} sits directly in the temp directory; give it a migration folder of its own`);
+  }
+  fs.mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, "worklog.md");
+  let text = "";
+  try { text = fs.readFileSync(file, "utf8"); } catch { /* no worklog.md yet */ }
+  const line = `Browser: ${answer}\n`;
+  if (!text.includes(line)) fs.writeFileSync(file, text + (text === "" || text.endsWith("\n") ? "" : "\n") + line);
+  return file;
+}
 export function approvePlan(tasksDir, planVersion) {
   if (!planVersion) throw new Error("approvePlan: no plan version to approve");
   const folder = path.dirname(path.resolve(tasksDir));

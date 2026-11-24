@@ -3434,11 +3434,13 @@ export const HOLD_SEQUENCED = "sequenced";  // set-level only: an earlier member
 export const HOLD_STATUS = "status";        // open, but neither `todo` nor in flight — a decision, not a schedule
 export const HOLD_LEDGER = "ledger";        // the dispatch books are broken, so the gate refuses THIS id too
 export const HOLD_DECISION = "decision";    // every open row waits on an open decision on a subject another task shares
-export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER, HOLD_DECISION];
+export const HOLD_BROWSER = "browser";      // it writes a page and worklog.md records no answer to the browser question
+export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER, HOLD_DECISION,
+  HOLD_BROWSER];
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
-export function startBlocker(task, tasks, running = {}, decisions = decisionIndex(tasks)) {
+export function startBlocker(task, tasks, running = {}, decisions = decisionIndex(tasks), browserGate = null) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
   if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
@@ -3450,6 +3452,10 @@ export function startBlocker(task, tasks, running = {}, decisions = decisionInde
   if (task.status !== S_TODO && task.status !== S_IN_PROGRESS && !SETTLED.has(task.status)) {
     return { cause: HOLD_STATUS, tasks: [] };
   }
+  // NO PAGE BUILD WITHOUT THE BROWSER ANSWER. A builder cannot ask the user, so the question its post-save check
+  // depends on is asked before its dispatch. `browserGate` is set by the CLI, which reads `worklog.md`; a caller
+  // that passes none is not gated.
+  if (browserGate && !browserGate.answer && writesPage(task.writesTo)) return { cause: HOLD_BROWSER, tasks: [] };
   const byId = new Map(tasks.map((x) => [x.id, x]));
   // THE QUEUE ORDER IS ENFORCED, not advised — a task built before its dependency reads answers that do not exist
   // yet: the child form its related list opens, the scaffolding it saves into, the `## Notes` the next chunk of
@@ -3575,7 +3581,7 @@ function openClock(dir, t, merged, opts, now) {
   // answer to "which task may I start?" cannot disagree with what this call then does with that id. The four
   // refusal SHAPES are unchanged: every caller reads `unread` / `blockedByDispatch` / `blockedByDeps` /
   // `blockedByOverlap` off the returned object exactly as before, in the same precedence.
-  const blocker = startBlocker(t, merged.tasks, state.running);
+  const blocker = startBlocker(t, merged.tasks, state.running, undefined, opts.browserGate);
   // A file the engine REFUSED to read is not started. Re-rendering it in `--start` is exactly what
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
@@ -3606,6 +3612,7 @@ function openClock(dir, t, merged, opts, now) {
   if (merged.dispatch?.failing.length) {
     return { refusal: { blockedByDispatch: merged.dispatch } };
   }
+  if (blocker?.cause === HOLD_BROWSER) return { refusal: { blockedByBrowser: t.writesTo } };
   if (blocker?.cause === HOLD_DEPS) return { refusal: { blockedByDeps: blocker.tasks } };
   if (blocker?.cause === HOLD_DECISION) return { refusal: { blockedByDecision: blocker } };
   if (blocker?.cause === HOLD_OVERLAP) return { refusal: { blockedByOverlap: blocker.tasks } };
@@ -4150,7 +4157,7 @@ export const NEXT_VERDICTS = [NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_
 // predicate, so an unfiltered set would advertise a fan-out `--start` refuses one call later. The set is
 // therefore mutually exclusive with ITSELF: the first writer of an artifact in queue order keeps it, and every
 // later writer is withheld as `sequenced`.
-export function startableTasks(set, dir) {
+export function startableTasks(set, dir, browserGate = null) {
   const tasks = set.tasks || [];
   const dispatch = set.dispatch || dispatchAudit(tasks, dir);
   const { running } = readTimingsFile(dir);
@@ -4170,7 +4177,7 @@ export function startableTasks(set, dir) {
   const claimed = new Map();   // artifact → the member of THIS answer that already writes it
   const decisions = decisionIndex(tasks);
   for (const t of candidates) {
-    const blocker = startBlocker(t, tasks, running, decisions);
+    const blocker = startBlocker(t, tasks, running, decisions, browserGate);
     if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file, rows: blocker.rows }); continue; }
     const owner = t.writesTo ? claimed.get(t.writesTo) : null;
     if (owner) { withheld.push({ task: t, cause: HOLD_SEQUENCED, tasks: [owner] }); continue; }
@@ -4887,15 +4894,34 @@ export function approvedPlanVersions(decisionsText) {
 // the route covers the whole run, so a later line can only be a correction of an earlier one — and a correction
 // to a value that is not one of DISPATCH_ROUTES leaves the run with no route, not with the earlier one.
 export function worklogRoute(worklogText) {
-  let route = null;
+  return worklogField(worklogText, "Route:", DISPATCH_ROUTES);
+}
+
+// The answers step 7.0b may record for the browser question, asked once before the first build task:
+// `page-smoke` (clio runs the post-save check headless), `surface` (an agent browser surface does it), `none`
+// (the user declined; every built page ends unexercised). Anything else is no answer.
+export const BROWSER_ANSWERS = Object.freeze(["page-smoke", "surface", "none"]);
+
+// The `Browser:` line step 7.0b writes into `worklog.md`, read by the rule `Route:` is: the LAST line wins, and a
+// correction to a value outside BROWSER_ANSWERS leaves the run with no answer, not with the earlier one.
+export function worklogBrowser(worklogText) {
+  return worklogField(worklogText, "Browser:", BROWSER_ANSWERS);
+}
+
+function worklogField(worklogText, field, allowed) {
+  let found = null;
   for (const line of String(worklogText || "").split(/\r?\n/)) {
     const plain = plainLine(line);
-    if (plain.startsWith("Route:") && plain.slice("Route:".length).trim() !== "") route = plain;
+    if (plain.startsWith(field) && plain.slice(field.length).trim() !== "") found = plain;
   }
-  if (!route) return null;
-  const value = route.slice("Route:".length).trim().split(/\s/)[0];
-  return DISPATCH_ROUTES.includes(value) ? route : null;
+  if (!found) return null;
+  const value = found.slice(field.length).trim().split(/\s/)[0];
+  return allowed.includes(value) ? found : null;
 }
+
+// A task that writes a page body owes that page a post-save browser check, so it is the task the browser answer
+// gates: a page chunk or repair round (`page:<id>`) and the whole-run build.
+export const writesPage = (writesTo) => String(writesTo || "").startsWith("page:") || writesTo === ARTIFACT_WHOLE;
 
 // THE RESUME FILE, rendered from values the caller computed. Pure: no file is read here, so the goldens can hold
 // it to its fields. `next` is the first task `--next` would name, or null with the verdict that answered instead.

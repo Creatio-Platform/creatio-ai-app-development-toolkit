@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
-import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, worklogBrowser,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -48,6 +48,64 @@ const labelKey = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " 
 // state the question, which is itself the finding.
 export const DECISION_MARKER = /^[\s*>-]*Decision needed \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
 export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
+// `Browser checks: N — <what each check answered>`, the line every page-writing task writes under `## Notes`. The
+// number is read, the prose is not; null when the task wrote no such line, which the verdict counts as 0.
+const BROWSER_CHECKS = /^[\s*>-]*Browser checks[\s:*]*(\d+)/i;
+export function browserChecksOf(notes) {
+  let n = null;
+  for (const line of String(notes || "").split(/\r?\n/)) {
+    const m = BROWSER_CHECKS.exec(line);
+    if (m) n = Number(m[1]);
+  }
+  return n;
+}
+// The cap a task's browser checks are held to: the second only confirms a fix the first one found.
+const BROWSER_CHECK_CAP = 2;
+const readTextOrEmpty = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
+// WHICH BUILT PAGES A BROWSER CHECK EXERCISED. A page is the artifact its page-writing tasks write; it is exercised
+// when at least one of them reports a check. A run can be complete and still have pages nobody opened after a save,
+// and those pages are what a person has to check by hand.
+function browserExercise(tasks) {
+  const pages = new Map();
+  const capBreaches = [];
+  for (const t of tasks) {
+    if (!writesPage(t.writesTo)) continue;
+    const n = browserChecksOf(t.notes) ?? 0;
+    if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
+    const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, checks: 0, tasks: [] };
+    page.checks += n;
+    page.tasks.push(t);
+    pages.set(t.writesTo, page);
+  }
+  return { unexercised: [...pages.values()].filter((p) => p.checks === 0), capBreaches };
+}
+function browserSection({ unexercised, capBreaches }, pageName, answer) {
+  const L = [];
+  if (unexercised.length) {
+    const recorded = answer ? `\`${esc(answer)}\`` : "none — `worklog.md` has no `Browser:` line";
+    L.push(`## Not exercised in a browser (${unexercised.length})`, "",
+      "These pages were built and read back, but no build task opened them after its last save, so what only the"
+        + " running page shows — a render error, a rule that does not fire, a save that writes the wrong column — is"
+        + " unchecked. Open each one on the stand and go through its checks below.",
+      "", `Browser answer recorded for this run: ${recorded}.`, "");
+    for (const p of unexercised) {
+      L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`)`);
+      for (const t of p.tasks) {
+        for (const [n, text] of markers(t.notes, CHECK_MARKER)) {
+          L.push(`  - [${cell(t.group || t.id)}](${enc(t.file)}), row ${n}: ${cell(text)}`);
+        }
+      }
+    }
+  }
+  if (capBreaches.length) {
+    if (L.length) L.push("");
+    L.push(`## Browser checks over the cap of ${BROWSER_CHECK_CAP} (${capBreaches.length})`, "",
+      "A task opens the page once after its last save and once more only to confirm a fix; a third check is a"
+        + " save-check-fix loop. Read these tasks' notes for what each check answered.", "");
+    for (const b of capBreaches) L.push(`- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`);
+  }
+  return L;
+}
 function markers(notes, re) {
   const out = new Map();
   for (const line of String(notes || "").split(/\r?\n/)) {
@@ -673,11 +731,19 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const postponedCount = postponedRows.length;
   const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
+  const exercise = browserExercise(tasks);
+  const unexercised = exercise.unexercised;
   let verdict;
   if (!complete) {
     // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
     // hide a shortfall.
     verdict = `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}`;
+  } else if (unexercised.length) {
+    // Built is not exercised: the run closed every task, but some page was never opened after a save. Ranked above
+    // 🟡 because an unchecked page is work for a person now, a postponed row is work for later.
+    verdict = `🟠 **BUILT, NOT EXERCISED** — ${plural(unexercised.length, "page")} never opened in a browser after its`
+      + ` last save: ${unexercised.map((p) => pageName(p.pageKey)).join(", ")} — check them on the stand (see the browser`
+      + ` section)${postponedNote}${manualNote}`;
   } else if (postponedCount) {
     // The 🟡 wording names one decision + destination if every postponed row shares one (the common
     // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
@@ -694,6 +760,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
+  const browser = browserSection(exercise, pageName, worklogBrowser(readTextOrEmpty(path.join(dir || ".", "..", "worklog.md"))));
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",
@@ -707,13 +774,16 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
     ...(carryOver.length ? ["", ...carryOver] : []),
     ...(withoutYou.length ? ["", ...withoutYou] : []),
+    ...(browser.length ? ["", ...browser] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
   let verdictColour = "green";
   if (!complete) verdictColour = "red";
+  else if (unexercised.length) verdictColour = "orange";
   else if (postponedCount) verdictColour = "yellow";
   return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
-    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount } };
+    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount,
+      unexercised: unexercised.length, capBreaches: exercise.capBreaches.length } };
 }
