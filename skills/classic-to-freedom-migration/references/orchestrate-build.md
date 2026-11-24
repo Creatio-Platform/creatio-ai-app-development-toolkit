@@ -335,6 +335,19 @@ may change it at any time by saying so — update the line first.
    + `D<N>` closes it on its Layout row, `build` + `D<N>` builds it as if the registry carried it —
    never in `decisionsWithoutDeliverable`.
 
+   **A Classic method nothing starts is not ported.** A custom method with no declared trigger, no
+   caller and no other occurrence of its name in the Classic sources is shown **Won't do — dormant**
+   on its plan line and arrives closed. When the user knows the page does run it, record
+   `"<pageKey>#method:<name>": { "status": "build" }` and re-run `--plan`: the row is a normal
+   deliverable again.
+
+   **A business rule the user accepted as built another way** (in a handler, as an entity rule) is
+   recorded per target attribute: `"<pageKey>#business-rule:<Attribute>": { "status":
+   "built-elsewhere", "decision": "D<N>" }`. It stands only on the user's own decision — the
+   `D<N>` entry carries `Decided by: user` and the `Quote:` of their words; an entry the
+   orchestrator decided is a plan gap. `--verify` then stops counting that attribute as missing and
+   quotes the decision on the rule row, so no repair task asks it again.
+
    **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
    deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints
    the list under `### Won't do` so the approver sees it. Until a task is dispatched, `--tasks` (the
@@ -680,8 +693,12 @@ migration is **not complete while the verdict says ⛔** — fix the gaps on-sta
 (`--checklist` is the same table's pre-build skeleton; the VERIFY run is what closes the task.)
 **Pass `bundle.handlers` and `bundle.viewModelConfig` too** (verbatim, beside `viewConfig`): with
 them the handler rows, the virtual-attribute rows, the per-tab layout rows and the native
-card-actions row are machine-checked (a handler is matched by the method name, the caller it was
-folded under, or a branch on its Classic trigger attribute; a tab by the plan's caption words
+card-actions row are machine-checked (a handler is matched by the build agent's `Ported as (row N)`
+symbol when it wrote one — a request the page sends, a function a handler calls — else by a CALL of
+the method name or of the caller it was folded under, or a branch on its Classic trigger attribute;
+a function that only carries the Classic name and is never called matches nothing. A `Module.function`
+symbol is checked against the page entry's optional `"deps"`: the `define()` dependency list of the
+page's `body.js`; a tab by the plan's caption words
 against the built tab's caption/name — resolved through `bundle.resources` when the entry carries
 them — or, when no caption matches, by holding exactly the fields the plan puts on that tab and no
 other field — among containers whose type or name contains `Tab`, a `crt.TabContainer` or a direct

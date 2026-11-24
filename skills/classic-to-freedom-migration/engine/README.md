@@ -495,13 +495,28 @@ the rows a `pages-only-no-menu` run does not build, and the section-registration
 page template rows of an `existing-section` run, whose section and pages already exist (a child or mini page keeps
 its template row). `RunProcess` and custom actions are never closed by a signal.
 
+A **dormant** method is the engine's one SOFT conclusion: a custom method with no declared trigger, no caller in the
+call index and no other occurrence of its name in any layer's Classic source (code, strings or comments — so
+`callback: this.onX` and `Ext.bind(this.onX)` keep it live) is closed `dormant: no trigger, no caller and no
+reference in Classic`. A manifest entry decides instead (`build` reopens it), where a hard conclusion — a hashed
+column — rejects an entry. An override of a lower layer's method, a body the parser could not read and a method
+assigned from another module are never dormant.
+
+One more status addresses a single business-rule target attribute rather than a deliverable:
+`"<pageKey>#business-rule:<Attribute>": { "status": "built-elsewhere", "decision": "D<N>" }` records that the user
+accepted that rule as built another way. It stands only when `D<N>` carries `Decided by: user` and a `Quote:`; the
+rule row's `vk.decided` then carries the attribute with the decision and quote, and `--verify` stops counting it
+missing. Any other status on such a key, an attribute the page's rules do not name, or an orchestrator's `D<N>` is
+a plan gap.
+
 The plan prints **Won't do** — `D<N>: <title>` or the engine's reason on the deliverable's own line (the card-action
 Layout row, the method and member tables, the child-scope row) and lists every other closed deliverable under
 `### Won't do` at its end. A run reads one `decisions.md`: from the folder above the task folder when `--tasks` is
 given, else from the `--out` folder. Only `--plan` and `--tasks` require it: any other mode (`--reads`, `--verify --built`,
 `--checklist`, `--spec`, `--stubs`) checks a `D<N>` against decisions.md when it reads one and skips that check
 when it does not. A plan gap (`deliverableStatus INVALID`, exit 2, `--tasks` writes nothing) is raised for an
-id that names no deliverable (the page's valid ids are listed), a status other than `wont-do` / `build`, a
+id that names no deliverable (the page's valid ids are listed), a status other than `wont-do` / `build` (or
+`built-elsewhere` on a rule attribute), a
 `wont-do` whose `D<N>` decisions.md does not hold, an entry on a deliverable the engine already closed, and a
 `wont-do` whose subject (behaviour card, confirm item, fold chain) other deliverables share without a status of
 their own. The cut writes each `wont-do` through the `--decide` row writer — `wont-do — <title> (D<N>)` with a
@@ -581,8 +596,11 @@ table is not emitted with `--tasks` at all — nothing reads it as a file; the r
 to `$Col` / `$PDS_Col_<hash>` (one built field per expected name); an expected rule target is satisfied by a rule
 whose `condition`/`actions` carry it as a whole token in any of those forms — `caption`/`name` are never tokenized.
 **Machine rows that would otherwise be confirm-on-stand:** with `--built.pages[k].handlers` and `.viewModelConfig`
-(verbatim from get-page) the engine resolves `handler` rows (method name · folded caller · a branch on the method's
-Classic trigger attribute/control — else ⚠, never ❌), `vmattr` rows (virtual attribute present), `layout` rows
+(verbatim from get-page) the engine resolves `handler` rows (the build agent's `Ported as (row N): <symbol>` line
+from the task's `## Notes`, which holds only when the page reaches the symbol — a request a handler or element
+sends, a function a handler calls, a `Module.function` called from a module in the entry's optional `deps` · else a
+CALL of the method name or of its folded caller, a definition alone never counts · a branch on the method's Classic
+trigger attribute/control — else ☐ confirm on-stand, never ❌; a `Ported as` symbol the page does not reach is ⚠), `vmattr` rows (virtual attribute present), `layout` rows
 (side profile / tab found by caption words — a `#ResourceString(K)#` caption resolved through `.resources` when
 the entry carries them — or, failing any caption match, by holding exactly the fields the row names and no other
 field, among containers whose type or name contains `Tab` that are a `crt.TabContainer` or a direct child of a

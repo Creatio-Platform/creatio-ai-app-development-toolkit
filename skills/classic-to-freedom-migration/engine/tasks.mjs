@@ -1078,19 +1078,24 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
-// THE TWO LINES THE FINAL REPORT READS OFF `## Notes`. Free prose under the row number is still
-// yours; these two are the sentences the migration result report quotes VERBATIM to the person who owns the
-// migration, so they are fixed in shape. Without them the report can only say "the agent did not state the
-// question", which is true and unhelpful.
+// THE LINES THE ENGINE READS OFF `## Notes`. Free prose under the row number is still yours; these are fixed in
+// shape. The final report quotes the first two VERBATIM to the person who owns the migration — without them it can
+// only say "the agent did not state the question", which is true and unhelpful. `--verify` reads the third: it is
+// how a method ported under another name is checked against the built page.
 function markersBlock() {
   return [
-    "- **Two lines the final report quotes verbatim — write them under `## Notes`, one line each:**",
+    "- **Lines the engine reads off `## Notes` — write them exactly, one line each:**",
     "  - for every `not-built — needs-decision` row: `Decision needed (row N): <the question, and the options a"
       + " person can choose between — 1-3 sentences>`. Not why you stopped (that goes in the prose) — WHAT is being"
       + " decided.",
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
+    "  - for every `Handler — …` row you ported under another name: `Ported as (row N): <symbol>` — the request"
+      + " type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or `Module.function`"
+      + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
+      + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
+      + " only a call or a `Ported as` line does.",
   ];
 }
 // THE USER'S DIRECTIVES, in every task that builds or reviews a page they apply to. The file is the sub-agent's
