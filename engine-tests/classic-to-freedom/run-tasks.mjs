@@ -11907,7 +11907,8 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
     fs.mkdirSync(path.join(broken, "decisions.md"));
     const unreadable = cliUnapproved(["--plan", "--out", path.join(broken, "plan.md")], MANIFEST);
     check("directives (CLI): an unreadable decisions.md (a directory here) exits with a message naming decisions.md, not an uncaught exception",
-      () => unreadable.status !== 0 && /decisions\.md/.test(unreadable.stderr || "") && !/\n\s+at /.test(unreadable.stderr || ""),
+      () => unreadable.status !== 0 && (unreadable.stderr || "").includes("decisions.md")
+        && !(unreadable.stderr || "").includes("    at "),
       () => ({ status: unreadable.status, stderr: (unreadable.stderr || "").slice(0, 500) }));
     const repBroken = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: path.join(broken, "build-tasks") }).markdown;
     check("directives (report): an unreadable decisions.md leaves the report standing and says the section could not be listed",
