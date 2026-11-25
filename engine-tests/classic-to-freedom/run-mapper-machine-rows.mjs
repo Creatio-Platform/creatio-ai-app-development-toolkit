@@ -128,6 +128,20 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     check("Ported as: an unpaired quote in code (`value.replace(/'/g, \"\")`) does not switch comment blanking off — a request named only in a later comment reads ⚠, never ✅, while a request really sent after the quote still reads ✅",
       () => stray.every((x) => x[0] === "⚠ verify") && st(sentAfter) === "✅ Done",
       () => [...stray, sentAfter]);
+    // A page function is called bare after a keyword too — `await fn(…)` and `return fn(…)` are the usual shapes in
+    // an async Freedom handler — while `obj.fn(…)`, `obj?.fn(…)` and `obj . fn(…)` stay another object's method.
+    const callShape = (call) => P(["applyEditRights"], verifyCtx({ pages: { main: page({ handlers: `[{ request: "usr.X", handler: async (request, next) => {
+        async function applyEditRights(r) { return r; }
+        ${call}
+        return next?.handle(request); } }]` }) } }, "main"));
+    const bareShapes = ["await applyEditRights(request);", "const r = await applyEditRights(request); return r;",
+      "return applyEditRights(request);", "void applyEditRights(request);"].map(callShape);
+    const memberShapes = ["await this.applyEditRights(request);", "await helpers?.applyEditRights(request);",
+      "return helpers . applyEditRights(request);"].map(callShape);
+    check("Ported as: a page function called as `await fn(…)`, `return fn(…)` or after another keyword reads ✅; called only as `this.fn(…)`, `obj?.fn(…)` or `obj . fn(…)` it reads ⚠",
+      () => bareShapes.every((x) => st(x) === "✅ Done" && /calls `applyEditRights`/.test(ev(x)))
+        && memberShapes.every((x) => x[0] === "⚠ verify" && /no handler calls `applyEditRights`/.test(ev(x))),
+      () => [...bareShapes, ...memberShapes]);
     const platform = P(["crt.HandleViewModelInitRequest"]);
     check("Ported as: a platform request a handler answers (`crt.HandleViewModelInitRequest`) is reached — the platform sends it",
       () => st(platform) === "✅ Done" && /answers platform request/.test(ev(platform)), () => platform);

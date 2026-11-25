@@ -4747,10 +4747,13 @@ function closingParen(code, open) {
 // does nothing on the page. A dotted `name` (`Helpers.format`) matches its dotted call.
 const ESCAPED_DOT = String.raw`\.`;
 const SPACED_DOT = String.raw`\s*\.\s*`;
-// `bare` asks for a call of the name itself, never `obj.name(…)` — another object's method of the same name.
+// `bare` asks for a call of the name itself, never `obj.name(…)` / `obj . name(…)` — another object's method of the
+// same name. Only a member access before the name rules it out: `await name(…)` and `return name(…)` are bare calls.
+const NOT_IN_WORD = String.raw`(?<![\w$])`;
+const NOT_A_MEMBER = String.raw`(?<!\.\s*)`;
 function calledIn(code, name, bare = false) {
   const callee = reEsc(name).replaceAll(ESCAPED_DOT, SPACED_DOT);
-  const before = bare ? String.raw`(?<![\w$.]\s*)` : String.raw`(?<![\w$])`;
+  const before = bare ? NOT_IN_WORD + NOT_A_MEMBER : NOT_IN_WORD;
   const re = new RegExp(String.raw`(function\s+)?${before}${callee}\s*\(`, "g");
   for (const m of code.matchAll(re)) {
     if (m[1]) continue;

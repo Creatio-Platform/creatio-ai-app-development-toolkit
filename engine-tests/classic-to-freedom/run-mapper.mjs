@@ -16,6 +16,7 @@ import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex,
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason, DORMANT_REASON } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { parseDecisionRecords } from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
+import { portedRowSymbols } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -9310,6 +9311,44 @@ const PG_MANIFEST = {
   signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
+// `Ported as` end to end through `--verify`: the task records -> `portedRowSymbols` -> `renderVerify`'s `portedAs`
+// -> the handler row's `vk`. One task carries a main-page handler row and a child-page handler row whose own
+// `pageKey` differs from the task's, so the lookup key is the row's page, not the task's.
+{
+  const PA_MANIFEST = {
+    entity: "M", seed: PG_SEED,
+    schemas: [{ pkg: "P", body: `define("MPage",[],function(){return{entitySchemaName:"M",details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}}},methods:{setCanEditFieldsRaw:function(){return 1;}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}]};});` }],
+    detailSchemas: { R1D: { entity: "C1", columns: ["Number"], editPage: "C1Page" } },
+    childPageSchemas: { C1Page: { entity: "C1", seed: PG_SEED, schemas: [{ pkg: "P", body: `define("C1Page",[],function(){return{entitySchemaName:"C1",methods:{onVisaSaved:function(){return 2;}},diff:[{operation:"insert",name:"C1F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"C1F"}}]};});` }] } },
+    planMeta: PG_MANIFEST.planMeta, signals: PG_MANIFEST.signals,
+  };
+  const paRun = runMigration(PA_MANIFEST, { baseDir: FIX });
+  const handlerRows = checklistGroups(paRun, checklistOpts(PA_MANIFEST)).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })))
+    .filter((r) => r.vk?.type === "handler");
+  const mainRow = handlerRows.find((r) => r.vk.method === "setCanEditFieldsRaw");
+  const childRow = handlerRows.find((r) => r.vk.method === "onVisaSaved");
+  const portedAs = portedRowSymbols({ tasks: [{ pageKey: "main",
+    rows: [{ label: mainRow?.label }, { label: childRow?.label, pageKey: childRow?.pageKey }],
+    notes: "## Notes\nPorted as (row 1): `usr.XRequest`\nPorted as (row 2): `applyVisa`" }] });
+  const built = { pages: {
+    main: { viewConfig: { items: [{ name: "MainF", type: "crt.Input" }] }, handlers: `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        await request.$context.executeRequest({ type: "usr.XRequest", $context: request.$context }); return next?.handle(request); } }]` },
+    "child:C1": { viewConfig: { items: [{ name: "C1F", type: "crt.Input" }] }, handlers: `[{ request: "crt.SaveRecordRequest", handler: async (request, next) => {
+        async function applyVisa(r) { return r; }
+        const res = await next?.handle(request); await applyVisa(request); return res; } }]` },
+  } };
+  const lineOf = (md, method) => md.split("\n").find((l) => l.includes(`Handler — \`${method}\``)) || "";
+  const withRecords = renderVerify(paRun, { ...checklistOpts(PA_MANIFEST), portedAs }, built).markdown;
+  const withoutRecords = renderVerify(paRun, checklistOpts(PA_MANIFEST), built).markdown;
+  check("Ported as (--verify end to end): the records reach their handler rows through `portedRowSymbols` and `renderVerify`'s `portedAs` — the main-page row reads ✅ ported as `usr.XRequest`, the child-page row (its own pageKey `child:C1`, not the task's `main`) reads ✅ ported as `applyVisa` — and the same run without the records closes neither",
+    () => mainRow?.pageKey === "main" && childRow?.pageKey === "child:C1"
+      && /✅ Done \| ported as ˋusr\.XRequestˋ/.test(lineOf(withRecords, "setCanEditFieldsRaw"))
+      && /✅ Done \| ported as ˋapplyVisaˋ/.test(lineOf(withRecords, "onVisaSaved"))
+      && !/✅ Done/.test(lineOf(withoutRecords, "setCanEditFieldsRaw")) && !/✅ Done/.test(lineOf(withoutRecords, "onVisaSaved")),
+    () => ({ rows: handlerRows.map((r) => [r.pageKey, r.label]), keys: [...portedAs.keys()],
+      with: [lineOf(withRecords, "setCanEditFieldsRaw"), lineOf(withRecords, "onVisaSaved")],
+      without: [lineOf(withoutRecords, "setCanEditFieldsRaw"), lineOf(withoutRecords, "onVisaSaved")] }));
+}
 const pgOpts = checklistOpts(PG_MANIFEST);
 // Two related lists on `main` open the SAME physical child page: one add-on, one page, so there is no conflict to
 // report, while each list keeps its own wiring row and the stand is read once.
