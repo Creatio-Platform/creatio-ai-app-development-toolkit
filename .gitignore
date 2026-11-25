@@ -42,3 +42,6 @@ scripts/build-dev-toolchain.config
 # Contributor tooling from the root package.json (ESLint + c8): the installed packages and the coverage report.
 node_modules/
 coverage/
+
+# claude plugin eval run output (scores, transcripts, reports) — local evidence, not source.
+evals/results/
