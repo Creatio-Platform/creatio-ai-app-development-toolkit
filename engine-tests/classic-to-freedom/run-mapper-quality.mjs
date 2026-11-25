@@ -104,17 +104,17 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
 
   // The client modules the handlers call into are linted on their own, with the same rules.
   const moduleOf = (body) => `define("UsrOrderPageModule", ["@creatio-devkit/common"], function(sdk) {\n"use strict";\n${body}\nreturn {};\n});`;
-  const longModule = lintModuleQuality(moduleOf(`async function closeAll(ids) {\n${lines(70)}\n}`));
+  const longModule = lintModuleQuality("UsrOrderPageModule", moduleOf(`async function closeAll(ids) {\n${lines(70)}\n}`));
   check("quality: a module's own function over the limit is reported, the define() factory around it is not",
     () => longModule.findings.filter((f) => f.rule === R.functionTooLong).map((f) => f.name).join() === "closeAll" && longModule.unreadable.length === 0,
     () => longModule.findings);
-  const moduleFindings = lintModuleQuality(moduleOf("// C04: close them (D8)\nasync function closeAll(ids) { for (const id of ids) { try { await model.update({ S: 1 }, id); } catch (e) { console.error(e); } } }"));
+  const moduleFindings = lintModuleQuality("UsrOrderPageModule", moduleOf("// C04: close them (D8)\nasync function closeAll(ids) { for (const id of ids) { try { await model.update({ S: 1 }, id); } catch (e) { console.error(e); } } }"));
   check("quality: a module's findings name the section `module` with a line, and its comments are read for plan codes",
     () => moduleFindings.findings.some((f) => f.rule === R.catchLogOnly && f.section === "module" && f.line === 4)
       && moduleFindings.findings.some((f) => f.rule === R.planCodeInComment && f.section === "module"),
     () => moduleFindings.findings);
   check("quality: a module source that is not a readable define() is reported unreadable, never passed",
-    () => lintModuleQuality("define(").unreadable.join() === "module" && lintModuleQuality("const x = 1;").unreadable.join() === "module");
+    () => lintModuleQuality("Broken", "define(").unreadable.join() === "module" && lintModuleQuality("Broken", "const x = 1;").unreadable.join() === "module");
 
   // A real built page and its modules, as a migration run built them: every runtime defect the build contract
   // forbids is found at its line — a Post handler that ends the chain, totals and counts paged in the browser, bulk
@@ -122,9 +122,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   const v2 = (f) => fs.readFileSync(path.join(FIX, "client-modules-v2", f), "utf8");
   const at = (page, rule) => page.findings.filter((f) => f.rule === rule && !f.advisory).map((f) => f.line);
   const v2Post = lintPageQuality({ handlers: v2("UsrMbContractsV2App_MbDeliveryNoteFormPage.handlers.js") });
-  const v2Totals = lintModuleQuality(v2("UsrMbContractsV2DocumentTotals.js"));
-  const v2Form = lintModuleQuality(v2("UsrMbContractsV2App_FormPageModule.js"));
-  const v2List = lintModuleQuality(v2("UsrMbContractsV2App_ListPageModule.js"));
+  const v2Totals = lintModuleQuality("UsrMbContractsV2DocumentTotals", v2("UsrMbContractsV2DocumentTotals.js"));
+  const v2Form = lintModuleQuality("UsrMbContractsV2App_FormPageModule", v2("UsrMbContractsV2App_FormPageModule.js"));
+  const v2List = lintModuleQuality("UsrMbContractsV2App_ListPageModule", v2("UsrMbContractsV2App_ListPageModule.js"));
   const v2Expected = [
     ["the Post handler ends the chain", at(v2Post, R.handlerWithoutNext), [30]],
     ["the totals page through every row", at(v2Totals, R.pagedReadLoop), [28]],

@@ -10,7 +10,8 @@
 // The per-page rules share their ids and thresholds with clio's page-body lint (`PageBodyAstLinter.Quality.cs`),
 // which gives the same findings as save-time warnings in every flow. Here they BLOCK: a page that breaks one is not
 // done. Both sides are kept in step by hand — a rule or threshold changed here is changed there too. Three rules are
-// checked here only: `handler-without-next`, `paged-read-loop` and `unchecked-write-result`.
+// checked here only: `paged-read-loop` and `unchecked-write-result`. `handler-without-next` shares its id with clio, and
+// both require the handler to RETURN what `next.handle(…)` gives, not only to call it.
 //
 // Everything is read from get-page's bundle as the read-back filed it (`handlers`, `validators`, `converters` are
 // SOURCE strings; `viewConfig`, `viewModelConfig`, `modelConfig`, `resources` are JSON). Nothing is evaluated.
@@ -110,9 +111,9 @@ export function lintPageQuality(entry, thresholds = DEFAULT_QUALITY_THRESHOLDS, 
 // Lint one client module (`define("Name", [deps], function (…) { … })`), the code a page's handlers call into. The
 // per-node rules, the unchecked writes and the plan codes in comments apply; the handler rules do not, since a module
 // holds no handlers. The findings name the section `module`; a source that is not a readable define() is reported in
-// `unreadable`.
-export function lintModuleQuality(src, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set()) {
-  const page = { findings: [], helpers: [], unreadable: [] };
+// `unreadable`; `name` is the module's schema name, carried on the result.
+export function lintModuleQuality(name, src, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set()) {
+  const page = { name, findings: [], helpers: [], unreadable: [] };
   const comments = [];
   const parsed = parseDefineModule(src, { locations: true, onComment: comments });
   if (parsed.error) { page.unreadable.push("module"); return page; }
