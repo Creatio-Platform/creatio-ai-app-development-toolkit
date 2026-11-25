@@ -236,10 +236,16 @@ function collectNamedFunctions(node, out, insideHelper = false, depth = 0) {
   for (const child of childNodes(node)) collectNamedFunctions(child, out, inner, depth + 1);
 }
 
-// The part of a node its shape keeps besides its type: an identifier's name, a literal's source text.
+// The part of a node its shape keeps besides its type: an identifier's name, a literal's source text, an operator
+// (with prefix/postfix for `++`/`--`), a declaration kind, a template's text. Operators are node properties, not
+// children, so without them `===` and `!==` helpers would read as copies.
 function shapeToken(n) {
   if (n.type === "Identifier") return " " + n.name;
   if (n.type === "Literal") return " " + n.raw;
+  if (n.type === "UpdateExpression") return (n.prefix ? " prefix " : " postfix ") + n.operator;
+  if (typeof n.operator === "string") return " " + n.operator;
+  if (n.type === "VariableDeclaration") return " " + n.kind;
+  if (n.type === "TemplateElement") return " " + n.value.raw;
   return "";
 }
 

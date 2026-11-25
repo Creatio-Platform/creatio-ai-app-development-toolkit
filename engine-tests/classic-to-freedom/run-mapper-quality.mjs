@@ -91,6 +91,29 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     + handler("usr.B", "function fmt2(v) { return v && v.value ? v.value : v; } fmt2(2);")));
   check("quality: two `function name() {}` helpers with one body in two handlers are a duplicate",
     () => count(declared, R.duplicateInPage) === 1, () => declared.findings);
+  // Operators, declaration kinds and template text are properties, not child nodes: helpers that differ only there
+  // have different logic, and merging them would change what the page does.
+  const tick = String.fromCharCode(96);
+  const operatorPairs = [
+    ['v && v.status && v.status.value === "a"', 'v && v.status && v.status.value !== "a"'],
+    ["v && v.status && v.status.value", "v || v.status || v.status.value"],
+    ["v.count + v.extra + v.base", "v.count - v.extra - v.base"],
+    ["{ let n = v.count; n += v.extra; return n; }", "{ let n = v.count; n -= v.extra; return n; }"],
+    ["{ const n = v.count; return n + v.extra; }", "{ let n = v.count; return n + v.extra; }"],
+    ["!v.status && !v.status.value && v.x", "-v.status && -v.status.value && v.x"],
+    ["{ let n = v.count; n++; return n; }", "{ let n = v.count; n--; return n; }"],
+    ["{ let n = v.count; n++; return n; }", "{ let n = v.count; ++n; return n; }"],
+    [tick + "${v.status.value} open ${v.x}" + tick, tick + "${v.status.value} closed ${v.x}" + tick],
+  ];
+  const differing = operatorPairs.map(([a, b]) => lintPageQuality(pageOf(`${handler("usr.A", "const isOpen = (v) => " + a + "; isOpen(1);")}, `
+    + handler("usr.B", "const isClosed = (v) => " + b + "; isClosed(2);"))));
+  check("quality: helpers that differ only in an operator, a declaration kind or template text are not duplicates",
+    () => differing.every((r) => count(r, R.duplicateInPage) === 0),
+    () => differing.map((r, i) => [operatorPairs[i][0], count(r, R.duplicateInPage)]).filter(([, c]) => c));
+  const sameOps = lintPageQuality(pageOf(`${handler("usr.A", 'const isOpen = (v) => v && v.status && v.status.value !== "a"; isOpen(1);')}, `
+    + handler("usr.B", 'const notA = (v) => v && v.status && v.status.value !== "a"; notA(2);')));
+  check("quality: helpers with one body, operators included, are still a duplicate",
+    () => count(sameOps, R.duplicateInPage) === 1, () => sameOps.findings);
   // A helper closing over its handler's own variables is a binding of that handler, not a copy of a helper.
   const wrapper = "const { $context, scopes } = request; const process = (config) => sdk.HandlerChainService.instance.process({ ...config, $context, scopes: [...scopes] }); await process({ type: \"usr.Sent\" });";
   check("quality: a helper reading its handler's $context/scopes is not a duplicate in another handler",

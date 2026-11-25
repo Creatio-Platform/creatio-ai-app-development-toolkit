@@ -98,11 +98,13 @@ closed by a decision, not by you: its judged row closes only when `decisions.md`
 contains the record's exact id as a whole token — backticks or a trailing `.` or `:` are fine, a
 longer id that merely contains it is not.
 
-The page's code is measured by the engine, not by you: the `Code quality` rows of the verify table
-(long functions, nested or copied helpers, catch blocks that only log, plan codes in comments, record
-ids a constants module holds, requests nobody sends) are blocking machine rows. A `#quality-gates`
-record that calls the page clean while one of them is `⚠ verify` is not convincing; quote the row in
-`why`.
+The page's code is measured by the engine, not by you, in two kinds of blocking machine rows of the
+verify table. The `Page code` row holds functions over the length limit, a helper declared twice on
+the page and requests nobody sends. The `Code quality` rows hold nested functions in a handler,
+helpers copied from another page, catch blocks that only log, a numeric `comparisonType`, sequential
+independent loads, plan codes in comments and record ids a constants module holds. A `#quality-gates`
+record that calls the page clean while either row reads `⚠ verify` is not convincing; quote the row
+in `why`.
 
 ## How to rule
 
