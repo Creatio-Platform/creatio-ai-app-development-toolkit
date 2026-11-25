@@ -3559,7 +3559,10 @@ export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED
 // never has to re-derive who is holding it in order to say so.
 // PAGE WORK ALREADY BEGUN: a page-writing task has its clock running or has saved its page. The browser question belongs
 // before the first page task starts, so once page work has begun the gate has nothing left to hold — and a folder
-// whose page work began before the folder had a `Browser:` line keeps building rather than refusing mid-run.
+// whose page work began before the folder had a `Browser:` line keeps building rather than refusing mid-run. The
+// scope is the folder on purpose: being in flight is a property of the folder, so from the first page task on, the
+// orchestrator's 7.0b instruction to ask before the next page task is the whole enforcement. Scoping the lift to one
+// page would refuse the next untouched page of every folder that was mid-build when the gate arrived.
 const PAGE_WORK_BEGUN = new Set([S_IN_PROGRESS, S_DONE, S_PARTIAL]);
 // `running` is the clock map of `timings.json`: a started task is `todo` on its file until its cells move.
 export const pageWorkBegun = (tasks, running = {}) => (tasks || []).some((t) => writesPage(t.writesTo)

@@ -321,6 +321,27 @@ class BrowserQuestionTests(unittest.TestCase):
     def test_a_folder_mid_build_is_not_held(self):
         self.assertIn("A folder whose page work has already begun", self.text)
 
+    def test_a_stored_no_is_announced_and_can_be_reversed(self):
+        self.assertIn("A first reply with `code: browser-declined`", self.text)
+        self.assertIn("never carry it into this run unannounced", self.text)
+        self.assertIn("call `page-smoke` with `browser=existing` and no `browser-path`", self.text)
+        self.assertIn("`code: browser-not-found`", self.text)
+
+
+class LastSaveRuleTests(unittest.TestCase):
+    """A page counts as exercised on its LAST built task's check, as the result report decides it."""
+
+    def test_the_builder_brief_states_the_last_save_rule(self):
+        notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
+        self.assertIn("only when its LAST built task, in queue order, reports a check", notes)
+        self.assertIn("every task that saves a page owes its own check after its own last save", notes)
+        self.assertNotIn("none of whose tasks", notes)
+
+    def test_the_orchestrator_report_step_states_the_same_rule(self):
+        text = flat(read(ORCHESTRATE))
+        self.assertIn("a page whose LAST built task, in queue order, does not report", text)
+        self.assertNotIn("none of whose build tasks", text)
+
 
 if __name__ == "__main__":
     unittest.main()

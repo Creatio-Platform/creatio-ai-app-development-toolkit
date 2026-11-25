@@ -295,6 +295,9 @@ could not run (a `page-smoke` refusal, a page that would not open), and the reas
 never because the `get-page` read-backs looked right, which read back the saved schema, not the
 running page. The engine cannot see your tool calls, so this line is how a reviewer and the judge
 see that the cap held, and the result report reads N from it and quotes your words after the dash
-beside each exercised page, so write what each check answered, not just that it ran: a page none of whose tasks reports a
-check ends the run as **BUILT, NOT EXERCISED**, with your `Check on stand (row N): …` lines as the
-list a person works through by hand. N above 2 is a defect in the task, and the report lists it.
+beside each exercised page, so write what each check answered, not just that it ran. A page counts
+as exercised only when its LAST built task, in queue order, reports a check: a check an earlier task
+or chunk ran on the page does not cover your save. You cannot tell whether your task is the page's
+last one, so every task that saves a page owes its own check after its own last save. A page whose
+last built task reports no check ends the run as **BUILT, NOT EXERCISED**, with your
+`Check on stand (row N): …` lines as the list a person works through by hand. N above 2 is a defect in the task, and the report lists it.

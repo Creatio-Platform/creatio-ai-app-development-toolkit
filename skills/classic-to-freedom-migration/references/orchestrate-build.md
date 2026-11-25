@@ -115,7 +115,7 @@ included, runs without asking. So the question is yours, asked before the first 
 
 1. Call `page-smoke` once on a Freedom form page that already exists on the target environment
    (`environment-name`, `page`; read-only, no `click`).
-2. A reply with `code: browser-consent-required` carries the question: put `browserConsent.question`
+2. A reply with `code: browser-consent-required` (or `browser-not-found`) carries the question: put `browserConsent.question`
    to the user verbatim, with its `browserConsent.choices`, and add one sentence of your own: a
    "no" (`browser=none`) is remembered for the whole machine and turns `page-smoke` off for every
    later run until the user changes it: a later call that passes `browser=existing` or
@@ -137,6 +137,13 @@ included, runs without asking. So the question is yours, asked before the first 
 
    A reply that already succeeds on the first call (the answer is remembered from an earlier run)
    is recorded as `Browser: page-smoke (remembered on this machine)`.
+
+   A first reply with `code: browser-declined` means a "no" from an earlier run is stored on this
+   machine. Tell the user that, and ask whether it stands for this run; never carry it into this run
+   unannounced. If it stands, record `Browser: none (user: "<their words>"; stored on this machine)`.
+   If they want the check, call `page-smoke` with `browser=existing` and no `browser-path`: an answer
+   passed on the call skips the stored one, and the reply is `code: browser-not-found` with the
+   `browserConsent` question, which nothing has been remembered for yet. Go on at step 2 with it.
 
    When the question cannot be put this way — the reply carries no `browserConsent` (a clio without
    it), it fails for another reason, or the environment has no Freedom form page to probe yet — tell
@@ -624,7 +631,8 @@ details of what is still open, with each build agent's `Check on stand (row N)` 
 plan-vs-built table is not written as a file — the report carries everything it says. The verdict is
 the CONJUNCTION: COMPLETE only when every task is closed, nothing stands recorded not built without
 a decision, no boundary was asserted without one, and every machine-checked plan item is present.
-A run that meets all of that but has a page none of whose build tasks reports `Browser checks: ≥1`
+A run that meets all of that but has a page whose LAST built task, in queue order, does not report
+`Browser checks: ≥1` (a check an earlier chunk ran does not cover a later save)
 reads `🟠 BUILT, NOT EXERCISED` instead, and its *Not exercised in a browser* section lists those
 pages with their `Check on stand` lines and the recorded `Browser:` answer: present it as it is — a
 page nobody opened after a save is work for the user now, not a footnote. Its *Exercised in a browser*
