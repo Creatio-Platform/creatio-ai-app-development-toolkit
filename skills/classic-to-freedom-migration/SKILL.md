@@ -42,10 +42,8 @@ These eight rules are non-negotiable. Everything else in this skill serves them.
    Collapsing, merging, or simplifying "for simplicity" is a plan deviation to **propose to the
    user**, never to apply silently. When unsure whether the plan is right, ask — do not quietly do
    something smaller.
-   **(c) An improvement beyond Classic parity defaults to **no**.** A tooltip, a dropdown, summaries or
-   any other element Classic did not have is built only when the user asked for it (a directive) or
-   answered yes to it in ⚠ Confirm. Offering one is fine; building it by default is a plan deviation, and
-   so is answering a parity question with an improvement.
+   **(c) Beyond-parity improvements default to no:** an element Classic lacked (tooltip,
+   summaries) is built only on a user directive or a yes in ⚠ Confirm.
 8. **UI/UX guidelines are mandatory when you BUILD, not optional.** Whenever you create or edit a Freedom UI page while implementing the approved plan (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring the page body and apply its rules (layout/containers, component choice, `colSpan`/gaps, `caption` vs `title`, island/card settings, lookups, fields, tooltips, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components). This is the same guideline the plan's **Quality gates** checklist row verifies after the build; this rule makes it a **before-build** gate too, so page bodies are authored to it in the first place rather than only reviewed afterward. It binds **whoever builds** — the five tools named above ARE the definition of "build" — and it binds at BOTH points; running only the save-time review is exactly how the gate gets skipped. (This is a **page-design** guideline — distinct from the clio build `get-guidance` contracts you read to write the schema.)
 
 > **Rules 7 and 8 bind whoever writes to the stand.** From step 7 that is a build sub-agent, one per task, so the
@@ -355,6 +353,7 @@ the bodies by hand (4.1) from the surviving reads.
   - **`SysDashboard` is administrated by records** — a rights-trimmed read looks exactly like "fewer dashboards"; query as a user who sees all.
   - **A query that ERRORED is not a "none" answer** — same rule as the other three signals.
 - **`siblingOf`** — this page matches one an earlier migration built: `./references/manifest-conditional-inputs.md` → *siblingOf*.
+- **`processPage` (gated)** — the plan title reads `(process page)`: record the process steps that open it, per `./references/process-page.md`.
 - **`typedPages` + `typedPageSchemas` (required for a typed entity, gated)** — when the entity's records open a different edit page per Type, read `./references/manifest-conditional-inputs.md` → *typedPages*.
 - **`childPageSchemas` (required — resolve EVERY child page before the plan)** — for each related list, the child entity's own edit-page schema as a NESTED manifest. **Resolve the edit-page name two ways:** (a) the detail body's `getEditPageName` (surfaced as `childPages[].editPage`), and (b) `list-entity-client-schemas` **by the CHILD entity** (not the parent) — its `editPages` (`kind: classic|freedom`, per-type variants) + `miniPageSchema` say directly whether the child has a real Classic edit page to rebuild, only a Freedom one (reuse), or none. The engine recursively maps each child page and nests its full field-mapping under `### Child page mappings`. Per Contract rule 4, a child with a real Classic `*Page` is mapped regardless of size; the only legitimate skips are a genuinely view-only detail with no `*Page` at all, a real native Freedom component (e.g. `ContactCommunication`), or a child entity that **owns another section** and stays on its Classic card by the user's decision (`opensClassicPage`, below).
   **Record what you verified on that detail's `detailSchemas` entry so the plan reflects reality (never a guess).** Exactly four answers resolve a child, and they are the four the structure gate accepts: a Classic `*Page` exists → put its schema in `childPageSchemas` (→ `Rebuild (child)`); no `*Page` exists → `"editPage": false` (→ `Without edit page`); the CHILD entity already ships a `kind: freedom` form page → `"reuseFreedomPage": "<Freedom form page>"` (→ `Reuse (Freedom)` — the related list opens that page, nothing is rebuilt, and the Classic child page is superseded rather than skipped); the child entity **owns another section** and the user drew that boundary → `"opensClassicPage": "<Classic page>"` (+ optional `"ownSection": "<Section>"`) (→ `Reuse (Classic)`, next paragraph). Until you record one of these, the child stays **`⚠ resolve`** and the plan is STRUCTURE INCOMPLETE — this is what prevents a Main-scope row asserting `Rebuild (child)` while the mappings below say the opposite.
@@ -538,6 +537,7 @@ Read each only when the step that names it says so:
 - `./references/manifest-conditional-inputs.md` — the step-4.2 manifest inputs that apply only when a surface signal exists (profile cards, the add-record mini page, dashboard delivery, typed pages, a section boundary).
 
 ## Known Traps
+- **A process page built as a record page.** Its buttons end or keep the process step, and the process element decides which → `./references/process-page.md`.
 
 Real failures from prior runs, kept short so they don't bury the flow above. Each is enforced by a gate or a reference — this list is a memory aid, not new rules.
 

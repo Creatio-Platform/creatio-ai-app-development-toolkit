@@ -496,8 +496,8 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
 
   // AC 10 — the skill prompt keeps improvements beyond parity at "no" by default.
   const skill = fs.readFileSync(SKILL_MD, "utf8");
-  check("detail features: SKILL.md says an improvement beyond Classic parity (tooltips, dropdowns, summaries) defaults to no",
-    () => /beyond Classic parity[^\n]{0,200}default(?:s)? to \*\*no\*\*/i.test(skill));
+  check("detail features: SKILL.md says an improvement beyond Classic parity (tooltips, summaries) defaults to no, built only on a directive or a ⚠ Confirm yes",
+    () => /Beyond-parity improvements default to no:\*\*[^#]{0,200}directive or a yes in ⚠ Confirm/.test(skill));
 
   // AC 11 — the new scans stay linear.
   const src = DETAIL_FEATURE_SCAN_FNS.map((f) => f.toString()).join("\n");
