@@ -2325,6 +2325,7 @@ function renderPlanWith(result, opts) {
   const signalLines = opts.processPage ? ["- not applicable — a process page has no section, list page or object; its process steps are listed under **Process page**"]
     : [sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check")];
   P.push("### On-stand signals", ...signalLines, "",
+    ...dataWritingPlanLines(dataWritingPages(result)),
     ...conventionsPlanLines(opts.projectConventions, opts.recordIds || [], esc));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
@@ -3319,6 +3320,33 @@ export function subPageNodes(result, seen = new Set(), out = []) {
   for (const t of result.typedPages || []) takeSubPage(t, seen, out);
   takeSubPage(result.miniPage, seen, out);
   return out;
+}
+
+// THE PAGES THAT WRITE DATA WHEN THEY OPEN (ENG-107721), over the whole page tree: the root form page (`main`) and
+// every sub-page node, each with the writes `writesOnOpen` in mapper.mjs found from its open hooks. One walk, so the
+// plan, the task files and the result report name the same pages. `{ pageKey, label, writes }`, empty for none.
+export function dataWritingPages(result) {
+  const root = { pageKey: "main", label: `${result?.entity || "?"} form page`, writes: result?.changeSet?.writesOnOpen || [] };
+  const subs = subPageNodes(result || {}).map((n) => ({ pageKey: n.pageKey, label: n.schema || n.entity || n.pageKey,
+    writes: n.writesOnOpen || [] }));
+  return [root, ...subs].filter((p) => p.writes.length);
+}
+// One write as a plan reads it: when it runs, the call chain from the open hook, and what it writes.
+export function dataWriteText(w) {
+  const what = w.writes.map((x) => (x.target ? `\`${esc(x.target)}\` (\`${esc(x.call)}\`)` : `\`${esc(x.call)}\``)).join(", ");
+  const when = w.addModeOnly ? "in add mode (a new record)" : "every time it opens, in edit mode too";
+  return `${when}: \`${esc(w.path.join(" → "))}\` writes ${what}`;
+}
+// The plan section. Nothing for a run without such a page, so an ordinary plan reads exactly as before.
+function dataWritingPlanLines(pages) {
+  if (!pages.length) return [];
+  return ["### Pages that write data when opened", "",
+    "⚠ Opening these pages changes data on the stand. Every browser check — the browser-question probe, `page-smoke`,"
+      + " a builder's check — opens them only in EDIT mode on an existing record (`page-smoke` with `record-id`)."
+      + " An add-mode check needs the user's consent for that page, the values below recorded before it, and what"
+      + " changed written as a `Stand data changed:` line in `worklog.md`; the migration result lists it."
+      + " A page that writes every time it opens is not opened at all without that consent.", "",
+    ...pages.flatMap((p) => p.writes.map((w) => `- **${esc(p.label)}** (\`${esc(p.pageKey)}\`) — ${dataWriteText(w)}`)), ""];
 }
 // Dedupe on the FINAL `pageKey` (D1), not on `pageDedupeId`. The two agree only because `assignPageKeys` has
 // already guaranteed one key per physical page; keying the splice on the KEY is what makes that guarantee load-

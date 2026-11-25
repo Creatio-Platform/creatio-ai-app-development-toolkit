@@ -711,8 +711,27 @@ const CALL_KIND_RX = [
   ["refresh", /(?:^|\.)refreshFields$|(?:^|\.)updateDetail(?:s)?$|(?:^|\.)reloadEntity$|(?:^|\.)reloadGridData$|(?:^|\.)loadEntity$/],
   ["feature-toggle", /getIsFeatureEnabled/],
   ["mixin-call", /(?:^|\.)mixins\./],
+  // A call that CHANGES stand data by itself, wherever it runs: a system-setting write (the classic counter idiom
+  // `postSysSettingsValue("XLastNumber", next)`), an insert / update / delete query, or the platform's number
+  // generator. Read beside `save` by `writesOnOpen` in mapper.mjs: a page that reaches one of these while it opens
+  // consumes data every time a browser check opens it (ENG-107721).
+  ["data-write", /(?:^|\.)post(?:Personal)?SysSettingsValue$|(?:^|\.)(?:InsertQuery|UpdateQuery|DeleteQuery|BatchQuery)$|(?:^|\.)getIncrement(?:Code|Number|Value)\w*$/],
 ];
 const classifyCall = (p) => CALL_KIND_RX.filter(([, rx]) => rx.test(p)).map(([kind]) => kind);
+
+// What a data-writing call writes, from its arguments: the first string argument (the system setting a
+// `postSysSettingsValue` writes) or the `rootSchemaName` of a query's config object. null when no static reading
+// names it; the call itself is still recorded.
+function dataWriteTarget(node, factory) {
+  const arg = firstStringArg(node);
+  if (arg && !factory) return arg;
+  for (const a of node.arguments || []) {
+    if (a?.type !== "ObjectExpression") continue;
+    const p = a.properties.find((x) => staticPropKey(x) === "rootSchemaName");
+    if (p?.value?.type === "Literal" && typeof p.value.value === "string") return p.value.value;
+  }
+  return null;
+}
 
 // Where a call's first string argument lands: `this.get("X")` reads an attribute, `this.set("X", …)` writes one,
 // `sandbox.publish/subscribe("Msg")` moves a message. A table so a new accessor is one entry, not a new branch.
@@ -733,10 +752,15 @@ function recordCall(node, sinks) {
   const p = calleePath(node.callee);
   if (!p) return;
   sinks.calls.add(p);
-  for (const k of classifyCall(p)) sinks.kinds.add(k);
+  const own = classifyCall(p);
+  for (const k of own) sinks.kinds.add(k);
   const arg = firstStringArg(node);
+  const factory = !!arg && CLASS_FACTORY_RX.test(p);
+  const built = factory ? classifyCall(arg) : [];
+  for (const k of built) sinks.kinds.add(k);
+  if (own.includes("data-write") || built.includes("data-write"))
+    sinks.dataWrites.add(JSON.stringify({ call: factory ? arg : p, target: dataWriteTarget(node, factory) }));
   if (!arg) return;
-  if (CLASS_FACTORY_RX.test(p)) for (const k of classifyCall(arg)) sinks.kinds.add(k);
   const hit = ARG_SINKS.find(([rx]) => rx.test(p));
   if (hit) sinks[hit[1]].add(arg);
 }
@@ -772,13 +796,13 @@ export function walkAstBounded(root, visit) {
 // blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH).
 function walkMethodBody(fnNode) {
   const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
-  const publishes = new Set(), subscribes = new Set();
+  const publishes = new Set(), subscribes = new Set(), dataWrites = new Set();
   // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
   // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
   // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
   const { truncated } = walkAstBounded(fnNode.body, (node) => {
     if (node.type === "CallExpression" || node.type === "NewExpression")
-      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
+      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes, dataWrites });
   });
   const sorted = (s) => [...s].sort(byLocale);
   // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
@@ -788,7 +812,9 @@ function walkMethodBody(fnNode) {
   return { calls: sorted(calls), kinds: sorted(kinds),
     readsAttrs: sorted(reads).filter((n) => !isRes(n)), readsResources: sorted(reads).filter(isRes),
     writesAttrs: sorted(writes),
-    publishes: sorted(publishes), subscribes: sorted(subscribes), truncated };
+    publishes: sorted(publishes), subscribes: sorted(subscribes),
+    // `{ call, target }` per distinct data-writing call (CALL_KIND_RX `data-write`), so a plan can name WHAT it writes
+    dataWrites: sorted(dataWrites).map((s) => JSON.parse(s)), truncated };
 }
 
 // A pure passthrough override (`f: function(){ this.callParent(arguments); }`) declares NO behaviour of its own.
@@ -841,7 +867,7 @@ export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "
 function externalMethodFact(name, fn) {
   const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
   return { name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
-    writesAttrs: [], publishes: [], subscribes: [], truncated: false,
+    writesAttrs: [], publishes: [], subscribes: [], dataWrites: [], truncated: false,
     externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false };
 }
 

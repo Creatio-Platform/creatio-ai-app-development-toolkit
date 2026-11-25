@@ -116,7 +116,10 @@ writes a page (the scaffolding, the reference cache and the child-page wiring st
 post-save check):
 
 1. Call `page-smoke` once on a Freedom form page that already exists on the target environment
-   (`environment-name`, `page`; read-only, no `click`).
+   (`environment-name`, `page`, and `record-id` of one existing record of its object; read-only, no
+   `click`). Never leave out `record-id`: without it `page-smoke` opens the page in ADD mode, and a page
+   that assigns a number or a counter when it opens consumes one on the stand. Prefer a page the plan's
+   **Pages that write data when opened** section does not list.
 2. A reply with `code: browser-consent-required` (or `browser-not-found`) carries the question: put `browserConsent.question`
    to the user verbatim, with its `browserConsent.choices`, and add one sentence of your own: a
    "no" (`browser=none`) is remembered for the whole machine and turns `page-smoke` off for every
@@ -151,6 +154,23 @@ post-save check):
    it), it fails for another reason, or the environment has no Freedom form page to probe yet — tell
    the user what could not be established and ask them to choose `surface` or `none` themselves.
    Record their words as the line; never write `none` for them.
+
+**7.0c Pages that write data when opened — ask with the browser question, before the first page task.** When the
+plan has a **Pages that write data when opened** section, every browser check of the run opens those pages only
+in EDIT mode on an existing record, and each task file of such a page says so. Opening one in add mode (or, for a
+page listed as writing *every time it opens*, at all) consumes stand data — the benchmark Contracts page takes the
+next `MbContractLastNumber` each time. So, in the same message as the browser question, list those pages and ask
+the user whether an add-mode check of any of them is wanted. Record each page the user agrees to as ONE line in
+`worklog.md`, and quote that line in the prompt of every builder of that page, beside the `Browser:` line:
+
+- `Add-mode check: <page> (user: "<their words>")`.
+
+No line means no consent: the builders keep to edit mode. An add-mode check you run yourself follows the builder's
+rule: read each value the plan names for that page before it, and after it write
+`Stand data changed: <what> <before> → <after> (<page>)` into `worklog.md`. Any other data a check of yours
+changed — a `page-smoke` `click` that saved, its `click.created` records — is a `Stand data changed:` line too. The
+migration result report lists every such line, from `worklog.md` and from the task notes, under
+**Stand data this run changed**.
 
 The engine reads the LAST `Browser:` line: until it names one of `page-smoke` · `surface` · `none`,
 `--next` withholds and `--start` refuses every task that writes a page, and `--handoff` refuses the

@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteText } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -625,7 +625,7 @@ function artifactRows(groups, B) {
 // project conventions approved with that plan (the block each build and fix task file shows). ONE place, so the
 // next run-level field cannot be added to some writers and missed at others.
 const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null,
-  directives: result.directives });
+  directives: result.directives, dataWritingPages: dataWritingPages(result) });
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -1233,6 +1233,25 @@ function directivesBlock(task, directives) {
       + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
+// THE PAGES OF THIS TASK THAT WRITE DATA WHEN THEY OPEN (ENG-107721). The task file is the builder's prompt, so the
+// rule that keeps its browser check from consuming data sits beside the rows it builds: edit mode on an existing
+// record, and an add-mode check only on the consent the orchestrator recorded. A whole-run task covers every page.
+export function dataWritingBlock(task, pages) {
+  const keys = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
+  const own = (pages || []).filter((p) => task.pageKey === "run" || keys.has(p.pageKey));
+  if (!own.length) return [];
+  return [
+    "- **⚠ This task's page writes data when it opens — keep every browser check from consuming it:**",
+    ...own.flatMap((p) => p.writes.map((w) => `  - **${esc(p.label)}** (\`${esc(p.pageKey)}\`) — ${dataWriteText(w)}`)),
+    "  - Open it only in EDIT mode on an existing record: `page-smoke` with `record-id` (read one record's Id first),"
+      + " a browser surface on the record's own URL. Never omit `record-id`: `page-smoke` without it opens add mode.",
+    "  - An add-mode check (or, for a page that writes on every open, any check) only when the prompt quotes an"
+      + " `Add-mode check:` line naming this page. Then read each value above before the check, and after it write"
+      + " `Stand data changed: <what> <before> → <after> (<page>, row N)` under `## Notes`, one line per value.",
+    "  - Any other record or setting a check of yours created or changed (a `click` that saved, `click.created`)"
+      + " is a `Stand data changed:` line too: the migration result lists every one.",
+  ];
+}
 function outcomeBlock(repair = false) {
   // THE RENDERED FILE IS THE SUB-AGENT'S PROMPT, so it names the field the engine actually reads. `status:`
   // is the engine's output and a word typed there is discarded and reported; `declared:` is the agent's only
@@ -1325,6 +1344,7 @@ export function renderTaskFile(task, set = {}) {
     ...markersBlock(),
     ...oneAgentBlock(task),
     ...directivesBlock(task, set.directives),
+    ...dataWritingBlock(task, set.dataWritingPages),
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
     ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
     // The card stays last before the deliverables: `refreshTaskCard` re-renders from its heading to them.

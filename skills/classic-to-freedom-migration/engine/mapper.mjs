@@ -618,6 +618,8 @@ export function mapToFreedom(eff, opts = {}) {
   const handlerStubs = _rl.handlerStubs;
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
+  // the page writes data while it opens: the plan names it and every browser check keeps to edit mode (ENG-107721)
+  const dataWritesOnOpen = writesOnOpen(payloadMethods);
 
   // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
   // (messages / mixins / the full define() dep list) ----
@@ -638,6 +640,7 @@ export function mapToFreedom(eff, opts = {}) {
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, standardMethodsFiltered, needsDecision,
+    writesOnOpen: dataWritesOnOpen,
     ruleSourceCount: payloadRules.length, // # of declarative page/entity rule DEFINITIONS considered (before mapping) — lets a caller detect "rules existed but none mapped into Logic"
     // resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
@@ -2331,6 +2334,53 @@ function buildCallerIndex(methods) {
     }
   }
   return idx;
+}
+
+// ---------------------------------------------------------------------------
+// PAGES THAT WRITE DATA WHEN THEY OPEN (ENG-107721). A Classic page whose open
+// hook reaches a data-writing call — the counter idiom `postSysSettingsValue
+// ("XLastNumber", next)` that assigns the next number, an insert / update
+// query, the number generator, a save — changes the stand every time anything
+// opens it. A browser check opens pages, so on the benchmark Contracts page the
+// consent probe and one builder consumed 2 contract numbers and nobody was told.
+// The walk starts at the hooks the platform runs while the page opens and
+// follows `this.<method>` calls through the page's own methods, so a helper one
+// hop away (`onEntityInitialized → mbAssignNumber`) is found where it writes.
+// ---------------------------------------------------------------------------
+const OPEN_HOOKS = ["init", "onEntityInitialized", "onRender"];
+// the hook's body asks which mode the card is in: its writes then belong to that mode, not to every open
+const ADD_MODE_CALL = /^this\.(?:isAddMode|isNewMode|isCopyMode)$/;
+const SAVE_CALL = /(?:^|\.)save(?:Entity)?$/;
+const methodWrites = (f) => [...(f?.dataWrites || []),
+  ...(f?.calls || []).filter((c) => SAVE_CALL.test(c)).map((call) => ({ call, target: null }))];
+
+// One entry per method that writes and is reached from an open hook: `{ hook, path, method, writes, addModeOnly }`,
+// `path` the call chain from the hook to the method. The FIRST path to a method wins (breadth-first, hooks in
+// OPEN_HOOKS order) and a method is listed once, so the plan names each write once.
+export function writesOnOpen(methods) {
+  const byName = new Map((methods || []).filter((m) => m?.facts).map((m) => [m.name, m]));
+  const out = [];
+  const seen = new Set();
+  for (const hook of OPEN_HOOKS) {
+    const start = byName.get(hook);
+    if (!start) continue;
+    const addModeOnly = start.facts.calls.some((c) => ADD_MODE_CALL.test(c));
+    const queue = [[hook]];
+    while (queue.length) {
+      const pathTo = queue.shift();
+      const name = pathTo.at(-1);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const m = byName.get(name);
+      const writes = methodWrites(m.facts);
+      if (writes.length) out.push({ hook, path: pathTo, method: name, writes, addModeOnly });
+      for (const c of m.facts.calls) {
+        const next = internalCallTarget(c);
+        if (next && byName.has(next) && !seen.has(next)) queue.push([...pathTo, next]);
+      }
+    }
+  }
+  return out;
 }
 
 // Walk callers upward until something ANSWERS what starts the chain: a caller

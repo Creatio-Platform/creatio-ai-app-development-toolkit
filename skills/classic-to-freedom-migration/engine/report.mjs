@@ -27,7 +27,7 @@
 // folder's decisions.md / plan.md; writes nothing.
 import fs from "node:fs";
 import path from "node:path";
-import { esc, planGaps } from "./designspec.mjs";
+import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
@@ -178,6 +178,51 @@ function capBreachLines(capBreaches) {
     "A task opens the page once after its last save and once more only to confirm a fix; a third check is a"
       + " save-check-fix loop. Read these tasks' notes for what each check answered.", "",
     ...capBreaches.map((b) => `- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`)];
+}
+// STAND DATA THE RUN CHANGED (ENG-107721). A browser check is not read-only on every page: a page that assigns the
+// next number when it opens consumes a counter, and a `click` that saves creates a record. Whoever changed data
+// writes one `Stand data changed: <what> <before> → <after>` line — the orchestrator in `worklog.md`, a builder under
+// its task's `## Notes` — and the orchestrator records each add-mode check the user agreed to as `Add-mode check:`.
+// Only FIELD lines count, as for `Browser checks`: a quoted line or one inside a code fence is prose about the line.
+const STAND_DATA = /^[\s*-]*Stand data changed\s*:\s*(.+)$/i;
+const ADD_MODE_CHECK = /^[\s*-]*Add-mode check\s*:\s*(.+)$/i;
+export function fieldLines(text, re) {
+  const out = [];
+  let fence = null;
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const f = FENCE.exec(line);
+    if (f) {
+      if (!fence) fence = f[1];
+      else if (f[1].startsWith(fence)) fence = null;
+      continue;
+    }
+    const m = fence ? null : re.exec(line);
+    if (m) out.push(m[1].trim());
+  }
+  return out;
+}
+const readWorklog = (dir) => {
+  try { return fs.readFileSync(path.join(path.dirname(path.resolve(dir)), "worklog.md"), "utf8"); }
+  catch { return ""; }
+};
+// Nothing for a run with no data-writing page and no recorded change, so an ordinary report reads as before.
+function standDataSection(result, tasks, dir, pageName) {
+  const worklog = dir ? readWorklog(dir) : "";
+  const changes = [...fieldLines(worklog, STAND_DATA).map((text) => ({ text, where: "`worklog.md`" })),
+    ...tasks.flatMap((t) => fieldLines(t.notes, STAND_DATA).map((text) => ({ text, where: `[${cell(t.group || t.id)}](${enc(t.file)})` })))];
+  const agreed = fieldLines(worklog, ADD_MODE_CHECK);
+  const pages = dataWritingPages(result);
+  if (!changes.length && !pages.length) return [];
+  const L = [`## Stand data this run changed (${changes.length})`, ""];
+  if (changes.length) L.push(...changes.map((c) => `- ${cell(c.text)} — ${c.where}`));
+  else L.push("No change to stand data was recorded by this run.");
+  if (pages.length) {
+    L.push("", `The plan named ${plural(pages.length, "page")} that write${pages.length === 1 ? "s" : ""} data when opened, so its browser checks`
+      + " opened them in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".");
+    L.push(agreed.length ? `Add-mode checks the user agreed to: ${agreed.map(cell).join("; ")}.`
+      : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule.");
+  }
+  return L;
 }
 // The block of `## Notes` that is ABOUT row N: from a heading / bold line naming the row ("## 2 — Handler", "### Row 9",
 // "**Row 6 —") to the next such line. Heuristic on purpose — agents format their notes freely — and used only as a
@@ -890,6 +935,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
   const browser = browserSection(exercise, pageName, browserAnswer);
+  const standData = standDataSection(result, tasks, dir, pageName);
   let sec = 3;
   const declined = declinedRows(tasks, decisions);
   const md = [
@@ -905,6 +951,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     ...(carryOver.length ? ["", ...carryOver] : []),
     ...(withoutYou.length ? ["", ...withoutYou] : []),
     ...(browser.length ? ["", ...browser] : []),
+    ...(standData.length ? ["", ...standData] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
