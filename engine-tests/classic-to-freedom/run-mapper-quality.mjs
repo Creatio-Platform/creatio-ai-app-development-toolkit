@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { lintPageQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS }
+import { lintPageQuality, lintModuleQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
@@ -35,6 +35,14 @@ const CASES = [
     good: handler("usr.Init", "const [a, b, c] = await Promise.all([m1.load(), m2.load(), m3.load()]);") },
   { rule: R.planCodeInComment, bad: handler("usr.Commented", "// C04 AC-2: lock the fields (D8)\nconst x = 1;"),
     good: handler("usr.Commented", "// Lock the fields while the record is approved.\nconst x = 1;") },
+  { rule: R.handlerWithoutNext, bad: '{ request: "usr.Post", handler: async (request) => { await post(request); } }',
+    good: handler("usr.Post", "await post(request);") },
+  { rule: R.pagedReadLoop,
+    bad: handler("usr.Count", "for (let page = 0; page < 10; page++) { rows = await model.load({ options: { pagingConfig: { rowsOffset: page * 500, rowCount: 500 } } }); }"),
+    good: handler("usr.Count", "rows = await model.load({ options: { pagingConfig: { rowsOffset: 0, rowCount: 10 } } });") },
+  { rule: R.uncheckedWriteResult,
+    bad: handler("usr.Recalc", "async function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return null; } return 1; }\nawait save(1);"),
+    good: handler("usr.Recalc", "async function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return null; } return 1; }\nif ((await save(1)) == null) await showFailure(request);") },
 ];
 const pageOf = (handlers) => ({ handlers: `[${handlers}]`, viewConfig: { items: [{ type: "crt.Button", name: "B", clicked: { request: "usr.Sent" } }] } });
 
@@ -61,6 +69,75 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("quality: clean validators and converters raise nothing", () => cleanSections.findings.length === 0, () => cleanSections.findings);
   const prose = lintPageQuality(pageOf(handler("usr.Commented", "// Uses ISO-8601 dates, HTTP/2 and the v2 API; step 3 of the wizard.\nconst x = 1;")));
   check("quality: ordinary technical tokens in a comment are not plan codes", () => count(prose, R.planCodeInComment) === 0, () => prose.findings);
+
+  // The handler chain: each way a handler can pass the request on, and each way it can end the chain.
+  const passesOn = [
+    "async (request, next) => { const result = await next?.handle(request); await after(); return result; }",
+    "async (request, next) => { let r; r = await next.handle(request); return r; }",
+    "(request, next) => next?.handle(request)",
+    "async (request, next) => { await before(); return next?.handle(request); }",
+  ];
+  const endsChain = [
+    ["async (request) => { await post(request); }", /takes no `next`/],
+    ["async (request, next) => { await post(request); }", /never calls/],
+    ["async (request, next) => { await next?.handle(request); await post(request); }", /does not return its result/],
+    ["async (request, next) => { const r = await next?.handle(request); return true; }", /does not return its result/],
+    ["async (request, next) => { [1].forEach(() => next.handle(request)); return null; }", /never calls/],
+    ["(request, next) => post(request)", /does not return/],
+  ];
+  const chainOf = (fn) => lintPageQuality({ handlers: `[{ request: "usr.Post", handler: ${fn} }]` }).findings.filter((f) => f.rule === R.handlerWithoutNext);
+  check("quality: a handler that calls next.handle(request) and returns its result passes the request on",
+    () => passesOn.every((fn) => chainOf(fn).length === 0), () => passesOn.map((fn) => [fn, chainOf(fn)]).filter(([, f]) => f.length));
+  check("quality: a handler without next, one that never calls it (a call inside a callback does not count) or one that drops its result ends the chain, and the finding says which",
+    () => endsChain.every(([fn, why]) => { const f = chainOf(fn); return f.length === 1 && why.test(f[0].text) && f[0].request === "usr.Post"; }),
+    () => endsChain.map(([fn]) => [fn, chainOf(fn)]));
+  const validatorFn = lintPageQuality({ handlers: "[]", validators: '{ "usr.V": { validator: (config) => (control) => null, params: [] } }' });
+  check("quality: the chain rule reads handlers only — a validator or converter has no next",
+    () => count(validatorFn, R.handlerWithoutNext) === 0, () => validatorFn.findings);
+  const checkedWrite = lintPageQuality(pageOf(handler("usr.Recalc",
+    "async function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return false; } return true; }\nconst ok = await save(1); if (!ok) await showFailure(request);")));
+  const noFailureValue = lintPageQuality(pageOf(handler("usr.Recalc",
+    "async function save(id) { await model.update({ A: 1 }, id); return true; }\nawait save(1);")));
+  check("quality: a write function's result used by its caller, or one that has no failure value to drop, is not an unchecked write",
+    () => count(checkedWrite, R.uncheckedWriteResult) === 0 && count(noFailureValue, R.uncheckedWriteResult) === 0,
+    () => [checkedWrite.findings, noFailureValue.findings]);
+
+  // The client modules the handlers call into are linted on their own, with the same rules.
+  const moduleOf = (body) => `define("UsrOrderPageModule", ["@creatio-devkit/common"], function(sdk) {\n"use strict";\n${body}\nreturn {};\n});`;
+  const longModule = lintModuleQuality(moduleOf(`async function closeAll(ids) {\n${lines(70)}\n}`));
+  check("quality: a module's own function over the limit is reported, the define() factory around it is not",
+    () => longModule.findings.filter((f) => f.rule === R.functionTooLong).map((f) => f.name).join() === "closeAll" && longModule.unreadable.length === 0,
+    () => longModule.findings);
+  const moduleFindings = lintModuleQuality(moduleOf("// C04: close them (D8)\nasync function closeAll(ids) { for (const id of ids) { try { await model.update({ S: 1 }, id); } catch (e) { console.error(e); } } }"));
+  check("quality: a module's findings name the section `module` with a line, and its comments are read for plan codes",
+    () => moduleFindings.findings.some((f) => f.rule === R.catchLogOnly && f.section === "module" && f.line === 4)
+      && moduleFindings.findings.some((f) => f.rule === R.planCodeInComment && f.section === "module"),
+    () => moduleFindings.findings);
+  check("quality: a module source that is not a readable define() is reported unreadable, never passed",
+    () => lintModuleQuality("define(").unreadable.join() === "module" && lintModuleQuality("const x = 1;").unreadable.join() === "module");
+
+  // A real built page and its modules, as a migration run built them: every runtime defect the build contract
+  // forbids is found at its line — a Post handler that ends the chain, totals and counts paged in the browser, bulk
+  // actions and numbering that only log a failure, and a recalculation whose failure the caller drops.
+  const v2 = (f) => fs.readFileSync(path.join(FIX, "client-modules-v2", f), "utf8");
+  const at = (page, rule) => page.findings.filter((f) => f.rule === rule && !f.advisory).map((f) => f.line);
+  const v2Post = lintPageQuality({ handlers: v2("UsrMbContractsV2App_MbDeliveryNoteFormPage.handlers.js") });
+  const v2Totals = lintModuleQuality(v2("UsrMbContractsV2DocumentTotals.js"));
+  const v2Form = lintModuleQuality(v2("UsrMbContractsV2App_FormPageModule.js"));
+  const v2List = lintModuleQuality(v2("UsrMbContractsV2App_ListPageModule.js"));
+  const v2Expected = [
+    ["the Post handler ends the chain", at(v2Post, R.handlerWithoutNext), [30]],
+    ["the totals page through every row", at(v2Totals, R.pagedReadLoop), [28]],
+    ["the item count pages through every row", at(v2Form, R.pagedReadLoop), [105]],
+    ["the log write after a post fails silently", at(v2Totals, R.catchLogOnly), [161]],
+    ["the recalculation result is dropped after a post", at(v2Totals, R.uncheckedWriteResult), [168]],
+    ["Deactivate selected and the number assignment only log", at(v2Form, R.catchLogOnly), [137, 211, 282]],
+    ["Close selected only logs", at(v2List, R.catchLogOnly), [32]],
+  ];
+  check("quality: the built client modules of a real run — every runtime defect of the build contract is found at its line",
+    () => [v2Post, v2Totals, v2Form, v2List].every((p) => p.unreadable.length === 0)
+      && v2Expected.every(([, got, want]) => got.join() === want.join()),
+    () => v2Expected.filter(([, got, want]) => got.join() !== want.join()));
 
   const measured = lintPageQuality(pageOf(handler("usr.Long", lines(61))));
   check("quality: a long function's finding states the measured length and the limit",
@@ -206,6 +283,15 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => ROW_RULES.every((rule) => rule === R.unusedResourceString
       ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
+  const chainEnded = '[{ request: "usr.ApplyButtonClicked", handler: async (request) => { await post(request); } }]';
+  const chainRule = QUALITY_ROW_RULES.find((r) => r.rule === R.handlerWithoutNext);
+  const chainOpen = renderVerify(result, opts, built(chainEnded));
+  const chainDecided = renderVerify(result, opts, built(chainEnded),
+    new Set([verifyRowKey("main", `[code-quality] ${R.handlerWithoutNext} — ${chainRule.label}`)]));
+  check("verify: a handler that ends the chain blocks its Code quality row; a plan decision that it ends the chain closes the row",
+    () => /⚠ verify/.test(rowLine(chainOpen.markdown, R.handlerWithoutNext)) && !chainOpen.complete
+      && !/⚠ verify/.test(rowLine(chainDecided.markdown, R.handlerWithoutNext)),
+    () => [rowLine(chainOpen.markdown, R.handlerWithoutNext), rowLine(chainDecided.markdown, R.handlerWithoutNext)]);
   const usesHeld = `[${handler("usr.ApplyButtonClicked", 'if (s === "' + held + '") { return; }')}]`;
   const heldId = renderVerify(result, opts, built(usesHeld));
   check("verify: a record id the declared constants module holds blocks the GUID row",

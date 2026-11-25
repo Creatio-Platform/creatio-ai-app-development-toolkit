@@ -274,6 +274,16 @@ answer. That record does not exercise a check that throws or comes back empty, s
 in the code: the flag's default is restrictive and every `catch` and empty branch shows the message.
 Setting up a user without read rights is not required.
 
+**A handler passes the request on; a failed write reaches the user.** Every handler you write — a
+`crt.*` one, a custom request, a button's `clicked` — calls `next?.handle(request)` and returns its
+result, unless a plan decision says that handler ends the chain. Every write in the page or its module
+returns an outcome the caller checks, and a failure is shown to the user, never only logged: a bulk
+action says how many records failed, a side step that failed (a log line, a recalculated total) is
+named, and a generated number that could not be assigned is reported. A total (sum, count) is one
+aggregate query, never a loop paging through the rows. The rules and their examples are in
+`./references/page-code-architecture.md` → 2, 5 and 6; `--verify` checks them in the page's Code
+quality rows.
+
 **A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
 verified only when a record that MUST match it comes back, and — for each AC that says a record
 must NOT be shown — when an existing record that must not match does not come back. Pick the

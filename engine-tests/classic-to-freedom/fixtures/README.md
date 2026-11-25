@@ -23,4 +23,10 @@ Provenance (important):
   `Related lists — N expected`) with a `built` cell on the main page's Fields row and a `wont-do (D3)` cell on its
   Related lists row. `run-tasks.mjs` copies it and never edits it in place.
 
+- `client-modules-v2/` — **real built Freedom code** from a migration benchmark run of the synthetic Classic
+  test package `MbContract` (no customer data): the three client modules the pages call into and the delivery-note
+  page's `handlers` section. It is kept as built, defects included — a Post handler that ends the chain, totals and
+  counts paged in the browser, bulk actions and numbering that only log a failure, a dropped recalculation result —
+  and `run-mapper-quality.mjs` asserts that the code-quality lint finds each one at its line. Do not tidy it.
+
 `employeescore/` was removed — no runner loaded it.
