@@ -25,9 +25,10 @@ A handler that skips `next`, or calls it and drops its result, silently ends the
 after it and for whoever fired the request.
 
 A handler ends the chain only when the plan says so: a decision that names the handler and why it
-replaces the platform behaviour (for example a save that must not reach the platform save). Without that
-decision the `--verify` row `[code-quality] handler-without-next` stays open; with it, the decision
-closes the row (`--decide D<N>`).
+replaces the platform behaviour (for example a save that must not reach the platform save). Each page
+handler that ends the chain has its own `--verify` row, `[code-quality] handler-without-next` followed by
+its request. Without the decision that row stays open; the decision (`--decide D<N>`) closes that
+handler's row only, so another handler that drops `next` still opens a row of its own.
 
 ## 3. The logic lives in a client module
 
@@ -58,7 +59,9 @@ function call in a custom request to give it a name.
   query (ESQ aggregation, `get-guidance esq`), never a loop that pages through the rows and adds them up in
   the browser — that reads every row on every call and grows with the data. A total is recalculated when a
   record it counts really changes (an item saved, deleted or (de)activated), not on every list load,
-  paging or page open. `--verify` reports a paged loop as `[code-quality] paged-read-loop`.
+  paging or page open. `--verify` reports a paged loop in the page's own code as
+  `[code-quality] paged-read-loop`; it does not read the client module yet, so check the module's totals
+  yourself.
 
 ## 6. A write reports its outcome, and the user sees a failure
 
@@ -77,9 +80,11 @@ USER: a dialog or a notification with a localizable message, never only `console
 - **A bulk action counts its failures.** An action over selected records (close, deactivate, delete)
   goes on past a failed record, counts the records that failed and, when any did, tells the user how many
   of how many ("2 of 5 contracts were not closed"); then it reloads the list once.
-- `--verify` reports a `catch` that only logs (or is empty) as `[code-quality] catch-log-only`, and a write
-  function whose failure result a caller ignores (`await recalculate(…);` as a bare statement when
-  `recalculate` returns `null` on a failure) as `[code-quality] unchecked-write-result`.
+- In the page's own code, `--verify` reports a `catch` that only logs (or is empty) as
+  `[code-quality] catch-log-only`, and a write function whose failure result a caller ignores
+  (`await recalculate(…);` as a bare statement when `recalculate` returns `null` on a failure) as
+  `[code-quality] unchecked-write-result`. It does not read the client module yet: check the module's
+  writes and catches against this section yourself.
 
 ```js
 // Incorrect — the failure stays in the console; the caller ignores the result.

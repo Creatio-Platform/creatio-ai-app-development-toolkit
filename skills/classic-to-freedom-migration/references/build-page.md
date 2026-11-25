@@ -276,7 +276,9 @@ Setting up a user without read rights is not required.
 
 **A handler passes the request on; a failed write reaches the user; a total is one query.** These
 hold for the page and its module alike — `./references/page-code-architecture.md` → 2, 5 and 6 has
-the rules and their examples, and `--verify` checks them in the page's Code quality rows.
+the rules and their examples. `--verify` checks them in the page's Code quality rows for the page's
+own `handlers`, `validators` and `converters` only: it does not read the client module yet, so check
+the module's handlers, writes and totals against those rules yourself before you close the task.
 
 **A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
 verified only when a record that MUST match it comes back, and — for each AC that says a record

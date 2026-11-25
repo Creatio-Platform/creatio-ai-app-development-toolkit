@@ -309,15 +309,29 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => ROW_RULES.every((rule) => rule === R.unusedResourceString
       ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
-  const chainEnded = '[{ request: "usr.ApplyButtonClicked", handler: async (request) => { await post(request); } }]';
+  // Two handlers end the chain; the plan decides that only the save does. The decision closes that handler's row,
+  // and the other handler's row stays open: one decision never covers a handler it does not name.
+  const chainEnded = '[{ request: "crt.SaveRecordRequest", handler: async (request) => { await save(request); return true; } },'
+    + ' { request: "usr.ApplyButtonClicked", handler: async (request) => { await post(request); } }]';
   const chainRule = QUALITY_ROW_RULES.find((r) => r.rule === R.handlerWithoutNext);
+  const chainRows = (md) => md.split("\n").filter((l) => l.includes(`[code-quality] ${R.handlerWithoutNext} —`));
+  const chainRowOf = (md, request) => chainRows(md).find((l) => l.includes(request)) || "";
+  const saveLabel = `[code-quality] ${R.handlerWithoutNext} — \`crt.SaveRecordRequest\` ${chainRule.label.replace(/^every handler /, "")}`;
   const chainOpen = renderVerify(result, opts, built(chainEnded));
-  const chainDecided = renderVerify(result, opts, built(chainEnded),
+  const chainDecided = renderVerify(result, opts, built(chainEnded), new Set([verifyRowKey("main", saveLabel)]));
+  const sharedDecided = renderVerify(result, opts, built(chainEnded),
     new Set([verifyRowKey("main", `[code-quality] ${R.handlerWithoutNext} — ${chainRule.label}`)]));
-  check("verify: a handler that ends the chain blocks its Code quality row; a plan decision that it ends the chain closes the row",
-    () => /⚠ verify/.test(rowLine(chainOpen.markdown, R.handlerWithoutNext)) && !chainOpen.complete
-      && !/⚠ verify/.test(rowLine(chainDecided.markdown, R.handlerWithoutNext)),
-    () => [rowLine(chainOpen.markdown, R.handlerWithoutNext), rowLine(chainDecided.markdown, R.handlerWithoutNext)]);
+  check("verify: each handler that ends the chain blocks a row of its own, named by its request; the shared row stays ✅",
+    () => /⚠ verify/.test(chainRowOf(chainOpen.markdown, "crt.SaveRecordRequest")) && /⚠ verify/.test(chainRowOf(chainOpen.markdown, "usr.ApplyButtonClicked"))
+      && !/⚠ verify/.test(rowLine(chainOpen.markdown, R.handlerWithoutNext)) && !chainOpen.complete,
+    () => chainRows(chainOpen.markdown));
+  check("verify: a plan decision that the save ends the chain closes the save's row only; the undecided handler keeps the page open",
+    () => !chainRowOf(chainDecided.markdown, "crt.SaveRecordRequest") && (chainDecided.decided || []).some((d) => d.deliverable.includes("crt.SaveRecordRequest"))
+      && /⚠ verify/.test(chainRowOf(chainDecided.markdown, "usr.ApplyButtonClicked")) && !chainDecided.complete,
+    () => ({ rows: chainRows(chainDecided.markdown), decided: chainDecided.decided }));
+  check("verify: a decision on the shared handler-without-next row closes neither named handler",
+    () => /⚠ verify/.test(chainRowOf(sharedDecided.markdown, "crt.SaveRecordRequest")) && /⚠ verify/.test(chainRowOf(sharedDecided.markdown, "usr.ApplyButtonClicked")),
+    () => chainRows(sharedDecided.markdown));
   const usesHeld = `[${handler("usr.ApplyButtonClicked", 'if (s === "' + held + '") { return; }')}]`;
   const heldId = renderVerify(result, opts, built(usesHeld));
   check("verify: a record id the declared constants module holds blocks the GUID row",

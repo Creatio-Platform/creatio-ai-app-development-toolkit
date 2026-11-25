@@ -106,7 +106,9 @@ independent loads, plan codes in comments, record ids a constants module holds, 
 not pass the request on (`next`), a write whose failure result the caller ignores and a read that pages
 through every row. A `#quality-gates`
 record that calls the page clean while either row reads `⚠ verify` is not convincing; quote the row
-in `why`.
+in `why`. These rows read the page's own code sections only, not its client module: a clean row says
+nothing about the module, so read the module's handlers, writes and totals yourself before you accept
+a record that calls them compliant.
 
 ## How to rule
 
