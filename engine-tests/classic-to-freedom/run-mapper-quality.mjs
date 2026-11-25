@@ -249,6 +249,96 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   } finally { fs.rmSync(asDir, { recursive: true, force: true }); }
 
   // the engine stays zero-dependency: quality.mjs imports only its siblings.
+  // THE RUN'S MODULES. A benchmark run built the page modules the contract asks for and still left: two note pages
+  // with no module of their own and four handlers copied between them, the same status id and the same selection
+  // helpers declared in two modules, a wrapper the code bypassed five times, and exports nobody imports. Each is a
+  // run-wide check, fed by the module bodies the read-back files under `built.modules`.
+  {
+    const GUID = "3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+    const thin = (arg) => handler("crt.HandleViewModelInitRequest", `await ${arg}.init(request.$context);`);
+    const copied = handler("crt.HandleViewModelAttributeChangeRequest",
+      "if (request.attributeName === \"Amount\") { const total = request.$context.Amount * 2; request.$context.Total = total; }");
+    const page = (schemaName, deps, handlers) => ({ schemaName, deps: JSON.stringify(deps), handlers: `[${handlers}]` });
+    const selected = "function selectedIds(list) { const out = []; for (const row of list || []) { if (row && row.selected) out.push(row.id); } return out; }";
+    const mod = (name, deps, args, body, exportsSrc) =>
+      `define("${name}", ${JSON.stringify(deps)}, function(${args}) {\n${body}\nreturn ${exportsSrc};\n});`;
+    const totals = mod("UsrTotals", ["@creatio-devkit/common"], "sdk",
+      "function processRequest(r) { return sdk.HandlerChainService.instance.process(r); }\nfunction sum(rows) { return rows.length; }",
+      "{ processRequest, sum }");
+    const badModules = {
+      UsrApp_FormPageModule: mod("UsrApp_FormPageModule", ["@creatio-devkit/common", "UsrTotals"], "sdk, totals",
+        `const CLOSED = "${GUID}";\n${selected}\nasync function init($context) { await sdk.HandlerChainService.instance.process({ type: "crt.LoadDataRequest", $context }); return totals.sum([CLOSED]); }`,
+        "{ init, selectedIds }"),
+      UsrApp_ListPageModule: mod("UsrApp_ListPageModule", [], "",
+        `const CLOSED_STATUS = "${GUID}";\n${selected}\nfunction init($context) { return selectedIds($context.Items).length && CLOSED_STATUS; }`,
+        "{ init }"),
+      UsrTotals: totals,
+    };
+    const goodModules = {
+      UsrApp_FormPageModule: mod("UsrApp_FormPageModule", ["UsrTotals"], "totals",
+        "async function init($context) { await totals.processRequest({ type: \"crt.LoadDataRequest\", $context }); return totals.sum([totals.CLOSED]); }",
+        "{ init }"),
+      UsrApp_ListPageModule: mod("UsrApp_ListPageModule", ["UsrTotals"], "totals",
+        "function init($context) { return totals.selectedIds($context.Items).length && totals.CLOSED; }", "{ init }"),
+      UsrTotals: mod("UsrTotals", ["@creatio-devkit/common"], "sdk",
+        `const CLOSED = "${GUID}";\n${selected}\nfunction processRequest(r) { return sdk.HandlerChainService.instance.process(r); }\nfunction sum(rows) { return rows.length; }`,
+        "{ CLOSED, selectedIds, processRequest, sum }"),
+    };
+    const pages = (noteDeps, noteHandlers) => ({
+      main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage")),
+      list: page("UsrApp_ListPage", ["UsrApp_ListPageModule"], thin("listPage")),
+      "child:Delivery": page("UsrApp_DeliveryPage", noteDeps("UsrApp_DeliveryPageModule"), noteHandlers("deliveryPage")),
+      "child:Return": page("UsrApp_ReturnPage", noteDeps("UsrApp_ReturnPageModule"), noteHandlers("returnPage")),
+    });
+    const bad = lintRunQuality(pages(() => ["@creatio-devkit/common", "UsrTotals"], () => copied), DEFAULT_QUALITY_THRESHOLDS, new Set(), badModules);
+    const goodNoteModule = (n, k = 2) => mod(n, ["UsrTotals"], "totals", `function onAmount($context) { $context.Total = $context.Amount * ${k}; }`, "{ onAmount }");
+    const good = lintRunQuality(pages((m) => [m],
+      (arg) => handler("crt.HandleViewModelAttributeChangeRequest", `if (request.attributeName === "Amount") ${arg}.onAmount(request.$context);`)),
+    DEFAULT_QUALITY_THRESHOLDS, new Set(), { ...goodModules,
+      UsrApp_DeliveryPageModule: goodNoteModule("UsrApp_DeliveryPageModule"), UsrApp_ReturnPageModule: goodNoteModule("UsrApp_ReturnPageModule", 3) });
+    const at = (run) => Object.fromEntries([...run].map(([k, p]) => [k, (p?.findings || []).map((f) => f.rule + " " + f.text)]));
+    const MODULE_RULES = [R.pageWithoutModule, R.duplicateHandlerAcrossPages, R.duplicateAcrossModules, R.sharedValueInTwoModules,
+      R.unusedModuleExport, R.wrappedCallInlined];
+
+    check("modules: a page with handlers and no `<PageSchema>Module` of its own is reported, each one — a shared module alone is not its module",
+      () => count(bad.get("child:Delivery"), R.pageWithoutModule) === 1 && count(bad.get("child:Return"), R.pageWithoutModule) === 1
+        && count(bad.get("main"), R.pageWithoutModule) === 0 && count(bad.get("list"), R.pageWithoutModule) === 0,
+      () => at(bad));
+    check("modules: a handler copied verbatim from another page is reported on the copying page only",
+      () => count(bad.get("child:Return"), R.duplicateHandlerAcrossPages) === 1 && count(bad.get("child:Delivery"), R.duplicateHandlerAcrossPages) === 0,
+      () => at(bad));
+    check("modules: a function declared in two modules is reported once, on the page whose own module holds the copy, naming the original",
+      () => { const f = bad.get("list").findings.filter((x) => x.rule === R.duplicateAcrossModules);
+        return f.length === 1 && /UsrApp_FormPageModule/.test(f[0].text) && count(bad.get("main"), R.duplicateAcrossModules) === 0; },
+      () => at(bad));
+    check("modules: a record id declared in two modules is reported once — a value the run's pages share lives in one module",
+      () => { const f = [...bad.values()].flatMap((p) => p.findings.filter((x) => x.rule === R.sharedValueInTwoModules));
+        return f.length === 1 && f[0].text.includes(GUID) && /UsrApp_FormPageModule/.test(f[0].text) && /UsrApp_ListPageModule/.test(f[0].text); },
+      () => at(bad));
+    check("modules: an export no page or other module uses is reported on the module's page; an export a page calls is not",
+      () => { const f = bad.get("main").findings.filter((x) => x.rule === R.unusedModuleExport);
+        return f.length === 1 && /selectedIds/.test(f[0].text) && !/\binit\b/.test(f[0].text); },
+      () => at(bad));
+    check("modules: a call written out although a module export wraps exactly it is reported, naming the wrapper",
+      () => { const f = bad.get("main").findings.filter((x) => x.rule === R.wrappedCallInlined);
+        return f.length === 1 && /UsrTotals\.processRequest/.test(f[0].text) && /HandlerChainService\.instance\.process/.test(f[0].text); },
+      () => at(bad));
+    check("modules: the same run written the way the contract asks — own modules, one shared module, every export used — has none of the module findings",
+      () => [...good.values()].every((p) => MODULE_RULES.every((r) => count(p, r) === 0)),
+      () => at(good));
+    check("modules: without module bodies only the page-side checks run, and nothing claims a module was checked",
+      () => { const r = lintRunQuality(pages(() => ["@creatio-devkit/common", "UsrTotals"], () => copied));
+        return count(r.get("child:Delivery"), R.pageWithoutModule) === 1
+          && [...r.values()].every((p) => [R.duplicateAcrossModules, R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].every((x) => count(p, x) === 0)); });
+    check("modules: an unreadable module body is named, never silently skipped",
+      () => { const r = lintRunQuality(pages((m) => [m], (a) => thin(a)), DEFAULT_QUALITY_THRESHOLDS, new Set(),
+        { ...goodModules, UsrApp_DeliveryPageModule: "define(\"UsrApp_DeliveryPageModule\", [], function() { return {", UsrApp_ReturnPageModule: goodNoteModule("UsrApp_ReturnPageModule", 3) });
+        return r.get("child:Delivery").unreadable.some((u) => /UsrApp_DeliveryPageModule/.test(u)); },
+      () => null);
+    check("modules: every module rule has its Code quality row",
+      () => MODULE_RULES.every((r) => QUALITY_ROW_RULES.some((row) => row.rule === r)));
+  }
+
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
   check("quality: quality.mjs imports only engine siblings (no package)",
     () => { const from = [...src.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]);
