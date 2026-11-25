@@ -632,14 +632,22 @@ function treeFacts(root) {
   };
   const { truncated } = walkAstBounded(root, (node) => {
     if (node.type === "Literal" && typeof node.value === "string" && GUID_RE.test(node.value)) guids.push({ value: node.value.toLowerCase(), line: lineOf(node) });
-    if (node.type === "MemberExpression" && !node.computed && node.object.type === "Identifier" && node.property.type === "Identifier") read(node.property.name, node.object.name);
-    if (node.type === "VariableDeclarator" && node.id.type === "ObjectPattern" && node.init?.type === "Identifier") {
-      for (const p of node.id.properties) if (p.type === "Property" && staticPropKey(p)) read(staticPropKey(p), node.init.name);
-    }
+    for (const [prop, obj] of memberReadsOf(node)) read(prop, obj);
     for (const v of HANDED_ON[node.type]?.(node) || []) if (v?.type === "Identifier") handedOn.add(v.name);
     if (node.type === "CallExpression") countCall(calls, node.callee);
   });
   return { guids, members, handedOn, calls, truncated };
+}
+
+// The [prop, object] pairs one node reads: `obj.prop`, or each key of `const { a, b } = obj`.
+function memberReadsOf(node) {
+  if (node.type === "MemberExpression" && !node.computed && node.object.type === "Identifier" && node.property.type === "Identifier") {
+    return [[node.property.name, node.object.name]];
+  }
+  if (node.type === "VariableDeclarator" && node.id.type === "ObjectPattern" && node.init?.type === "Identifier") {
+    return node.id.properties.filter((p) => p.type === "Property" && staticPropKey(p)).map((p) => [staticPropKey(p), node.init.name]);
+  }
+  return [];
 }
 
 function countCall(calls, callee) {
