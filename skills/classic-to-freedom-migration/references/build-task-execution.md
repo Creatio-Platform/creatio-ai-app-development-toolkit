@@ -46,6 +46,12 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    `Closed by` cell says evidence + judge, or it is a confirm-on-stand row), `Check on stand (row N): <what to
    open → what is expected>`. Without the first the report can only tell the user "the agent did not state the
    question"; without the second the user is sent to your notes to find the check.
+   **A `Handler — …` row ported under another name gets a third line:** `Ported as (row N): <symbol>` — the
+   request type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or
+   `Module.function` from a module the page lists in its `define()` deps; several symbols go in as code spans.
+   `--verify` closes the row only when the built page reaches the symbol: the request is sent by a handler or an
+   element, the function is called. **Never add a function named after the Classic method to close the row** —
+   a definition no handler calls ports nothing, and `--verify` leaves the row open and says so.
    **Append it with an in-place edit — never a shell heredoc, never a whole-file write.** A note put through the
    shell breaks on quoting and on command-length limits, and the table above your notes is the engine's: rewriting
    the file drops the `Outcome` cells your status is computed from.

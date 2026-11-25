@@ -26,8 +26,8 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
   // handlers
   const H = (method, parent, triggers, c = ctx) => resolveVk({ type: "handler", method, parent, triggers }, c);
   const trigContact = [{ kind: "attribute-dependency", attribute: "Contact" }];
-  check("handler: a handler that NAMES the Classic method closes the row ✅",
-    () => st(H("onSaved", null, [])) === "✅ Done" && /defines or calls `onSaved`/.test(ev(H("onSaved", null, []))), () => H("onSaved", null, []));
+  check("handler: a handler that CALLS the Classic method closes the row ✅",
+    () => st(H("onSaved", null, [])) === "✅ Done" && /a handler calls `onSaved`/.test(ev(H("onSaved", null, []))), () => H("onSaved", null, []));
   check("handler: a port that dropped the method name but BRANCHES on its Classic trigger attribute closes the row ✅ (the measured shape: setContactInfo became reloadCommunicationOptions under attributeName === Contact)",
     () => st(H("onContactChange", null, trigContact)) === "✅ Done" && /branches on attribute `Contact`/.test(ev(H("onContactChange", null, trigContact))),
     () => H("onContactChange", null, trigContact));
@@ -36,10 +36,131 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       && st(H("helper", "onSaved", [])) === "✅ Done" && /ported with `onSaved`/.test(ev(H("helper", "onSaved", []))),
     () => [H("setContactInfo", "onContactChange", trigContact), H("helper", "onSaved", [])]);
   check("handler (guard): a method with no name match and no trigger branch is non-gating confirm-on-stand, never ❌ — a port under another name or as a declarative rule is legitimate, and the text says what to record",
-    () => { const r = H("getEmailDetailFilter", null, []); return r[2] === "skip" && /confirm on-stand/.test(st(r)) && /record how it was ported/.test(ev(r)); },
+    () => { const r = H("getEmailDetailFilter", null, []); return r[2] === "skip" && /confirm on-stand/.test(st(r)) && /Ported as \(row N\): <symbol>/.test(ev(r)); },
     () => H("getEmailDetailFilter", null, []));
   check("handler (guard): no `handlers` slot ⇒ non-gating confirm-on-stand, naming the slot to pass — never a false ✅ or ❌",
     () => { const r = H("onSaved", null, [], flat); return r[2] === "skip" && /handlers not provided/.test(ev(r)); }, () => H("onSaved", null, [], flat));
+
+  // A function that carries the Classic method's name counts only when something calls it.
+  {
+    const DEF_ONLY = `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        function setCanEditFieldsRaw() { return true; }
+        const getRequestStatusFilter = () => null;
+        return next?.handle(request); } }]`;
+    const dctx = verifyCtx({ pages: { main: page({ handlers: DEF_ONLY }) } }, "main");
+    const a = H("setCanEditFieldsRaw", null, [], dctx);
+    const b = H("getRequestStatusFilter", null, [], dctx);
+    check("handler: a Classic-named function that is only DEFINED does not close the row — it stays confirm-on-stand, says nothing calls it and points to `Ported as`",
+      () => [a, b].every((r) => r[2] === "skip" && r[0] !== "✅ Done" && /nothing calls it/.test(ev(r)) && /Ported as \(row N\)/.test(ev(r))),
+      () => [a, b]);
+    const SHORTHAND = `[{ request: "usr.X", handler: async (request, next) => { const h = { onSaved(r) { return r; } }; return next?.handle(request); } }]`;
+    const s1 = H("onSaved", null, [], verifyCtx({ pages: { main: page({ handlers: SHORTHAND }) } }, "main"));
+    check("handler: a method-shorthand definition `onSaved(r) { … }` is a definition, not a call — the row stays open",
+      () => s1[2] === "skip" && /nothing calls it/.test(ev(s1)), () => s1);
+    const CALLED = `[{ request: "usr.X", handler: async (request, next) => { const h = { onSaved(r) { return r; } }; h.onSaved(request); return next?.handle(request); } }]`;
+    const s2 = H("onSaved", null, [], verifyCtx({ pages: { main: page({ handlers: CALLED }) } }, "main"));
+    check("handler: the same definition with a call `h.onSaved(request)` closes the row ✅", () => st(s2) === "✅ Done", () => s2);
+    const parentDef = H("helper", "setCanEditFieldsRaw", [], dctx);
+    check("handler: a folded helper whose caller is only defined (never called) does not close by the caller's name",
+      () => parentDef[2] === "skip", () => parentDef);
+  }
+
+  // `Ported as (row N): <symbol>` — the build agent's record of the port, checked against the built page.
+  {
+    const PORTED = `[
+      { request: "usr.SetCanEditFieldsRequest", handler: async (request, next) => {
+          function applyEditRights(r) { return r; }
+          function neverCalled() { return 1; }
+          applyEditRights(request); return next?.handle(request); } },
+      { request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+          await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest", $context: request.$context });
+          UsrRights.check(request.$context);
+          return next?.handle(request); } },
+      { request: "usr.NeverSentRequest", handler: async (request, next) => next?.handle(request) }]`;
+    const vc = { items: [{ type: "crt.Button", name: "RecalcBtn", clicked: { request: "usr.RecalcRequest" } }] };
+    const pctx = (extra = {}) => verifyCtx({ pages: { main: page({ handlers: PORTED, viewConfig: vc, ...extra }) } }, "main");
+    const P = (portedAs, c = pctx()) => resolveVk({ type: "handler", method: "setCanEditFieldsRaw", parent: null, triggers: [], portedAs }, c);
+    const req = P(["usr.SetCanEditFieldsRequest"]);
+    const fromElement = P(["usr.RecalcRequest"]);
+    const fn = P(["applyEditRights"]);
+    const mod = P(["UsrRights.check"], pctx({ deps: ["@creatio-devkit/common", "UsrRights"] }));
+    check("Ported as: a request a handler sends (`type: …`), a request an element sends (`clicked.request`), a page function a handler calls and a module function called from a declared dep each close the row ✅, naming the symbol",
+      () => [req, fromElement, fn, mod].every((r) => st(r) === "✅ Done")
+        && /sends request `usr\.SetCanEditFieldsRequest`/.test(ev(req)) && /calls `applyEditRights`/.test(ev(fn)) && /from module `UsrRights`/.test(ev(mod)),
+      () => [req, fromElement, fn, mod]);
+    const unsent = P(["usr.NeverSentRequest"]);
+    const missing = P(["usr.InventedRequest"]);
+    const uncalled = P(["neverCalled"]);
+    const undefinedFn = P(["notOnThePage"]);
+    const noDeps = P(["UsrRights.check"]);
+    const undeclared = P(["UsrRights.check"], pctx({ deps: ["@creatio-devkit/common"] }));
+    const mixed = P(["usr.SetCanEditFieldsRequest", "neverCalled"]);
+    check("Ported as: a request with no sender, a symbol not on the page, a function the page defines but never calls, one it does not define, a module function without `deps` or from an undeclared module, and a claim mixing a real and an invented symbol each read ⚠ verify, never ✅",
+      () => [unsent, missing, uncalled, undefinedFn, noDeps, undeclared, mixed].every((r) => r[0] === "⚠ verify" && r[2] === "unverified")
+        && /nothing on the page sends it/.test(ev(unsent)) && /no handler calls `neverCalled`/.test(ev(uncalled))
+        && /defines no function `notOnThePage`/.test(ev(undefinedFn))
+        && /carries no `deps`/.test(ev(noDeps)) && /not among the page's `define\(\)` deps/.test(ev(undeclared)),
+      () => [unsent, missing, uncalled, undefinedFn, noDeps, undeclared, mixed]);
+    const COMMENTED = `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        // TODO: await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest" });
+        helpers.applyRights(request);
+        return next?.handle(request); } }]`;
+    const cctx2 = verifyCtx({ pages: { main: page({ handlers: COMMENTED }) } }, "main");
+    const commented = P(["usr.SetCanEditFieldsRequest"], cctx2);
+    const scaffold = P(["handle"], cctx2);
+    const memberOnly = P(["applyRights"], cctx2);
+    check("Ported as: a request named only in a comment is not sent, the platform name `handle` (every handler's `next?.handle(request)`) names no port, and a name reached only as another object's method (`helpers.applyRights(…)`) with no definition on the page is not a page function — each reads ⚠, never ✅",
+      () => [commented, scaffold, memberOnly].every((x) => x[0] === "⚠ verify")
+        && /is a platform name every handler uses/.test(ev(scaffold)) && /defines no function `applyRights`/.test(ev(memberOnly)),
+      () => [commented, scaffold, memberOnly]);
+    // An unpaired quote (`/'/g`, a regex literal) is not a string: the comments after it are still blanked, so a
+    // commented-out request keeps reading ⚠ — on the quote's own line, on the next one, and after a `"` or a backtick.
+    const STRAY = (q, sameLine) => `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        const safe = value.replace(/${q}/g, "");${sameLine ? "" : "\n"}        // TODO: await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest" });
+        return next?.handle(request); } }]`;
+    const stray = [["'", false], ["'", true], ['"', false], ["`", false]].map(([q, same]) =>
+      P(["usr.SetCanEditFieldsRequest"], verifyCtx({ pages: { main: page({ handlers: STRAY(q, same) }) } }, "main")));
+    const SENT_AFTER = `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        const safe = value.replace(/'/g, "");
+        await request.$context.executeRequest({ type: "usr.SetCanEditFieldsRequest" }); // it's sent
+        return next?.handle(request); } }]`;
+    const sentAfter = P(["usr.SetCanEditFieldsRequest"], verifyCtx({ pages: { main: page({ handlers: SENT_AFTER }) } }, "main"));
+    check("Ported as: an unpaired quote in code (`value.replace(/'/g, \"\")`) does not switch comment blanking off — a request named only in a later comment reads ⚠, never ✅, while a request really sent after the quote still reads ✅",
+      () => stray.every((x) => x[0] === "⚠ verify") && st(sentAfter) === "✅ Done",
+      () => [...stray, sentAfter]);
+    // A page function is called bare after a keyword too — `await fn(…)` and `return fn(…)` are the usual shapes in
+    // an async Freedom handler — while `obj.fn(…)`, `obj?.fn(…)` and `obj . fn(…)` stay another object's method.
+    const callShape = (call) => P(["applyEditRights"], verifyCtx({ pages: { main: page({ handlers: `[{ request: "usr.X", handler: async (request, next) => {
+        async function applyEditRights(r) { return r; }
+        ${call}
+        return next?.handle(request); } }]` }) } }, "main"));
+    const bareShapes = ["await applyEditRights(request);", "const r = await applyEditRights(request); return r;",
+      "return applyEditRights(request);", "void applyEditRights(request);"].map(callShape);
+    const memberShapes = ["await this.applyEditRights(request);", "await helpers?.applyEditRights(request);",
+      "return helpers . applyEditRights(request);"].map(callShape);
+    check("Ported as: a page function called as `await fn(…)`, `return fn(…)` or after another keyword reads ✅; called only as `this.fn(…)`, `obj?.fn(…)` or `obj . fn(…)` it reads ⚠",
+      () => bareShapes.every((x) => st(x) === "✅ Done" && /calls `applyEditRights`/.test(ev(x)))
+        && memberShapes.every((x) => x[0] === "⚠ verify" && /no handler calls `applyEditRights`/.test(ev(x))),
+      () => [...bareShapes, ...memberShapes]);
+    const platform = P(["crt.HandleViewModelInitRequest"]);
+    check("Ported as: a platform request a handler answers (`crt.HandleViewModelInitRequest`) is reached — the platform sends it",
+      () => st(platform) === "✅ Done" && /answers platform request/.test(ev(platform)), () => platform);
+    const trigPage = verifyCtx({ pages: { main: page({ handlers: HANDLERS }) } }, "main");
+    const attrChange = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: trigContact,
+      portedAs: ["crt.HandleViewModelAttributeChangeRequest"] }, trigPage);
+    check("Ported as: `crt.HandleViewModelAttributeChangeRequest` with a handler that branches on the trigger attribute (the natural port of a Classic attribute-change method) reads ✅ — the platform sends the request, page code never does",
+      () => st(attrChange) === "✅ Done" && /answers platform request `crt\.HandleViewModelAttributeChangeRequest`/.test(ev(attrChange)),
+      () => attrChange);
+    const fallThrough = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: trigContact, portedAs: ["usr.Invented"] }, trigPage);
+    const notSymbol = P(["not a symbol"]);
+    check("Ported as: a record that does not hold still lets the trigger branch close the row ✅; with nothing else closing it, the record's ⚠ is reported, and a word that is not a symbol is named as such",
+      () => st(fallThrough) === "✅ Done" && /branches on attribute `Contact`/.test(ev(fallThrough))
+        && notSymbol[0] === "⚠ verify" && /is not a request type, a page function or `Module.function`/.test(ev(notSymbol)),
+      () => [fallThrough, notSymbol]);
+    const overDefOnly = P(["usr.SetCanEditFieldsRequest"], verifyCtx({ pages: { main: page({ handlers: PORTED + "\nfunction setCanEditFieldsRaw() {}" }) } }, "main"));
+    check("Ported as: a valid record closes the row even when the page also carries an uncalled namesake",
+      () => st(overDefOnly) === "✅ Done", () => overDefOnly);
+  }
 
   // view-model attributes
   check("vmattr: a virtual attribute present in viewModelConfig.attributes is ✅; one absent (payload present) is ⚠; NO viewModelConfig ⇒ NON-gating confirm-on-stand (skip), symmetric with the handler resolver — an OPTIONAL slot must never hard-gate the run",

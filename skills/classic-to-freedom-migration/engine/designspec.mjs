@@ -28,7 +28,7 @@ import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, w
 import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
 import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
-import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
+import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
 import { processPagePlanLines, processPageRows, PROCESS_VK_RESOLVERS } from "./process-page.mjs";
 const strip = (s) => (s == null ? "" : String(s)
@@ -1542,7 +1542,7 @@ function renderImperativeLogic(cs, opts = {}) {
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const unmarked = parent ? `port with \`${esc(parent)}\`` : targetText(h);
-    const target = lineStatus(pageKeyOf(opts), { deliverableId: methodId(h.sourceMethod) }, opts) || (h.listMapped ? LIST_MAPPED_TARGET : unmarked);
+    const target = lineStatus(pageKeyOf(opts), { deliverableId: methodId(h.sourceMethod), dormant: !!h.dormant }, opts) || (h.listMapped ? LIST_MAPPED_TARGET : unmarked);
     const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
@@ -2757,6 +2757,7 @@ function handlerStubRows(cs) {
     const own = (h.triggers || []).map(rootTrigger).filter(Boolean);
     const viaParent = parent ? (stubByName.get(parent)?.triggers || []).map(rootTrigger).filter(Boolean) : [];
     return { deliverableId: methodId(h.sourceMethod), label: `Handler — \`${esc(h.sourceMethod)}\`` + note, ...cardField(h), ...writesField(h),
+      ...(h.dormant ? { dormant: true } : {}),
       vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } };
   });
 }
@@ -2869,13 +2870,20 @@ export const childPageId = (c) => `child-page:${c.via || c.entity}`;
 export const NATIVE_CARD_ACTIONS_ID = "card-actions:native";
 export const STATUS_WONT_DO = "wont-do";
 export const STATUS_BUILD = "build";
+// One business-rule target attribute the user accepted as built another way (in code, as an entity rule), on their
+// own decision: `<pageKey>#business-rule:<Attribute>` → `{ status: "built-elsewhere", decision: "D<N>" }`. The
+// page's rule row stops counting that attribute as missing; whether the other build meets the decision is judged
+// against the decision itself, not here.
+export const STATUS_BUILT_ELSEWHERE = "built-elsewhere";
+export const RULE_ATTR_PREFIX = "business-rule:";
+export const ruleAttrId = (attr) => `${RULE_ATTR_PREFIX}${attr}`;
 // The kinds of `manifest.deliverableStatus` issue; `related` lists the deliverables that need a status of their own.
 export const STATUS_ISSUE = Object.freeze({ unknownId: "unknown-id", status: "status", engineClosed: "engine-closed", decision: "decision", related: "related", twice: "twice", otherPage: "other-page" });
 const isReusedChild = (c) => typeof c?.reuseFreedomPage === "string" && !!c.reuseFreedomPage;
 // The context a status is resolved in: the run's opts (the manifest entries, `isChildPage`, the host mode, the
 // decisions.md titles) plus the on-stand signals.
 function statusCtx(result, opts) {
-  return { ...opts, signals: result?.signals ?? opts?.signals };
+  return { ...opts, signals: result?.signals ?? opts?.signals, decisionProvenance: opts?.decisionProvenance ?? result?.decisionProvenance };
 }
 const CHILD_ACTION_REASON = "standard card action on a child edit page — the page has no section-level menu and the template ships its own controls";
 const PAGES_ONLY_REASON = "`placement.sectionHost.mode = pages-only-no-menu` — no section is registered, so no section entry or list page is built";
@@ -2911,8 +2919,16 @@ function fieldReason(row) {
 export function engineStatusReason(row, ctx = {}) {
   return cardActionReason(row, ctx) || childPageReason(row) || pagesOnlyReason(row, ctx) || existingSectionReason(row, ctx) || fieldReason(row);
 }
-// THE status of one deliverable: the engine's conclusion (`not-applicable`, with its reason), else the person's
-// manifest entry (`wont-do` with its D<N>, or an explicit `build`), else null — build as planned.
+export const DORMANT_REASON = "dormant: no trigger, no caller and no reference in this page's Classic schemas";
+// The engine's SOFT conclusions: closed by default, but a person's `build` (or `wont-do`) entry decides instead.
+// A dormant method is one — the analysis can be wrong about what starts a method, and the person who knows the
+// page can say so; a hashed column cannot be rendered whoever asks, so that stays a hard conclusion above.
+function softStatusReason(row) {
+  return row.dormant ? DORMANT_REASON : null;
+}
+// THE status of one deliverable: the engine's hard conclusion (`not-applicable`, with its reason), else the
+// person's manifest entry (`wont-do` with its D<N>, or an explicit `build`), else the engine's soft conclusion,
+// else null — build as planned.
 export function deliverableStatusOf(pageKey, row, ctx = {}) {
   if (row.na) return { kind: "not-applicable", reason: row.na };
   const reason = engineStatusReason(row, ctx);
@@ -2920,7 +2936,9 @@ export function deliverableStatusOf(pageKey, row, ctx = {}) {
   // an alias is read first: a withheld feature's `feature:<Feature>` before its confirm id (the `withheldIds` order)
   const entry = [...(row.aliasIds || []), row.deliverableId].filter(Boolean)
     .map((id) => ctx.deliverableStatus?.[statusKey(pageKey, id)]).find(isStatusEntry);
-  return entry ? { kind: entry.status, decision: entry.decision || null } : null;
+  if (entry) return { kind: entry.status, decision: entry.decision || null };
+  const soft = softStatusReason(row);
+  return soft ? { kind: "not-applicable", reason: soft } : null;
 }
 const isStatusEntry = (e) => e?.status === STATUS_WONT_DO || e?.status === STATUS_BUILD;
 // A closed status as plan text: `**Won't do** — D6: <title>` or `**Won't do** — <engine reason>`.
@@ -3440,6 +3458,24 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
   return { listConfirmOnMain, sectionLogicKey };
 }
 
+// The page's business-rules row. A target attribute the user accepted as built another way rides in `vk.decided`
+// (attribute → `{ decision, quote }`), so `--verify` stops counting it as missing and quotes the decision instead.
+function businessRulesRow(deliverableId, label, ruleN, ruleIds, pageKey, ctx) {
+  const decided = rulesBuiltElsewhere(pageKey, ruleIds, ctx);
+  return { deliverableId, label: `${label} × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds, ...(decided ? { decided } : {}) } };
+}
+// The `built-elsewhere` entries that close one of `attrs` on this page, each on the user's own decision; null when
+// none does. An entry that cannot stand (another status, an orchestrator's decision) closes nothing and is reported
+// by the plan's `deliverableStatus` check instead.
+function rulesBuiltElsewhere(pageKey, attrs, ctx) {
+  const out = {};
+  for (const attr of attrs) {
+    const e = ctx.deliverableStatus?.[statusKey(pageKey, ruleAttrId(attr))];
+    const user = e?.status === STATUS_BUILT_ELSEWHERE ? userDecision(ctx.decisionProvenance, e.decision) : null;
+    if (user) out[attr] = { decision: e.decision, quote: user.quote };
+  }
+  return Object.keys(out).length ? out : null;
+}
 export function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
@@ -3475,13 +3511,13 @@ export function checklistGroups(result, opts = {}) {
   // gated against `--built.pages[<key>].businessRules` (the read-page-business-rules result), because a page's
   // rules persist as separate BusinessRule_* schemas INVISIBLE to a page-body grep.
   // Page rules and entity rules are two deliverables: an entity rule reaches every page of the object, so the user
-  // may decline it on its own (`entity-rules`, closed `wont-do`) while the page rules are still built.
+  // may decline it on its own (`entity-rules`, closed `wont-do`) while the page rules are still built. Each row
+  // carries the `built-elsewhere` decisions that close its own attributes.
   const pageRuleN = (cs.pageBusinessRules || []).length;
   const pageRuleIds = [...new Set((cs.pageBusinessRules || []).map((r) => r.element).filter(Boolean))];
   const entityRuleIds = [...new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute).filter(Boolean))];
-  if (pageRuleN) ruleItems.push({ deliverableId: "business-rules", label: `Business rules × ${pageRuleN}`, vk: { type: "rule", n: pageRuleN, names: pageRuleIds } });
-  if (entityRuleIds.length) ruleItems.push({ deliverableId: ENTITY_RULES_DELIVERABLE,
-    label: `Entity business rules × ${entityRuleIds.length}`, vk: { type: "rule", n: entityRuleIds.length, names: entityRuleIds } });
+  if (pageRuleN) ruleItems.push(businessRulesRow("business-rules", "Business rules", pageRuleN, pageRuleIds, pageKey, ctx));
+  if (entityRuleIds.length) ruleItems.push(businessRulesRow(ENTITY_RULES_DELIVERABLE, "Entity business rules", entityRuleIds.length, entityRuleIds, pageKey, ctx));
   G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
@@ -4215,7 +4251,24 @@ function builtRuleTokens(built, elementColumn) {
     return new Set(forms);
   });
 }
+// The attributes the user accepted as built another way, quoted: `Amount (D4: “keep it in code”)`.
+function decidedRuleText(decided) {
+  return Object.entries(decided).map(([a, d]) => `${esc(a)} (${esc(d.decision)}: “${esc(d.quote)}”)`).join(", ");
+}
+// A rule row whose every attribute the user accepted as built another way closes on those decisions alone; one
+// with attributes left is matched on them, and its text names the ones the decisions closed.
 export function resolveRuleVk(vk, ctx) {
+  const decided = vk.decided || {};
+  // A page nobody read, or one reported NOT BUILT, answers for every rule the same way it does without decisions.
+  if (ctx.entryAbsent || ctx.page === false) return resolveOpenRules(vk, ctx);
+  if (!Object.keys(decided).length) return resolveOpenRules(vk, ctx);
+  const text = decidedRuleText(decided);
+  const open = [...new Set(vk.names || [])].filter((n) => !Object.hasOwn(decided, n));
+  if (!open.length) return ["✅ Done", `every expected business-rule target attribute was built another way on the user's decision: ${text}`, "ok"];
+  const [mark, ev, ...rest] = resolveOpenRules({ ...vk, names: open }, ctx);
+  return [mark, `${ev}; built another way on the user's decision: ${text}`, ...rest];
+}
+function resolveOpenRules(vk, ctx) {
   const want = [...new Set(vk.names || [])];
   if (!want.length) return ["⚠ verify", "no expected business-rule identity was published — nothing to match against", "unverified"];
   // D6 tri-state + R5's not-checkable, in this order: no page entry = nobody fetched the page (⚠ unverified);
@@ -4704,6 +4757,152 @@ function handlerTriggerMatch(vk, src, code) {
   }
   return null;
 }
+// The index just past the `)` that closes the `(` at `open`, or -1 when the source ends first. Run over `codeOnly`
+// output, so a parenthesis inside a string or a comment is already blanked.
+function closingParen(code, open) {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === "(") depth++;
+    else if (code[i] === ")" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+// Is `name` CALLED in `code` (a `codeOnly` output)? `name(…)`, `this.name(…)` and `obj.name(…)` are calls;
+// `function name(…)` and the method shorthand `name(…) { … }` are definitions, and a function that is only defined
+// does nothing on the page. A dotted `name` (`Helpers.format`) matches its dotted call.
+const ESCAPED_DOT = String.raw`\.`;
+const SPACED_DOT = String.raw`\s*\.\s*`;
+// `bare` asks for a call of the name itself, never `obj.name(…)` / `obj . name(…)` — another object's method of the
+// same name. Only a member access before the name rules it out: `await name(…)` and `return name(…)` are bare calls.
+const NOT_IN_WORD = String.raw`(?<![\w$])`;
+const NOT_A_MEMBER = String.raw`(?<!\.\s*)`;
+function calledIn(code, name, bare = false) {
+  const callee = reEsc(name).replaceAll(ESCAPED_DOT, SPACED_DOT);
+  const before = bare ? NOT_IN_WORD + NOT_A_MEMBER : NOT_IN_WORD;
+  const re = new RegExp(String.raw`(function\s+)?${before}${callee}\s*\(`, "g");
+  for (const m of code.matchAll(re)) {
+    if (m[1]) continue;
+    const end = closingParen(code, m.index + m[0].length - 1);
+    if (end >= 0 && /^\s*\{/.test(code.slice(end, end + 8))) continue;
+    return true;
+  }
+  return false;
+}
+// The handler source with its comments blanked and its strings kept: a request type is a string, and a request
+// named only in a comment is not sent.
+// Where the string opened at `i` ends: one past its unescaped closing quote, or -1 when it has none. A `'` or `"`
+// string cannot cross a line end; a template literal can. A quote with no twin (`/'/g` in a regex literal) is not
+// a string, so the caller keeps scanning after it and the comments that follow are still blanked.
+function stringEnd(src, i) {
+  const quote = src[i];
+  let j = i + 1;
+  while (j < src.length && src[j] !== quote) {
+    if (src[j] === "\n" && quote !== "`") return -1;
+    j += src[j] === "\\" ? 2 : 1;
+  }
+  return j < src.length ? j + 1 : -1;
+}
+// Where the comment opened at `i` ends: a line comment at its newline (kept), a block comment past its `*/`.
+function commentEnd(src, i) {
+  if (src[i + 1] === "/") {
+    const eol = src.indexOf("\n", i);
+    return eol < 0 ? src.length : eol;
+  }
+  const close = src.indexOf("*/", i + 2);
+  return close < 0 ? src.length : close + 2;
+}
+const QUOTES = new Set(['"', "'", "`"]);
+// One linear pass: a quote opens a string that runs to its unescaped twin, `//` and `/*` open a comment.
+function withoutComments(s) {
+  const src = String(s);
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    let end = i + 1;
+    const close = QUOTES.has(src[i]) ? stringEnd(src, i) : -1;
+    if (close > 0) {
+      end = close;
+      out.push(src.slice(i, end));
+    } else if (src[i] === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
+      end = commentEnd(src, i);
+      out.push(" ");
+    } else {
+      out.push(src[i]);
+    }
+    i = end;
+  }
+  return out.join("");
+}
+// Is `name` a function the page itself defines (`function name(`, `const name = `, a `name:` / `name(` member)?
+const definedIn = (code, name) => new RegExp(String.raw`function\s+${reEsc(name)}\s*\(|\b(?:const|let|var)\s+${reEsc(name)}\s*=|[{,]\s*${reEsc(name)}\s*[:(]`).test(code);
+// A request a page sends: a handler's `type: "<request>"` or an element's `request: "<request>"` in the view config.
+// A handler DECLARING it (`request: "<request>", handler: …`) only answers it, so the declaration alone is not a
+// sender.
+function requestSent(src, viewConfigJson, request) {
+  const lit = String.raw`["'\`]${reEsc(request)}["'\`]`;
+  return new RegExp(String.raw`\btype\s*:\s*${lit}`).test(src) || new RegExp(String.raw`"request"\s*:\s*${lit}`).test(viewConfigJson);
+}
+const requestDeclared = (src, request) => new RegExp(String.raw`\brequest\s*:\s*["'\`]${reEsc(request)}["'\`]`).test(src);
+// What a `Ported as` line may name: a page function (`applyRights`) or a dotted symbol — a request type
+// (`usr.SetCanEditRequest`) or `Module.function`. Anything else is named back as not a symbol.
+const IDENT = String.raw`[A-Za-z_$][\w$]*`;
+const PAGE_FUNCTION = new RegExp(`^${IDENT}$`);
+const PLATFORM_REQUEST_PREFIX = "crt.";
+const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
+// Whether a handler calls `sym`, as a verdict; `from` names where the function lives when it is not on the page.
+const callVerdict = (code, sym, from = "") => (calledIn(code, sym)
+  ? { ok: true, text: `a handler calls \`${esc(sym)}\`${from}` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` });
+// A page function: one the page defines, called bare. A platform name (`handle`, `save`) is Freedom scaffolding —
+// every handler ends in `next?.handle(request)` — so it names no port.
+function pageFunctionVerdict(code, sym) {
+  if (HANDLER_NAME_DENY.has(sym)) return { ok: false, text: `\`${esc(sym)}\` is a platform name every handler uses, not a port` };
+  if (!definedIn(code, sym)) return { ok: false, text: `the page defines no function \`${esc(sym)}\`` };
+  return calledIn(code, sym, true) ? { ok: true, text: `a handler calls \`${esc(sym)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
+}
+// The page's declared `define()` dependencies, when the page entry carries them (`--built.pages[<key>].deps`, read
+// off the page's `body.js`). Null when absent: a module function's port cannot be checked without them.
+function pageDepsOf(page) {
+  const deps = entryObject(page)?.deps;
+  return Array.isArray(deps) ? new Set(deps.filter((d) => typeof d === "string")) : null;
+}
+// A dotted symbol that is not a request: a module function, reached when the page declares the module in its
+// `define()` deps and a handler calls `Module.fn(…)`. The module's own source is not read.
+function moduleFunctionVerdict(sym, module, ctx, code) {
+  const deps = pageDepsOf(ctx.page);
+  if (!deps) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
+  if (!deps.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
+  return callVerdict(code, sym, ` from module \`${esc(module)}\``);
+}
+// One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
+// the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
+// a module function (`Module.fn`) a handler calls from a module the page declares in its `define()` deps.
+function portedSymbolVerdict(sym, ctx, code) {
+  const src = ctx._noComments ?? (ctx._noComments = withoutComments(ctx.handlersSrc));
+  if (PAGE_FUNCTION.test(sym)) return pageFunctionVerdict(code, sym);
+  const dotted = DOTTED_SYMBOL.exec(sym);
+  if (!dotted) return { ok: false, text: `\`${esc(sym)}\` is not a request type, a page function or \`Module.function\`` };
+  // Memoized on the page ctx like `_codeOnly`: every dotted symbol of the page reads the same view config.
+  const viewConfigJson = ctx._viewConfigJson ?? (ctx._viewConfigJson = JSON.stringify(entryObject(ctx.page)?.viewConfig ?? null));
+  if (requestSent(src, viewConfigJson, sym)) return { ok: true, text: `the page sends request \`${esc(sym)}\`` };
+  // A platform request (`crt.HandleViewModelInitRequest`, `crt.SaveRecordRequest`) is sent by the platform itself, so
+  // a handler that answers it is reached; a custom request is reached only when something on the page sends it.
+  if (requestDeclared(src, sym)) {
+    return sym.startsWith(PLATFORM_REQUEST_PREFIX) ? { ok: true, text: `a handler answers platform request \`${esc(sym)}\`` }
+      : { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
+  }
+  return moduleFunctionVerdict(sym, dotted[1], ctx, code);
+}
+// The build agent's `Ported as (row N): <symbol>` lines for this row, checked against the built page: `{ verdict }`
+// when every named symbol holds (a claim naming one real port and one invented symbol is not a port), `{ failed }`
+// with the reason when one does not, null when the row carries no claim.
+function portedAsMatch(vk, ctx, code) {
+  const syms = vk.portedAs || [];
+  if (!syms.length) return null;
+  const verdicts = syms.map((s) => portedSymbolVerdict(s, ctx, code));
+  const label = syms.map((s) => `\`${esc(s)}\``).join(", ");
+  if (verdicts.every((v) => v.ok)) return { verdict: ["✅ Done", `ported as ${label}: ${verdicts.map((v) => v.text).join("; ")}`, "ok"] };
+  return { failed: ["⚠ verify", `\`Ported as\` names ${label}, which does not hold on the built page: ${verdicts.filter((v) => !v.ok).map((v) => v.text).join("; ")} — name the symbol the page actually reaches`, "unverified"] };
+}
 export function resolveHandlerVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
@@ -4712,14 +4911,27 @@ export function resolveHandlerVk(vk, ctx) {
   // comments + string literals blanked — for name/def matching. Memoized on the page ctx (verifyCtxFactory caches
   // one ctx per page key), so a page's handler rows strip the source once, not once per row.
   const code = ctx._codeOnly ?? (ctx._codeOnly = codeOnly(src));
-  if (!HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
-  if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
+  // The build agent's own record of the port is read first: it names the symbol, and the check is whether the
+  // page reaches it. Without one, a Classic name counts only when a handler CALLS it — a function that carries the
+  // Classic method's name and is never called ports nothing. A record that does not hold still lets the other
+  // checks close the row; it is reported only when none of them does.
+  const ported = portedAsMatch(vk, ctx, code);
+  if (ported?.verdict) return ported.verdict;
+  if (!HANDLER_NAME_DENY.has(vk.method) && calledIn(code, vk.method)) return ["✅ Done", `a handler calls \`${esc(vk.method)}\``, "ok"];
+  if (vk.parent && calledIn(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler calls`, "ok"];
   const trigHit = handlerTriggerMatch(vk, src, code);
   if (trigHit) return trigHit;
+  return ported?.failed || ["☐ confirm on-stand", handlerOpenText(vk, code), "skip"];
+}
+// What an unrecognised handler row asks for: the `Ported as` line naming the real port, or, for a port that is not
+// code at all (a declarative rule), a `Check on stand` line.
+function handlerOpenText(vk, code) {
   const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
   const parentNote = vk.parent ? ` / \`${esc(vk.parent)}\`` : "";
   const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
-  return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
+  const definedOnly = !HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)
+    ? ` A handler defines \`${esc(vk.method)}\` but nothing calls it: a definition is not a port.` : "";
+  return `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote}.${definedOnly} Record the port as \`Ported as (row N): <symbol>\` — the request the page sends, or the page function or \`Module.function\` a handler calls; a port that is not code (a declarative rule) is confirmed on the stand with a \`Check on stand\` line`;
 }
 // What the OTHER built pages of the payload send: a quoted name in their handler source, or a request in their view.
 function requestsSentElsewhere(root, pageKey) {
@@ -5457,6 +5669,12 @@ function withPagePeers(r, peers) {
   if (r.vk.type === "fields") return { ...r, vk: { ...r.vk, peers: p.fields } };
   return r.vk.type === "details" ? { ...r, vk: { ...r.vk, n: p.lists } } : r;
 }
+// The build agent's `Ported as (row N): <symbol>` record reaches a handler row's `vk`, keyed like `decidedKeys`
+// (`verifyRowKey`), so the resolver checks the named symbol against the built page.
+function withPortedAs(r, page, portedAs) {
+  const syms = r.vk?.type === "handler" ? portedAs?.get(verifyRowKey(page, r.label)) : null;
+  return syms?.length ? { ...r, vk: { ...r.vk, portedAs: syms } } : r;
+}
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null);
@@ -5481,13 +5699,13 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r0 of g.rows) {
-      const r = withPagePeers(r0, peers);
+      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
+      // `buildVerifyRow` applies inside.
+      const rowPage = r0.pageKey || g.pageKey || "main";
+      const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
       // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
       // evidence id is one the run publishes, and an evidence record under it is not an orphan.
       if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
-      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
-      // `buildVerifyRow` applies inside.
-      const rowPage = r.pageKey || g.pageKey || "main";
       if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;

@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
-import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -46,8 +46,10 @@ const labelKey = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " 
 // line; both are read verbatim. The FALLBACK is honest, not clever: the sentence(s) of the row's own notes block
 // that talk about a decision, trimmed — and when there is nothing to find, the report says the agent did not
 // state the question, which is itself the finding.
-export const DECISION_MARKER = /^[\s*>-]*Decision needed \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
-export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
+export const DECISION_MARKER = notesMarker("Decision needed");
+export const CHECK_MARKER = notesMarker("Check on stand");
+// The FIRST line of each row: the report quotes one sentence per row.
+const markers = (notes, re) => new Map([...notesMarkers(notes, re)].map(([n, values]) => [n, values[0]]));
 // `Browser checks: N — <what each check answered>`, the line every page-writing task writes under `## Notes`. The
 // number decides the verdict; the prose is not judged, only quoted beside each exercised page in the result report,
 // so a person reads what the builder says each check answered instead of trusting a typed number. null when the
@@ -176,14 +178,6 @@ function capBreachLines(capBreaches) {
     "A task opens the page once after its last save and once more only to confirm a fix; a third check is a"
       + " save-check-fix loop. Read these tasks' notes for what each check answered.", "",
     ...capBreaches.map((b) => `- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`)];
-}
-function markers(notes, re) {
-  const out = new Map();
-  for (const line of String(notes || "").split(/\r?\n/)) {
-    const m = re.exec(line);
-    if (m && !out.has(Number(m[1]))) out.set(Number(m[1]), m[2].trim());
-  }
-  return out;
 }
 // The block of `## Notes` that is ABOUT row N: from a heading / bold line naming the row ("## 2 — Handler", "### Row 9",
 // "**Row 6 —") to the next such line. Heuristic on purpose — agents format their notes freely — and used only as a

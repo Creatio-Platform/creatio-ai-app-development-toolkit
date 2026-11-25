@@ -1183,19 +1183,36 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
-// THE TWO LINES THE FINAL REPORT READS OFF `## Notes`. Free prose under the row number is still
-// yours; these two are the sentences the migration result report quotes VERBATIM to the person who owns the
-// migration, so they are fixed in shape. Without them the report can only say "the agent did not state the
-// question", which is true and unhelpful.
+// One `## Notes` marker line, `<Label> (row N): <value>`: a list bullet, a quote mark and bold around it are
+// allowed, so every marker accepts the same formatting a build agent gives it.
+export const notesMarker = (label) => new RegExp(String.raw`^[\s*>-]*${label} \(row (\d+)\)[\s:*]*([^\s:*].*)$`, "i");
+// Every value of one marker in `notes`, by row number, in file order.
+export function notesMarkers(notes, re) {
+  const out = new Map();
+  for (const line of String(notes || "").split(/\r?\n/)) {
+    const m = re.exec(line);
+    if (m) out.set(Number(m[1]), [...(out.get(Number(m[1])) || []), m[2].trim()]);
+  }
+  return out;
+}
+// THE LINES THE ENGINE READS OFF `## Notes`. Free prose under the row number is still yours; these are fixed in
+// shape. The final report quotes the first two VERBATIM to the person who owns the migration — without them it can
+// only say "the agent did not state the question", which is true and unhelpful. `--verify` reads the third: it is
+// how a method ported under another name is checked against the built page.
 function markersBlock() {
   return [
-    "- **Two lines the final report quotes verbatim — write them under `## Notes`, one line each:**",
+    "- **Lines the engine reads off `## Notes` — write them exactly, one line each:**",
     "  - for every `not-built — needs-decision` row: `Decision needed (row N): <the question, and the options a"
       + " person can choose between — 1-3 sentences>`. Not why you stopped (that goes in the prose) — WHAT is being"
       + " decided.",
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
+    "  - for every `Handler — …` row you ported under another name: `Ported as (row N): <symbol>` — the request"
+      + " type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or `Module.function`"
+      + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
+      + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
+      + " only a call or a `Ported as` line does.",
   ];
 }
 // THE USER'S DIRECTIVES, in every task that builds or reviews a page they apply to. The file is the sub-agent's
@@ -4406,6 +4423,50 @@ export function decidedRowKeys(set) {
     });
   }
   return keys;
+}
+
+// `Ported as (row N): <symbol>` — a build agent's record, under `## Notes`, of the symbol a row was ported as when
+// it is not the Classic method's own name: a request type the page sends (`usr.SetCanEditRequest`), a page
+// function a handler calls, or `Module.function`. `--verify` checks the symbol against the built page. Several
+// symbols are written as code spans (`` `a`, `b` ``); without code spans the first word is the symbol, so prose
+// after it is never read as a claim.
+export const PORTED_MARKER = notesMarker("Ported as");
+// A word that is not a symbol is kept as written, so `--verify` names it instead of reading the row as unrecorded.
+export function portedSymbols(value) {
+  const spans = [...String(value || "").matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
+  const words = spans.length ? spans : [String(value || "").trim().split(/[\s,;]+/)[0]];
+  return words.map(withoutCallSuffix).filter(Boolean);
+}
+// `fn();` -> `fn`: trailing `;.,:` off, then one empty `()`. A loop, not an anchored regex, so it stays linear.
+const TRAILING_PUNCT = new Set([";", ".", ",", ":"]);
+function withoutCallSuffix(word) {
+  let end = word.length;
+  while (end > 0 && TRAILING_PUNCT.has(word[end - 1])) end -= 1;
+  const w = word.slice(0, end);
+  const open = w.endsWith(")") ? w.lastIndexOf("(") : -1;
+  return open >= 0 && w.slice(open + 1, -1).trim() === "" ? w.slice(0, open) : w;
+}
+// Every `Ported as` record of the folder, keyed like `decidedRowKeys` (`verifyRowKey(page, label)`) so `--verify`
+// finds it on the plan row the task row was cut from. A row number outside the task's rows names nothing. The LATEST
+// record for a row is the one read: the last line in a task, and a later repair round's over the plan task's — so
+// the correction `--verify` asks for replaces the claim it rejected instead of joining it.
+export function portedRowSymbols(set) {
+  const out = new Map();
+  const round = new Map();
+  for (const t of set?.tasks || []) {
+    if (t.unread) continue;
+    const r = Number(t.repairRound) || 0;
+    for (const [n, values] of notesMarkers(t.notes, PORTED_MARKER)) {
+      const row = t.rows?.[n - 1];
+      const page = row && (row.pageKey || t.pageKey);
+      if (!page) continue;
+      const key = verifyRowKey(page, row.label);
+      if (round.has(key) && round.get(key) > r) continue;
+      round.set(key, r);
+      out.set(key, [...new Set(portedSymbols(values.at(-1)))]);
+    }
+  }
+  return out;
 }
 
 // ---8<--- DECIDE / REVOKE: a person's answer to a question the plan raised ---8<---

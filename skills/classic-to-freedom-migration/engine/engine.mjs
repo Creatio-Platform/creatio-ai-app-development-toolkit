@@ -584,7 +584,14 @@ export function parseJsExpression(src, { locations = false, onComment } = {}) {
 // Parse a Classic schema body into the effective-page inputs, WITHOUT executing it (AST + static eval).
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
+// The source rides on the result as a NON-enumerable `src`, so `mergeHierarchy` can ask whether a method's name
+// occurs anywhere beyond its definitions, while every serialized or compared copy of the result is unchanged.
 export function parseSchema(src, pkg) {
+  const out = parseSchemaBody(src, pkg);
+  if (typeof src === "string") Object.defineProperty(out, "src", { value: src, enumerable: false });
+  return out;
+}
+function parseSchemaBody(src, pkg) {
   const mod = parseDefineModule(src, { locations: true });
   // the module's define() name (`BasePageProcessTemplate`, the page's own schema name), or null
   return { ...parseSchemaModule(src, pkg, mod), moduleName: mod.name ?? null };
@@ -2239,6 +2246,25 @@ function mergeDetails(L, seed, details) {
   }
 }
 
+const ESCAPED_DOLLAR = String.raw`\$`;
+// Does `name` occur in the fold's sources more often than its `definitions` (one per layer that declares it)? Code,
+// strings and comments alike: a reference that cannot be told from a mention keeps the method a normal row. `null`
+// when some layer's source is not at hand.
+function nameReferenced(name, definitions, tagged) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+  const word = new RegExp(String.raw`(?<![\w$])${name.replaceAll("$", ESCAPED_DOLLAR)}(?![\w$])`, "g");
+  let total = 0;
+  for (const { L } of tagged) {
+    if (typeof L.src !== "string") return null;
+    total += [...L.src.matchAll(word)].length;
+    if (total > definitions) return true;
+  }
+  return false;
+}
+// Only a method a client layer alone declares, with a readable body, can be dormant (see `isDormant` in mapper.mjs),
+// so only such a method is looked up in the sources; every other one reads `null`, "may be referenced".
+const dormantCandidate = (m) => m.schemaTouched && m.pkgs.length === 1 && !!m.facts;
+
 // methods (override stack) — track whether any schema schema contributed, and carry the TOP layer's body facts.
 // The facts follow last-write-wins (the effective implementation is the topmost override's), while `pkgs`
 // accumulates the whole stack — so the plan can say both "what it does" and "who overrode it".
@@ -2581,6 +2607,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
     methods: [...methods.entries()].map(([n, m]) => ({
       name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched,
+      // Whether the name occurs anywhere in this fold's Classic sources (the page's base chain and its own layers) beyond the method's own definitions — a member
+      // reference (`callback: this.onX`, `Ext.bind(this.onX)`), a string, a call. `null` when a layer's source is
+      // not at hand, which a reader must take as "may be referenced".
+      referenced: dormantCandidate(m) ? nameReferenced(n, m.pkgs.length, tagged) : null,
       // body evidence (calls / attribute reads-writes / message traffic / line span), null when the layer's body
       // was not statically readable — the NAME still survives, so a member is never lost for lack of evidence
       facts: m.facts || null,
