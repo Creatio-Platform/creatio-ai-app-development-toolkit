@@ -5,6 +5,7 @@
 			<Item Name="Caption" Value="Return note edit page" />
 			<Item Name="LocalizableStrings.MbAlreadyPostedMessage.Value" Value="The document is already posted." />
 			<Item Name="LocalizableStrings.MbPostButtonCaption.Value" Value="Post" />
+			<Item Name="LocalizableStrings.MbPostFailedMessage.Value" Value="The document could not be posted. Check the record and try again." />
 		</Items>
 	</Group>
 </Resources>

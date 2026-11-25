@@ -5,24 +5,33 @@ define("MbDocumentTotalsMixin", [], function() {
 		/**
 		 * Marks the document as posted, logs it and recalculates the contract amount.
 		 * Shared by every document page of a contract.
+		 * The flag is written to the record first, and the page, the History line and the contract
+		 * amount follow only when that write succeeds: the page's save() reports no failure, so a
+		 * rejected save would leave the page showing a posted document that was never posted.
 		 */
 		mbPostDocument: function() {
 			if (this.get("MbIsPosted")) {
 				this.showInformationDialog(this.get("Resources.Strings.MbAlreadyPostedMessage"));
 				return;
 			}
-			this.set("MbIsPosted", true);
-			this.save({
-				isSilent: true,
-				callback: function() {
-					this.mbWriteLog("Posted document " + (this.get("MbNumber") || ""));
-					const contract = this.get("MbContract");
-					if (contract) {
-						this.mbRecalculateContractAmount(contract.value);
-					}
-				},
-				scope: this
-			});
+			const update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: this.entitySchemaName});
+			update.filters.add("Id", Terrasoft.createColumnFilterWithParameter(
+				Terrasoft.ComparisonType.EQUAL, "Id", this.get("Id")));
+			update.filters.add("NotPosted", Terrasoft.createColumnFilterWithParameter(
+				Terrasoft.ComparisonType.EQUAL, "MbIsPosted", false));
+			update.setParameterValue("MbIsPosted", true, Terrasoft.DataValueType.BOOLEAN);
+			update.execute(function(response) {
+				if (!response?.success || !response.rowsAffected) {
+					this.showInformationDialog(this.get("Resources.Strings.MbPostFailedMessage"));
+					return;
+				}
+				this.set("MbIsPosted", true);
+				this.mbWriteLog("Posted document " + (this.get("MbNumber") || ""));
+				const contract = this.get("MbContract");
+				if (contract) {
+					this.mbRecalculateContractAmount(contract.value);
+				}
+			}, this);
 		},
 
 		mbIsPostButtonEnabled: function() {
