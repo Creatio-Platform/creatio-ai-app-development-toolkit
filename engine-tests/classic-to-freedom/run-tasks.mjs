@@ -5964,7 +5964,7 @@ console.log("\n===== the migration result report — one artifact, computed from
       () => browserAt > 0 && browserAt < md.indexOf("## Exercised in a browser")
         && /no `worklog\.md` beside the task folder/.test(lostRep.browserAnswerUnread || "")
         && /A recorded `Browser: none` is therefore not applied/.test(md)
-        && /^migrate\.mjs: ⚠ BROWSER ANSWER NOT READ — no `worklog\.md` beside the task folder/.test(browserAnswerUnreadNote(lostRep)),
+        && browserAnswerUnreadNote(lostRep).startsWith("migrate.mjs: ⚠ BROWSER ANSWER NOT READ — no `worklog.md` beside the task folder"),
       () => ({ unread: lostRep.browserAnswerUnread, note: browserAnswerUnreadNote(lostRep), at: browserAt }));
     const dirBase = tmp("result-report-browser-unreadable");
     const blocked = path.join(dirBase, "build-tasks");

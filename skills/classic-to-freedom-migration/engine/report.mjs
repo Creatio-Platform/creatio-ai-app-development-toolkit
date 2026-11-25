@@ -66,7 +66,7 @@ function browserChecksLine(notes) {
     const f = FENCE.exec(line);
     if (f) {
       if (!fence) fence = f[1];
-      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      else if (f[1].startsWith(fence)) fence = null;
       continue;
     }
     const m = fence ? null : BROWSER_CHECKS.exec(line);
@@ -146,7 +146,8 @@ function exercisedLines(exercised, pageName) {
 // Under `Browser: none` the intro says the user declined the check, because a page whose task did report one is
 // listed here too and "no build task opened them" would be false for it.
 function unexercisedLines(unexercised, pageName, { line, unread }) {
-  const recorded = line ? `\`${esc(line)}\`` : `none — ${unread ? "`worklog.md` could not be read" : "`worklog.md` has no `Browser:` line"}`;
+  const noAnswer = unread ? "`worklog.md` could not be read" : "`worklog.md` has no `Browser:` line";
+  const recorded = line ? `\`${esc(line)}\`` : `none — ${noAnswer}`;
   const intro = browserAnswerOf(line) === "none"
     ? "The user declined the browser check for this run, so no built page counts as exercised, including any a build"
       + " task did report a check for: a declined run is a conscious opt-out, and a person opens each page on the"
