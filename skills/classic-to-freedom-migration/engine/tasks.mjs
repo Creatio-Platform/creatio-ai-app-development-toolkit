@@ -1340,6 +1340,34 @@ function outcomeBlock(repair = false) {
   ];
 }
 
+// The opening paragraph of a task file: a judge round, a repair round, or a plan task.
+function taskBanner(task) {
+  if (task.kind === REPAIR_KIND && task.cause === UNJUDGED_CAUSE) return [
+    `> JUDGE — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. Each row below has an evidence record a`,
+    "> builder filed and no verdict: `--verify` reads it as NOT judged. You are the independent judge, read-only:",
+    "> rule on every record listed under **Records you rule on** by the judge brief's rules, then record each row",
+    "> `built` once its verdict is filed, whichever way you ruled. Build nothing and write nothing on the stand.",
+  ];
+  if (task.kind === REPAIR_KIND) return [
+    // WHERE THE ROWS CAME FROM decides the first move: a row `--verify` could not find may be built and unrecorded,
+    // a row the previous agent wrote down as not built is one somebody already tried and stopped at.
+    `> REPAIR — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. ${String(task.cause).startsWith("not-built:")
+      ? "These rows were recorded as NOT BUILT by the agent that built the page — read what it wrote in the"
+        + "\n> table below before you start."
+      : "These rows were left OPEN by a `--verify`\n> run against the page as it is NOW."}`
+      + " They are not new plan work, and the plan has not changed. Fix exactly",
+    "> these rows on the page this task names. If a row is open because the plan is WRONG rather than the build,",
+    "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
+    "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
+  ];
+  return [
+    "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
+    "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
+    "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
+    "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
+    "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+  ];
+}
 export function renderTaskFile(task, set = {}) {
   const naNote = task.naRows ? `, ${task.naRows} plan-boundary` : "";
   const conventions = conventionsTaskLines(set.projectConventions, cell);
@@ -1348,29 +1376,7 @@ export function renderTaskFile(task, set = {}) {
     "",
     `# ${task.step ?? task.order}. ${task.pageKey} · ${task.group}`,
     "",
-    ...(task.kind === REPAIR_KIND && task.cause === UNJUDGED_CAUSE ? [
-      `> JUDGE — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. Each row below has an evidence record a`,
-      "> builder filed and no verdict: `--verify` reads it as NOT judged. You are the independent judge, read-only:",
-      "> rule on every record listed under **Records you rule on** by the judge brief's rules, then record each row",
-      "> `built` once its verdict is filed, whichever way you ruled. Build nothing and write nothing on the stand.",
-    ] : task.kind === REPAIR_KIND ? [
-      // WHERE THE ROWS CAME FROM decides the first move: a row `--verify` could not find may be built and unrecorded,
-      // a row the previous agent wrote down as not built is one somebody already tried and stopped at.
-      `> REPAIR — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. ${String(task.cause).startsWith("not-built:")
-        ? "These rows were recorded as NOT BUILT by the agent that built the page — read what it wrote in the"
-          + "\n> table below before you start."
-        : "These rows were left OPEN by a `--verify`\n> run against the page as it is NOW."}`
-        + " They are not new plan work, and the plan has not changed. Fix exactly",
-      "> these rows on the page this task names. If a row is open because the plan is WRONG rather than the build,",
-      "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
-      "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
-    ] : [
-      "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
-      "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
-      "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
-      "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
-      "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
-    ]),
+    ...taskBanner(task),
     "",
     `- **Page key:** \`${task.pageKey}\``,
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
@@ -2949,42 +2955,44 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
         parked.push({ pageKey, cause, rows: rows.length, rounds: REPAIR_ROUND_CAP });
         continue;
       }
-      const round = next.round;
-      const identityKey = identity.get(pageKey) || pageKey;
-      const judging = cause === UNJUDGED_CAUSE;
-      const artifact = judging ? `review:${identityKey}` : `page:${identityKey}`;
-      const srcRows = rows.map((r) => ({
-        label: r.deliverable, groupTitle: `Repair — ${causeText(cause)}`,
-        vk: r.outcome === "missing" ? { type: "repair" } : null, na: null,
-        weight: B.row, status: r.status, evidence: r.evidence, unjudgedRecord: r.unjudgedRecord,
-      }));
-      chunkRows(srcRows, B).forEach((chunkSrc, i) => {
-        const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
-      const suffix = i ? `#${i + 1}` : "";
-        const t = {
-          id, pageKey, artifact, writesTo: writesToOf(artifact),
-          anchor: `repair-${cause}-round${round}${suffix}`,
-          kind: REPAIR_KIND, cause, repairRound: round,
-          group: `Repair round ${round} — ${causeText(cause)}`,
-          title: `Repair round ${round} — ${causeText(cause)}`,
-          groups: [...new Set(chunkSrc.map((r) => r.groupTitle))],
-          order: Number.MAX_SAFE_INTEGER - 1, phase: DEFAULT_PHASE,
-          origin: TASK_ORIGIN_ENGINE, status: S_TODO,
-          rows: chunkSrc.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? "repair" : null, na: null,
-            status: r.status, evidence: r.evidence })),
-          weight: chunkSrc.reduce((a, r) => a + r.weight, 0),
-          gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
-          rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
-          covers: chunkSrc.map((r) => coverKey(r.label)),
-          ...(judging ? { judgedRecords: chunkSrc.map((r) => r.unjudgedRecord) } : {}),
-        };
-        const nameSlug = slugify(`${pageKey}-${cause}`);
-        t.file = `task-repair-round${round}-${nameSlug}-${id}.md`;
-        tasks.push(t);
-      });
+      tasks.push(...repairRoundTasks({ pageKey, identityKey: identity.get(pageKey) || pageKey, cause, rows, round: next.round, B }));
     }
   }
   return { tasks, parked, pending };
+}
+// One repair round over the open rows of one (page, cause), cut into chunks by the budget. A round over records
+// nobody judged is a read-only review handed to a judge; every other round writes the page.
+function repairRoundTasks({ pageKey, identityKey, cause, rows, round, B }) {
+  const judging = cause === UNJUDGED_CAUSE;
+  const artifact = judging ? `review:${identityKey}` : `page:${identityKey}`;
+  const srcRows = rows.map((r) => ({
+    label: r.deliverable, groupTitle: `Repair — ${causeText(cause)}`,
+    vk: r.outcome === "missing" ? { type: "repair" } : null, na: null,
+    weight: B.row, status: r.status, evidence: r.evidence, unjudgedRecord: r.unjudgedRecord,
+  }));
+  return chunkRows(srcRows, B).map((chunkSrc, i) => {
+    const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
+    const suffix = i ? `#${i + 1}` : "";
+    const t = {
+      id, pageKey, artifact, writesTo: writesToOf(artifact),
+      anchor: `repair-${cause}-round${round}${suffix}`,
+      kind: REPAIR_KIND, cause, repairRound: round,
+      group: `Repair round ${round} — ${causeText(cause)}`,
+      title: `Repair round ${round} — ${causeText(cause)}`,
+      groups: [...new Set(chunkSrc.map((r) => r.groupTitle))],
+      order: Number.MAX_SAFE_INTEGER - 1, phase: DEFAULT_PHASE,
+      origin: TASK_ORIGIN_ENGINE, status: S_TODO,
+      rows: chunkSrc.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? "repair" : null, na: null,
+        status: r.status, evidence: r.evidence })),
+      weight: chunkSrc.reduce((a, r) => a + r.weight, 0),
+      gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
+      rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
+      covers: chunkSrc.map((r) => coverKey(r.label)),
+      ...(judging ? { judgedRecords: chunkSrc.map((r) => r.unjudgedRecord) } : {}),
+    };
+    t.file = `task-repair-round${round}-${slugify(`${pageKey}-${cause}`)}-${id}.md`;
+    return t;
+  });
 }
 
 // ---8<--- I/O ---8<---

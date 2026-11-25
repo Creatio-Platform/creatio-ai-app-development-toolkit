@@ -12647,7 +12647,7 @@ console.log("\n===== judging: every evidence record reaches a judge =====");
   const { tasks } = buildRepairTasks(RUN, pages, OPTS, []);
   const judge = tasks.find((t) => t.cause === "unverified:unjudged");
   check("judging: rows filed but NOT judged become one read-only judge round on the page's review artifact, listing their record ids",
-    () => judge && judge.writesTo === "" && judge.artifact.startsWith("review:") && judge.rows.length === 2
+    () => judge?.writesTo === "" && judge.artifact.startsWith("review:") && judge.rows.length === 2
       && JSON.stringify(judge.judgedRecords) === JSON.stringify(["list#listpage:action:a1", "list#confirm:list-columns:set"]),
     () => tasks.map((t) => [t.cause, t.artifact, t.writesTo, t.judgedRecords]));
   check("judging: a record that was never filed stays builder work — only a missing verdict goes to a judge",

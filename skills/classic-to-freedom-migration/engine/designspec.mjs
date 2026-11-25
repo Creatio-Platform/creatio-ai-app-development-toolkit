@@ -4567,9 +4567,8 @@ const VK_ONSTAND = new Set(["onstand"]);
 // A planned value that does not open with a name in that shape is returned as written: a plan that names no
 // package still fails the comparison instead of having one guessed for it. The plan's rows keep the value as
 // approved, so a task cut before create-app ran does not read as changed once it has.
-const PACKAGE_IDENT = String.raw`[A-Za-z_]\w*`;
-const PACKAGE_NAME = new RegExp(`^${PACKAGE_IDENT}$`);
-const NAMED_WITH_NOTE = new RegExp(String.raw`^` + "`?(" + PACKAGE_IDENT + ")`?" + String.raw`\s*(?:\(.*\)|[—–-]\s.*)?$`, "s");
+const PACKAGE_NAME = /^[A-Za-z_]\w*$/;
+const NAMED_WITH_NOTE = /^`?([A-Za-z_]\w*)`?\s*(?:\(.*\)|[—–-]\s.*)?$/s;
 export function packageNameOf(planned, created = null) {
   if (typeof created === "string" && PACKAGE_NAME.test(created.trim())) return created.trim();
   if (typeof planned !== "string") return planned;

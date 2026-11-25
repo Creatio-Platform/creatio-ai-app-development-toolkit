@@ -155,7 +155,7 @@ export function runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, 
 export function runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, verifyCtx, coTextsManifest, FIX }) {
   const m = coTextsManifest();
   const run = runMigration(m, { baseDir: FIX });
-  const strings = JSON.parse(JSON.stringify(run.changeSet.resourceCultures));
+  const strings = structuredClone(run.changeSet.resourceCultures);
   const rowWith = (s) => renderVerify(run, checklistOpts(m), { pages: { main: { viewConfig: [{ name: "X", type: "crt.Input" }],
     resources: { strings: s } } } }).markdown.split("\n").find((l) => l.includes("Form page")) || "";
   const renamed = Object.fromEntries(Object.entries(strings).map(([k, v]) => [`${k}Renamed_title`, v]));
