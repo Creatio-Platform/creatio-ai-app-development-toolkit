@@ -83,7 +83,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     ["async (request, next) => { await next?.handle(request); await post(request); }", /does not return its result/],
     ["async (request, next) => { const r = await next?.handle(request); return true; }", /does not return its result/],
     ["async (request, next) => { [1].forEach(() => next.handle(request)); return null; }", /never calls/],
-    ["(request, next) => post(request)", /does not return/],
+    ["(request, next) => post(request)", /never calls/],
   ];
   const chainOf = (fn) => lintPageQuality({ handlers: `[{ request: "usr.Post", handler: ${fn} }]` }).findings.filter((f) => f.rule === R.handlerWithoutNext);
   check("quality: a handler that calls next.handle(request) and returns its result passes the request on",

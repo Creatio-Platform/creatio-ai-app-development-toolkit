@@ -14,7 +14,7 @@
 //
 // Everything is read from get-page's bundle as the read-back filed it (`handlers`, `validators`, `converters` are
 // SOURCE strings; `viewConfig`, `viewModelConfig`, `modelConfig`, `resources` are JSON). Nothing is evaluated.
-import { parseJsExpression, parseDefineModule, staticPropKey, childNodesOf, isFnNode } from "./engine.mjs";
+import { parseJsExpression, parseDefineModule, staticPropKey, childNodesOf, isFnNode, walkAstBounded } from "./engine.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const QUALITY_RULES = Object.freeze({
@@ -116,10 +116,7 @@ export function lintModuleQuality(src, thresholds = DEFAULT_QUALITY_THRESHOLDS, 
   const comments = [];
   const parsed = parseDefineModule(src, { locations: true, onComment: comments });
   if (parsed.error) { page.unreadable.push("module"); return page; }
-  const ctx = { page, t: thresholds, constantsGuids, fnNames: new WeakMap() };
-  walkSection(parsed.factory.body, "module", false, ctx);
-  checkUncheckedWrites(parsed.factory, "module", page);
-  for (const c of comments) checkComment(c, "module", page);
+  lintTree(parsed.factory.body, comments, "module", { page, t: thresholds, constantsGuids, fnNames: new WeakMap() });
   return page;
 }
 
@@ -128,6 +125,11 @@ function lintSection(src, section, ctx) {
   const ast = parseJsExpression(src, { locations: true, onComment: comments });
   if (!ast) { ctx.page.unreadable.push(section); return; }
   if (section === "handlers" && ast.type === "ArrayExpression") lintHandlers(ast, ctx);
+  lintTree(ast, comments, section, ctx);
+}
+
+// The rules every source gets: the per-node ones, the unchecked writes and the plan codes in comments.
+function lintTree(ast, comments, section, ctx) {
   walkSection(ast, section, false, ctx);
   checkUncheckedWrites(ast, section, ctx.page);
   for (const c of comments) checkComment(c, section, ctx.page);
@@ -224,6 +226,7 @@ function lintHandlers(array, ctx) {
     const { request, handler } = readHandlerEntry(entry);
     if (!handler) continue;
     if (request) ctx.fnNames.set(handler, request);
+    checkPassesOn(handler, request, ctx.page);
     lintHandler(handler, ctx);
   }
 }
@@ -239,8 +242,7 @@ function readHandlerEntry(entry) {
   return { request, handler };
 }
 
-function lintHandler(handler, { page, t, fnNames }) {
-  checkPassesOn(handler, fnNames.get(handler), page);
+function lintHandler(handler, { page, t }) {
   const helpers = [];
   collectNamedFunctions(handler.body, helpers);
   // The handler's own variables: its parameters and what its body declares outside the functions in it. A sibling
@@ -297,29 +299,25 @@ function namesFromNext(own, nextName) {
 }
 
 // A handler passes the request on: it takes `next`, calls `next.handle(…)` and returns what that call gives (directly,
-// or through a variable it assigned the call to). Anything else ends the chain for the handlers after it; a handler
-// meant to end it is accepted by a plan decision on the row.
+// or through a variable it assigned the call to; an arrow's expression body is what it returns). Anything else ends
+// the chain for the handlers after it; a handler meant to end it is accepted by a plan decision on the row.
 function checkPassesOn(handler, request, page) {
   const fail = (why) => page.findings.push(finding(QUALITY_RULES.handlerWithoutNext, "handlers", lineOf(handler),
     `${request ? "`" + request + "`" : "a handler"} ${why}`, { request: request || null }));
-  const nextParam = handler.params[1];
-  if (nextParam?.type !== "Identifier") return fail("takes no `next`, so the handlers after it never run");
-  const nextName = nextParam.name;
-  if (handler.body.type !== "BlockStatement") {
-    if (!isNextCall(handler.body, nextName)) fail("does not return `next.handle(request)`");
-    return;
-  }
+  const nextName = handler.params[1]?.type === "Identifier" ? handler.params[1].name : null;
+  if (!nextName) return fail("takes no `next`, so the handlers after it never run");
   const own = ownNodes(handler.body);
   if (!own.some((n) => n.type === "CallExpression" && isNextCall(n, nextName))) {
     return fail("never calls `next.handle(request)`, so the handlers after it never run");
   }
   const fromNext = namesFromNext(own, nextName);
-  const returnsNext = own.some((n) => {
-    if (n.type !== "ReturnStatement" || !n.argument) return false;
-    const value = unwrap(n.argument);
-    return isNextCall(n.argument, nextName) || (value?.type === "Identifier" && fromNext.has(value.name));
+  const returned = handler.body.type === "BlockStatement"
+    ? own.filter((n) => n.type === "ReturnStatement" && n.argument).map((n) => n.argument) : [handler.body];
+  const passesOn = returned.some((value) => {
+    const v = unwrap(value);
+    return isNextCall(v, nextName) || (v?.type === "Identifier" && fromNext.has(v.name));
   });
-  if (!returnsNext) fail("calls `next.handle(request)` but does not return its result");
+  if (!passesOn) fail("calls `next.handle(request)` but does not return its result");
 }
 
 // ---- writes ----
@@ -332,36 +330,33 @@ const isFailureReturn = (n) => n.type === "ReturnStatement" && n.argument != nul
   && ((n.argument.type === "Literal" && (n.argument.value === null || n.argument.value === false))
     || (n.argument.type === "Identifier" && n.argument.name === "undefined"));
 
-// The named functions of a source that write data and give back a failure value on some path.
-function failingWriters(node, out = new Set(), depth = 0) {
-  if (!node || depth > 1000) return out;
-  let fn = null;
-  if (node.type === "FunctionDeclaration" && node.id) fn = [node.id.name, node];
-  else if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && isFunction(node.init)) fn = [node.id.name, node.init];
-  if (fn) {
-    const body = ownNodes(fn[1].body);
-    if (body.some(isWriteCall) && body.some(isFailureReturn)) out.add(fn[0]);
-  }
-  for (const child of childNodes(node)) failingWriters(child, out, depth + 1);
-  return out;
+// `function name() {}` / `const name = () => {}` as `[name, function]`.
+function namedFunctionOf(n) {
+  if (n.type === "FunctionDeclaration" && n.id) return [n.id.name, n];
+  if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isFunction(n.init)) return [n.id.name, n.init];
+  return null;
 }
 
-// A call to such a function as a bare statement (`await recalculate(…);`) drops its result: the write may have failed
-// and nobody is told. Within one source only: a function of another module is not seen.
+// A named function that writes data and gives back a failure value on some path has a result its caller must check.
+// A call to it as a bare statement (`await recalculate(…);`) drops that result: the write may have failed and nobody
+// is told. Within one source only: a function of another module is not seen.
 function checkUncheckedWrites(ast, section, page) {
-  const writers = failingWriters(ast);
-  if (!writers.size) return;
-  const visit = (node, depth = 0) => {
-    if (!node || depth > 1000) return;
-    const call = node.type === "ExpressionStatement" ? unwrap(node.expression) : null;
-    if (call?.type === "CallExpression" && call.callee.type === "Identifier" && writers.has(call.callee.name)) {
-      page.findings.push(finding(QUALITY_RULES.uncheckedWriteResult, section, lineOf(node),
-        `\`${call.callee.name}(…)\` writes data and returns a failure value, but this call ignores it — check it and tell the user`,
-        { name: call.callee.name }));
+  const writers = new Set();
+  const bareCalls = [];
+  walkAstBounded(ast, (node) => {
+    const named = namedFunctionOf(node);
+    if (named) {
+      const body = ownNodes(named[1].body);
+      if (body.some(isWriteCall) && body.some(isFailureReturn)) writers.add(named[0]);
     }
-    for (const child of childNodes(node)) visit(child, depth + 1);
-  };
-  visit(ast);
+    const call = node.type === "ExpressionStatement" ? unwrap(node.expression) : null;
+    if (call?.type === "CallExpression" && call.callee.type === "Identifier") bareCalls.push([node, call.callee.name]);
+  });
+  for (const [node, name] of bareCalls.sort((x, y) => lineOf(x[0]) - lineOf(y[0]))) {
+    if (!writers.has(name)) continue;
+    page.findings.push(finding(QUALITY_RULES.uncheckedWriteResult, section, lineOf(node),
+      `\`${name}(…)\` writes data and returns a failure value, but this call ignores it — check it and tell the user`, { name }));
+  }
 }
 
 // Named functions only (`function name() {}`, `const name = () => {}`): an inline callback is not a helper.

@@ -58,7 +58,7 @@ function call in a custom request to give it a name.
   query (ESQ aggregation, `get-guidance esq`), never a loop that pages through the rows and adds them up in
   the browser — that reads every row on every call and grows with the data. A total is recalculated when a
   record it counts really changes (an item saved, deleted or (de)activated), not on every list load,
-  paging or page open. `--verify` reports a paged loop as `[code-quality] paged-aggregation-loop`.
+  paging or page open. `--verify` reports a paged loop as `[code-quality] paged-read-loop`.
 
 ## 6. A write reports its outcome, and the user sees a failure
 
