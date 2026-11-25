@@ -7,8 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { analyzePageCode, renderCodeMap, findingCount, findingPhrases, codeMapRoot, MAX_FUNCTION_LINES }
+import { analyzePageCode, renderCodeMap, findingCount, findingPhrases, codeMapRoot }
   from "../../skills/classic-to-freedom-migration/engine/codemap.mjs";
+import { QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS } from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
+
+const LIMIT = DEFAULT_QUALITY_THRESHOLDS.maxFunctionLines;
+const ofRule = (a, rule) => a.findings.filter((f) => f.rule === rule);
 import { renderVerify, esc } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -51,34 +55,39 @@ const VIEW_SENDS_OPEN_HISTORY = [{ type: "crt.Button", name: "HistoryButton", cl
 
 console.log("— analysis of a relay-shaped body");
 const relay = analyzePageCode(RELAY, []);
-check("finds the helper defined in three handlers", () => relay.duplicates.length === 1
-  && relay.duplicates[0].name === "idOf" && relay.duplicates[0].handlers.length === 3, () => relay.duplicates);
-check("does not report a helper defined once", () => !relay.duplicates.some((d) => d.name === "readLookup"));
-check(`finds the handler over ${MAX_FUNCTION_LINES} lines and only that one`, () => relay.longFunctions.length === 1
-  && relay.longFunctions[0].name === "crt.HandleViewModelInitRequest" && relay.longFunctions[0].lines > MAX_FUNCTION_LINES,
-  () => relay.longFunctions);
-check("finds the request nothing sends, and not the one a handler sends", () => relay.unsent.length === 1
-  && relay.unsent[0] === "usr.RefreshTotals", () => relay.unsent);
-check("counts three findings", () => findingCount(relay) === 3, () => findingPhrases(relay));
+const dupes = ofRule(relay, QUALITY_RULES.duplicateInPage);
+check("finds the helper declared in three handlers: two copies of the first", () => dupes.length === 2
+  && dupes.every((d) => d.name === "idOf" && d.original === "idOf" && d.count === 3), () => dupes);
+check("does not report a helper defined once", () => !dupes.some((d) => d.name === "readLookup"));
+const longs = ofRule(relay, QUALITY_RULES.functionTooLong);
+check(`finds the handler over ${LIMIT} lines and only that one`, () => longs.length === 1
+  && longs[0].where === "crt.HandleViewModelInitRequest" && longs[0].lines > LIMIT && longs[0].limit === LIMIT, () => longs);
+const unsent = ofRule(relay, QUALITY_RULES.requestWithoutSender);
+check("finds the request nothing sends, and not the one a handler sends", () => unsent.length === 1
+  && unsent[0].request === "usr.RefreshTotals", () => unsent);
+check("counts four findings", () => findingCount(relay) === 4, () => findingPhrases(relay));
+check("the limit is the run's manifest.qualityThresholds.maxFunctionLines",
+  () => ofRule(analyzePageCode(RELAY, [], new Set(), { ...DEFAULT_QUALITY_THRESHOLDS, maxFunctionLines: 500 }), QUALITY_RULES.functionTooLong).length === 0);
 check("lists every handler with its line count and helpers", () => relay.handlers.length === 4
   && relay.handlers[2].helpers.join(",") === "idOf,readLookup", () => relay.handlers);
 
 check("a helper over the limit is reported under its own name, beside the handler that holds it",
   () => { const big = `const big = () => {\n${"  1;\n".repeat(160)}};`;
     const a = analyzePageCode(`[{ request: "usr.Short", handler: async (request, next) => { ${big} return next?.handle(request); } }]`, []);
-    return a.longFunctions.map((f) => f.name).join() === "usr.Short,usr.Short › big"; });
+    return ofRule(a, QUALITY_RULES.functionTooLong).map((f) => f.where).join() === "usr.Short,usr.Short › big"; });
 
 console.log("— analysis of a clean body");
 const clean = analyzePageCode(CLEAN, VIEW_SENDS_OPEN_HISTORY);
 check("a clean body has no findings", () => findingCount(clean) === 0, () => findingPhrases(clean));
-check("a request a button sends is not reported", () => !clean.unsent.includes("usr.OpenHistory"));
-check("the same request with a view that has no button for it is reported", () => analyzePageCode(CLEAN, []).unsent.join() === "usr.OpenHistory");
+const unsentOf = (a) => ofRule(a, QUALITY_RULES.requestWithoutSender).map((f) => f.request).join();
+check("a request a button sends is not reported", () => !unsentOf(clean).includes("usr.OpenHistory"));
+check("the same request with a view that has no button for it is reported", () => unsentOf(analyzePageCode(CLEAN, [])) === "usr.OpenHistory");
 check("a handler that names its OWN request (a type check, a log line) does not count as sending it",
-  () => analyzePageCode(`[{ request: "usr.Self", handler: async (request, next) => { if (request.type === "usr.Self") { return 1; } return next?.handle(request); } }]`, []).unsent.join() === "usr.Self");
+  () => unsentOf(analyzePageCode(`[{ request: "usr.Self", handler: async (request, next) => { if (request.type === "usr.Self") { return 1; } return next?.handle(request); } }]`, [])) === "usr.Self");
 check("without a viewConfig nobody knows what the buttons send: the unsent check is skipped and the map says so",
-  () => { const a = analyzePageCode(CLEAN); return a.sendsChecked === false && a.unsent.length === 0 && findingCount(a) === 0
+  () => { const a = analyzePageCode(CLEAN); return a.sendsChecked === false && unsentOf(a) === "" && findingCount(a) === 0
     && renderCodeMap(a, "P").includes("Requests sent from the view were not checked"); });
-check("a platform request is never reported as unsent", () => !relay.unsent.some((r) => r.startsWith("crt.")));
+check("a platform request is never reported as unsent", () => !unsent.some((f) => f.request.startsWith("crt.")));
 check("an empty body has no handlers and no findings", () => { const a = analyzePageCode("", []); return a.handlers.length === 0 && findingCount(a) === 0; });
 
 console.log("— input that cannot be read");
@@ -86,18 +95,18 @@ check("a body that does not parse gives an error, not a throw", () => /does not 
 check("a body that is not an array gives an error", () => /not an array/.test(analyzePageCode("{ a: 1 }").error || ""));
 check("a handler body past the engine's walk budget is an error, never a half-analysed map",
   () => /too large or too deeply nested/.test(analyzePageCode(`[{ request: "usr.Deep", handler: () => { const deep = ${"[".repeat(500)}1${"]".repeat(500)}; } }]`).error || ""));
-check("a computed `[request]` key is not read as the request", () => analyzePageCode(`[{ ["request"]: "usr.X", handler: () => {} }]`).unsent.length === 0);
+check("a computed `[request]` key is not read as the request", () => unsentOf(analyzePageCode(`[{ ["request"]: "usr.X", handler: () => {} }]`, [])) === "");
 
 console.log("— the map");
 const map = renderCodeMap(relay, "PIS_FormPage");
-check("the map names the page and the finding count", () => map.startsWith("# PIS_FormPage — code map") && map.includes("3 finding(s)"));
-check("the map lists the duplicate helper with its handlers", () => /\| `idOf` \| `crt\.HandleViewModelInitRequest`, `crt\.SaveRecordRequest`, `usr\.LoadSubscriptionState` \|/.test(map), () => map);
+check("the map names the page and the finding count", () => map.startsWith("# PIS_FormPage — code map") && map.includes("4 finding(s)"));
+check("the map lists each copy of the duplicate helper", () => (map.match(/- `idOf` repeats `idOf` \(line \d+\) — declared 3 times/g) || []).length === 2, () => map);
 check("the map flags the long handler", () => /\| `crt\.HandleViewModelInitRequest` \| \d+ ⚠ \|/.test(map), () => map);
 check("a clean map says the verify row will pass", () => renderCodeMap(clean, "P").includes("No findings"));
 check("names from the page body are escaped in the map — a backtick or a pipe cannot break the table", () => {
-  const odd = renderCodeMap({ handlers: [{ request: "usr.A|B`C", lines: 3, helpers: [] }], duplicates: [], longFunctions: [], unsent: [] }, "P", esc);
+  const odd = renderCodeMap({ handlers: [{ request: "usr.A|B`C", lines: 3, helpers: [] }], findings: [], sendsChecked: true, maxFunctionLines: LIMIT }, "P", esc);
   return odd.includes(String.raw`usr.A\|BˋC`) && !odd.includes("A|B");
-}, () => renderCodeMap({ handlers: [{ request: "usr.A|B`C", lines: 3, helpers: [] }], duplicates: [], longFunctions: [], unsent: [] }, "P", esc));
+}, () => renderCodeMap({ handlers: [{ request: "usr.A|B`C", lines: 3, helpers: [] }], findings: [], sendsChecked: true, maxFunctionLines: LIMIT }, "P", esc));
 
 console.log("— input shapes");
 check("a saved get-page response is its bundle", () => codeMapRoot(JSON.stringify({ bundle: { handlers: CLEAN } })).handlers === CLEAN);
@@ -116,7 +125,7 @@ console.log("— the `Page code` row of --verify");
   const line = (v) => (v.markdown.split("\n").find((l) => l.includes("| Page code — ")) || "").replaceAll("ˋ", "`");
   const open = renderVerify(res, {}, built(RELAY));
   check("the relay body opens the row with every finding named, and the run is not complete", () => /⚠ verify/.test(line(open))
-    && line(open).includes("`idOf` is defined in 3 handlers") && line(open).includes("`usr.RefreshTotals` is declared but nothing sends it")
+    && line(open).includes("`idOf` repeats `idOf`") && line(open).includes("`usr.RefreshTotals` is declared but nothing sends it")
     && /`crt\.HandleViewModelInitRequest` is \d+ lines/.test(line(open)) && open.complete === false, () => line(open));
   const fixed = renderVerify(res, {}, built(CLEAN, VIEW_SENDS_OPEN_HISTORY));
   check("the fixed body closes the row and the run completes", () => /✅ Done/.test(line(fixed)) && fixed.complete === true,

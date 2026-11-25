@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
 import { RECONCILE_MODE_CLASSIC } from "./reconcile-modes.mjs";
-import { analyzePageCode, findingCount, findingPhrases, viewRequests, MAX_FUNCTION_LINES } from "./codemap.mjs"; // the `Page code` row measures what the writer's code map shows
+import { analyzePageCode, findingCount, findingPhrases, viewRequests } from "./codemap.mjs"; // the `Page code` row measures what the writer's code map shows
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions, cardActionSignals,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
@@ -26,6 +26,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
+import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
@@ -3047,9 +3048,10 @@ function qualityGateRows(pageKey) {
 // (codemap.mjs) before it writes; this row is where the build is held to it. It closes on the built page's handler
 // source, so it needs no stand call beyond the read-back, and a deliberate exception is a `D<N>` decision like any
 // other row (`--decide D<N> --wont-do`).
-function pageCodeRows() {
-  return [{ deliverableId: "page-code", label: `Page code — no function over ${MAX_FUNCTION_LINES} lines, no helper defined in more than one handler, no request declared but never sent`,
-    vk: { type: "pagecode" } }];
+// The label names the threshold KEY, never its value, so a decision recorded on the row survives a changed limit.
+function pageCodeRows(opts) {
+  return [{ deliverableId: "page-code", label: "Page code — no function longer than `maxFunctionLines`, no helper declared twice on the page, no request declared but never sent",
+    vk: { type: "pagecode", thresholds: opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS } }];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -3508,7 +3510,7 @@ export function checklistGroups(result, opts = {}) {
   // to "refine if desired". So acceptance is now a single, checkable fact — did you run the skill on all pages —
   // and the escape phrases are explicitly rejected. See `qualityGateRows`: it is now an EVIDENCE-gated row.
   // Page code — ALWAYS present: the page's handler code measured, the same analysis the writer's code map prints.
-  G("Page code", pageCodeRows());
+  G("Page code", pageCodeRows(opts));
   G("Quality gates", qualityGateRows(pageKey));
   // ROOT SPLICE — only the page that owns the key `main` folds the tree, so a sub-page's own groups stay its own
   // (its grandchildren are reached by the recursive walk, not by nesting rows inside rows).
@@ -4717,13 +4719,18 @@ function requestsSentElsewhere(root, pageKey) {
 export function resolvePageCodeVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the page's handler code");
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so it has no code to check", "skip"];
-  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
+  const entry = entryObject(ctx.page);
+  const sections = { validators: entry?.validators, converters: entry?.converters };
+  if (ctx.handlersSrc == null && typeof sections.validators !== "string" && typeof sections.converters !== "string") {
+    return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
+  }
   // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
-  const a = analyzePageCode(ctx.handlersSrc, entryObject(ctx.page)?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey));
+  const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey),
+    vk.thresholds || DEFAULT_QUALITY_THRESHOLDS, sections);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   if (!findingCount(a)) {
     const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
-    return ["✅ Done", `${a.handlers.length} handler(s): none over ${MAX_FUNCTION_LINES} lines, no helper defined twice, ${sends}`, "ok"];
+    return ["✅ Done", `${a.handlers.length} handler(s): none over ${a.maxFunctionLines} lines, no helper declared twice, ${sends}`, "ok"];
   }
   return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception (a request sent only from a module outside the built pages is one)`, "unverified"];
 }
@@ -4884,6 +4891,51 @@ export function resolveCardNativeVk(vk, ctx) {
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
 }
+// THE CODE QUALITY GROUPS are verify-only: one per page the table already shows, appended when the built pages are
+// checked. They measure how the plan's rows were written and add no row of their own to build, so they stay out of
+// `checklistGroups` — the plan, the task cut, a split's coverage and every task's digest never see them. An open one
+// still becomes a repair task, because those are cut from the verify rows.
+function codeQualityGroups(planGroups, opts) {
+  const pageKeys = [...new Set(planGroups.map((g) => g.pageKey).filter((k) => k && k !== "run"))];
+  return pageKeys.map((k) => pageGroup(k, "Code quality", codeQualityRows(opts), opts));
+}
+// The code-quality rows of one page, one per rule. The thresholds and the constants modules' record ids travel in
+// the row itself, so the resolver needs nothing but the built root.
+function codeQualityRows(opts) {
+  const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
+  const constantsGuids = opts.constantsGuids || [];
+  const runKey = qualityRunKey(thresholds, constantsGuids);
+  // A rule whose check needs something the run did not record says so on its own row.
+  const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
+  return QUALITY_ROW_RULES.map(({ rule, label }) => ({
+    deliverableId: `quality:${rule}`,
+    label: `[code-quality] ${rule} — ${label}`,
+    vk: { type: "quality", rule, thresholds, constantsGuids, runKey, note: notes[rule] || "" },
+  }));
+}
+const QUALITY_LISTED = 5;
+// A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
+// `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
+// not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
+export function resolveQualityVk(vk, ctx) {
+  if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
+  if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey).get(ctx.pageKey);
+  if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
+  if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
+  const found = page.findings.filter((f) => f.rule === vk.rule);
+  const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
+    + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
+  const blocking = found.filter((f) => !f.advisory);
+  const noted = found.filter((f) => f.advisory);
+  const note = vk.note ? vk.note + " " : "";
+  if (blocking.length) {
+    return ["⚠ verify", `${blocking.length} finding(s): ${listed(blocking)} — fix the code, or record a decision (\`--decide D<N>\`) that accepts it${blocking.some((f) => f.limit != null) ? ", or raise the limit in `manifest.qualityThresholds`" : ""}`, "unverified"];
+  }
+  if (noted.length) return ["ℹ noted", `${note}${noted.length} noted, not blocking: ${listed(noted)}`, "skip"];
+  if (note) return ["ℹ noted", note.trim(), "skip"];
+  return ["✅ Done", "none on the built page", "ok"];
+}
 // The list page's checked module rows: only the constants modules its own record ids map to (the section's define()
 // list is the list analyzer's, carried by the section's member worklist).
 function listModuleRows(result, opts) {
@@ -4925,7 +4977,7 @@ const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCou
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
 const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
-  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk]]);
+  ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
@@ -5318,6 +5370,8 @@ function withTextCheck(verdict, vk, ctx) {
 function rowKindOf(r, outcome) {
   if (r.na) return "na";
   if (r.info) return "info";
+  // A Code quality row that does not block is a note about the page's code, never a plan item to confirm by hand.
+  if (outcome === "skip" && r.vk?.type === "quality") return "info";
   if (outcome === "skip") return "confirm";
   return r.vk ? "machine" : "confirm";
 }
@@ -5393,7 +5447,8 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // of the run, the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
-  const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
+  const planGroups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
+  const groups = [...planGroups, ...codeQualityGroups(planGroups, opts)];
   const L = []; let n = 0;
   // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
