@@ -5896,6 +5896,23 @@ console.log("\n===== the migration result report — one artifact, computed from
       && /the Owner field is filled/.test(oneUnchecked.markdown.slice(oneUnchecked.markdown.indexOf("## Not exercised")))
       && oneUnchecked.counts.unexercised === 1,
     () => oneUnchecked.markdown.slice(0, 1600));
+  {
+    // Each unexercised page's bullet, byte for byte: its last built task and why that task reports no check, in the
+    // builder's words — a refused check, a check never attempted and a missing line are different jobs on the stand.
+    const reasons = exercisedRep([pageTask("r-a", "main", "Browser checks: 0 — page-smoke cannot open a list page; no surface available"),
+      pageTask("r-b", "child:C1", "Browser checks: 0"), pageTask("r-c", "child:C2", "")], tmp("result-report-unexercised-reasons"));
+    const md = reasons.markdown;
+    const got = md.slice(md.indexOf("## Not exercised")).split("\n").filter((l) => l.startsWith("- **"))
+      .map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    const want = [
+      "- **<page>** (`page:main`) — [Page build](r-a.md), `Browser checks: 0`: page-smoke cannot open a list page; no surface available",
+      "- **<page>** (`page:child:C1`) — [Page build](r-b.md), `Browser checks: 0`: no account of why",
+      "- **<page>** (`page:child:C2`) — [Page build](r-c.md) wrote no `Browser checks` line",
+    ];
+    check("not exercised: each unexercised page quotes its last built task's `Browser checks` reason, says when there is none, and says when the line is missing",
+      () => JSON.stringify(got) === JSON.stringify(want),
+      () => ({ got, want }));
+  }
   check("not exercised: the 🟠 run keeps `complete` (exit code untouched) and says the unchecked pages on stderr, by name",
     () => /^migrate\.mjs: 🟠 BUILT, NOT EXERCISED — .*Check them on the stand/.test(unexercisedNote(oneUnchecked))
       && unexercisedNote(oneUnchecked).includes(oneUnchecked.unexercisedPages[0]) && oneUnchecked.unexercisedPages.length === 1

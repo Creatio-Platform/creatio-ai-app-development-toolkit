@@ -72,7 +72,9 @@ const BUILT_STATUSES = new Set([S_DONE, S_PARTIAL]);
 // later is opened as it finally stands, not as an earlier chunk left it. A run can be complete and still have pages
 // nobody opened after their last save, and those pages are what a person has to check by hand. Under
 // `Browser: none` the user declined the check for the run, so no built page counts as exercised whatever its notes
-// say. `tasks` arrive in queue order (`planTasks`).
+// say. A page the recorded tool cannot open (a list page under `Browser: page-smoke` with no browser surface) is
+// unexercised too, on purpose: nobody saw it run, so a person still has to open it; the section quotes the builder's
+// reason, which tells that case apart from a check nobody ran. `tasks` arrive in queue order (`planTasks`).
 function browserExercise(tasks, declined = false) {
   const pages = new Map();
   const capBreaches = [];
@@ -83,7 +85,7 @@ function browserExercise(tasks, declined = false) {
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
     const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
     page.exercised = n > 0 && !declined;
-    page.evidence = { task: t, n, text: line?.text || "" };
+    page.evidence = { task: t, n, text: line?.text || "", reported: !!line };
     page.tasks.push(t);
     pages.set(t.writesTo, page);
   }
@@ -118,13 +120,21 @@ function unexercisedLines(unexercised, pageName, answer) {
   const L = [`## Not exercised in a browser (${unexercised.length})`, "",
     "These pages were built and read back, but no build task opened them after its last save, so what only the"
       + " running page shows — a render error, a rule that does not fire, a save that writes the wrong column — is"
-      + " unchecked. Open each one on the stand and go through its checks below.",
+      + " unchecked. Open each one on the stand and go through its checks below. Each page names its last build task"
+      + " and quotes why it reports no check: a refused or impossible check wants the consent or the tool fixed first.",
     "", `Browser answer recorded for this run: ${recorded}.`, ""];
   for (const p of unexercised) {
-    L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`)`);
+    L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`) — ${unexercisedReason(p.evidence)}`);
     for (const t of p.tasks) L.push(...checkOnStandLines(t));
   }
   return L;
+}
+// Why the page's last built task opened nothing, in the builder's words: a refused or impossible check wants the
+// consent or the tool fixed, a check nobody ran wants the page opened, and a missing line says nothing either way.
+function unexercisedReason({ task: t, n, text, reported }) {
+  const where = `[${cell(t.group || t.id)}](${enc(t.file)})`;
+  if (!reported) return `${where} wrote no \`Browser checks\` line`;
+  return `${where}, \`Browser checks: ${n}\`: ${text ? cell(text) : "no account of why"}`;
 }
 const checkOnStandLines = (t) => [...markers(t.notes, CHECK_MARKER)]
   .map(([n, text]) => `  - [${cell(t.group || t.id)}](${enc(t.file)}), row ${n}: ${cell(text)}`);
