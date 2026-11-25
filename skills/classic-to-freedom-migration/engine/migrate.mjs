@@ -2296,11 +2296,10 @@ const ATTRIBUTE_READ = /this\.\$(\w{1,80})|this\.get\(\s{0,5}["'](\w{1,80})["']\
 // it) narrows the list the same way on every visit — a fixed filter. One small pattern per shape, merged.
 const ATTRIBUTE_CONTROLS = [/["']?name["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']/g, /["']?bindTo["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']/g];
 const ATTRIBUTE_ASSIGNMENTS = [/this\.\$(\w{1,80})\s{0,5}=(?!=)/g, /this\.set\(\s{0,5}["'](\w{1,80})["']/g];
-const INIT_MEMBERS = ["init", "initData", "onEntityInitialized", "constructor", "onRender"];
-// The spans of every layer's init members, as [open, close] offsets.
-function initSpans(body, spans) {
+// The spans of every layer's members with these names, as [open, close] offsets.
+function memberSpans(body, names, spans) {
   const out = [];
-  for (const name of INIT_MEMBERS) {
+  for (const name of names) {
     for (const start of memberValueStarts(body, name, spans)) {
       const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(body.slice(start, start + 400));
       const inner = fm ? braceBody(body, start + fm[0].length - 1) : null;
@@ -2309,11 +2308,38 @@ function initSpans(body, spans) {
   }
   return out;
 }
+// Every layer's `diff` array, as [open, close] offsets: the controls the detail puts on its list.
+const MAX_DIFF_LEAD = 80;
+function diffSpans(body, spans) {
+  const out = [];
+  for (const start of memberValueStarts(body, "diff", spans)) {
+    const open = body.indexOf("[", start);
+    const close = open >= 0 && open - start <= MAX_DIFF_LEAD ? matchingBracket(body, open, spans) : -1;
+    if (close > open) out.push([open, close]);
+  }
+  return out;
+}
+function matchingBracket(body, open, spans) {
+  let depth = 0;
+  for (let i = open; i < body.length; i++) {
+    if (insideSpan(spans, i)) continue;
+    if (body[i] === "[") depth++;
+    else if (body[i] === "]" && --depth === 0) return i;
+  }
+  return -1;
+}
+// The attributes a user changes on the list: a control in the detail's own `diff` binds to it or is named after it,
+// or a method such a control binds (a button's `click`) assigns it. A name or `bindTo` anywhere else (a config a
+// method returns, a comment, a string) is no control, and an assignment anywhere else (init, a grid-data load, a
+// sandbox message from the master list) sets the attribute for the user, so its filter is fixed.
 function changedAttributes(body, spans = literalSpans(body)) {
-  const init = initSpans(body, spans);
-  const inInit = (i) => init.some(([a, b]) => i >= a && i <= b);
-  return new Set([...ATTRIBUTE_CONTROLS.flatMap((re) => [...body.matchAll(re)].map((m) => m[1])),
-    ...ATTRIBUTE_ASSIGNMENTS.flatMap((re) => [...body.matchAll(re)].filter((m) => !inInit(m.index)).map((m) => m[1]))]);
+  const diffs = diffSpans(body, spans);
+  const inDiff = (i) => !insideSpan(spans, i) && diffs.some(([a, b]) => i > a && i < b);
+  const controlled = (re) => [...body.matchAll(re)].filter((m) => inDiff(m.index)).map((m) => m[1]);
+  const handlers = memberSpans(body, [...new Set(controlled(ATTRIBUTE_CONTROLS[1]))], spans);
+  const inHandler = (i) => handlers.some(([a, b]) => i >= a && i <= b);
+  return new Set([...ATTRIBUTE_CONTROLS.flatMap(controlled),
+    ...ATTRIBUTE_ASSIGNMENTS.flatMap((re) => [...body.matchAll(re)].filter((m) => inHandler(m.index)).map((m) => m[1]))]);
 }
 
 // The kind of control a quick filter needs, read off the attribute's declared data type.
@@ -2438,7 +2464,7 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
 }
 // Every function of the feature scan, for the structural ReDoS golden.
 export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
-  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, initSpans, filterChainCode];
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom

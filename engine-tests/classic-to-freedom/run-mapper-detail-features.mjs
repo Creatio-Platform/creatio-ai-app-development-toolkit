@@ -65,7 +65,8 @@ const INLINE_TOGGLE_BODY = `define("InlineDetail",[],function(){return{entitySch
   methods:{onActiveOnlyButtonClick:function(){this.$IsActiveOnly=!this.$IsActiveOnly;this.reloadGridData();},
     getFilters:function(){var f=this.callParent(arguments);
       if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
-      return f;}}};});`;
+      return f;}},
+  diff:[{operation:"insert",name:"ActiveOnlyButton",parentName:"Detail",propertyName:"tools",values:{click:{bindTo:"onActiveOnlyButtonClick"}}}]};});`;
 // A date read into a local first, and the filter's value is the local.
 const ALIAS_BODY = `define("AliasDetail",[],function(){return{entitySchemaName:"Line",
   attributes:{"OnDate":{dataValueType:Terrasoft.DataValueType.DATE}},
@@ -80,7 +81,8 @@ const TOGGLE_AND_HELPER_BODY = `define("BothDetail",[],function(){return{entityS
     getFilters:function(){var f=this.callParent(arguments);
       if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
       this.addCategoryFilter(f);return f;},
-    addCategoryFilter:function(f){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));}}};});`;
+    addCategoryFilter:function(f){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));}},
+  diff:[{operation:"insert",name:"ActiveOnlyButton",parentName:"Detail",propertyName:"tools",values:{click:{bindTo:"onActiveOnlyButtonClick"}}}]};});`;
 // Fixed filters two helpers below getFilters — an IN filter and a comparison filter — read body-wide.
 const DEEP_FIXED_BODY = `define("DeepDetail",[],function(){return{entitySchemaName:"Req",
   methods:{getFilters:function(){var f=this.callParent(arguments);this.addScopeFilters(f);return f;},
@@ -95,11 +97,25 @@ const DEEP_IN_BESIDE_TOGGLE_BODY = `define("DeepToggleDetail",[],function(){retu
       if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
       this.addScopeFilters(f);return f;},
     addScopeFilters:function(f){this.addOwnerFilters(f);},
-    addOwnerFilters:function(f){f.addItem(this.Terrasoft.createColumnInFilterWithParameters("Owner",[this.$MasterId]));}}};});`;
+    addOwnerFilters:function(f){f.addItem(this.Terrasoft.createColumnInFilterWithParameters("Owner",[this.$MasterId]));}},
+  diff:[{operation:"insert",name:"ActiveOnlyButton",parentName:"Detail",propertyName:"tools",values:{click:{bindTo:"onActiveOnlyButtonClick"}}}]};});`;
 // A getFilters the engine cannot read (a reference, not a function body): the body's column filters still signal FIXED.
 const UNREADABLE_FILTERS_BODY = `define("OpaqueDetail",[],function(){return{entitySchemaName:"Req",
   methods:{getFilters:helpers.filters,
     scope:function(f){f.addItem(this.Terrasoft.createColumnInFilterWithParameters("Owner",[this.$MasterId]));}}};});`;
+// The master list's selected row, set while the grid data loads and on a sandbox message: no control on this list
+// changes it, so its filter is fixed.
+const MASTER_ROW_BODY = `define("ChildRowsDetail",[],function(){return{entitySchemaName:"Line",
+  methods:{initGridData:function(){this.callParent(arguments);this.set("Subscription",this.Terrasoft.GUID_EMPTY);
+      this.sandbox.subscribe("ActiveRowChanged",function(row){this.set("Subscription",row);this.reloadGridData();},this);},
+    getFilters:function(){var f=this.callParent(arguments);var id=this.get("Subscription");
+      if(id){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Subscription",id));}return f;}}};});`;
+// A name and a bindTo outside the diff — a config a method returns, a comment — are no control.
+const NOT_A_CONTROL_BODY = `define("ConfigDetail",[],function(){return{entitySchemaName:"Req",
+  methods:{getOwnerColumnConfig:function(){return {name:"Owner",bindTo:"Owner"};},
+    onOwnerPicked:function(v){this.$Owner=v;},
+    getFilters:function(){/* the toolbar once had {bindTo:"Owner"} */var f=this.callParent(arguments);
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Owner",this.get("Owner")));return f;}}};});`;
 // An attribute set only while the list initialises: the user never changes it, so its filter is fixed.
 const INIT_ONLY_BODY = `define("MineDetail",[],function(){return{entitySchemaName:"Task",
   methods:{init:function(){this.$CurrentContact=Terrasoft.SysValue.CURRENT_USER_CONTACT.value;this.callParent(arguments);},
@@ -189,7 +205,7 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   const deep = detailOf(run("DeepDetail", "Req", DEEP_FIXED_BODY), "DeepDetail");
   check("detail features: an IN filter and a comparison filter two helpers below getFilters stay FIXED, both columns named",
     () => deep.features.quickFilters.length === 0 && deep.addMode?.fixedFilters === true
-      && [...deep.addMode.filterCols].sort().join(",") === "Category,Owner",
+      && [...deep.addMode.filterCols].sort((a, b) => a.localeCompare(b)).join(",") === "Category,Owner",
     () => ({ addMode: deep.addMode, quick: deep.features.quickFilters }));
   const opaque = detailOf(run("OpaqueDetail", "Req", UNREADABLE_FILTERS_BODY), "OpaqueDetail");
   check("detail features: a getFilters the engine cannot read still gives the fixed-filter signal with the body's columns",
@@ -202,6 +218,15 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && deepToggle.addMode?.fixedFilters === true && deepToggle.addMode.filterCols.join(",") === "Owner"
       && /FIXED list filters on Owner/.test(deepToggleRun.plan),
     () => ({ addMode: deepToggle.addMode, quick: deepToggle.features.quickFilters }));
+
+  const masterRow = detailOf(run("ChildRowsDetail", "Line", MASTER_ROW_BODY), "ChildRowsDetail");
+  check("detail features: an attribute set by a grid-data load and a sandbox message (the master list's row) is a FIXED filter, not a quick filter",
+    () => masterRow.features.quickFilters.length === 0 && masterRow.addMode?.fixedFilters === true && masterRow.addMode.filterCols.join(",") === "Subscription",
+    () => ({ addMode: masterRow.addMode, quick: masterRow.features.quickFilters }));
+  const notControl = detailOf(run("ConfigDetail", "Req", NOT_A_CONTROL_BODY), "ConfigDetail");
+  check("detail features: a name or bindTo outside the detail's diff (a returned config, a comment) and a setter no control binds make no quick filter",
+    () => notControl.features.quickFilters.length === 0 && notControl.addMode?.fixedFilters === true && notControl.addMode.filterCols.join(",") === "Owner",
+    () => ({ addMode: notControl.addMode, quick: notControl.features.quickFilters }));
 
   // AC 2 — a date filter is a quick filter on its columns; a filter kept in the profile raises the persistence question.
   const date = run("ActiveProductDetail", "ActiveProduct", DATE_BODY);
@@ -296,6 +321,14 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   check("detail features: a detail declared by a platform template layer stays context — no decide row",
     () => !platform.changeSet.needsDecision.some((n) => n.kind === "detail-inherited") && (platform.changeSet.inheritedDetails || []).length === 0,
     () => platform.changeSet.inheritedDetails);
+  const unplacedSeed = [...CLEAN_SEED, { pkg: "Vendor.Logging", body: `define("BaseModulePageV2",[],function(){return{details:{Log:{schemaName:"VendorLogDetail",entitySchemaName:"ChangeLog"}},diff:[]};});` }];
+  const inheritedUnplaced = runMigration({ entity: "X", seed: unplacedSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const inhU = inheritedUnplaced.changeSet.needsDecision.find((n) => n.kind === "detail-inherited");
+  check("detail features: an inherited detail no layer places claims what users saw only by the chain state, and a placed one names its tab",
+    () => inhU?.placed === false && !/Classic users saw it/.test(inhU.reason)
+      && (inhU.chainComplete ? /users never saw it/ : /no FETCHED layer places it/).test(inhU.reason)
+      && inh?.placed === true && /placed in 'ChangesHistoryTab', so Classic users saw it/.test(inh.reason),
+    () => ({ inhU, inh }));
   const documented = runMigration({ entity: "X", seed: layerSeed("BaseModulePageV2/Vendor.Logging", "BaseModulePageV2", "VendorLogDetail"),
     schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   check("detail features: the documented `Schema/Package` form names the same layer package",
@@ -320,6 +353,22 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => unplacedOf(noSeed)?.chainComplete === false && /no FETCHED layer places it/.test(unplacedOf(noSeed).reason)
       && /Complete the chain before answering/.test(unplacedOf(noSeed).reason) && !/users never saw it/.test(unplacedOf(noSeed).reason),
     () => unplacedOf(noSeed));
+  const declaredNone = runMigration({ entity: "X", seed: [], noParentTemplate: true, schemas: [{ pkg: "P", body:
+    `define("XPage",[],function(){return{entitySchemaName:"X",details:{Files:{schemaName:"FileDetailV2",entitySchemaName:"XFile",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[]};});` }],
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  check("detail features: a page verified to have no parent template (`noParentTemplate: true`) has a complete chain — the unplaced question says users never saw it",
+    () => unplacedOf(declaredNone)?.chainComplete === true && /users never saw it/.test(unplacedOf(declaredNone).reason),
+    () => unplacedOf(declaredNone));
+  const approved = runMigration({ entity: "X", seed: CLEAN_SEED, deliverableStatus: { "main#confirm:detail-unplaced:FileDetailV2": { status: "build", decision: "D4" } }, schemas: [{ pkg: "P", body:
+    `define("XPage",[],function(){return{entitySchemaName:"X",details:{Files:{schemaName:"FileDetailV2",entitySchemaName:"XFile",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[]};});` }],
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const approvedRows = checklistGroups(approved, {}).flatMap((g) => g.rows);
+  check("detail features: a `build` answer on the unplaced question builds the detail — its Attachments row is back — and asks for its tab",
+    () => approved.changeSet.standardFeatures.find((s) => s.classicDetail === "FileDetailV2")?.unplaced !== true
+      && approvedRows.some((r) => r.deliverableId === "feature:Attachments")
+      && /Answered build \(D4\)/.test(unplacedOf(approved)?.reason || "")
+      && approved.changeSet.needsDecision.some((n) => n.kind === "detail-placement" && n.item === "FileDetailV2"),
+    () => ({ unplaced: unplacedOf(approved), rows: approvedRows.map((r) => r.deliverableId).filter(Boolean) }));
   check("detail features: the unplaced question's wording follows the chain state — it asserts what users saw only on a complete chain",
     () => unplacedOf(files)?.chainComplete === /users never saw it/.test(unplacedOf(files)?.reason || ""),
     () => unplacedOf(files));

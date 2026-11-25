@@ -4719,13 +4719,14 @@ function gridNamedAfter(ops, n) {
   if (found.length > 1) return { ambiguous: found.map((o) => o.name) };
   return found.length ? { grid: found[0] } : {};
 }
+const ambiguousGrids = (w) => esc(String(w.n)) + " (" + w.ambiguous.map((g) => esc(g)).join(", ") + ")";
 function resolveRowToolbarVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' row toolbars");
   const want = (vk.names || []).map((n) => ({ n, ...gridNamedAfter(ctx.ops, n) }));
   const bare = want.filter((w) => w.grid && !w.grid.rowToolbar).map((w) => w.n);
   if (bare.length) return ["❌ MISSING", `${bare.map((n) => esc(String(n))).join(", ")} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones`, "missing"];
   const ambiguous = want.filter((w) => w.ambiguous);
-  if (ambiguous.length) return ["⚠ verify", `more than one grid is named after ${ambiguous.map((w) => `${esc(String(w.n))} (${w.ambiguous.map((g) => esc(g)).join(", ")})`).join("; ")} — confirm the related list's \`rowToolbarItems\` on the stand`, "unverified"];
+  if (ambiguous.length) return ["⚠ verify", `more than one grid is named after ${ambiguous.map(ambiguousGrids).join("; ")} — confirm the related list's \`rowToolbarItems\` on the stand`, "unverified"];
   const unfound = want.filter((w) => !w.grid).map((w) => w.n);
   if (unfound.length) return ["⚠ verify", `no grid named after ${unfound.map((n) => esc(String(n))).join(", ")} on the built page — confirm its \`rowToolbarItems\` on the stand`, "unverified"];
   return ["✅ Done", `${want.length} list(s) declare \`rowToolbarItems\`, matched by name`, "ok"];

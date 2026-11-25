@@ -574,7 +574,7 @@ export function mapToFreedom(eff, opts = {}) {
   const inheritanceUnchecked = uncheckedTemplateDetails(eff.details);
   inheritanceUnchecked.forEach((name) => needsDecision.push({ kind: "detail-inheritance-unchecked", item: name,
     reason: `detail '${name}' comes from a template layer whose \`pkg\` names no package, so whether a customer or vendor layer declares it was NOT checked — supply the layer's package, then decide it like an inherited detail` }));
-  inheritedDetails.forEach((d) => needsDecision.push(inheritedDetailDecision(d)));
+  inheritedDetails.forEach((d) => needsDecision.push(inheritedDetailDecision(d, chainIsComplete(eff))));
 
   // ---- embedded profile cards (linked-record blocks) → the Freedom side profile ----
   const _pc = mapProfileCards(ctx);
@@ -1767,7 +1767,7 @@ function mapDetails(ctx, containers, profileRegion) {
     standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null,
       caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null,
       ...(settings ? { element: d.key, connections: settings.connections } : {}),
-      ...(d.parent ? {} : { unplaced: true }) });
+      ...(awaitsPlacement(d) ? { unplaced: true } : {}) });
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1815,7 +1815,7 @@ function mapDetails(ctx, containers, profileRegion) {
       element: d.key || null,
       // what users can do with the list besides its columns; null when the detail's schema was not bundled
       features: detailFeaturesOf(d, dinfo),
-      ...(d.parent ? {} : { unplaced: true }),
+      ...(awaitsPlacement(d) ? { unplaced: true } : {}),
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
@@ -1832,7 +1832,11 @@ function mapDetails(ctx, containers, profileRegion) {
     return title;
   };
   // Emit ONE deduped placement: a standard feature (A3 analog) or a rebuilt custom detail. Own fn for Sonar CC 15.
-  const emitDetail = ({ d, tab, own }) => {
+  const emitDetail = ({ d: declared, tab, own }) => {
+    // A `build` answer to the unplaced question puts the detail back: it is built like a placed one, and its tab is
+    // then the open question.
+    const answered = declared.parent ? null : featureStatus([unplacedConfirmId(declared)]);
+    const d = answered?.status === "build" ? { ...declared, placementApproved: true } : declared;
     // Ensure the OWNING tab is emitted as a container so a tab holding ONLY details is still built (+ caption).
     if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
@@ -1840,7 +1844,9 @@ function mapDetails(ctx, containers, profileRegion) {
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     // A detail Classic declares but never places is not shown there: building it, a standard feature included, adds a
     // surface the user never had, so it waits for their approval.
-    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat?.feature, chainIsComplete(ctx.eff)));
+    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat?.feature, chainIsComplete(ctx.eff), answered));
+    if (d.placementApproved) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+      reason: `the user approved building detail '${d.key}', which Classic placed in no tab — confirm target tab` });
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
       const decided = featureStatus(withheldIds(feat.feature, d.schemaName || d.key));
       needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
@@ -1872,19 +1878,29 @@ function detailFeaturesOf(d, dinfo) {
 // The text says no more than the input supports: the engine sees only the FETCHED layers, so a detail no fetched layer
 // places was hidden from users only when the parent chain is known to be complete. With a missing, skeletal or partial
 // seed a layer that was not fetched may place it, and the question says so instead of asserting what users saw.
-function unplacedDetailDecision(d, feature, chainComplete) {
-  const what = feature ? `the ${feature} detail '${d.schemaName || d.key}'` : `detail '${d.schemaName || d.key}'`;
-  const seen = chainComplete
-    ? "no layer of the page's complete chain places it in a tab, so its users never saw it"
-    : "no FETCHED layer places it in a tab, but the parent chain is not known to be complete (no seed, or a skeletal or partial one): a layer missing from the manifest may place it. Complete the chain before answering";
-  return { kind: "detail-unplaced", item: d.schemaName || d.key, chainComplete, ...(feature ? { feature } : {}),
-    reason: `${what} is declared on the Classic page; ${seen}. Approve one: build it (name the tab) or Won't do. Nothing is built for it until the user answers` };
+// The answer is recorded on the question's own confirm row (`confirm:detail-unplaced:<item>`): `build` builds the
+// detail and asks for its tab (`detail-placement`); any other answer, or none, builds nothing for it.
+const unplacedConfirmId = (d) => `confirm:detail-unplaced:${d.schemaName || d.key}`;
+const awaitsPlacement = (d) => !d.parent && !d.placementApproved;
+const UNPLACED_SEEN = {
+  complete: "no layer of the page's complete chain places it in a tab, so its users never saw it",
+  partial: "no FETCHED layer places it in a tab, but the parent chain is not known to be complete (no seed, or a skeletal or partial one): a layer missing from the manifest may place it. Complete the chain before answering",
+};
+function unplacedDetailDecision(d, feature, chainComplete, answered = null) {
+  const item = d.schemaName || d.key;
+  const what = feature ? `the ${feature} detail '${item}'` : `detail '${item}'`;
+  const seen = chainComplete ? UNPLACED_SEEN.complete : UNPLACED_SEEN.partial;
+  const base = { kind: "detail-unplaced", item, chainComplete, ...(feature ? { feature } : {}), ...(answered ? { decidedBy: answered.key } : {}) };
+  if (answered?.status === "build") {
+    return { ...base, reason: `${what} is declared on the Classic page; ${seen}. Answered build (${answered.decision || answered.key}): it is built, and its tab is the \`detail-placement\` question` };
+  }
+  return { ...base, reason: `${what} is declared on the Classic page; ${seen}. Answer build or Won't do on this row; a build answer builds it and then asks for its tab. Nothing is built for it until the user answers` };
 }
 // Whether the merged chain is complete enough to say what Classic users saw: a real seed that is neither skeletal nor
 // partial, or a page verified to have no parent template.
 const chainIsComplete = (eff) => {
   const q = eff?.seedQuality;
-  return !!q && ((q.seeded && !q.looksSkeletal && !q.possiblyPartial) || eff.noParentTemplate === true);
+  return eff?.noParentTemplate === true || (!!q && q.seeded && !q.looksSkeletal && !q.possiblyPartial);
 };
 
 // The packages of the Creatio platform itself. A template layer from any other package (a customer's or a vendor's)
@@ -1898,7 +1914,7 @@ const nonPlatformLayer = (pkg) => { const p = layerPackage(pkg); return !!p && !
 function inheritedLayerDetails(details) {
   return (details || []).filter((d) => d.fromTemplate && (d.provenance || []).some(nonPlatformLayer))
     .map((d) => ({ key: d.key, schemaName: d.schemaName || null, entity: d.entitySchemaName || null,
-      layer: (d.provenance || []).findLast(nonPlatformLayer) }));
+      layer: (d.provenance || []).findLast(nonPlatformLayer), parent: d.parent || null }));
 }
 // Template details whose layers name no package at all: whether they are inherited from a customer or vendor layer
 // was NOT checked, which the plan has to say rather than show an empty list that reads as "nothing inherited".
@@ -1907,11 +1923,15 @@ function uncheckedTemplateDetails(details) {
 }
 // No recommendation either way: whether a vendor's or a customer's inherited detail still belongs on the page is the
 // user's call, and a recommendation is the answer they would give without reading the question.
-function inheritedDetailDecision(d) {
+// Like the unplaced question, it claims what Classic users saw only as far as the input supports: placed in a tab, or
+// placed by no layer of a complete chain; with an incomplete chain an unfetched layer may place it.
+function inheritedDetailDecision(d, chainComplete) {
   const name = d.schemaName || d.key;
   const over = d.entity ? " (over '" + d.entity + "')" : "";
-  return { kind: "detail-inherited", item: name, layer: d.layer,
-    reason: `detail '${name}'${over} comes from the template layer '${d.layer}', not from the page's own schema, and Classic users saw it on this page. Inherited — decide: build it as a related list (name the tab) or Won't do` };
+  let seen = `placed in '${d.parent}', so Classic users saw it on this page`;
+  if (!d.parent) seen = chainComplete ? UNPLACED_SEEN.complete : UNPLACED_SEEN.partial;
+  return { kind: "detail-inherited", item: name, layer: d.layer, placed: !!d.parent, chainComplete,
+    reason: `detail '${name}'${over} comes from the template layer '${d.layer}', not from the page's own schema; ${seen}. Inherited — decide: build it as a related list (name the tab) or Won't do` };
 }
 
 // A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and

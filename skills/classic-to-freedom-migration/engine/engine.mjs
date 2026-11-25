@@ -2593,6 +2593,8 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     warnings,
     unresolvedParents,
     seedQuality, // #19 — whether the seed is a real fetched template body vs a hand-authored skeleton
+    // the manifest's verified declaration that the page has no parent template: its chain is complete as fetched
+    noParentTemplate: opts.noParentTemplate === true,
     features, // feature toggles gating runtime visibility (the rendered page shows one feature-state)
     cardActionHints, // custom card actions found in getActions bodies (imperative — surfaced for review)
     processLaunch, processNames, // #8c — the page launches a business process (a "Run process" action)
