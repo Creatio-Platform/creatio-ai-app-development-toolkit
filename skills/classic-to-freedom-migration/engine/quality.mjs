@@ -430,7 +430,9 @@ function groupBy(items, keyOf) {
 // page. `pages` is `{ pageKey: bundle entry }`.
 // `wholeRun` says `pages` are ALL the run's pages (the verify payload): only then is an export nobody uses known to be
 // unused — one page alone cannot see what the others import.
-export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, wholeRun = true) {
+// `projectModules` are the team's declared helper and constants modules (`projectConventions`): they also serve pages
+// outside the run, so an export of theirs is never reported as unused.
+export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, wholeRun = true, projectModules = new Set()) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   const helperOwners = new Map();
@@ -438,7 +440,7 @@ export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, c
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
   for (const [key, page] of byPage) if (page) reportCopiesFromOtherPages(key, page, helperOwners);
-  lintRunModules(byPage, pages || {}, modules, wholeRun);
+  lintRunModules(byPage, pages || {}, modules, wholeRun, projectModules);
   return byPage;
 }
 
@@ -455,14 +457,15 @@ function reportCopiesFromOtherPages(key, page, helperOwners) {
 // The run's findings, built once per `--built` root: the verify rows of every page read the same result.
 const RUN_CACHE = new WeakMap();
 // The key of one thresholds + constants-module combination, built once per set of rows (see `codeQualityRows`).
-export const qualityRunKey = (thresholds, constantsGuids) =>
-  JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort((a, b) => a.localeCompare(b)).join();
-export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids)) {
+export const qualityRunKey = (thresholds, constantsGuids, projectModules = []) =>
+  JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort((a, b) => a.localeCompare(b)).join()
+  + "|" + [...projectModules].sort((a, b) => a.localeCompare(b)).join();
+export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids), projectModules = []) {
   const pages = root?.pages && typeof root.pages === "object" ? root.pages : { main: root };
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
   const modules = root?.modules && typeof root.modules === "object" ? root.modules : null;
-  if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules));
+  if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, true, new Set(projectModules)));
   return perRoot.get(cacheKey);
 }
 
@@ -483,10 +486,10 @@ export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualit
 const MIN_COPIED_HANDLER_NODES = 15;
 
 function emptyPageLint() {
-  return { findings: [], helpers: [], unreadable: [], handlerShapes: [], asts: [] };
+  return { findings: [], helpers: [], unreadable: [], handlerShapes: [], asts: [], notChecked: [] };
 }
 
-function lintRunModules(byPage, pages, modules, wholeRun) {
+function lintRunModules(byPage, pages, modules, wholeRun, projectModules = new Set()) {
   const keys = Object.keys(pages);
   reportPagesWithoutModule(byPage, pages);
   reportCopiedHandlers(byPage);
@@ -504,8 +507,9 @@ function lintRunModules(byPage, pages, modules, wholeRun) {
   reportModuleCopies(read, byPage, report);
   reportSharedValues(read, report);
   const importers = importerFacts(pages, byPage, read);
-  if (wholeRun) reportUnusedExports(read, importers, report);
-  reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun));
+  // Not the project's declared modules: they also serve pages outside the run, which nothing here sees.
+  if (wholeRun) reportUnusedExports(read.filter((m) => !projectModules.has(m.name)), importers, report);
+  reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
 }
 
 // The page a module's findings belong to: the page whose own module it is, else the first page importing it.
@@ -533,7 +537,9 @@ function reportPagesWithoutModule(byPage, pages) {
     const page = byPage.get(key);
     const deps = bundleDeps(entry);
     const schema = pageSchemaOf(entry);
-    if (!page?.handlerShapes.length || !deps || !schema || deps.includes(schema + "Module")) continue;
+    if (!page?.handlerShapes.length) continue;
+    if (!deps || !schema) { page.notChecked.push(QUALITY_RULES.pageWithoutModule); continue; }
+    if (deps.includes(schema + "Module")) continue;
     page.findings.push(finding(QUALITY_RULES.pageWithoutModule, "handlers", 0,
       `${page.handlerShapes.length} handler(s) and no \`${schema}Module\` among the page's imports (${deps.length ? deps.map((d) => "`" + d + "`").join(", ") : "none"})`));
   }
@@ -560,10 +566,11 @@ function reportCopiedHandlers(byPage) {
 function moduleFacts(name, src) {
   const mod = parseDefineModule(src, { locations: true });
   if (mod.error) return { name, error: mod.error };
-  const functions = [];
-  collectNamedFunctions(mod.factory.body, functions);
+  // The bounded walk first: a body it refuses is never handed to the recursive helper walk.
   const facts = treeFacts(mod.factory.body);
   if (facts.truncated) return { name, error: "the body is too large or too deeply nested to read" };
+  const functions = [];
+  collectNamedFunctions(mod.factory.body, functions);
   return { name, factory: mod.factory, argOf: argBindings(mod.factory.params, mod.deps), functions, ...facts,
     exports: exportedNames(mod.returned, functions) };
 }
@@ -592,9 +599,14 @@ function exportedNames(returned, functions) {
   const byName = new Map(functions.map((f) => [f.name, f]));
   return returned.properties.filter((p) => p.type === "Property").map((p) => {
     const name = staticPropKey(p);
-    const fn = p.value.type === "Identifier" ? byName.get(p.value.name)?.fn : (isFunction(p.value) ? p.value : null);
-    return name ? { name, line: lineOf(p), fn: fn || null } : null;
+    return name ? { name, line: lineOf(p), fn: exportedFunction(p.value, byName) } : null;
   }).filter(Boolean);
+}
+
+// The function an export names: a function declared in the module (`{ init }`), or one written in place.
+function exportedFunction(value, byName) {
+  if (value.type === "Identifier") return byName.get(value.name)?.fn || null;
+  return isFunction(value) ? value : null;
 }
 
 // A function in one module whose body is a copy of one declared earlier — in another module, or on a page.
@@ -646,7 +658,7 @@ function importerFacts(pages, byPage, read) {
     const deps = bundleDeps(entry) || [];
     const names = argNamesOf(entry?.args);
     const bound = names ? new Map(names.map((n, i) => [n, deps[i]]).filter(([n, d]) => n && d)) : null;
-    for (const ast of byPage.get(key)?.asts || []) out.push({ name: null, bound, ...treeFacts(ast) });
+    for (const ast of byPage.get(key)?.asts || []) out.push({ name: null, page: key, bound, ...treeFacts(ast) });
   }
   for (const m of read) out.push({ name: m.name, bound: m.argOf, members: m.members, calls: m.calls });
   return out;
@@ -683,13 +695,15 @@ function wrappedCallOf(fn) {
   if (fn.body.type === "BlockStatement") {
     if (fn.body.body.length !== 1) return null;
     const st = fn.body.body[0];
-    expr = st.type === "ReturnStatement" ? st.argument : (st.type === "ExpressionStatement" ? st.expression : null);
+    if (st.type === "ReturnStatement") expr = st.argument;
+    else if (st.type === "ExpressionStatement") expr = st.expression;
+    else return null;
   }
   if (expr?.type === "AwaitExpression") expr = expr.argument;
   return expr?.type === "CallExpression" ? calleePath(expr.callee) : null;
 }
 
-function reportInlinedWrappers(read, importers, report, ownModules) {
+function reportInlinedWrappers(read, importers, report, ownModules, byPage) {
   const all = read.flatMap((m) => m.functions.filter((f) => !f.nested).map((f) => ({ m, f, path: wrappedCallOf(f.fn),
     exported: m.exports.some((ex) => ex.fn === f.fn), shared: !ownModules.has(m.name) }))).filter((w) => w.path);
   // One wrapper per call, the one to reuse: an exported one first, then one in a shared module. A second wrapper of
@@ -697,12 +711,14 @@ function reportInlinedWrappers(read, importers, report, ownModules) {
   const rank = (w) => (w.exported ? 0 : 2) + (w.shared ? 0 : 1);
   for (const [path, group] of groupBy(all, (w) => w.path)) {
     const w = group.slice().sort((a, b) => rank(a) - rank(b))[0];
-    for (const s of importers.filter((x) => x.name)) {
+    for (const s of importers) {
       const n = (s.calls.get(path) || 0) - (s.name === w.m.name ? 1 : 0);
       if (n < 1) continue;
       const how = w.exported || s.name === w.m.name ? "call it" : "export it and call it";
-      report(s.name, QUALITY_RULES.wrappedCallInlined, 0,
-        `\`${s.name}\` calls \`${path.slice(1)}\` ${n} time(s) directly although \`${w.m.name}.${w.f.name}\` wraps it — ${how}`);
+      const who = s.name ? `\`${s.name}\`` : "the page";
+      const text = `${who} calls \`${path.slice(1)}\` ${n} time(s) directly although \`${w.m.name}.${w.f.name}\` wraps it — ${how}`;
+      if (s.name) report(s.name, QUALITY_RULES.wrappedCallInlined, 0, text);
+      else byPage.get(s.page)?.findings.push(finding(QUALITY_RULES.wrappedCallInlined, "handlers", 0, text));
     }
   }
 }

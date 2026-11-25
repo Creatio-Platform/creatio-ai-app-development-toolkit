@@ -15900,6 +15900,16 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   const empty = compose({});
   check("compose: an EMPTY folder means the pages import no module of the run — no problem, and `built.modules` is an empty map",
     () => empty.problems.length === 0 && Object.keys(empty.built.modules).length === 0, () => empty);
+  const odd = (() => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_mod_"));
+    fs.mkdirSync(path.join(d, "reads", "modules", "Folder.js"), { recursive: true });
+    fs.writeFileSync(path.join(d, "reads", "modules", "__proto__.js"), "x");
+    fs.writeFileSync(path.join(d, "reads", "index.json"), JSON.stringify({ version: 1, reads: [{ kind: "modules", file: "reads/modules" }] }));
+    try { return assembleBuilt(d); } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  })();
+  check("compose: a folder named like a module and a prototype name are reported, never read or crashed on",
+    () => odd.problems.some((p) => /Folder\.js/.test(p.file) && /not a file/.test(p.why)) && odd.problems.some((p) => /__proto__/.test(p.file))
+      && Object.keys(odd.built.modules).length === 0, () => odd);
   const missing = compose(null);
   check("compose: a MISSING folder is a problem (not read), never read as 'no modules'",
     () => missing.problems.some((p) => p.file === "reads/modules" && /not written/.test(p.why)) && !missing.built?.modules,

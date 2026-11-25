@@ -14,7 +14,7 @@
 // A literal `null` is none of the three and is a problem of its own (see `readJson`).
 import fs from "node:fs";
 import path from "node:path";
-import { READS_DIR, READS_INDEX_FILE } from "./reads.mjs";
+import { READS_DIR, READS_INDEX_FILE, moduleNameOf } from "./reads.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
@@ -251,7 +251,6 @@ function composeOneRead(dir, r, acc) {
 // THE RUN'S CLIENT MODULES: every `<Module>.js` in the folder, as source text under `built.modules`. The bodies are
 // read, never run. A missing folder is "not read", and the module checks then say they did not run; an empty one is
 // "the pages import no module of the run".
-const MODULE_FILE = /^([A-Za-z_$][\w$]*)\.js$/;
 function composeModules(dir, r, acc) {
   const full = resolvedReadPath(dir, r.file);
   if (!full) { acc.problems.push({ file: r.file, what: "the run's client modules", why: `resolves outside \`${READS_DIR}/\` — re-run \`--reads <dir>\`` }); return; }
@@ -260,13 +259,12 @@ function composeModules(dir, r, acc) {
     return;
   }
   const modules = Object.create(null);
-  for (const name of fs.readdirSync(full).sort((a, b) => a.localeCompare(b))) {
-    const m = MODULE_FILE.exec(name);
-    if (!m || UNSAFE_KEYS.has(m[1])) {
-      acc.problems.push({ file: path.posix.join(r.file, name), what: "a client module file", why: "is not named `<Module>.js` — name it after the module's schema" });
-      continue;
-    }
-    modules[m[1]] = fs.readFileSync(path.join(full, name), "utf8");
+  for (const entry of fs.readdirSync(full, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const name = moduleNameOf(entry.name);
+    const problem = !entry.isFile() ? "is not a file — copy each module's `body.js` in as one `<Module>.js` file"
+      : (!name && "is not named `<Module>.js` — name it after the module's schema");
+    if (problem) { acc.problems.push({ file: path.posix.join(r.file, entry.name), what: "a client module file", why: problem }); continue; }
+    modules[name] = fs.readFileSync(path.join(full, entry.name), "utf8");
   }
   acc.modules = modules;
 }

@@ -185,7 +185,7 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
   fs.writeFileSync(path.join(mdir, "UsrA_ListPage.js"), "define(\"UsrA_ListPage\", [], function() { return { handlers: /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/ }; });");
   const mods = readModuleDir(mdir);
   check("readModuleDir: reads `<Module>.js` and `<Module>/body.js` (the .clio-pages layout) and leaves page bodies out",
-    () => Object.keys(mods).sort().join() === "UsrA_FormPageModule,UsrShared", () => Object.keys(mods));
+    () => Object.keys(mods).sort((a, b) => a.localeCompare(b)).join() === "UsrA_FormPageModule,UsrShared", () => Object.keys(mods));
   const notePage = { schemaName: "UsrA_NotePage", deps: "[\"UsrShared\"]", handlers: "[{ request: \"crt.HandleViewModelInitRequest\", handler: async (request, next) => { await shared.go(request.$context); return next?.handle(request); } }]" };
   check("codeMapRoot: a saved get-page response keeps the page's schema name beside the bundle — the own-module check needs it",
     () => codeMapRoot(JSON.stringify({ page: { schemaName: "UsrA_NotePage" }, bundle: { handlers: "[]" } })).schemaName === "UsrA_NotePage");
@@ -195,9 +195,19 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
       && !single.findings.some((f) => f.rule === QUALITY_RULES.unusedModuleExport) && single.wholeRun === false,
     () => single);
   const whole = runModuleFindings({ pages: { main: { schemaName: "UsrA_FormPage", deps: "[\"UsrA_FormPageModule\"]", handlers: "[{ request: \"crt.HandleViewModelInitRequest\", handler: async (request, next) => { await formPage.init(request.$context); return next?.handle(request); } }]" } } }, "main", mods);
-  check("whole run (built.json): an export nobody uses is reported",
-    () => whole.findings.filter((f) => f.rule === QUALITY_RULES.unusedModuleExport).map((f) => /spare|CLOSED/.exec(f.text)?.[0]).sort().join() === "CLOSED,spare",
+  check("whole run (built.json): an export nobody uses is reported, in the page's own module and in a shared module alike",
+    () => whole.findings.filter((f) => f.rule === QUALITY_RULES.unusedModuleExport).map((f) => /spare|CLOSED/.exec(f.text)?.[0]).sort((a, b) => a.localeCompare(b)).join() === "CLOSED,spare",
     () => whole.findings);
+  // One page in hand: two modules the page neither owns nor imports are not the builder's to fix.
+  fs.writeFileSync(path.join(mdir, "UsrOtherA.js"), `define("UsrOtherA", [], function() { const X = "7b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a4b"; return { X }; });`);
+  fs.writeFileSync(path.join(mdir, "UsrOtherB.js"), `define("UsrOtherB", [], function() { const Y = "7b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a4b"; return { Y }; });`);
+  const scoped = runModuleFindings(notePage, "main", readModuleDir(mdir));
+  check("one page: a duplicate between two modules the page does not reach is left out of its map",
+    () => !scoped.findings.some((f) => /UsrOther/.test(f.text)) && scoped.findings.some((f) => f.rule === QUALITY_RULES.sharedValueInTwoModules),
+    () => scoped.findings);
+  check("one page with no findings does not claim every export is used — it did not look",
+    () => !/every export is used/.test(renderCodeMap(analyzePageCode(notePage.handlers), "main", esc, { modules: 1, findings: [], wholeRun: false }))
+      && /every export is used/.test(renderCodeMap(analyzePageCode(notePage.handlers), "main", esc, { modules: 1, findings: [], wholeRun: true })));
   const noMods = renderCodeMap(analyzePageCode(notePage.handlers), "main", esc, null);
   check("without module bodies the map says the modules were NOT checked, never 'no findings'",
     () => /## The run's modules/.test(noMods) && /Not checked/.test(noMods), () => noMods);

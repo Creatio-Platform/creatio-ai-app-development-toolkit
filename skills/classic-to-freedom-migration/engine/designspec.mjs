@@ -5261,13 +5261,14 @@ function codeQualityGroups(planGroups, opts) {
 function codeQualityRows(opts) {
   const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
   const constantsGuids = opts.constantsGuids || [];
-  const runKey = qualityRunKey(thresholds, constantsGuids);
+  const projectModules = [...(opts.projectConventions?.helperModules || []), ...(opts.projectConventions?.constantsModules || [])];
+  const runKey = qualityRunKey(thresholds, constantsGuids, projectModules);
   // A rule whose check needs something the run did not record says so on its own row.
   const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
   return QUALITY_ROW_RULES.map(({ rule, label }) => ({
     deliverableId: `quality:${rule}`,
     label: `[code-quality] ${rule} — ${label}`,
-    vk: { type: "quality", rule, thresholds, constantsGuids, runKey, note: notes[rule] || "" },
+    vk: { type: "quality", rule, thresholds, constantsGuids, projectModules, runKey, note: notes[rule] || "" },
   }));
 }
 const QUALITY_LISTED = 5;
@@ -5280,8 +5281,11 @@ export function resolveQualityVk(vk, ctx) {
   if (MODULE_BODY_RULES.includes(vk.rule) && !(ctx.root?.modules && typeof ctx.root.modules === "object")) {
     return ["☐ confirm on-stand", "the run's module bodies were not read — fill `reads/modules/` as the read plan says to check the modules", "skip"];
   }
-  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey).get(ctx.pageKey);
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey, vk.projectModules).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
+  if (page.notChecked?.includes(vk.rule)) {
+    return ["☐ confirm on-stand", "the page has handlers but its bundle carries no `deps` or no schema name, so its own module could not be checked — pass get-page's `bundle.json` and `meta.json` whole", "skip"];
+  }
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
   const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")

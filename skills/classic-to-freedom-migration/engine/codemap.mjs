@@ -18,9 +18,11 @@
 // `--verify` reads it. Exit 0 = no findings, 2 = findings, 1 = the input could not be read or parsed.
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { getAcornParse, walkAstBounded, staticPropKey, isFnNode } from "./engine.mjs";
+import { getAcornParse, walkAstBounded, staticPropKey, isFnNode, parseDefineModule } from "./engine.mjs";
+import { bundleDeps } from "./conventions.mjs";
 import { lintPageQuality, lintRunQuality, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES } from "./quality.mjs";
 import path from "node:path";
+import { moduleNameOf } from "./reads.mjs";
 // designspec.mjs imports this module for the verify row; neither module uses the other's exports while it loads,
 // so the cycle is safe, and the CLI below reads the page exactly the way `--verify` does.
 import { verifyCtx, esc } from "./designspec.mjs";
@@ -155,12 +157,31 @@ export function runModuleFindings(root, pageKey, modules, thresholds = DEFAULT_Q
   if (!modules || typeof modules !== "object") return null;
   const wholeRun = !!(root?.pages && typeof root.pages === "object");
   const pages = wholeRun ? root.pages : { [pageKey]: root };
+  // One page in hand: a finding is the builder's only when it touches a module the page owns or imports, directly
+  // or through those modules. Two unrelated modules elsewhere in the folder are not this page's to fix.
+  const reach = wholeRun ? null : importClosure(root, pageKey, modules);
+  const touches = (f) => !reach || !f.section?.startsWith("module ") || [...reach].some((n) => f.section === `module ${n}` || f.text.includes(`\`${n}\``));
   const out = [];
   for (const [key, lint] of lintRunQuality(pages, thresholds, new Set(), modules, wholeRun)) {
-    for (const f of lint?.findings || []) if (RUN_MODULE_RULES.includes(f.rule)) out.push({ page: key, ...f });
+    for (const f of lint?.findings || []) if (RUN_MODULE_RULES.includes(f.rule) && touches(f)) out.push({ page: key, ...f });
     for (const u of lint?.unreadable || []) if (u.startsWith("module ")) out.push({ page: key, rule: "unreadable", text: `${u} could not be parsed` });
   }
   return { modules: Object.keys(modules).length, findings: out, wholeRun };
+}
+
+// The modules one page reaches: its own `<PageSchema>Module`, its imports, and theirs.
+function importClosure(entry, pageKey, modules) {
+  const reach = new Set(bundleDeps(entry) || []);
+  if (typeof entry?.schemaName === "string") reach.add(entry.schemaName + "Module");
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const name of [...reach]) {
+      for (const dep of (typeof modules[name] === "string" ? parseDefineModule(modules[name]).deps : [])) {
+        if (!reach.has(dep)) { reach.add(dep); grew = true; }
+      }
+    }
+  }
+  return reach;
 }
 
 export function renderCodeMap(a, pageKey = "page", escape = String, run = null) {
@@ -175,7 +196,7 @@ export function renderCodeMap(a, pageKey = "page", escape = String, run = null) 
   a.handlers.forEach((h, i) => L.push(`| ${i + 1} | ${code(h.request)} | ${h.lines}${h.lines > a.maxFunctionLines ? " ⚠" : ""} | ${h.helpers.map(code).join(", ") || "—"} |`));
   L.push("", "## The run's modules", "");
   if (!run) L.push("Not checked: the input carries no module bodies. Pass `--modules <dir>` (a folder of `<Module>.js` files, or `.clio-pages` with each module's `body.js`) or a `built.json` with `modules`.");
-  else if (!run.findings.length) L.push(`**No findings** across ${run.modules} module(s): every page with handlers has its own module, nothing is declared twice, every export is used.`);
+  else if (!run.findings.length) L.push(`**No findings** across ${run.modules} module(s): every page with handlers has its own module and nothing is declared twice${run.wholeRun ? ", every export is used" : ""}.`);
   else {
     L.push(`**${run.findings.length} finding(s)** across ${run.modules} module(s) — the \`Code quality\` rows of \`--verify\` hold the same:`);
     for (const f of run.findings) L.push(`- ${code(f.page)} · ${f.rule}: ${f.text}`);
@@ -199,13 +220,13 @@ export function codeMapRoot(raw) {
 // `.clio-pages`. A body with a `SCHEMA_HANDLERS` section is a page, not a module, and is left out.
 export function readModuleDir(dir) {
   const out = Object.create(null);
-  for (const name of fs.readdirSync(dir).sort((x, y) => x.localeCompare(y))) {
-    const full = path.join(dir, name);
-    const file = fs.statSync(full).isDirectory() ? path.join(full, "body.js") : full;
-    const m = /^([A-Za-z_$][\w$]*?)(?:\.js)?$/.exec(name);
-    if (!m || ["__proto__", "constructor", "prototype"].includes(m[1]) || !fs.existsSync(file) || !file.endsWith(".js")) continue;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
+    const folder = entry.isDirectory();
+    const name = moduleNameOf(entry.name, { requireJs: !folder });
+    const file = folder ? path.join(dir, entry.name, "body.js") : path.join(dir, entry.name);
+    if (!name || !fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
     const src = fs.readFileSync(file, "utf8");
-    if (!src.includes("/**SCHEMA_HANDLERS*/")) out[m[1]] = src;
+    if (!src.includes("/**SCHEMA_HANDLERS*/")) out[name] = src;
   }
   return out;
 }
