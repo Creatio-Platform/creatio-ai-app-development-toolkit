@@ -75,15 +75,10 @@ function issuesOf(launched, unnamedFrom, recorded, extra) {
   return [...missing, ...unnamed, ...recorded.processes.flatMap(followIssues)];
 }
 
-// A name the parser quoted that can be a process schema name: one identifier, not a dotted path
-// (`Resources.Strings.*`, `Terrasoft.*`) and not one of the platform's process modules.
-const PROCESS_MODULES = new Set(["ProcessModuleUtilities", "ProcessSchemaManager", "ProcessEntryPointUtilities", "ProcessModuleV2"]);
-const isProcessName = (n) => typeof n === "string" && /^[A-Za-z]\w*$/.test(n) && !PROCESS_MODULES.has(n);
-
 // The started processes, their user-task pages and the plan's open questions — or null when the code starts none.
 // `sources`: `[{ from, launch, names }]`, one per page the run covers (the page, its section, its folded sub-pages).
 export function launchedProcessesInfo({ sources, manifest }) {
-  const facts = sources.map((s) => ({ from: s.from, launch: !!s.launch, names: (s.names || []).filter(isProcessName) }));
+  const facts = sources.map((s) => ({ from: s.from, launch: !!s.launch, names: s.names || [] }));
   const launched = launchedOf(facts);
   const unnamedFrom = facts.filter((s) => s.launch && !s.names.length).map((s) => s.from);
   if (!launched.size && !unnamedFrom.length) return null;

@@ -50,13 +50,18 @@ export function runLaunchedProcessesChecks({ check, runMigration, runMigrate, re
     () => (unrecorded.changeSet.needsDecision || []).some((n) => n.kind === "process-launch"
       && /The drop rule does NOT apply to a process the code names \(MbApproveContractProcess\).*place it as a MENU ITEM in the Actions button of the surface the Classic button is on/.test(n.reason)
       && !/keep the action where the Classic button is/.test(n.reason)));
-  // A quoted string that only looks like a process name (a resource caption, a platform module) is not a started process.
+  // A dotted resource key that only looks like a process name is not a started process, and no consumer names it:
+  // the started-process list and the process-launch decision read the same names.
+  const RESOURCE_KEY = "Resources.Strings.MbStartApprovalProcessCaption";
   const noisy = CONTRACT.replace('ProcessModuleUtilities.executeProcess({',
-    'this.get("Resources.Strings.MbStartApprovalProcessCaption"); this.set("MbModule", "ProcessModuleUtilities");\n\t\t\t\tProcessModuleUtilities.executeProcess({');
+    `this.get("${RESOURCE_KEY}");\n\t\t\t\tProcessModuleUtilities.executeProcess({`);
   const noisyRun = runMigration({ ...manifest(), schemas: [{ pkg: "MbMigrationBench", body: noisy }] });
-  check("started processes: a resource caption or a platform module named like a process is not a started process",
-    () => noisy !== CONTRACT && noisyRun.launchedProcesses.processes.map((p) => p.name).join() === PROCESS && noisyRun.launchedProcessesBlockers.length === 1,
-    () => noisyRun.launchedProcesses.processes.map((p) => p.name));
+  const noisyLaunch = (noisyRun.changeSet.needsDecision || []).find((n) => n.kind === "process-launch");
+  check("started processes: a resource key named like a process is neither a started process nor named by the process-launch decision",
+    () => noisy !== CONTRACT && noisyRun.launchedProcesses.processes.map((p) => p.name).join() === PROCESS && noisyRun.launchedProcessesBlockers.length === 1
+      && noisyLaunch?.item === PROCESS && !noisyLaunch.reason.includes(RESOURCE_KEY)
+      && /does NOT apply to a process the code names \(MbApproveContractProcess\)/.test(noisyLaunch.reason),
+    () => [noisyRun.launchedProcesses.processes.map((p) => p.name), noisyLaunch?.item]);
 
   const sigOf = (processes) => runMigration({ ...manifest(followed()), signals: { processes } }).plan.split("\n").find((l) => /Connected processes/.test(l)) || "";
   check("started processes: with the section process menu not resolved, the line says so and still names what the code starts",
