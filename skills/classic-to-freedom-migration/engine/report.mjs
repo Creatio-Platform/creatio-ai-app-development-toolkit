@@ -191,7 +191,11 @@ export const STAND_DATA = "Stand data changed";
 export const ADD_MODE_CHECK = "Add-mode check";
 const LEAD = new Set([" ", "\t", "*", "-"]);
 const LEAD_NO_DASH = new Set([" ", "\t", "*"]);
-const skipWhile = (s, chars) => { let i = 0; while (i < s.length && chars.has(s[i])) i++; return s.slice(i); };
+const skipWhile = (s, chars) => {
+  let i = 0;
+  while (i < s.length && chars.has(s[i])) i++;
+  return s.slice(i);
+};
 // The value of a `<label>: <value>` field line, or null: list marker and bold allowed before the label, bold around
 // the colon, and a closing bold after the value, which is not part of it.
 export function labelValue(line, label) {

@@ -100,7 +100,7 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   check("writes-on-open: a later path with no mode test replaces an earlier add-mode path (isNewMode && …), never the reverse",
     () => { const w = opened(guardedFirst); return w.length === 1 && w[0].addModeOnly === false && w[0].hook === "onRender"; },
     () => opened(guardedFirst));
-  // The reviewer's shapes: a mode test that is negated, and one helper the hook reaches both inside and outside it.
+  // A mode test that is negated, and one helper the hook reaches both inside and outside the add-mode branch.
   const negated = page("UsrNegatedPage", [
     'onEntityInitialized: function() { if (!this.isAddMode()) { this.usrStamp(); } }', stamp,
   ].join(", "));
