@@ -194,6 +194,45 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
         && (ownRun.changeSet.requestHandlers || []).some((h) => h.element === CANCEL)
         && /⚠ verify.*customer handler the profile cannot read/.test(rowOf(renderVerify(ownRun, checklistOpts(manifest({}, ownHandler)), built()).markdown, "[process button]")); },
     () => ownRun.processPage.buttons);
+  // A customer handler that may end the step is the decision the plan asks for: until it is recorded the way-out row
+  // waits for it; once recorded, the button is mapped, built and checked on the stand like a routed button.
+  const ownOpts = checklistOpts(manifest({}, ownHandler));
+  check("process page: when the only button that may end the step is an undecided customer handler, the way-out row waits for the decision",
+    () => ownRun.processPage.completing === 0 && ownRun.processPage.undecided === 1
+      && /⚠ verify.*a customer handler may.*processPage\.handlers/.test(rowOf(renderVerify(ownRun, ownOpts, built()).markdown, "keeps a completing button and an exit")),
+    () => rowOf(renderVerify(ownRun, ownOpts, built()).markdown, "keeps a completing button and an exit"));
+  const decidedManifest = () => manifest({ processPage: { ...manifest().processPage, handlers: { [CANCEL]: PROCESS_BEHAVIOUR.COMPLETE_NO_SAVE } } }, ownHandler);
+  const decidedRun = runMigration(decidedManifest());
+  const decidedVerify = (b) => renderVerify(decidedRun, checklistOpts(decidedManifest()), b).markdown;
+  const decidedPressed = { pressed: [{ button: CANCEL, outcome: "completed" }] };
+  check("process page: a decided customer handler takes the recorded behaviour, counts as completing, and the plan names the handler whose other work must move",
+    () => { const b = decidedRun.processPage.buttons.find((x) => x.classic === CANCEL);
+      return b?.behaviour === PROCESS_BEHAVIOUR.COMPLETE_NO_SAVE && b.source === "custom-handler-decided" && decidedRun.processPage.completing === 1
+        && decidedRun.processPage.undecided === 0 && /.onUsrOwnClick. does not run on the Freedom click/.test(decidedRun.plan); },
+    () => decidedRun.processPage.buttons);
+  check("process page: a decided customer handler is built with no `usr.` handler",
+    () => !(decidedRun.changeSet.requestHandlers || []).some((h) => h.element === CANCEL), () => decidedRun.changeSet.requestHandlers);
+  check("process page: a decided customer handler closes its button, way-out and stand rows once built and pressed as decided",
+    () => { const md = decidedVerify(built({ stand: decidedPressed }));
+      return ["[process button] Cancel", "keeps a completing button and an exit", "Stand check"].every((l) => /✅ Done/.test(rowOf(md, l))); },
+    () => decidedVerify(built({ stand: decidedPressed })).split("\n").filter((l) => /process|Stand check/.test(l)));
+  check("process page: a decided customer handler pressed with the other outcome fails the stand check",
+    () => /❌ MISSING.*should leave the step completed/.test(rowOf(decidedVerify(built({ stand: { pressed: [{ button: CANCEL, outcome: "open" }] } })), "Stand check")));
+  check("process page: a recorded handler decision outside the three behaviours leaves the button undecided",
+    () => runMigration(manifest({ processPage: { ...manifest().processPage, handlers: { [CANCEL]: "unknown" } } }, ownHandler))
+      .processPage.buttons.find((x) => x.classic === CANCEL)?.behaviour === PROCESS_BEHAVIOUR.UNKNOWN);
+  const withSection = manifest({ planMeta: { sectionSchema: "UsrDeliverySection" } });
+  const withSectionRun = runMigration(withSection);
+  check("process page: a manifest that still names a section schema gets no List page block and no list-column row",
+    () => !/### List page/.test(withSectionRun.plan) && !/List columns/.test(withSectionRun.checklist)
+      && !/List columns/.test(renderVerify(withSectionRun, checklistOpts(withSection), built()).markdown),
+    () => [withSectionRun.plan.split("\n").filter((l) => /List page/.test(l)), withSectionRun.checklist.split("\n").filter((l) => /List columns/.test(l))]);
+  const unconsented = (consent) => manifest({ processPage: { ...manifest().processPage, steps: [{ ...STEP, consent }] } });
+  const unconsentedRow = (consent) => rowOf(renderVerify(runMigration(unconsented(consent)), checklistOpts(unconsented(consent)), built()).markdown, "[process step]");
+  check("process page: a step re-pointed against a declined or pending consent is ❌, not reported as not re-pointed",
+    () => ["declined", "pending"].every((c) => /❌ MISSING.*without the user's consent/.test(unconsentedRow(c))), () => [unconsentedRow("declined"), unconsentedRow("pending")]);
+  check("process page: an approved step with no built record names the refusal route — manual steps and a decision",
+    () => /⚠ verify.*if the re-point was refused, hand over the manual steps/.test(rowOf(verify(built({ processSteps: [] })), "[process step]")));
   const apiCaller = PAGE.replace('"parentName": "ProcessActionButtons"', '"parentName": "Header"')
     .replace('"bindTo": "onCancelProcessElementClick"', '"bindTo": "onUsrCancelClick"')
     .replace('methods: {},', 'methods: { onUsrCancelClick: function() { this.cancelProcessElement(this.get("Tag")); } },');

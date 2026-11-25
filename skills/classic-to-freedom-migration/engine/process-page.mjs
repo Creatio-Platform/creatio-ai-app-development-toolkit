@@ -76,6 +76,14 @@ export function processTemplateOfManifest(manifest) {
 //   { stepsResolved: true, evidence, steps: [{ process, element, caption?, buttons?: [{ tag, performClosePage,
 //     performSaveData }], resultBranches: bool, consent: "approved" | "declined" | "pending" }] }
 // `stepsResolved: true` with `steps: []` is a valid answer ("the user named no process"); never asked is not.
+// `handlers: { <Classic button name>: "complete-save" | "complete-no-save" | "close-open" }` records what the user
+// decided a customer handler does to the step (the plan's ⚠ row); the button is then mapped and checked like a
+// routed one.
+const DECIDABLE = [PROCESS_BEHAVIOUR.COMPLETE_SAVE, PROCESS_BEHAVIOUR.COMPLETE_NO_SAVE, PROCESS_BEHAVIOUR.CLOSE_OPEN];
+function handlerDecisionsOf(manifest) {
+  const recorded = plainObject(plainObject(manifest?.processPage).handlers);
+  return Object.fromEntries(Object.entries(recorded).filter(([, v]) => DECIDABLE.includes(v)));
+}
 function processStepsOf(manifest) {
   const pp = plainObject(manifest?.processPage);
   const steps = (Array.isArray(pp.steps) ? pp.steps : []).filter((s) => s && typeof s === "object").map((s) => ({
@@ -135,15 +143,16 @@ function mayEndStep(item, methodCalls) {
 
 // The page's live process buttons (the merged items; a removed button is gone; one hidden by default stays, a rule or
 // binding may show it), each with its Classic behaviour, where that behaviour was read, and its Freedom button.
-export function processButtonsOf(items, steps = [], resources = {}, methods = []) {
+export function processButtonsOf(items, steps = [], resources = {}, methods = [], decisions = {}) {
   const captionOf = (raw) => (raw && typeof resources[resourceKey(raw)] === "string" && resources[resourceKey(raw)]) || raw || null;
   const methodCalls = new Map((methods || []).map((m) => [m.name, m.facts?.calls || []]));
   const isButton = (i) => i?.itemType === 5 && !i.engineOnlyStub && typeof i.handlers?.click === "string";
   return (items || []).filter(isButton).flatMap((i) => {
     const base = { classic: i.name, freedom: freedomNameOf(i), caption: captionOf(i.caption), tag: i.tag || null, handler: i.handlers.click };
     if (PROCESS_HANDLERS.has(i.handlers.click)) return [{ ...base, ...behaviourOf(i.handlers.click, i.tag || null, steps) }];
-    if (mayEndStep(i, methodCalls)) return [{ ...base, behaviour: PROCESS_BEHAVIOUR.UNKNOWN, source: "custom-handler", perStep: [] }];
-    return [];
+    if (!mayEndStep(i, methodCalls)) return [];
+    const decided = decisions[i.name];
+    return [{ ...base, behaviour: decided || PROCESS_BEHAVIOUR.UNKNOWN, source: decided ? "custom-handler-decided" : "custom-handler", perStep: [] }];
   });
 }
 // Every behaviour a button has across the page and the steps.
@@ -154,20 +163,23 @@ const isCompleting = (b) => [...behavioursOf(b)].some((x) => x === PROCESS_BEHAV
 export function processPageInfo({ template, pageName, items, methods, manifest }) {
   if (!template) return null;
   const stepFacts = processStepsOf(manifest);
-  const buttons = processButtonsOf(items, stepFacts.steps, plainObject(manifest?.resources), methods);
+  const buttons = processButtonsOf(items, stepFacts.steps, plainObject(manifest?.resources), methods, handlerDecisionsOf(manifest));
   return {
     template, pageName: pageName || null,
     // the page parameters its fields bind to (the bound names of the page's own fields)
     parameters: [...new Set((items || []).filter((i) => i.bindTo && !i.templateOwned).map((i) => i.bindTo))],
     buttons,
     completing: buttons.filter(isCompleting).length,
+    // customer handlers that may end the step and are not decided yet
+    undecided: buttons.filter((b) => b.behaviour === PROCESS_BEHAVIOUR.UNKNOWN).length,
     stepsResolved: stepFacts.resolved, evidence: stepFacts.evidence, steps: stepFacts.steps,
     issues: stepsIssuesOf(stepFacts),
   };
 }
 
 // The mapper's view: Classic button name → its behaviour, so a process button gets no generated request handler. A
-// customer handler of unknown effect keeps the ordinary path (its body is ported) until a decision says otherwise.
+// customer handler of unknown effect keeps the ordinary path (its body is ported) until a decision says otherwise;
+// a decided one is built like a routed button (the plan names the handler whose other work must move).
 export function processButtonMap(info) {
   const pageBehaviour = (b) => (behavioursOf(b).has(PROCESS_BEHAVIOUR.CLOSE_OPEN) ? PROCESS_BEHAVIOUR.CLOSE_OPEN : b.behaviour);
   return new Map((info?.buttons || []).filter((b) => b.behaviour !== PROCESS_BEHAVIOUR.UNKNOWN).map((b) => [b.classic, pageBehaviour(b)]));
@@ -185,6 +197,7 @@ const SOURCE_TEXT = {
   "element-per-step": "⚠ process element `Buttons` — differs by step; each re-pointed step is checked against its own entry",
   "page-default": "⚠ template default — the process element was not read",
   "custom-handler": "⚠ a customer handler among the process buttons, or one that calls the template's process API",
+  "custom-handler-decided": "the user's decision on a customer handler (`processPage.handlers`)",
 };
 const behaviourText = (b) => BEHAVIOUR_TEXT[b] || b;
 const buttonSourceText = (s) => SOURCE_TEXT[s] || s;
@@ -196,8 +209,12 @@ function perStepMappingText(b, name) {
 function freedomMappingText(b, esc) {
   const name = code(esc(b.freedom));
   if (b.behaviour === PROCESS_BEHAVIOUR.UNKNOWN)
-    return `decide from ${code(esc(b.handler))}'s body whether it completes the step (with or without saving) or only closes the page, and record the decision`;
+    return `decide from ${code(esc(b.handler))}'s body whether it completes the step (with or without saving) or only closes the page, and record it in \`processPage.handlers\``;
   if (b.source === "element-per-step") return perStepMappingText(b, name);
+  if (b.source === "custom-handler-decided") return `${routedMappingText(b, name)}; ⚠ ${code(esc(b.handler))} does not run on the Freedom click — move any other work it does (a process parameter, a message) into the process or a page handler`;
+  return routedMappingText(b, name);
+}
+function routedMappingText(b, name) {
   if (b.behaviour === PROCESS_BEHAVIOUR.CLOSE_OPEN)
     return `${name} with ${code(CLOSE_PAGE_REQUEST)}; NOT selected as completing in the process element`;
   const validate = expectedValidate(b.behaviour) ? "true" : "false";
@@ -261,7 +278,7 @@ export function processPageRows(info, esc) {
     label: "[process step] none named — hand over the manual re-pointing steps", vk: { type: "processstep", consent: "none" } });
   return [...buttonRows,
     { deliverableId: "process-exit", label: "The page keeps a completing button and an exit that leaves the process step open",
-      vk: { type: "processexit", completing: info.completing } },
+      vk: { type: "processexit", completing: info.completing, undecided: info.undecided } },
     ...stepRows,
     { deliverableId: "process-stand-check", label: "Stand check: open the page from its process step and press each button",
       vk: { type: "processstand", buttons: info.buttons.map((b) => ({ freedom: b.freedom, behaviour: b.behaviour, perStep: b.perStep || [] })) } }];
@@ -312,7 +329,7 @@ function resolveProcessButtonVk(vk, ctx, helpers) {
   const { esc } = helpers;
   const name = code(esc(vk.freedom));
   if (vk.behaviour === PROCESS_BEHAVIOUR.UNKNOWN)
-    return [VERIFY, `${name} runs a customer handler the profile cannot read — decide what it does to the process step and record the decision (\`--decide D<N>\`)`, "unverified"];
+    return [VERIFY, `${name} runs a customer handler the profile cannot read — decide what it does to the process step, record it in \`processPage.handlers\` and re-run \`--plan\``, "unverified"];
   const unreadable = pageUnreadable(ctx, name, helpers);
   if (unreadable) return unreadable;
   const op = buttonOps(ctx).find((o) => o.name === vk.freedom);
@@ -329,6 +346,8 @@ function resolveProcessButtonVk(vk, ctx, helpers) {
 }
 // The way out: a completing button, and a button that closes the page without any re-pointed step selecting it.
 function resolveProcessExitVk(vk, ctx, helpers) {
+  if (!vk.completing && vk.undecided)
+    return [VERIFY, "no routed button completes the step; a customer handler may — decide what it does (`processPage.handlers`) and re-run `--plan`", "unverified"];
   if (!vk.completing) return [MISSING, "no Classic button completes the step — add a completing button, or the step waits forever", "missing"];
   const unreadable = pageUnreadable(ctx, "the exit button", helpers);
   if (unreadable) return unreadable;
@@ -342,9 +361,11 @@ function resolveProcessExitVk(vk, ctx, helpers) {
 function resolveProcessStepVk(vk, ctx, { esc }) {
   if (vk.consent === "none") return [VERIFY, "no process step names this page — the page cannot complete a step until the user re-points one; record a decision (`--decide D<N>`) once the manual steps are handed over", "unverified"];
   if (vk.resultBranches) return [VERIFY, "manual — the process branches on this step's result: map each Classic tag to its Freedom button by hand, then record a decision (`--decide D<N>`)", "unverified"];
-  if (vk.consent !== "approved") return [VERIFY, `not re-pointed (${vk.consent === "declined" ? "declined" : "no consent"}) — the page cannot complete the step until the user re-points it; record a decision (\`--decide D<N>\`) once the manual steps are handed over`, "unverified"];
   const step = builtSteps(ctx).find((s) => s.process === vk.process && s.element === vk.element);
-  if (!step) return [VERIFY, "pass `describe-business-process` of the re-pointed step as `--built.processSteps` to check it", "unverified"];
+  if (vk.consent !== "approved" && step?.page)
+    return [MISSING, `re-pointed to ${code(esc(step.page))} without the user's consent — activate the previous version`, "missing"];
+  if (vk.consent !== "approved") return [VERIFY, `not re-pointed (${vk.consent === "declined" ? "declined" : "no consent"}) — the page cannot complete the step until the user re-points it; record a decision (\`--decide D<N>\`) once the manual steps are handed over`, "unverified"];
+  if (!step) return [VERIFY, "pass `describe-business-process` of the re-pointed step as `--built.processSteps` to check it; if the re-point was refused, hand over the manual steps and record a decision (`--decide D<N>`)", "unverified"];
   if (typeof step.page !== "string" || !step.page) return [MISSING, "the step names no Freedom page", "missing"];
   if (step.active === false) return [VERIFY, `re-pointed to ${code(esc(step.page))} in a version that is not active — activate it`, "unverified"];
   return [DONE, `re-pointed to ${code(esc(step.page))} in the active version`, "ok"];

@@ -919,9 +919,9 @@ export function isNestedFold(opts) {
 // A SECTION migration when the section chain folded, OR a mini page / section schema is named even though the
 // chain wasn't gathered (bundle returned sectionLayerCount:0). A nested fold (`isNestedFold`) is never a section:
 // a child sub-bundle carrying `planMeta.sectionSchema` renders no List-page block and no "⚠ Section schema not
-// gathered … re-run". Extracted for CC.
+// gathered … re-run". A process page has no section, whatever its manifest names. Extracted for CC.
 function isSectionScope(result, section, opts) {
-  return !!((section || result.miniPage || opts.planMeta?.sectionSchema) && !isNestedFold(opts));
+  return !!((section || result.miniPage || opts.planMeta?.sectionSchema) && !isNestedFold(opts) && !opts.processPage);
 }
 
 // Group the Layout rows by region (first-seen order) then rank regions: side profile / header FIRST, then tabs,
@@ -3387,7 +3387,7 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
   // `☐ confirm on-stand` is a hole by construction: it adds a build unit nothing can ever close. With nothing
   // resolved (no columns, no filters, no actions), the single unresolved-columns row stays on the form page's key and
   // the ⚠ line in the spec carries the question.
-  const listRows = isMain ? buildListItems(pm, section, result, isMain).filter(Boolean) : [];
+  const listRows = isMain && !opts.processPage ? buildListItems(pm, section, result, isMain).filter(Boolean) : [];
   // An approved `pages-only-no-menu` run registers NO section, so `create-app-section` never runs and no list page is
   // minted: queueing one would gate rows on a page the plan deliberately does not build. Its deliverables degrade to
   // ungated prose on the form page's key — the same treatment the `Navigable section registered` row gets — and the

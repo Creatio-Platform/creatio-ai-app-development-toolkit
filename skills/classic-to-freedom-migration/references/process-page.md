@@ -32,7 +32,12 @@ not a process page.
 
   A button the template does not route — a customer click handler among the process buttons, or one whose body
   calls the template's process API (`cancelProcessElement`, `completeExecution`, …) — is listed with ⚠: read its
-  handler, decide what it does to the step, and record the decision. Its body is ported like any handler meanwhile.
+  handler, decide with the user what it does to the step, and record it in `manifest.processPage.handlers`
+  (`{ "<Classic button name>": "complete-save" | "complete-no-save" | "close-open" }`) before the plan is
+  approved. Until then its body is ported like any handler, and a page whose only way to end the step is such a
+  handler keeps the way-out row at ⚠. Once recorded, the button is built and checked like a routed one; the
+  handler itself does not run on the Freedom click, so the plan names it and any other work it does moves into the
+  process or a page handler.
 - **The page always keeps a way out:** at least one completing button and one exit that leaves the step open (the
   Freedom template's `BackButton` / `CloseButton`), even where the Classic page removed its Close. A hide rule never
   removes that exit.
@@ -61,7 +66,8 @@ the page. clio cannot search processes by page, so:
     { "process": "UsrDeliveryProcess", "element": "CheckDelivery", "caption": "Check the delivery",
       "buttons": [{ "tag": "SaveData", "performClosePage": true, "performSaveData": true }],
       "resultBranches": false, "consent": "pending" }
-  ]
+  ],
+  "handlers": { "UsrApproveButton": "complete-save" }
 }
 ```
 
