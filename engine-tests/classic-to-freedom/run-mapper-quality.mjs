@@ -93,7 +93,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => count(declared, R.duplicateInPage) === 1, () => declared.findings);
   // Operators, declaration kinds and template text are properties, not child nodes: helpers that differ only there
   // have different logic, and merging them would change what the page does.
-  const tick = String.fromCharCode(96);
+  const tick = String.fromCodePoint(96);
   const operatorPairs = [
     ['v && v.status && v.status.value === "a"', 'v && v.status && v.status.value !== "a"'],
     ["v && v.status && v.status.value", "v || v.status || v.status.value"],
