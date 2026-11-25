@@ -4174,7 +4174,7 @@ function resolveRequestCardActionVk(vk, ctx) {
   const why = relay.text ? ` (${relay.text})` : "";
   return ["⚠ verify", `no built element fires \`${esc(vk.request)}\`${why} — wire the action to that request, or confirm it is built`, "unverified"];
 }
-// A request fired one step removed: a built element fires a page request, and that request's handler sends the
+// A request fired one step removed: a built element fires a custom page request, and that request's handler sends the
 // platform request — itself, or through a module the page imports in its `define()` deps whose source the payload
 // carries (`--built.modules`). In the module only the functions the handler calls count, and the module's own
 // functions they call in turn: a module that sends the request from some other function does not close the row.
@@ -4185,7 +4185,9 @@ function relayedRequest(request, ctx) {
   if (ctx._handlerEntries === undefined) ctx._handlerEntries = handlerEntriesByRequest(ctx.handlersSrc);
   const hits = ctx.ops.filter((o) => !isRemove(o)).flatMap((o) => {
     const fired = opRequest(o);
-    if (!fired || fired === request) return [];
+    // A platform request (`crt.SaveRecordRequest` on the template's Save button) is the platform's own action; a page
+    // handler of it is a hook around that action, not the dispatcher of this one, so it is never relayed.
+    if (!fired || fired === request || fired.startsWith(PLATFORM_REQUEST_PREFIX)) return [];
     return (ctx._handlerEntries?.get(fired) || []).map((body) => ({ ...relayFromHandler(body, request, ctx), via: `\`${esc(o.name)}\` fires \`${esc(fired)}\`, whose handler ` }));
   });
   const hit = hits.find((h) => h.ok);

@@ -1,11 +1,11 @@
 # `mbcontract-v2-recorded` — pages whose logic lives in client modules
 
-Not synthesized. Recorded from the MbContract v2 benchmark run of the Classic→Freedom migration
-(`migrations/mbcontract-eng103105-v2`, 2026-11-25).
+Not synthesized: get-page reads of five Freedom pages of the MbContract v2 benchmark, a migration in which
+every Classic method of a page was ported into a client module the page imports.
 
-- `bundle-<page>.json` — the run's `reads/*-bundle-*.json` (get-page's `bundle.json`) for the five pages
-  whose handler rows the run left unconfirmed, trimmed to the fields a handler or card-action row reads:
-  `name`, `viewConfig`, `handlers`, `deps`, `args`, `validators`, `converters`. Nothing in them is edited.
+- `bundle-<page>.json` — get-page's `bundle.json` of each page, trimmed to the fields a handler or
+  card-action row reads: `name`, `viewConfig`, `handlers`, `deps`, `args`, `validators`, `converters`.
+  Nothing in them is edited.
 
   | page key | file | `deps` | `args` |
   | --- | --- | --- | --- |
@@ -15,27 +15,24 @@ Not synthesized. Recorded from the MbContract v2 benchmark run of the Classic→
   | `child:MbDeliveryNote` | `bundle-child-mbdeliverynote.json` | `@creatio-devkit/common`, `UsrMbContractsV2DocumentTotals` | `(sdk, mbDocumentTotals)` |
   | `child:MbReturnNote` | `bundle-child-mbreturnnote.json` | `@creatio-devkit/common`, `UsrMbContractsV2DocumentTotals` | `(sdk, mbDocumentTotals)` |
 
-- `modules/UsrMbContractsV2App_FormPageModule.js` — get-page's `raw.body` for the form page's module,
-  line ends normalized to LF. It is the one module a row needs the source of: the Start approval card
-  action.
+- `modules/UsrMbContractsV2App_FormPageModule.js` — get-page's `raw.body` of the form page's module, line
+  ends normalized to LF.
 
-`expected.json` is the plan side of the same run, per page: its `Handler — …` rows, each with the
-`Ported as (row N)` record its build task wrote (13 rows: 8 on the form page, 1 on the list page, 2 on
-the item mini page, 1 on each note page), and the form page's `Card action — RunProcess` row. Those are
-the 14 rows of the reopen.
+`expected.json` is the plan side, per page: each `Handler — …` row with the `Ported as (row N)` record
+its build task wrote (13 rows: 8 on the form page, 1 on the list page, 2 on the item mini page, 1 on
+each note page), and the form page's `Card action — RunProcess` row.
 
-## What it checks (`run-mapper-module-deps.mjs`)
+Every handler only routes into its module through the name the page's factory gives it
+(`await contractPage.refreshCanEditFields(request)`), and `deps` is get-page's source text, not an
+array. The form page's `MbStartApprovalButton` fires `mb.MbStartApprovalButtonClicked`, whose handler
+calls `contractPage.startApproval(request)`, the module function that sends
+`crt.RunBusinessProcessRequest`; the template's Save button fires `crt.SaveRecordRequest`, whose page
+handler calls `contractPage.refreshStartApprovalEnabled`, which sends nothing.
 
-Every handler only routes into its module through the name the factory gives it:
-`await contractPage.refreshCanEditFields(request)`, `await mbDocumentTotals.setNewDocumentDate(…)`.
-The run's `--verify` left all 13 handler rows and the Start approval card action unconfirmed:
+## What `run-mapper-module-deps.mjs` asserts on it
 
-1. The recorded `built.json` carried `deps` as get-page's source text (`'["…Module"]'`), not an array,
-   so verify said the page entry carries no `deps`. It also dropped `args`, because `assemble.mjs` did
-   not copy that field, so no `alias.fn(…)` call could be read as the module's.
-2. `MbStartApprovalButton` fires `mb.MbStartApprovalButtonClicked`, whose handler calls
-   `contractPage.startApproval(request)`; that module function sends `crt.RunBusinessProcessRequest`.
-   The card-action row looked only for an element firing the platform request itself.
-
-With `args` in the payload all 13 rows close. With the form page's module source as well
-(`modules/<schema>.js` → `built.modules`) the card action closes too.
+- Without `args` each handler row is ⚠ and names `args`; with `args` all 13 read ✅, each through its
+  page's own name for the module.
+- The Run-process card action is ✅ through the Start approval button, its handler and the module
+  function it calls. Without that button it is ⚠: the Save button's handler is never credited.
+- It is ⚠ without the module source, naming `modules/<schema>.js`.

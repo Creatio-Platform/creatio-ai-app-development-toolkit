@@ -1,10 +1,9 @@
-// PAGES THAT HAND THEIR LOGIC TO A CLIENT MODULE. Recorded, not synthesized: the MbContract v2 benchmark ported
-// every Classic method of five pages into client modules, and each page's handlers only route there through the name
-// its `define()` factory gives the module (`contractPage.refreshCanEditFields(…)`, `mbDocumentTotals.setNewDocumentDate(…)`).
-// `--verify` left the 13 handler rows of those pages and the form page's Start approval card action unconfirmed:
-// the recorded `deps` is get-page's SOURCE text, not an array, the payload dropped `args`, so no `alias.fn(…)` call
-// could be read as the module's — and the button fires a page request whose handler calls the module, which sends
-// `crt.RunBusinessProcessRequest`. Imported and run by `run-mapper.mjs`, which hands it its `check`.
+// PAGES THAT HAND THEIR LOGIC TO A CLIENT MODULE (fixture `mbcontract-v2-recorded`, get-page reads of five pages).
+// Each page's handlers only route into a module through the name its `define()` factory gives it
+// (`contractPage.refreshCanEditFields(…)`), and `deps` is get-page's SOURCE text. A `Ported as: Module.fn` handler row
+// holds through that name when the payload carries `args`; a Run-process card action holds when a built element fires
+// a custom page request whose handler calls the module function that sends `crt.RunBusinessProcessRequest`.
+// Imported and run by `run-mapper.mjs`, which hands it its `check`.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -102,6 +101,45 @@ export function runModuleDepChecks({ check, verifyCtx, resolveVk, FIX }) {
       && viaOther[0] === "⚠ verify" && viaExport[0] === "✅ Done"
       && noSource[0] === "⚠ verify" && /add it as `modules\/UsrX_FormPageModule\.js`/.test(noSource[1]) && !/@creatio-devkit/.test(noSource[1]),
     () => [viaHelper, viaOther, viaExport, noSource]);
+
+  // The Save button fires `crt.SaveRecordRequest`, and the page's Save handler calls `contractPage.refreshStartApprovalEnabled`.
+  // A platform request's page handler is a hook around the platform's action, never this action's dispatcher: with
+  // the Start approval button gone the row is ⚠, also when that hook's module function sends the request.
+  const withoutButton = (n) => {
+    if (Array.isArray(n)) return n.filter((x) => x?.name !== "MbStartApprovalButton").map(withoutButton);
+    return n && typeof n === "object" ? Object.fromEntries(Object.entries(n).map(([k, v]) => [k, withoutButton(v)])) : n;
+  };
+  const noButton = entryOf(bundle, { viewConfig: withoutButton(bundle.viewConfig) });
+  const cardNoButton = resolveVk(cardVk, verifyCtx({ pages: { main: noButton }, modules: { [MODULE]: moduleSrc } }, "main"));
+  const hookSends = moduleSrc.replace("async function refreshStartApprovalEnabled", "async function refreshStartApprovalEnabledUnused")
+    .replace("async function startApproval", "async function refreshStartApprovalEnabled");
+  const cardHookSends = resolveVk(cardVk, verifyCtx({ pages: { main: noButton }, modules: { [MODULE]: hookSends } }, "main"));
+  check("module deps (recorded v2): without the Start approval button the Run-process card action reads ⚠ — the Save button fires `crt.SaveRecordRequest` and its page handler is never credited, not even when the module function it calls sends `crt.RunBusinessProcessRequest`",
+    () => JSON.stringify(noButton.viewConfig).includes("crt.SaveRecordRequest") && !JSON.stringify(noButton.viewConfig).includes("MbStartApprovalButton")
+      && hookSends !== moduleSrc && cardNoButton[0] === "⚠ verify" && cardHookSends[0] === "⚠ verify" && !/SaveRecordRequest/.test(cardHookSends[1]),
+    () => [cardNoButton, cardHookSends]);
+
+  // The alias spelling: a call of `contractPage` as a member of something else, in a comment, or only in a string
+  // does not close a handler row, and a member call of it does not close the card action either.
+  const CALL = "await contractPage.updateCanEditFields(request.$context, request.value);";
+  const onlyAs = (shape) => rows(verifyCtx({ pages: { main: entryOf(bundle, { handlers: bundle.handlers.replace(CALL, shape) }) } }, "main"))
+    .find((r) => r[0] === "mbOnStatusChanged");
+  const asCall = onlyAs(CALL);
+  const notACall = ["await other.contractPage.updateCanEditFields(request.$context, request.value);",
+    "// " + CALL, 'const s = "contractPage.updateCanEditFields()"; void (request.$context, request.value);'].map(onlyAs);
+  const relayMember = resolveVk(cardVk, verifyCtx({ pages: { main: entryOf(bundle, { handlers: bundle.handlers.replace("await contractPage.startApproval(request)", "await foo.contractPage.startApproval(request)") }) },
+    modules: { [MODULE]: moduleSrc } }, "main"));
+  check("module deps: a row whose only call is `other.contractPage.fn(…)`, a commented `// contractPage.fn(…)` or a string \"contractPage.fn(…)\" reads ⚠, and `foo.contractPage.startApproval(…)` does not close the card action",
+    () => bundle.handlers.split(CALL).length === 2 && asCall[1] === "✅ Done" && notACall.every((r) => r[1] === "⚠ verify") && relayMember[0] === "⚠ verify",
+    () => [asCall, notACall, relayMember]);
+
+  // Aliases pair with deps by position: a deps slot that is no string keeps its place, so the parameter after it
+  // still names the module after it.
+  const shifted = verifyCtx({ pages: { main: entryOf(bundle, { deps: '[someVariable, "UsrMbContractsV2App_FormPageModule"]', args: "(first, contractPage)" }) } }, "main");
+  const shiftedArray = verifyCtx({ pages: { main: entryOf(bundle, { deps: [null, "UsrMbContractsV2App_FormPageModule"], args: "(first, contractPage)" }) } }, "main");
+  check("module deps: a deps slot that is no string literal keeps its position — `contractPage` still names the module after it, so every handler row reads ✅",
+    () => [shifted, shiftedArray].every((c) => c.aliases.get(MODULE) === "contractPage" && rows(c).every((r) => r[1] === "✅ Done")),
+    () => [[...shifted.aliases], [...shiftedArray.aliases]]);
 
   // A request named only in a comment of the module, or a handler that sends the request itself.
   const commented = moduleSrc.replaceAll('type: "crt.RunBusinessProcessRequest"', '// type: "crt.RunBusinessProcessRequest"\n\t\t\ttype: "crt.ShowDialogRequest"');

@@ -353,12 +353,22 @@ export function bundleArgs(entry) {
 // (`@creatio-devkit/common`) is the platform's, never a module the build wrote.
 export const MODULE_SCHEMA_NAME = /^[A-Za-z_]\w*$/;
 // The local name each `define()` dependency goes by on the page: `deps[i]` -> `args[i]`, null where the page gave it
-// none (or the bundle carried no `args`). null when the bundle carried no `deps`.
+// none (or the bundle carried no `args`). Paired by POSITION: a deps slot that is no string literal keeps its place
+// and is left out of the map, so it cannot shift a later dependency onto the parameter before it. null when the
+// bundle carried no `deps`.
 export function moduleAliases(entry) {
-  const deps = bundleDeps(entry);
-  if (!deps) return null;
+  const slots = depSlots(entry?.deps);
+  if (!slots) return null;
   const args = bundleArgs(entry) || [];
-  return new Map(deps.map((d, i) => [d, args[i] ?? null]));
+  return new Map(slots.map((d, i) => [d, args[i] ?? null]).filter(([d]) => d != null));
+}
+// The `deps` slots in order, a slot that is no string null; null when the bundle carried no `deps` or its source is
+// not an array literal (then no position can be trusted).
+function depSlots(v) {
+  if (v == null) return null;
+  if (Array.isArray(v)) return v.map((x) => (typeof x === "string" ? x : null));
+  const node = parseJsExpression(v);
+  return node?.type === "ArrayExpression" ? node.elements.map((el) => (isStringLiteral(el) ? el.value : null)) : null;
 }
 // THE FUNCTIONS A CLIENT MODULE DEFINES, by name: each `function name(…)`, `const name = function / arrow`, and
 // `name: function / arrow` property, with its source and its code (strings and comments blanked) for call matching.
