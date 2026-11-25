@@ -116,6 +116,15 @@ const NOT_A_CONTROL_BODY = `define("ConfigDetail",[],function(){return{entitySch
     onOwnerPicked:function(v){this.$Owner=v;},
     getFilters:function(){/* the toolbar once had {bindTo:"Owner"} */var f=this.callParent(arguments);
       f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Owner",this.get("Owner")));return f;}}};});`;
+// A toggle the user flips from the list's tools menu: the menu item is built in code, its Click bound to the handler.
+const MENU_TOGGLE_BODY = `define("MineDetail",[],function(){return{entitySchemaName:"Task",
+  attributes:{"MineOnly":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false}},
+  methods:{addToolsButtonMenuItems:function(menu){this.callParent(arguments);
+      menu.addItem(this.getButtonMenuItem({Caption:"Mine",Click:{bindTo:"onMineOnlyClick"}}));},
+    onMineOnlyClick:function(){this.set("MineOnly",!this.get("MineOnly"));this.reloadGridData();},
+    getFilters:function(){var f=this.callParent(arguments);
+      if(this.get("MineOnly")){f.add("own",this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Owner",Terrasoft.SysValue.CURRENT_USER_CONTACT.value));}
+      return f;}}};});`;
 // An attribute set only while the list initialises: the user never changes it, so its filter is fixed.
 const INIT_ONLY_BODY = `define("MineDetail",[],function(){return{entitySchemaName:"Task",
   methods:{init:function(){this.$CurrentContact=Terrasoft.SysValue.CURRENT_USER_CONTACT.value;this.callParent(arguments);},
@@ -219,6 +228,11 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && /FIXED list filters on Owner/.test(deepToggleRun.plan),
     () => ({ addMode: deepToggle.addMode, quick: deepToggle.features.quickFilters }));
 
+  const menuToggle = detailOf(run("MineDetail", "Task", MENU_TOGGLE_BODY), "MineDetail");
+  check("detail features: a toggle the user flips from the tools menu (a menu item's Click bound to its handler) is a quick filter, not a FIXED filter",
+    () => menuToggle.features.quickFilters.map((q) => `${q.attribute}:${q.kind}:${q.columns.join("+")}`).join(",") === "MineOnly:toggle:Owner"
+      && menuToggle.addMode?.fixedFilters !== true,
+    () => ({ addMode: menuToggle.addMode, quick: menuToggle.features.quickFilters }));
   const masterRow = detailOf(run("ChildRowsDetail", "Line", MASTER_ROW_BODY), "ChildRowsDetail");
   check("detail features: an attribute set by a grid-data load and a sandbox message (the master list's row) is a FIXED filter, not a quick filter",
     () => masterRow.features.quickFilters.length === 0 && masterRow.addMode?.fixedFilters === true && masterRow.addMode.filterCols.join(",") === "Subscription",
@@ -324,11 +338,14 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   const unplacedSeed = [...CLEAN_SEED, { pkg: "Vendor.Logging", body: `define("BaseModulePageV2",[],function(){return{details:{Log:{schemaName:"VendorLogDetail",entitySchemaName:"ChangeLog"}},diff:[]};});` }];
   const inheritedUnplaced = runMigration({ entity: "X", seed: unplacedSeed, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   const inhU = inheritedUnplaced.changeSet.needsDecision.find((n) => n.kind === "detail-inherited");
-  check("detail features: an inherited detail no layer places claims what users saw only by the chain state, and a placed one names its tab",
+  const inhC = runMigration({ entity: "X", seed: unplacedSeed, noParentTemplate: true, schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS })
+    .changeSet.needsDecision.find((n) => n.kind === "detail-inherited");
+  check("detail features: an inherited detail no layer places says users never saw it only on a complete chain, and a placed one names its tab",
     () => inhU?.placed === false && !/Classic users saw it/.test(inhU.reason)
-      && (inhU.chainComplete ? /users never saw it/ : /no FETCHED layer places it/).test(inhU.reason)
+      && inhU.chainComplete === false && /no FETCHED layer places it/.test(inhU.reason)
+      && inhC?.chainComplete === true && /users never saw it/.test(inhC.reason) && !/Classic users saw it/.test(inhC.reason)
       && inh?.placed === true && /placed in 'ChangesHistoryTab', so Classic users saw it/.test(inh.reason),
-    () => ({ inhU, inh }));
+    () => ({ inhU, inhC, inh }));
   const documented = runMigration({ entity: "X", seed: layerSeed("BaseModulePageV2/Vendor.Logging", "BaseModulePageV2", "VendorLogDetail"),
     schemas: [{ pkg: "P", body: page("{}", "") }], planMeta: docPlanMeta, signals: FULL_SIGNALS });
   check("detail features: the documented `Schema/Package` form names the same layer package",
@@ -369,8 +386,8 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && /Answered build \(D4\)/.test(unplacedOf(approved)?.reason || "")
       && approved.changeSet.needsDecision.some((n) => n.kind === "detail-placement" && n.item === "FileDetailV2"),
     () => ({ unplaced: unplacedOf(approved), rows: approvedRows.map((r) => r.deliverableId).filter(Boolean) }));
-  check("detail features: the unplaced question's wording follows the chain state — it asserts what users saw only on a complete chain",
-    () => unplacedOf(files)?.chainComplete === /users never saw it/.test(unplacedOf(files)?.reason || ""),
+  check("detail features: on the seeded run (a partial chain) the unplaced question claims nothing about what users saw",
+    () => unplacedOf(files)?.chainComplete === false && /no FETCHED layer places it/.test(unplacedOf(files).reason) && !/users never saw it/.test(unplacedOf(files).reason),
     () => unplacedOf(files));
   check("detail features: an unplaced Files detail → `detail-unplaced` approval naming Attachments, its Layout row says it waits for approval",
     () => fileFeature?.unplaced === true && files.changeSet.needsDecision.some((n) => n.kind === "detail-unplaced" && n.item === "FileDetailV2" && n.feature === "Attachments")
@@ -382,6 +399,47 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && !fileRows.some((r) => (r.deliverableId || "").startsWith("related-list:"))
       && fileRows.filter((r) => r.vk?.type === "details").every((r) => r.vk.n === 0),
     () => fileRows.filter((r) => /feature:|related-list:/.test(r.deliverableId || "") || r.vk?.type === "details").map((r) => [r.deliverableId, r.vk]));
+
+  // An unplaced detail's questions wait for its approval; a build answer raises them.
+  const unplacedPage = `define("XPage",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"LimitDetail",entitySchemaName:"Limit",filter:{detailColumn:"X",masterColumn:"Id"}},S:{schemaName:"SumDetail",entitySchemaName:"Line",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[]};});`;
+  const unplacedRun = (status = {}) => runMigration({ entity: "X", seed: CLEAN_SEED, deliverableStatus: status,
+    schemas: [{ pkg: "P", body: unplacedPage }], detailSchemas: { LimitDetail: { body: TOGGLE_BODY, editPage: false }, SumDetail: { body: SUMMARY_BODY, editPage: false } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS });
+  const featureKinds = (r) => r.changeSet.needsDecision.map((n) => n.kind).filter((k) => /detail-filter-persistence|detail-summaries|detail-add-mechanism|detail-row-actions/.test(k));
+  const waiting = unplacedRun();
+  check("detail features: an unplaced detail raises no persistence, summaries, add-mechanism or row-action question before its approval — only `detail-unplaced`",
+    () => featureKinds(waiting).length === 0 && waiting.changeSet.needsDecision.filter((n) => n.kind === "detail-unplaced").length === 2
+      && features(waiting).some((l) => /Quick filter \(toggle\) `IsActiveOnly`/.test(l)),
+    () => ({ kinds: waiting.changeSet.needsDecision.map((n) => n.kind) }));
+  const answeredBoth = unplacedRun({ "main#confirm:detail-unplaced:LimitDetail": { status: "build", decision: "D5" }, "main#confirm:detail-unplaced:SumDetail": { status: "build", decision: "D5" } });
+  check("detail features: once a build answer approves the unplaced details, their persistence and summaries questions are asked",
+    () => featureKinds(answeredBoth).includes("detail-filter-persistence") && featureKinds(answeredBoth).includes("detail-summaries"),
+    () => ({ kinds: answeredBoth.changeSet.needsDecision.map((n) => n.kind) }));
+
+  // A folded child page answers its own questions: a directive scoped to it, and its detail's rows under its key.
+  const childPage = `define("LineChildPage",[],function(){return{entitySchemaName:"Line",details:{CD:{schemaName:"SumDetail",entitySchemaName:"Line",filter:{detailColumn:"Line",masterColumn:"Id"}},TD:{schemaName:"LimitDetail",entitySchemaName:"Limit",filter:{detailColumn:"Line",masterColumn:"Id"}}},diff:[`
+    + `{operation:"insert",name:"T",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true}},`
+    + `{operation:"insert",name:"CD",parentName:"T",propertyName:"items",values:{itemType:2}},{operation:"insert",name:"TD",parentName:"T",propertyName:"items",values:{itemType:2}}]};});`;
+  const foldedRun = (records) => runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: page(oneDetail("LineDetail", "Line")) }],
+    detailSchemas: { LineDetail: { body: PLAIN_BODY.replaceAll("PlainDetail", "LineDetail"), editPage: "LineChildPage" } },
+    childPageSchemas: { LineChildPage: { entity: "Line", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: childPage }],
+      detailSchemas: { SumDetail: { body: SUMMARY_BODY, editPage: false }, LimitDetail: { body: TOGGLE_BODY, editPage: false } }, signals: FULL_SIGNALS } },
+    planMeta: docPlanMeta, signals: FULL_SIGNALS }, { decisionRecords: records });
+  const undirectedFold = foldedRun([]);
+  const childGroups = checklistGroups(undirectedFold, {}).filter((g) => g.pageKey && g.pageKey !== "main" && g.pageKey !== "list");
+  const childKey = childGroups[0]?.pageKey;
+  check("detail features: a folded child page's related list gets its quick-filter verify row under the child's own page key",
+    () => !!childKey && childGroups.flatMap((g) => g.rows).some((r) => r.vk?.type === "detailfilter" && r.vk.names.includes("TDQuickFilterByIsActiveOnly")),
+    () => checklistGroups(undirectedFold, {}).map((g) => [g.pageKey, g.baseTitle || g.title]));
+  const childDirective = (scope) => [{ id: "D7", title: "summaries", fields: { kind: "directive", decidedBy: "user", quote: "use crt.Summaries on the line page", expectation: "crt.Summaries on the line page", scope } }];
+  const directedFold = foldedRun(childDirective(childKey));
+  const childSpec = (r) => (r.childPages || []).map((c) => c.spec || "").join("\n");
+  check("detail features: a directive scoped to the folded child page answers ITS summaries question — the child's plan names the directive, not a Decision needed",
+    () => /\| Summaries \|[^\n]*Decision needed/.test(childSpec(undirectedFold))
+      && /\| Summaries \|[^\n]*user directive D7/.test(childSpec(directedFold)) && !/\| Summaries \|[^\n]*Decision needed/.test(childSpec(directedFold)),
+    () => ({ childKey, before: childSpec(undirectedFold).split("\n").filter((l) => /Summaries/.test(l)), after: childSpec(directedFold).split("\n").filter((l) => /Summaries/.test(l)) }));
+  check("detail features: a directive scoped to the root only leaves the folded child's summaries question open",
+    () => /\| Summaries \|[^\n]*Decision needed/.test(childSpec(foldedRun(childDirective("main")))));
 
   // AC 8 — a field the page's own diff disables is read-only, and --verify holds the built field to it.
   const ro = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body:

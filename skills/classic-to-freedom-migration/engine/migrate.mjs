@@ -176,7 +176,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
     // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
     // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, inheritedDirectives: ctx.directives, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -1436,6 +1436,8 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
+    // a detail Classic never placed owes no question until the user approves building it
+    if (d.unplaced) continue;
     const label = detailLabel(d);
     // Two independent signals, two plan lines: the add flow, and what the rows of existing records may do. A detail
     // that only removes row actions has no add mechanism, so it gets no add-mechanism row (that row would call a
@@ -1452,7 +1454,8 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
 export function attachDetailFeatureDecisions(changeSet) {
   for (const d of (changeSet.details || [])) {
     const f = d.features;
-    if (!f) continue;
+    // the rows still describe an unplaced detail so the approver can judge it; its questions wait for the approval
+    if (!f || d.unplaced) continue;
     const label = detailLabel(d);
     for (const q of f.quickFilters.filter((x) => x.persisted)) {
       changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
@@ -1491,7 +1494,8 @@ function asksForSummaries(directive) {
   if (!ASKS_FOR_SUMMARIES.test(text)) return false;
   return ![...text.matchAll(SUMMARY_WORD)].some((m) => NEGATION.test(text.slice(Math.max(0, m.index - NEGATION_REACH), m.index + NEGATION_REACH)));
 }
-// `results` are the root (page key `main`) and the folded sub-pages, each under its own page key. Exported for the goldens.
+// Each of `results` is one page's `{ changeSet, pageKey }`; every run applies it to its own change set before its rows
+// and spec render, so a folded sub-page answers under its own key. Exported for the goldens.
 export function applySummariesDirective(results, directives) {
   const asking = (directives || []).filter(asksForSummaries);
   if (!asking.length) return;
@@ -2308,7 +2312,8 @@ function memberSpans(body, names, spans) {
   }
   return out;
 }
-// Every layer's `diff` array, as [open, close] offsets: the controls the detail puts on its list.
+// Every layer's `diff` array, as [open, close] offsets: the controls the detail puts on its list. The tools-menu
+// override (`addToolsButtonMenuItems`) builds its items in code, so its spans are a control surface too.
 const MAX_DIFF_LEAD = 80;
 function diffSpans(body, spans) {
   const out = [];
@@ -2328,12 +2333,12 @@ function matchingBracket(body, open, spans) {
   }
   return -1;
 }
-// The attributes a user changes on the list: a control in the detail's own `diff` binds to it or is named after it,
-// or a method such a control binds (a button's `click`) assigns it. A name or `bindTo` anywhere else (a config a
+// The attributes a user changes on the list: a control in the detail's own `diff` or tools menu binds to it or is
+// named after it, or a method such a control binds (a button's `click`, a menu item's `Click`) assigns it. A name or `bindTo` anywhere else (a config a
 // method returns, a comment, a string) is no control, and an assignment anywhere else (init, a grid-data load, a
 // sandbox message from the master list) sets the attribute for the user, so its filter is fixed.
 function changedAttributes(body, spans = literalSpans(body)) {
-  const diffs = diffSpans(body, spans);
+  const diffs = [...diffSpans(body, spans), ...memberSpans(body, ["addToolsButtonMenuItems"], spans)];
   const inDiff = (i) => !insideSpan(spans, i) && diffs.some(([a, b]) => i > a && i < b);
   const controlled = (re) => [...body.matchAll(re)].filter((m) => inDiff(m.index)).map((m) => m[1]);
   const handlers = memberSpans(body, [...new Set(controlled(ATTRIBUTE_CONTROLS[1]))], spans);
@@ -3238,6 +3243,10 @@ export function runMigration(manifest, opts = {}) {
   });
   attachDetailAddModes(changeSet, detailSchemas);
   attachDetailFeatureDecisions(changeSet);
+  // The user's directives answer this page's questions before anything renders: the root reads them from the decision
+  // records, a folded sub-page inherits the root's, and each applies them under its own page key.
+  const runDirectives = opts.scopeSchema ? (opts.inheritedDirectives || []) : directivesOf(opts.decisionRecords || []);
+  applySummariesDirective([{ changeSet, pageKey: withheldPageKey(opts) }], runDirectives);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
   // carries them. Hand-appending them to the plan's `Adjustments` did not survive a re-run: `--plan --out` rewrites
   // the file, so the only link from a worklist row to the behaviour that describes it was lost on every regenerate.
@@ -3349,7 +3358,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, conventions: runConventions, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, conventions: runConventions, runRegistry, directives: runDirectives }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -3512,7 +3521,6 @@ export function runMigration(manifest, opts = {}) {
   // them: a directive changes what the plan builds.
   const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
   out.directives = directivesOf(decisionRecords);
-  applySummariesDirective([out, ...folded], out.directives);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds, out.directives);
   out.translationsMissing = translationsMissing(manifest);

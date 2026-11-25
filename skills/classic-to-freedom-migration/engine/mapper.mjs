@@ -1903,9 +1903,10 @@ const chainIsComplete = (eff) => {
   return eff?.noParentTemplate === true || (!!q && q.seeded && !q.looksSkeletal && !q.possiblyPartial);
 };
 
-// The packages of the Creatio platform itself. A template layer from any other package (a customer's or a vendor's)
-// carries details its users saw on this page, so each becomes a plan row instead of silent context. A layer whose
-// `pkg` names no package (`Schema` rather than `Schema/Package`) cannot be told apart and stays context.
+// The packages of the Creatio platform itself: Creatio's own `Crt…` and `Terrasoft…` packages and the base ones. A
+// template layer from any other package (a customer's or a vendor's) carries details its users saw on this page, so
+// each becomes a plan row instead of silent context. A layer whose `pkg` is blank names no package, so its details
+// are reported as not checked.
 const PLATFORM_PACKAGE = /^(?:Crt\w*|Base|NUI|UIv2|Platform\w*|Core|Terrasoft\w*)$/i;
 // A layer's `pkg` is the package name itself (what `get-classic-page-sources` writes, e.g. `Samarasoft.Logging`), or
 // `Schema/Package` (the form the module contract documents); either way the package is the part after any `/`.
