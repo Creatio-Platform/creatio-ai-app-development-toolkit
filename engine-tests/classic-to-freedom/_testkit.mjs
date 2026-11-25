@@ -44,21 +44,32 @@ export const makeSchema = (pkg, o = {}) => ({
 // one file every fixture on the machine shares.
 export const approvalEntry = (planVersion) =>
   `## Plan approved\n- Approved by: test\n- Plan version: \`${planVersion}\`\n`;
+// The browser answer step 7.0b records: a `Browser:` line in `worklog.md` of the migration folder above
+// `tasksDir`. `--start` of a task that writes a page refuses without one. Appended once, after whatever
+// worklog.md already holds, so a fixture that writes its own worklog keeps its lines.
+export function recordBrowserAnswer(tasksDir, answer = "page-smoke") {
+  return appendOnceBeside(tasksDir, "worklog.md", `Browser: ${answer}\n`, "recordBrowserAnswer", "\n");
+}
 export function approvePlan(tasksDir, planVersion) {
   if (!planVersion) throw new Error("approvePlan: no plan version to approve");
+  return appendOnceBeside(tasksDir, "decisions.md", approvalEntry(planVersion), "approvePlan", "\n\n");
+}
+// Appends `entry` once to `fileName` in the migration folder above `tasksDir`, separated from what the file already
+// holds by `gap` (a file ending in a newline needs one newline fewer). Refused for a task folder directly under the
+// OS temp directory, whose migration folder every fixture on the machine would share.
+function appendOnceBeside(tasksDir, fileName, entry, who, gap) {
   const folder = path.dirname(path.resolve(tasksDir));
   if (folder === path.resolve(os.tmpdir())) {
-    throw new Error(`approvePlan: ${tasksDir} sits directly in the temp directory; give it a migration folder of its own`);
+    throw new Error(`${who}: ${tasksDir} sits directly in the temp directory; give it a migration folder of its own`);
   }
   fs.mkdirSync(folder, { recursive: true });
-  const file = path.join(folder, "decisions.md");
+  const file = path.join(folder, fileName);
   let text = "";
-  try { text = fs.readFileSync(file, "utf8"); } catch { /* no decisions.md yet */ }
-  const entry = approvalEntry(planVersion);
+  try { text = fs.readFileSync(file, "utf8"); } catch { /* no such file yet */ }
   if (!text.includes(entry)) {
-    let sep = "\n\n";
+    let sep = gap;
     if (text === "") sep = "";
-    else if (text.endsWith("\n")) sep = "\n";
+    else if (text.endsWith("\n")) sep = gap.slice(1);
     fs.writeFileSync(file, text + sep + entry);
   }
   return file;

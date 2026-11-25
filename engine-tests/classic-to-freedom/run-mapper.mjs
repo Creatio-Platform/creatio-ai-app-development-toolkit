@@ -1,6 +1,7 @@
 // Golden test for the mapper: merge -> map -> assert Freedom ChangeSet.
 import { runMachineRowChecks } from "./run-mapper-machine-rows.mjs";
 import { runConventionsChecks } from "./run-mapper-conventions.mjs";
+import { runQualityChecks } from "./run-mapper-quality.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -585,6 +586,70 @@ check("entity-filter: dynamic filter → incomplete + folded into ONE concrete e
 }
 check("entity-filter: static filter marked complete + NOT in the folded line",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && /\bSt by\b/.test(n.reason)));
+
+/* ---- object-wide scope: a Classic FILTRATION is page-scoped, its Freedom entity rule is object-wide ---- */
+// Freedom page rules carry no lookup filter, so every FILTRATION becomes an entity rule that reaches every page and
+// list of the object. The plan states that on the rule and asks the user once per page before anything is built.
+{
+  const scope = efcs.needsDecision.filter((n) => n.kind === "object-wide-scope");
+  check("object-wide scope: every entity rule names the object it reaches and says it applies on all its pages",
+    () => efcs.entityBusinessRules.length === 2
+      && efcs.entityBusinessRules.every((r) => r.entity === "X" && /applies on ALL pages and lists of the object/.test(r.note)),
+    () => efcs.entityBusinessRules.map((r) => [r.entity, r.note]));
+  check("object-wide scope: ONE folded decision per page, fixed item, naming every filtered lookup",
+    () => scope.length === 1 && scope[0].item === "entity business rules"
+      && /\bLk\b/.test(scope[0].reason) && /\bSt\b/.test(scope[0].reason),
+    () => scope);
+  check("object-wide scope: the decision tells the agent to name the other pages and what a refusal means",
+    () => /list-pages/.test(scope[0]?.reason) && /ALL pages and lists of X/.test(scope[0]?.reason)
+      && /not migrated — add manually: Freedom page rules have no lookup filter/.test(scope[0]?.reason)
+      && /`wont-do`/.test(scope[0]?.reason) && /--decide D<N> --wont-do/.test(scope[0]?.reason),
+    () => scope[0]?.reason);
+  const spec = renderDesignSpec({ entity: "X", changeSet: efcs });
+  check("object-wide scope: the plan's rule row carries the label and ⚠ Confirm carries the folded row",
+    () => /entity business rule — applies on ALL pages of `X`/.test(spec)
+      && /- \*\*\[object-wide-scope\]\*\* entity business rules — /.test(spec),
+    () => spec.split("\n").filter((l) => /entity business rule|object-wide/.test(l)).join("\n"));
+  const groups = checklistGroups({ entity: "X", changeSet: efcs }, {})
+    .filter((g) => g.baseTitle === "⚠ Confirm worklist").flatMap((g) => g.rows);
+  check("object-wide scope: the decision reaches the checklist, not only plan.md",
+    () => groups.filter((r) => r.confirm?.kind === "object-wide-scope").length === 1,
+    () => groups.map((r) => r.label));
+  // The decline path names a deliverable id; it must be a row of this plan that holds the entity rules and nothing
+  // else, so closing it `wont-do` leaves the page rules to be built.
+  const named = /`<pageKey>#([\w-]+)`/.exec(scope[0]?.reason || "")?.[1];
+  const mixed = { ...efcs, pageBusinessRules: [{ action: "show", element: "Shown", inverseAction: "hide" }] };
+  const rows = checklistGroups({ entity: "X", changeSet: mixed }, {}).flatMap((g) => g.rows);
+  const declined = rows.find((r) => r.deliverableId === named);
+  const pageRules = rows.find((r) => r.deliverableId === "business-rules");
+  check("object-wide scope: the id the decline path names is a checklist row holding exactly the entity rules",
+    () => named === "entity-rules" && declined?.vk?.type === "rule"
+      && [...declined.vk.names].sort().join() === "Lk,St"
+      && pageRules?.vk?.names.join() === "Shown" && !pageRules.vk.names.some((n) => declined.vk.names.includes(n)),
+    () => ({ named, declined, pageRules }));
+  const closed = checklistGroups({ entity: "X", changeSet: mixed },
+    { deliverableStatus: { "main#entity-rules": { status: "wont-do", decision: "D1" } } }).flatMap((g) => g.rows);
+  check("object-wide scope: closing `main#entity-rules` wont-do closes only that row; the page rules stay open",
+    () => closed.find((r) => r.deliverableId === "entity-rules")?.status?.kind === "wont-do"
+      && closed.find((r) => r.deliverableId === "business-rules")?.status?.kind !== "wont-do",
+    () => closed.filter((r) => /rules/.test(r.deliverableId || "")).map((r) => [r.deliverableId, r.status]));
+}
+// With no entity on the page, the row and the decision still read as instructions the agent can follow.
+{
+  const noEnt = mapToFreedom(mergeHierarchy([L("Client", {
+    diff: [di({ name: "Lk", parentName: "Header", propertyName: "items", bindTo: "Lk" })],
+    businessRules: { Lk: { r: { ruleType: 1, baseAttributePatch: "OtherCol" } } } })]));
+  const d = (noEnt.needsDecision || []).find((n) => n.kind === "object-wide-scope");
+  const spec = renderDesignSpec({ entity: null, changeSet: noEnt });
+  check("object-wide scope (no entity): the decision asks for the entity first instead of `list-pages` by a placeholder, and the rule row names the object generically",
+    () => noEnt.entity === "?" && /read this page's entity on-stand/.test(d?.reason) && !/by entity (the object|\?)/.test(d?.reason)
+      && !/ALL pages and lists of \?/.test(d?.reason) && !/ALL pages of `\?`/.test(spec)
+      && /entity business rule — applies on ALL pages of the object/.test(spec),
+    () => ({ entity: noEnt.entity, reason: d?.reason }));
+}
+check("object-wide scope (negative): a page with no FILTRATION raises no object-wide decision",
+  () => !dcs.needsDecision.some((n) => n.kind === "object-wide-scope") && (dcs.entityBusinessRules || []).length === 0,
+  () => dcs.needsDecision.map((n) => n.kind));
 
 /* ---- image component + tooltip carry (Product gaps) ---- */
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
@@ -10675,6 +10740,7 @@ check("renderVerify: `rows` carries every table row with its page, kind (machine
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
 runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
 runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX, ENGINE_DIR });
+runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
@@ -13632,10 +13698,15 @@ const n2TreeManifest = (titleA, titleB) => ({
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
-    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => r.label.startsWith("Business rules ×"));
-    check("T4 (R3): the Business rules checklist row carries a `rule` vk (never a vk-less skip) with the expected identities",
-      ruleRow?.vk?.type === "rule" && ruleRow.vk.names.includes("Contact") && ruleRow.vk.names.includes("Owner"),
-      () => ruleRow);
+    const rrRows = checklistGroups(rr, {}).flatMap((g) => g.rows);
+    const ruleRow = rrRows.find((r) => r.label.startsWith("Business rules ×"));
+    const entityRow = rrRows.find((r) => r.label.startsWith("Entity business rules ×"));
+    check("T4 (R3): the page and entity business-rule rows each carry a `rule` vk (never a vk-less skip) with their own identities",
+      ruleRow?.vk?.type === "rule" && ruleRow.deliverableId === "business-rules"
+        && ruleRow.vk.names.join() === "Contact" && ruleRow.vk.n === 1
+        && entityRow?.vk?.type === "rule" && entityRow.deliverableId === "entity-rules"
+        && entityRow.vk.names.join() === "Owner" && entityRow.vk.n === 1,
+      () => ({ ruleRow, entityRow }));
   }
   // Applicant-case contract fixture — a built payload mirroring the real Applicant page: 11 business rules read off
   // the slot and the native crt.CommunicationOptions. The whole point of N1: NONE of this reads ❌ MISSING now.
@@ -16053,35 +16124,41 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   const su = JSON.parse(verifyManifest);
   const withStatus = (status) => ({ ...su, deliverableStatus: status });
   const run = (m) => runMigration(m, { baseDir: DIR, decisions, decisionRecords: records });
-  const ruleRowOf = (res, m) => checklistGroups(res, checklistOpts(m)).flatMap((g) => g.rows).find((r) => r.vk?.type === "rule");
-  const userM = withStatus({ "main#business-rule:ParentSupportUnit": { status: "built-elsewhere", decision: "D4" } });
+  // Page rules and entity rules are two rows (`business-rules`, `entity-rules`): the row is the one that names the attribute.
+  const ruleRowOf = (res, m, attr) => checklistGroups(res, checklistOpts(m)).flatMap((g) => g.rows)
+    .find((r) => r.vk?.type === "rule" && r.vk.names.includes(attr));
+  const userM = withStatus({ "main#business-rule:ParentSupportUnit": { status: "built-elsewhere", decision: "D4" },
+    "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D4" } });
   const userRun = run(userM);
-  const userRow = ruleRowOf(userRun, userM);
-  check("rules (built-elsewhere): a `built-elsewhere` entry on the user's own decision closes that rule attribute — the row's vk carries it with the quote, in the plan run and in a later mode that re-derives the groups from the manifest alone",
-    () => !(userRun.statusIssues || []).length && userRow.vk.decided?.ParentSupportUnit?.decision === "D4"
-      && userRow.vk.decided.ParentSupportUnit.quote === "leave that filter in the handler, it is fine",
-    () => ({ issues: userRun.statusIssues, vk: userRow?.vk }));
-  const names = userRow.vk.names;
+  const entityRow = ruleRowOf(userRun, userM, "ParentSupportUnit");
+  const pageRow = ruleRowOf(userRun, userM, "Calendar");
+  const decidedOn = (row, attr) => row?.vk.decided?.[attr]?.decision === "D4" && row.vk.decided[attr].quote === "leave that filter in the handler, it is fine";
+  check("rules (built-elsewhere): a `built-elsewhere` entry on the user's own decision closes that rule attribute — the row's vk carries it with the quote, on the entity-rules row and on the page-rules row alike, in the plan run and in a later mode that re-derives the groups from the manifest alone",
+    () => !(userRun.statusIssues || []).length && entityRow !== pageRow
+      && decidedOn(entityRow, "ParentSupportUnit") && decidedOn(pageRow, "Calendar"),
+    () => ({ issues: userRun.statusIssues, entity: entityRow?.vk, page: pageRow?.vk }));
+  const names = pageRow.vk.names;
   const governs = (attr) => ({ name: `BusinessRule_${attr}`, condition: {}, actions: [{ type: "make-required", items: [`${attr}Field`] }] });
   const built = (rules) => verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: { count: rules.length, rules } } } }, "main");
-  const others = names.filter((n) => n !== "ParentSupportUnit");
-  const allBuilt = resolveRuleVk(userRow.vk, built(others.map(governs)));
-  const oneShort = resolveRuleVk(userRow.vk, built(others.slice(1).map(governs)));
+  const others = names.filter((n) => n !== "Calendar");
+  const allBuilt = resolveRuleVk(pageRow.vk, built(others.map(governs)));
+  const oneShort = resolveRuleVk(pageRow.vk, built(others.slice(1).map(governs)));
   check("rules (built-elsewhere): the decided attribute is not counted missing — the other rules built read ✅ and quote the decision; a shortfall names only the attributes still owed",
-    () => allBuilt[2] === "ok" && /built another way on the user's decision: ParentSupportUnit \(D4: “leave that filter in the handler, it is fine”\)/.test(allBuilt[1])
-      && oneShort[2] === "unverified" && new RegExp(`missing: ${others[0]}`).test(oneShort[1]) && !/missing:[^;]*ParentSupportUnit/.test(oneShort[1]),
+    () => others.length > 0 && allBuilt[2] === "ok" && /built another way on the user's decision: Calendar \(D4: “leave that filter in the handler, it is fine”\)/.test(allBuilt[1])
+      && oneShort[2] === "unverified" && new RegExp(`missing: ${others[0]}`).test(oneShort[1]) && !/missing:[^;]*Calendar/.test(oneShort[1]),
     () => [names, allBuilt, oneShort]);
-  const onlyDecided = resolveRuleVk({ type: "rule", n: 1, names: ["ParentSupportUnit"], decided: userRow.vk.decided }, built([]));
+  const onlyPsu = { type: "rule", n: 1, names: ["ParentSupportUnit"], decided: entityRow.vk.decided };
+  const onlyDecided = resolveRuleVk(onlyPsu, built([]));
   check("rules (built-elsewhere): a row whose every attribute was built another way on the user's decision is ✅ on the decisions alone; a page reported NOT BUILT is still ❌",
     () => onlyDecided[2] === "ok"
-      && resolveRuleVk({ type: "rule", n: 1, names: ["ParentSupportUnit"], decided: userRow.vk.decided }, verifyCtx({ pages: { main: false } }, "main"))[2] === "missing",
+      && resolveRuleVk(onlyPsu, verifyCtx({ pages: { main: false } }, "main"))[2] === "missing",
     () => onlyDecided);
   const orchM = withStatus({ "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D5" } });
   const orchRun = run(orchM);
   const plainM = withStatus({ "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D6" } });
   const plainRun = run(plainM);
   check("rules (built-elsewhere): the same status on an orchestrator's decision, or on an entry with no provenance, closes nothing — the attribute stays expected and the plan reports a `deliverableStatus` issue",
-    () => [[orchRun, orchM], [plainRun, plainM]].every(([r, m]) => !ruleRowOf(r, m).vk.decided
+    () => [[orchRun, orchM], [plainRun, plainM]].every(([r, m]) => !ruleRowOf(r, m, "Calendar").vk.decided
         && (r.statusIssues || []).some((x) => x.key === "main#business-rule:Calendar" && x.kind === "decision" && /not the user's own decision/.test(x.problem))
         && planGaps(r).some((g) => /deliverableStatus INVALID/.test(g))),
     () => [orchRun.statusIssues, plainRun.statusIssues]);

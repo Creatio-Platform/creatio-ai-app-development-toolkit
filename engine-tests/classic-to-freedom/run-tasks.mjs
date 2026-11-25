@@ -11,18 +11,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport, readDecisionTexts } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, browserChecksOf, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
-  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
+  startBlocker, startableTasks, HOLD_BROWSER, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
+  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf, pageWorkBegun, browserAnswerOwed, browserAnswerUngated,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -32,7 +33,7 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { approvePlan } from "./_testkit.mjs";
+import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
 import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
@@ -205,7 +206,11 @@ const planVersionOf = (manifest, baseDir = DIR) => {
 const approve = (dir, manifest = MANIFEST, baseDir = DIR) => approvePlan(dir, planVersionOf(manifest, baseDir));
 const approveTasksArg = (args, manifest, baseDir) => {
   const at = args.indexOf("--tasks");
-  if (at >= 0 && args[at + 1]) approve(args[at + 1], manifest, baseDir);
+  if (at >= 0 && args[at + 1]) {
+    approve(args[at + 1], manifest, baseDir);
+    // `--start` and `--next` hold a page-writing task until worklog.md records the browser answer (step 7.0b).
+    if (args.includes("--start") || args.includes("--next")) recordBrowserAnswer(args[at + 1]);
+  }
 };
 // THE BUILD LOOP OF AN APPROVED PLAN: `migrate.mjs` on a manifest piped to stdin, run the way the orchestrator runs
 // it once the user approved the plan — so a `--tasks <dir>` run first records that approval for the manifest it
@@ -2890,6 +2895,7 @@ console.log("\n===== migrate.mjs --tasks / --start (CLI): the plan approval gate
         && JSON.stringify(snapOf(copy)) === JSON.stringify(before),
       () => ({ id, status: start.status, stdout: start.stdout }));
     fs.writeFileSync(path.join(copy, "decisions.md"), `## Plan approved\n- Approved by: user\n- Plan version: ${V}\n`);
+    recordBrowserAnswer(cdir);
     const started = cliUnapproved(["--tasks", cdir, "--start", id], MANIFEST);
     check("approval gate T4 (R3, anti-vacuity): the same `--start` with the approval restored starts the task — the refusal above is the gate, not a task that could not start",
       () => started.status === 0 && /DISPATCH TOKEN/.test(started.stdout || ""),
@@ -5820,6 +5826,193 @@ console.log("\n===== the migration result report — one artifact, computed from
     () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
+  // BUILT IS NOT EXERCISED. A page whose build tasks never opened it after a save is reported as such: the verdict
+  // counts what a browser check exercised, not only what the read-back found. The count is the `Browser checks: N`
+  // line each page-writing task writes under `## Notes`; a missing line counts as 0.
+  check("browserChecksOf: reads N off the plain, listed or bold `Browser checks: N — …` line, and null when there is none",
+    () => browserChecksOf("Browser checks: 2 — 1: loads clean; 2: confirms the fix") === 2
+      && browserChecksOf("- **Browser checks:** 0 — the user chose no browser") === 0
+      && browserChecksOf("## Notes\nsome prose\n") === null && browserChecksOf("") === null,
+    () => [browserChecksOf("Browser checks: 2 — x"), browserChecksOf("- **Browser checks:** 0 — y")]);
+  {
+    // Only a field line sets the count: prose ABOUT the line — a quoted example, a fenced one, a mention mid-sentence
+    // or in inline code — never flips the number a verdict rests on, and a later field line corrects an earlier one.
+    const real = "Browser checks: 2 — loads clean; fix confirmed";
+    const cases = {
+      quoted: [`${real}`, "> Browser checks: 0 — <why>"].join("\n"),
+      fenced: [`${real}`, "```text", "Browser checks: 0 — <why>", "```"].join("\n"),
+      tildeFence: ["~~~", "Browser checks: 3 — example", "~~~", "Browser checks: 0 — the user chose no browser"].join("\n"),
+      inline: [`${real}`, "The brief's shape is `Browser checks: 0 — <why>`; mine is above."].join("\n"),
+      corrected: ["Browser checks: 0 — not yet", "- Browser checks: 1 — loads clean after the fix"].join("\n"),
+    };
+    const got = Object.fromEntries(Object.entries(cases).map(([k, v]) => [k, browserChecksOf(v)]));
+    check("browserChecksOf: a quoted, fenced or inline example never sets the count; the last FIELD line wins, so a builder corrects its count by writing it again",
+      () => JSON.stringify(got) === JSON.stringify({ quoted: 2, fenced: 2, tildeFence: 0, inline: 2, corrected: 1 }),
+      () => got);
+  }
+  const pageTask = (id, pageKey, notes, writesTo = `page:${pageKey}`) => ({ id, file: `${id}.md`, group: "Page build", pageKey,
+    writesTo, status: "done", notes, rows: [{ label: `Form page ${id}`, outcomeKind: "built", outcome: "built" }] });
+  const exercisedRep = (tasks, dir) => renderFinalReport({ result: RUN, verifyRes: greenVerify,
+    set: { planVersion: RUN.planVersion, tasks }, dir });
+  const allChecked = exercisedRep([pageTask("e-b", "main", "Browser checks: 0 — read-back only"),
+    pageTask("e-a", "main", "Browser checks: 1 — loads clean"), pageTask("e-c", "child:C1", "Browser checks: 2 — loads; fix confirmed")],
+  tmp("result-report-exercised"));
+  check("exercised: every page whose last built task reports `Browser checks: ≥1` keeps 🟢 COMPLETE, no not-exercised section and no stderr note",
+    () => allChecked.complete === true && /🟢 \*\*COMPLETE\*\*/.test(allChecked.markdown) && allChecked.verdictColour === "green"
+      && !/Not exercised in a browser/.test(allChecked.markdown) && unexercisedNote(allChecked) === "",
+    () => allChecked.markdown.split("\n")[2]);
+  {
+    // The exercised section, byte for byte: each page beside its last built task, the count, and the builder's own
+    // words after the dash, so the number a 🟢 verdict rests on is read next to what each check answered.
+    const md = allChecked.markdown;
+    const from = md.indexOf("## Exercised in a browser");
+    const got = from < 0 ? [] : md.slice(from).split("\n\n## ")[0].split("\n").filter((l) => l.startsWith("- ") || l.startsWith("## "));
+    const want = [
+      "## Exercised in a browser (2)",
+      "- **Main page** (`page:main`) — [Page build](e-a.md), 1 check: loads clean",
+      "- **C1 page** (`page:child:C1`) — [Page build](e-c.md), 2 checks: loads; fix confirmed",
+    ];
+    const pageNames = got.slice(1).map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    const wantNames = want.slice(1).map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    check("exercised: a 🟢 run quotes each exercised page's `Browser checks` prose beside its count, from the page's last built task",
+      () => got[0] === want[0] && JSON.stringify(pageNames) === JSON.stringify(wantNames),
+      () => ({ got, want }));
+    const bare = exercisedRep([pageTask("b-a", "main", "Browser checks: 1")], tmp("result-report-exercised-bare"));
+    check("exercised: a `Browser checks: N` line with no prose is named as such beside the page, not left blank",
+      () => bare.verdictColour === "green" && /, 1 check: no account of what the checks answered$/m.test(bare.markdown),
+      () => bare.markdown.slice(bare.markdown.indexOf("## Exercised")));
+  }
+  const lastChunkUnchecked = exercisedRep([pageTask("k-a", "main", "Browser checks: 1 — loads clean"),
+    pageTask("k-b", "main", "Browser checks: 0 — saved the handlers")], tmp("result-report-last-chunk"));
+  check("exercised: a page whose LAST built chunk reports no check is unexercised even though an earlier chunk checked it — the page is opened as it finally stands",
+    () => lastChunkUnchecked.verdictColour === "orange" && lastChunkUnchecked.counts.unexercised === 1,
+    () => lastChunkUnchecked.markdown.split("\n")[2]);
+  {
+    // A whole-run build is ONE artifact in the browser verdict, whatever pages it saved: its single
+    // `Browser checks: N` line decides all of them at once, as one check line decides one page's last chunk.
+    const wholeTask = (notes) => ({ ...pageTask("wh-a", "run", notes, ARTIFACT_WHOLE), group: "Whole run",
+      rows: [{ label: "Form page main", pageKey: "main", outcomeKind: "built", outcome: "built" },
+        { label: "List page list", pageKey: "list", outcomeKind: "built", outcome: "built" }] });
+    const wholeChecked = exercisedRep([wholeTask("Browser checks: 1 — form loads clean")], tmp("result-report-whole-checked"));
+    const wholeUnchecked = exercisedRep([wholeTask("Browser checks: 0 — read-back only")], tmp("result-report-whole-unchecked"));
+    check("exercised: a whole-run build is one artifact in the browser verdict — one reported check marks the run exercised, none leaves the whole run as the one unexercised entry",
+      () => wholeChecked.verdictColour === "green" && wholeChecked.counts.unexercised === 0
+        && (wholeChecked.markdown.match(/^- \*\*.*\(`whole`\)/gm) || []).length === 1
+        && wholeUnchecked.verdictColour === "orange" && wholeUnchecked.counts.unexercised === 1
+        && wholeUnchecked.unexercisedPages.length === 1,
+      () => ({ checked: wholeChecked.verdictColour, unchecked: wholeUnchecked.unexercisedPages }));
+  }
+  const oneUnchecked = exercisedRep([pageTask("u-a", "main", "Browser checks: 1 — loads clean"),
+    { ...pageTask("u-b", "child:C1", "Check on stand (row 1): open a C1 record → the Owner field is filled"), status: "done" }],
+  tmp("result-report-unexercised"));
+  check("not exercised: one page with no task reporting a browser check turns the green verdict into 🟠 BUILT, NOT EXERCISED, keeps the run complete, and lists that page with its `Check on stand` lines",
+    () => oneUnchecked.complete === true && oneUnchecked.verdictColour === "orange"
+      && /🟠 \*\*BUILT, NOT EXERCISED\*\*/.test(oneUnchecked.markdown) && !/🟢/.test(oneUnchecked.markdown)
+      && /## Not exercised in a browser/.test(oneUnchecked.markdown)
+      && /the Owner field is filled/.test(oneUnchecked.markdown.slice(oneUnchecked.markdown.indexOf("## Not exercised")))
+      && oneUnchecked.counts.unexercised === 1,
+    () => oneUnchecked.markdown.slice(0, 1600));
+  {
+    // Each unexercised page's bullet, byte for byte: its last built task and why that task reports no check, in the
+    // builder's words — a refused check, a check never attempted and a missing line are different jobs on the stand.
+    const reasons = exercisedRep([pageTask("r-a", "main", "Browser checks: 0 — page-smoke cannot open a list page; no surface available"),
+      pageTask("r-b", "child:C1", "Browser checks: 0"), pageTask("r-c", "child:C2", "")], tmp("result-report-unexercised-reasons"));
+    const md = reasons.markdown;
+    const got = md.slice(md.indexOf("## Not exercised")).split("\n").filter((l) => l.startsWith("- **"))
+      .map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    const want = [
+      "- **<page>** (`page:main`) — [Page build](r-a.md), `Browser checks: 0`: page-smoke cannot open a list page; no surface available",
+      "- **<page>** (`page:child:C1`) — [Page build](r-b.md), `Browser checks: 0`: no account of why",
+      "- **<page>** (`page:child:C2`) — [Page build](r-c.md) wrote no `Browser checks` line",
+    ];
+    check("not exercised: each unexercised page quotes its last built task's `Browser checks` reason, says when there is none, and says when the line is missing",
+      () => JSON.stringify(got) === JSON.stringify(want),
+      () => ({ got, want }));
+  }
+  check("not exercised: the 🟠 run keeps `complete` (exit code untouched) and says the unchecked pages on stderr, by name",
+    () => /^migrate\.mjs: 🟠 BUILT, NOT EXERCISED — .*Check them on the stand/.test(unexercisedNote(oneUnchecked))
+      && unexercisedNote(oneUnchecked).includes(oneUnchecked.unexercisedPages[0]) && oneUnchecked.unexercisedPages.length === 1
+      && unexercisedNote({ ...oneUnchecked, complete: false }) === "",
+    () => ({ note: unexercisedNote(oneUnchecked), pages: oneUnchecked.unexercisedPages }));
+  {
+    const nbase = tmp("result-report-browser-none");
+    const ndir = path.join(nbase, "build-tasks");
+    fs.mkdirSync(ndir, { recursive: true });
+    fs.writeFileSync(path.join(nbase, "worklog.md"), "# Worklog\n\nBrowser: none (user: \"I will check the pages myself\")\n");
+    const noneRep = exercisedRep([pageTask("n-a", "main", "Browser checks: 0 — the user chose no browser")], ndir);
+    check("not exercised: `Browser: none` is honoured — the run ends 🟠 BUILT, NOT EXERCISED and the browser section quotes the recorded answer",
+      () => noneRep.verdictColour === "orange" && /🟠 \*\*BUILT, NOT EXERCISED\*\*/.test(noneRep.markdown)
+        && /Browser: none \(user: "I will check the pages myself"\)/.test(noneRep.markdown),
+      () => noneRep.markdown.slice(noneRep.markdown.indexOf("## Not exercised")));
+    const checkedRep = exercisedRep([pageTask("n-b", "main", "Browser checks: 2 — loads clean; fix confirmed")], ndir);
+    const sec = checkedRep.markdown.slice(checkedRep.markdown.indexOf("## Not exercised"));
+    check("not exercised: under `Browser: none` the section says the user declined the check, so a page whose task reported one is listed without the section claiming nobody opened it",
+      () => checkedRep.verdictColour === "orange" && /The user declined the browser check for this run/.test(sec)
+        && /including any a build task did report a check for/.test(sec) && !/no build task opened them/.test(sec)
+        && /`Browser checks: 2`: loads clean; fix confirmed/.test(sec) && checkedRep.browserAnswerUnread === null,
+      () => sec.slice(0, 900));
+  }
+  {
+    // An answer the report could not read is said, not taken for "no answer": without it a recorded `Browser: none`
+    // cannot be applied, so the verdict may be greener than the answer earns.
+    const lost = path.join(tmp("result-report-browser-unread"), "build-tasks");
+    fs.mkdirSync(lost, { recursive: true });
+    const lostRep = exercisedRep([pageTask("l-a", "main", "Browser checks: 1 — loads clean")], lost);
+    const md = lostRep.markdown;
+    const browserAt = md.indexOf("## Browser answer not read");
+    check("browser answer unread: a task folder with no `worklog.md` beside it puts `Browser answer not read` first in the browser section, names the missing file, and raises the stderr note",
+      () => browserAt > 0 && browserAt < md.indexOf("## Exercised in a browser")
+        && /no `worklog\.md` beside the task folder/.test(lostRep.browserAnswerUnread || "")
+        && /A recorded `Browser: none` is therefore not applied/.test(md)
+        && /^migrate\.mjs: ⚠ BROWSER ANSWER NOT READ — no `worklog\.md` beside the task folder/.test(browserAnswerUnreadNote(lostRep)),
+      () => ({ unread: lostRep.browserAnswerUnread, note: browserAnswerUnreadNote(lostRep), at: browserAt }));
+    const dirBase = tmp("result-report-browser-unreadable");
+    const blocked = path.join(dirBase, "build-tasks");
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.mkdirSync(path.join(dirBase, "worklog.md"));
+    const blockedRep = exercisedRep([pageTask("l-b", "main", "")], blocked);
+    check("browser answer unread: a `worklog.md` that exists but cannot be read says so, and the not-exercised section reads `could not be read`, not `has no Browser: line`",
+      () => /could not be read \(E/.test(blockedRep.browserAnswerUnread || "")
+        && /Browser answer recorded for this run: none — `worklog\.md` could not be read\./.test(blockedRep.markdown),
+      () => ({ unread: blockedRep.browserAnswerUnread }));
+    const quiet = exercisedRep([], lost);
+    check("browser answer unread: with no page built the answer decides nothing, so there is no finding and no stderr note",
+      () => quiet.browserAnswerUnread === null && !/Browser answer not read/.test(quiet.markdown) && browserAnswerUnreadNote(quiet) === "",
+      () => ({ unread: quiet.browserAnswerUnread }));
+    const ok = path.join(tmp("result-report-browser-read"), "build-tasks");
+    fs.mkdirSync(ok, { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(ok), "worklog.md"), "# Worklog\n\nRoute: agent\n");
+    const okRep = exercisedRep([pageTask("l-c", "main", "Browser checks: 1 — loads clean")], ok);
+    check("browser answer unread: a readable `worklog.md` with no `Browser:` line is no read failure — no unread section, no note",
+      () => okRep.browserAnswerUnread === null && !/Browser answer not read/.test(okRep.markdown) && browserAnswerUnreadNote(okRep) === "",
+      () => ({ unread: okRep.browserAnswerUnread }));
+  }
+  const nothingBuilt = exercisedRep([pageTask("w-a", "main", "Browser checks: 1 — loads clean"),
+    { ...pageTask("w-b", "child:C1", ""), status: "wont-do" }, { ...pageTask("w-c", "child:C2", ""), status: "not-applicable" },
+    { ...pageTask("w-d", "child:C3", ""), status: "postponed" }], tmp("result-report-nothing-built"));
+  check("exercised: a page whose only task closed wont-do, not-applicable or postponed built nothing, so it never turns the run 🟠",
+    () => nothingBuilt.counts.unexercised === 0 && !/🟠/.test(nothingBuilt.markdown) && !/Not exercised in a browser/.test(nothingBuilt.markdown),
+    () => nothingBuilt.markdown.split("\n")[2]);
+  {
+    const dbase = tmp("result-report-browser-declined");
+    const ddir = path.join(dbase, "build-tasks");
+    fs.mkdirSync(ddir, { recursive: true });
+    fs.writeFileSync(path.join(dbase, "worklog.md"), "Browser:none (user: \"no browser\")\n");
+    const declinedRep = exercisedRep([pageTask("d-a", "main", "Browser checks: 1 — opened it anyway")], ddir);
+    check("not exercised: under `Browser: none` a built page counts as unexercised even when its task reports a check — the user declined the check for the run",
+      () => declinedRep.verdictColour === "orange" && declinedRep.counts.unexercised === 1,
+      () => declinedRep.markdown.split("\n")[2]);
+  }
+  const overCap = exercisedRep([pageTask("o-a", "main", "Browser checks: 4 — loads; fix; fix again; fix again")], tmp("result-report-cap"));
+  check("cap: a task reporting more than two browser checks is listed as a cap breach — a warning, so the verdict stays 🟢",
+    () => overCap.verdictColour === "green" && /Browser checks over the cap of 2/.test(overCap.markdown) && /o-a/.test(overCap.markdown)
+      && overCap.counts.capBreaches === 1,
+    () => overCap.markdown);
+  const redStaysRed = exercisedRep([{ ...pageTask("r-a", "main", ""), status: "todo", rows: [{ label: "Form page r-a" }] }], tmp("result-report-red-unexercised"));
+  check("not exercised: an incomplete run stays ⛔ NOT COMPLETE — the browser tier never replaces a red verdict",
+    () => redStaysRed.verdictColour === "red" && /⛔ \*\*NOT COMPLETE\*\*/.test(redStaysRed.markdown) && !/🟠/.test(redStaysRed.markdown.split("\n")[2]),
+    () => redStaysRed.markdown.split("\n")[2]);
+
   // TWO WAYS A CLOSED TASK CAN CARRY A WORD NOTHING STANDS BEHIND, neither of which the machine leg can see. The
   // set they are measured against is `closedSet` above, which the check before this one proves reads 🟢 COMPLETE.
   // `DRIFT` is the real thing, merged out of a folder recorded against SET's rows and re-read against SET3's.
@@ -5888,6 +6081,29 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /\*\*D7\*\* — dash title/.test(repG.markdown) && /\*\*D8\*\* — colon title/.test(repG.markdown)
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
+  }
+  // A filter the user did not want object-wide is closed `wont-do` under its decision: section 2 lists it with
+  // the decision, so the reader learns it was not migrated and has to be added by hand. A `wont-do` citing no
+  // recorded decision is not listed there.
+  {
+    const baseW = tmp("result-report-declined"); fs.mkdirSync(baseW, { recursive: true });
+    fs.writeFileSync(path.join(baseW, "decisions.md"), "# Decisions\n\n## D4 — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter\n");
+    const dW = path.join(baseW, "build-tasks");
+    const wnt = (id, reason) => ({ id, file: `${id}.md`, group: "Logic", pageKey: "main", status: "done", kind: "build", notes: "",
+      rows: [{ label: `Filter · ${id}`, outcomeKind: "wont-do", outcome: `wont-do — ${reason}`, outcomeReason: reason, na: null }] });
+    const repW = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [wnt("Lk", "declined object-wide scope (D4)"), wnt("St", "not wanted")] }, dir: dW });
+    const s2 = repW.markdown.slice(repW.markdown.indexOf("## 2."), repW.markdown.indexOf("## 3.") > 0 ? repW.markdown.indexOf("## 3.") : undefined);
+    check("report section 2 lists a `wont-do` row that cites a recorded decision, with the decision's title — a declined filter is visible as not migrated",
+      () => /Closed by a recorded decision/.test(s2) && /Filter · Lk/.test(s2)
+        && /\*\*D4\*\* — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter/.test(s2),
+      () => s2);
+    check("report section 2 does not list a `wont-do` row that cites no recorded decision",
+      () => !/Filter · St/.test(s2), () => s2);
+    const summaryN = /\| Boundaries the agent closed \| (\d+)/.exec(repW.markdown)?.[1];
+    const headingN = /## 2\. Boundaries the agent closed \((\d+)\)/.exec(repW.markdown)?.[1];
+    check("report summary counts the declined row as a boundary closed by a recorded decision, the same number section 2's heading gives",
+      () => summaryN === "1" && headingN === "1" && /Boundaries the agent closed \| 1 — with a recorded decision 1 · without 0/.test(repW.markdown),
+      () => ({ summaryN, headingN }));
   }
   // decisions.md written as a TABLE (`| D1 | **title** | … |`), per references/migration-documentation.md — the
   // second cell is the title (bold lead lifted). Structured shapes (heading / table) take precedence, so a plain
@@ -6595,10 +6811,102 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     () => DISPATCH_ROUTES.every((r) => worklogRoute(`Route: ${r}`) === `Route: ${r}`)
       && worklogRoute("- **Route:** `inline` (the host has no sub-agents)") === "Route: inline (the host has no sub-agents)",
     () => DISPATCH_ROUTES.map((r) => worklogRoute(`Route: ${r}`)));
+  check("browserAnswerOf: the value of a `Browser:` line, read by the rule the gate reads it — with or without the space, a trailing quote ignored — and null for no line",
+    () => browserAnswerOf("Browser: none (user: \"no\")") === "none" && browserAnswerOf(worklogBrowser("Browser:none")) === "none"
+      && browserAnswerOf(worklogBrowser("- **Browser:** `page-smoke`")) === "page-smoke" && browserAnswerOf(null) === null,
+    () => [browserAnswerOf("Browser: none"), browserAnswerOf(worklogBrowser("Browser:none")), worklogBrowser("- **Browser:** `page-smoke`")]);
+  check("worklogBrowser: each of page-smoke · surface · none is an answer, a plain, bold or listed line is read, a trailing quote is kept, and the LAST one wins",
+    () => BROWSER_ANSWERS.every((a) => worklogBrowser(`Browser: ${a}`) === `Browser: ${a}`)
+      && worklogBrowser("- **Browser:** `page-smoke` (user: \"yes, use Chrome\")") === "Browser: page-smoke (user: \"yes, use Chrome\")"
+      && worklogBrowser("Browser: none\n## later\nBrowser: page-smoke\n") === "Browser: page-smoke",
+    () => BROWSER_ANSWERS.map((a) => worklogBrowser(`Browser: ${a}`)));
+  check("worklogBrowser: no line, an empty line, a mention in prose or an answer outside the three is NO answer — and a later such line is not saved by an earlier valid one",
+    () => worklogBrowser("") === null && worklogBrowser("Browser:") === null
+      && worklogBrowser("- the Browser: line is written in 7.0b") === null && worklogBrowser("Browser: manual") === null
+      && worklogBrowser("Browser: Page-smoke") === null && worklogBrowser("Browser: page-smoke\nBrowser: TBD\n") === null,
+    () => [worklogBrowser("Browser: manual"), worklogBrowser("Browser: page-smoke\nBrowser: TBD")]);
+  check("writesPage: a page body (`page:<id>`) and the whole-run build write a page; the reference cache, the scaffold, child wiring and a review do not",
+    () => writesPage("page:main") && writesPage(ARTIFACT_WHOLE) && !writesPage(ARTIFACT_REFS) && !writesPage(ARTIFACT_SCAFFOLD)
+      && !writesPage("wiring:main") && !writesPage("") && !writesPage(undefined));
   check("worklogRoute: `Route: TBD`, a misspelt or a re-cased route is NO route — and a later such line is not saved by an earlier valid one",
     () => worklogRoute("Route: TBD") === null && worklogRoute("Route: agents") === null && worklogRoute("Route: Agent") === null
       && worklogRoute("Route: agent\n## later\nRoute: TBD\n") === null,
     () => [worklogRoute("Route: TBD"), worklogRoute("Route: agents"), worklogRoute("Route: agent\nRoute: TBD")]);
+  {
+    // THE BROWSER GATE ON `--start`. A builder cannot reach the user, so the post-save check it owes a page runs only
+    // if the orchestrator asked the browser question first. `startTask` refuses a page-writing task under a gate with
+    // no answer and opens no clock; a task that writes no page is not held by it.
+    const d = path.join(tmp("browser-gate"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const tasks = readTaskDir(d);
+    const page = tasks.find((t) => writesPage(t.writesTo));
+    const cache = tasks.find((t) => !writesPage(t.writesTo) && !(t.dependsOn || []).length);
+    const noAnswer = startTask(d, page.id, RUN, { ...OPTS, browserGate: { answer: null } }, null, AT(1));
+    check("browser gate: `startTask` with a gate and no answer REFUSES a page-writing task, names its artifact and opens NO clock",
+      () => noAnswer.started === null && noAnswer.blockedByBrowser === page.writesTo && !readTimingsFile(d).running[page.id],
+      () => ({ started: noAnswer.started, blockedByBrowser: noAnswer.blockedByBrowser, running: readTimingsFile(d).running }));
+    const cacheStart = startTask(d, cache.id, RUN, { ...OPTS, browserGate: { answer: null } }, null, AT(3));
+    check("browser gate: a task that writes no page (the reference cache) starts with no answer recorded",
+      () => !cacheStart.blockedByBrowser && cacheStart.started?.id === cache.id,
+      () => ({ blockedByBrowser: cacheStart.blockedByBrowser, started: cacheStart.started?.id }));
+    // A folder of its own for the answered start, with the page task's dependencies closed the way a run closes them.
+    const da = path.join(tmp("browser-gate-answered"), "build-tasks");
+    syncTaskDir(da, RUN, OPTS);
+    clearDepsOf(da, page.id, RUN, OPTS, 2);
+    const answered = startTask(da, page.id, RUN, { ...OPTS, browserGate: { answer: "Browser: none" } }, null, AT(40));
+    check("browser gate: with an answer recorded — `none` included — the same task starts and opens its clock",
+      () => !answered.blockedByBrowser && answered.started?.id === page.id && !!readTimingsFile(da).running[page.id],
+      () => ({ blockedByBrowser: answered.blockedByBrowser, started: answered.started?.id, running: readTimingsFile(da).running }));
+    // A folder whose page work began before it had a `Browser:` line: the gate has nothing left to hold.
+    const inFlight = readTaskDir(da);
+    const otherPage = inFlight.find((t) => writesPage(t.writesTo) && t.writesTo !== page.writesTo && t.status === "todo");
+    check("browser gate: once a page task is in progress or built, a missing `Browser:` line holds no task of ANOTHER page either — the lift is folder-wide, so a folder mid-build keeps building",
+      () => pageWorkBegun(inFlight) && !browserAnswerOwed(inFlight) && !!otherPage
+        && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } })?.cause !== HOLD_BROWSER,
+      () => ({ begun: pageWorkBegun(inFlight), other: otherPage?.id, blocker: otherPage && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } }) }));
+    check("browserAnswerUngated: true once page work has begun with a page task still open, false on a fresh folder and on one whose page tasks are all closed",
+      () => browserAnswerUngated(inFlight) && !browserAnswerUngated(readTaskDir(d))
+        && !browserAnswerUngated(inFlight.map((t) => (writesPage(t.writesTo) && ["todo", "in-progress"].includes(t.status) ? { ...t, status: "done" } : t))),
+      () => ({ inFlight: browserAnswerUngated(inFlight), fresh: browserAnswerUngated(readTaskDir(d)) }));
+    const fresh = readTaskDir(d);
+    const closedPages = fresh.map((t) => (writesPage(t.writesTo) ? { ...t, status: "wont-do" } : t));
+    check("browserAnswerOwed: a fresh folder with page tasks owes the answer; one whose page tasks are all closed without building, or that has no page task, does not",
+      () => browserAnswerOwed(fresh) && !pageWorkBegun(fresh) && !browserAnswerOwed(closedPages)
+        && !browserAnswerOwed(fresh.filter((t) => !writesPage(t.writesTo))),
+      () => ({ fresh: browserAnswerOwed(fresh), closed: browserAnswerOwed(closedPages) }));
+
+    // The same gate through the CLI: `worklog.md` of the migration folder is what the engine reads.
+    const cd = path.join(tmp("browser-gate-cli"), "build-tasks");
+    cliApproved(["--tasks", cd], MANIFEST);
+    const pageId = readTaskDir(cd).find((t) => writesPage(t.writesTo)).id;
+    approve(cd);
+    const refused = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
+    const said = `${refused.stdout || ""}${refused.stderr || ""}`;
+    check("browser gate (CLI): `--start` of a page-writing task with no `Browser:` line in worklog.md exits 2, names the line and step 7.0b, and opens no clock",
+      () => refused.status === 2 && /NOTHING WAS STARTED/.test(said) && /`Browser:`/.test(said) && /7\.0b/.test(said)
+        && !readTimingsFile(cd).running[pageId],
+      () => ({ status: refused.status, said: said.slice(0, 600) }));
+    const nextHeld = cliUnapproved(["--tasks", cd, "--next"], MANIFEST);
+    check("browser gate (CLI): `--next` withholds that task for the same reason `--start` refuses it — one predicate behind both",
+      () => new RegExp(`\\[${pageId}\\] — writes .*no \`Browser:\` line yet`).test(nextHeld.stdout || "")
+        && !new RegExp(`--start "?${pageId}`).test(nextHeld.stdout || ""),
+      () => (nextHeld.stdout || "").slice(0, 1200));
+    fs.writeFileSync(path.join(path.dirname(cd), "worklog.md"), "# Worklog\n\nRoute: agent\n");
+    const hoManifest = path.join(path.dirname(cd), "manifest.json");
+    fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
+    const handoffHeld = cliFileApproved(hoManifest, "--tasks", cd, "--handoff");
+    check("browser gate (CLI): `--handoff` of a folder with a page-writing task refuses by name while worklog.md has no `Browser:` line — exit 2, step 7.0b, nothing written",
+      () => handoffHeld.status === 2 && /NOTHING WRITTEN/.test(handoffHeld.stdout || "")
+        && /no `Browser:` line naming one of page-smoke · surface · none/.test(handoffHeld.stdout || "")
+        && /7\.0b/.test(handoffHeld.stdout || "") && !fs.existsSync(path.join(path.dirname(cd), "resume.md")),
+      () => ({ status: handoffHeld.status, out: (handoffHeld.stdout || "").slice(0, 1200) }));
+    recordBrowserAnswer(cd, "page-smoke");
+    clearDepsOf(cd, pageId, RUN, OPTS, 50);
+    const passed = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
+    check("browser gate (CLI): with `Browser: page-smoke` recorded in worklog.md and its dependencies closed, `--start` exits 0 and opens the task's clock",
+      () => passed.status === 0 && /DISPATCH TOKEN/.test(passed.stdout || "") && !!readTimingsFile(cd).running[pageId],
+      () => `${passed.stdout || ""}${passed.stderr || ""}`.slice(0, 600));
+  }
   {
     // The decisions.md TEMPLATE in migration-documentation.md, filled in the obvious way, must pass the gate the
     // hand-off applies — a template whose value line carries its own explanation fails the exact version match.
@@ -6642,7 +6950,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
   const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
   const APPROVAL = `- Plan version: \`${RUN.planVersion}\``;
   const decisionsOk = `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Decision: build the plan\n- Approved by: user\n${APPROVAL}\n`;
-  const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n";
+  const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\nBrowser: page-smoke\n";
   // Recorded BEFORE the cut: `--tasks` slices only a plan whose version decisions.md approves.
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "decisions.md"), decisionsOk);
@@ -6676,6 +6984,8 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     () => resume);
   check("--handoff (R1): resume.md records the `Route:` line from worklog.md verbatim",
     () => /\*\*Route:\*\* `Route: agent`/.test(resume), () => resume);
+  check("--handoff (R1): resume.md records the `Browser:` line from worklog.md verbatim, so the resuming session never asks the question again",
+    () => /\*\*Browser:\*\* `Browser: page-smoke`.*never ask it again/.test(resume), () => resume);
   check("--handoff (R1): resume.md carries the engine's `--- progress ---` block, as `--tasks` prints it",
     () => resume.includes("--- progress ---") && /done \d+ · running \d+ · todo \d+/.test(resume) && /dispatched \d+ of \d+/.test(resume),
     () => resume);
@@ -6735,6 +7045,35 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     /manifest .*does not exist/, /reruns step 4.*hands off/);
   refusalCase("no-route", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent\n", "")), {},
     /no `Route:` line/, /7\.0/);
+  refusalCase("no-browser", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", "")), {},
+    /no `Browser:` line naming one of page-smoke · surface · none/, /7\.0b/);
+  {
+    // A folder sliced before it had a `Browser:` line, whose page work has already begun: the hand-off goes through.
+    const copy = path.join(tmp("cli-handoff-in-flight"), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    fs.writeFileSync(path.join(copy, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", ""));
+    const cdir = path.join(copy, "build-tasks");
+    const begun = readTaskDir(cdir).find((t) => writesPage(t.writesTo));
+    // Its page task's clock is running, recorded in the plain shape a folder from an earlier engine carries.
+    fs.writeFileSync(path.join(cdir, TIMINGS_FILE), JSON.stringify({ samples: [], running: { [begun.id]: AT(90) } }));
+    const res = cliFile(manifestPath, "--tasks", cdir, "--handoff");
+    check("--handoff: a folder whose page work began before it had a `Browser:` line is not refused for it — resume.md is written",
+      () => res.status === 0 && !/`Browser:`/.test(res.stdout || "") && fs.existsSync(path.join(copy, "resume.md")),
+      () => ({ running: readTimingsFile(cdir).running, status: res.status, out: (res.stdout || "").slice(0, 600) }));
+    // The lift refuses nothing, so the answer still owed is said where a fresh context reads its next command.
+    const resume = fs.readFileSync(path.join(copy, "resume.md"), "utf8");
+    const owedNext = cliFile(manifestPath, "--tasks", cdir, "--next");
+    check("--handoff / --next: in that folder resume.md and `--next` say the browser answer is still owed and name step 7.0b",
+      () => /^- \*\*Browser:\*\* not answered — .*7\.0b/m.test(resume)
+        && /BROWSER ANSWER STILL OWED — .*7\.0b/.test(owedNext.stdout || ""),
+      () => ({ resume: resume.split("\n").find((l) => l.includes("Browser")), next: (owedNext.stdout || "").slice(-600) }));
+    fs.appendFileSync(path.join(copy, "worklog.md"), "Browser: page-smoke\n");
+    const answeredNext = cliFile(manifestPath, "--tasks", cdir, "--next");
+    check("--next: once worklog.md records a `Browser:` line, the still-owed reminder is gone",
+      () => !/BROWSER ANSWER STILL OWED/.test(answeredNext.stdout || ""),
+      () => (answeredNext.stdout || "").slice(-600));
+  }
   refusalCase("route-tbd", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent", "Route: TBD")), {},
     /no `Route:` line naming one of agent · codex · copilot · inline/, /7\.0/);
   {
@@ -6862,7 +7201,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "decisions.md"),
     `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Approved by: user\n- Plan version: ${RUN.planVersion}\n`);
-  fs.writeFileSync(path.join(folder, "worklog.md"), "# Worklog\n\nRoute: agent\n");
+  fs.writeFileSync(path.join(folder, "worklog.md"), "# Worklog\n\nRoute: agent\nBrowser: page-smoke\n");
   cliFile(manifestPath, "--tasks", dir);
   for (let moved = true; moved;) {
     moved = false;
@@ -9271,6 +9610,35 @@ check("identity digest guard: rendering the identity condition does NOT move any
   },
   () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
 
+// The RelatedPage add-on is per object, so every wiring row says so and that an existing entry moves only on the
+// user's answer — the builder reads the row, not the reference, at the moment it writes the add-on.
+check("child page wiring: every binding row states that the add-on is object-wide and moves an existing entry only on the user's answer",
+  () => {
+    const rows = SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).filter((r) => !r.na);
+    return rows.length > 0 && rows.every((r) => /The add-on is object-wide/.test(r.label) && /only on the user's answer/.test(r.label));
+  },
+  () => SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).map((r) => r.label));
+// The wiring step reads the edit cards through a named call and the fields it acts on, so a builder can run it as
+// written instead of inventing a lookup into a system table.
+check("child page wiring: build-page.md names the call, argument and fields of the SysModuleEdit read",
+  () => {
+    const doc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/references/build-page.md"), "utf8");
+    const step = doc.slice(doc.indexOf("read the entity's `SysModuleEdit` cards"), doc.indexOf("one line\n     per Classic entry"));
+    return step.length > 0 && /`list-entity-client-schemas` with `entity-name`/.test(step)
+      && /`editPages\[\]`/.test(step) && /`cardSchema`/.test(step) && /`kind: classic`/.test(step)
+      && /never write `SysModuleEdit`/.test(step);
+  });
+// The field the wiring step reads must be the one the skill's canonical description of the tool response names, so
+// a rename in one place fails here instead of leaving the builder reading an undefined property.
+check("child page wiring: the `editPages[]` page field the wiring step reads is the one SKILL.md's Arg-facts names",
+  () => {
+    const skill = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+    const argFacts = skill.split("\n").find((l) => l.startsWith("> Arg-facts:") && l.includes("list-entity-client-schemas")) || "";
+    return /`editPages` \(each with the page it opens in `cardSchema`/.test(argFacts);
+  });
+
 // Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
 // add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
 // LAST task writing the page that holds the list, and nothing that writes the page body waits on it.
@@ -10902,7 +11270,7 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   fs.mkdirSync(hoFolder, { recursive: true });
   fs.writeFileSync(path.join(hoFolder, "decisions.md"), "# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n"
     + `- Decision: build the plan\n- Approved by: user\n- Plan version: \`${RUN.planVersion}\`\n`);
-  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n");
+  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\nBrowser: page-smoke\n");
   cliHo("--tasks", hoDir);
   for (const f of RECORD_FILES) fs.rmSync(path.join(hoFolder, f), { force: true });
   const handedOff = cliHo("--tasks", hoDir, "--handoff");
