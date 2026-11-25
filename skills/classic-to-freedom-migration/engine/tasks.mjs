@@ -2990,7 +2990,8 @@ function repairRoundTasks({ pageKey, identityKey, cause, rows, round, B }) {
       covers: chunkSrc.map((r) => coverKey(r.label)),
       ...(judging ? { judgedRecords: chunkSrc.map((r) => r.unjudgedRecord) } : {}),
     };
-    t.file = `task-repair-round${round}-${slugify(`${pageKey}-${cause}`)}-${id}.md`;
+    const nameSlug = slugify(`${pageKey}-${cause}`);
+    t.file = `task-repair-round${round}-${nameSlug}-${id}.md`;
     return t;
   });
 }
