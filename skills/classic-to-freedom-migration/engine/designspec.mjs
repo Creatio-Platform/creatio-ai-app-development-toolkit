@@ -5725,27 +5725,35 @@ function builtStringsOf(page) {
   }
   return out;
 }
-// Whether any string of the built page carries `want` in `culture`. The plan names a resource key derived from the
-// Classic one, but the page may keep the text under the key its element is built with
-// (`<Element>ExpansionPanel_title` for a related list's `<Detail>_Caption`), so a text the page carries under
-// another key is the caption built, not a caption missing.
-const carriesText = (built, culture, want) => Object.values(built).some((v) => v?.[culture] === want);
+// THE KEY THE PAGE BUILT THE CAPTION UNDER. The plan names a resource key derived from the Classic one, but the page
+// may keep the text under the key its element is built with (`<Element>ExpansionPanel_title` for a related list's
+// `<Detail>_Caption`). One built key stands in for one plan key, and only when it carries the plan's text in EVERY
+// culture the plan lists: a key the plan expects for another text, a key already standing in for another caption,
+// and a key matching in some cultures only are other strings that happen to share words, not this caption.
+function substituteKey(built, t, taken) {
+  const cultures = Object.entries(t.cultures || {});
+  if (!cultures.length) return null;
+  return Object.keys(built).find((k) => !taken.has(k)
+    && cultures.every(([culture, want]) => built[k]?.[culture] === want)) || null;
+}
 // A row's Classic texts against the built page, culture by culture. A key the built page does not carry is matched
-// by its text under any other key, and absent only when no key carries it; a payload with no `resources` is
-// `unread`. A key the page does carry is compared by text: the same key with other words is a changed caption.
-function textMismatches(texts, ctx) {
+// through `substituteKey`, and absent in every culture when no key stands in for it; a payload with no `resources`
+// is `unread`. A key the page does carry is compared by text: the same key with other words is a changed caption.
+export function textMismatches(texts, ctx) {
   const built = builtStringsOf(ctx.page);
-  const differ = [], absent = [];
-  if (!built) return { differ, absent, unread: true };
+  const differ = [], absent = [], substituted = [];
+  if (!built) return { differ, absent, substituted, unread: true };
+  const taken = new Set((texts || []).map((t) => t.key));
   for (const t of texts || []) {
-    const got = built[t.key] || {};
+    const own = built[t.key];
+    const sub = own ? null : substituteKey(built, t, taken);
+    if (sub) { taken.add(sub); substituted.push(`\`${t.key}\` as \`${sub}\``); continue; }
     for (const [culture, want] of Object.entries(t.cultures || {})) {
-      if (typeof got[culture] !== "string") {
-        if (!carriesText(built, culture, want)) absent.push(`\`${t.key}\` ${culture}`);
-      } else if (got[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${got[culture]}" ≠ Classic "${want}"`);
+      if (typeof own?.[culture] !== "string") absent.push(`\`${t.key}\` ${culture}`);
+      else if (own[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${own[culture]}" ≠ Classic "${want}"`);
     }
   }
-  return { differ, absent };
+  return { differ, absent, substituted };
 }
 // A text that differs from Classic in any culture fails the row; a Classic culture the built page does not carry
 // leaves a passing row unverified, and so does a built page read without its strings. Rows already MISSING or not
@@ -5753,10 +5761,11 @@ function textMismatches(texts, ctx) {
 function withTextCheck(verdict, vk, ctx) {
   const [, ev, outcome] = verdict;
   if (!vk?.texts?.length || (outcome !== "ok" && outcome !== "unverified")) return verdict;
-  const { differ, absent, unread } = textMismatches(vk.texts, ctx);
+  const { differ, absent, substituted, unread } = textMismatches(vk.texts, ctx);
   if (unread && outcome === "ok") return ["⚠ verify", `${ev}; built page carries no \`resources\` to compare ${vk.texts.length} Classic text(s) against`, "unverified", ...verdict.slice(3)];
   if (differ.length) return ["❌ MISSING", `${ev}; built text differs from Classic: ${differ.join("; ")}`, "missing", ...verdict.slice(3)];
   if (absent.length && outcome === "ok") return ["⚠ verify", `${ev}; built page has no text in ${absent.join(", ")}`, "unverified", ...verdict.slice(3)];
+  if (substituted.length) return [verdict[0], `${ev}; caption text kept under the page's own key: ${substituted.join(", ")}`, ...verdict.slice(2)];
   return verdict;
 }
 function rowKindOf(r, outcome) {

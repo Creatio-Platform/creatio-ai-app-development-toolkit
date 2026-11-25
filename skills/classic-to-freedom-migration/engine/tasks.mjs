@@ -708,15 +708,19 @@ function evidenceIdsByPage(groups) {
   }
   return byPage;
 }
+// The records of `pages`, in page order, as the `judgedRecords` field — absent when the pages publish none.
+const judgedRecordsOf = (byPage, pages) => {
+  const ids = [...new Set(pages)].flatMap((k) => [...(byPage.get(k) || [])]);
+  return ids.length ? { judgedRecords: ids } : {};
+};
 function withJudgedRecords(tasks, groups) {
   const byPage = evidenceIdsByPage(groups);
-  for (const t of tasks) {
-    if (!String(t.artifact || "").startsWith("review:")) continue;
-    const pages = t.reviewsArtifacts ? [...byPage.keys()] : [...new Set([t.pageKey, ...t.rows.map((r) => r.pageKey)])];
-    const ids = pages.flatMap((k) => [...(byPage.get(k) || [])]);
-    if (ids.length) t.judgedRecords = ids;
-  }
-  return tasks;
+  return tasks.map((t) => {
+    if (!String(t.artifact || "").startsWith("review:")) return t;
+    // The collapsed run's single review judges every page; a per-page review, the pages its rows come from.
+    const pages = t.reviewsArtifacts ? [...byPage.keys()] : [t.pageKey, ...t.rows.map((r) => r.pageKey)];
+    return { ...t, ...judgedRecordsOf(byPage, pages) };
+  });
 }
 
 // A RUN TOO SMALL TO SPLIT. Returns the two buckets it collapses to — everything that writes, then everything
@@ -1263,13 +1267,19 @@ function directivesBlock(task, directives) {
       + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
+// An id as a code span the judge can copy as written: Markdown escapes nothing inside one, so the id is not escaped
+// either; one holding a backtick gets the longer fence. A line break would end the list item, so it is a space.
+const idSpan = (id) => {
+  const s = String(id).replace(/\s+/g, " ");
+  return s.includes("`") ? `\`\` ${s} \`\`` : `\`${s}\``;
+};
 // The review's worklist: every record of its pages, by the id the judge files its verdict under.
 function judgedRecordsBlock(task) {
   if (!task.judgedRecords?.length) return [];
   return [
     `- **Records you rule on — ${task.judgedRecords.length}, every one of them.** A verdict for each id below goes`
       + " into `judge.json`; an id left `null` is a row the final report calls NOT judged, so the run cannot close.",
-    ...task.judgedRecords.map((id) => `  - \`${esc(id)}\``),
+    ...task.judgedRecords.map((id) => `  - ${idSpan(id)}`),
   ];
 }
 function outcomeBlock(repair = false) {
@@ -2679,6 +2689,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   }
 
   const subjectOf = splitSubjects(resolved.items);
+  const recordsByPage = evidenceIdsByPage(groups);
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
       label: r.label, groupTitle: r.group, vk: r.vk, na: r.na, ...statusFields(r),
@@ -2705,6 +2716,9 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       reviewsArtifacts: [...new Set(srcRows.filter((r) => r.groupTitle === REVIEW_GROUP && !isFiledGateRow(r))
         .map((r) => `page:${identity.get(r.rowPageKey) || r.rowPageKey}`))],
       wiresArtifacts: wiredArtifacts(srcRows, identity),
+      // A split item judges the pages whose review rows it carries, so it rules on every record of those pages.
+      ...judgedRecordsOf(recordsByPage, srcRows.filter((r) => r.groupTitle === REVIEW_GROUP && !isFiledGateRow(r))
+        .map((r) => r.rowPageKey)),
       order: i + 2,                       // the reference cache keeps position 1
       phase: DEFAULT_PHASE,
       origin: TASK_ORIGIN_ENGINE,

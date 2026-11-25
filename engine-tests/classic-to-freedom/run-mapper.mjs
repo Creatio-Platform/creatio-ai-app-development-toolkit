@@ -13371,7 +13371,7 @@ const n2TreeManifest = (titleA, titleB) => ({
       return run.changeSet.resources.GeneralInfoTabCaption === "General information"
         && run.changeSet.resourceCultures.GeneralInfoTabCaption["en-US"] === "General information" && row.includes("✅");
     });
-  runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, coTextsManifest, FIX });
+  runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, verifyCtx, coTextsManifest, FIX });
   // A folded child page and a mini page check their own texts in every culture, like the typed page.
   {
     const m = coTextsManifest();
@@ -16684,7 +16684,7 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       && itemsOf("| — | — | **Won't do** — none |").length === 0);
 }
 
-runVerifyFalseNegativeChecks({ check, runMigration, checklistOpts, checklistGroups, renderVerify, resolveVk, resolveRuleVk,
+runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, checklistOpts, checklistGroups, renderVerify, resolveVk, resolveRuleVk,
   verifyCtx, parseDecisionRecords, verifyManifest, DIR });
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

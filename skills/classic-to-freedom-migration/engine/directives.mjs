@@ -88,7 +88,8 @@ function unwrapQuote(v) {
   const closing = CLOSING_MARKS.get(v[0]);
   return v.length >= 2 && closing?.includes(v.at(-1)) ? v.slice(1, -1).trim() : v;
 }
-function stripTicks(s) {
+function stripTicks(raw) {
+  const s = String(raw).trim();
   let from = 0;
   let to = s.length;
   while (from < to && s[from] === "`") from++;
@@ -174,10 +175,21 @@ export const directiveCovers = (directive, pageKey) =>
 // address is read here, and only from an entry the user decided in their own words: the other statuses drop or
 // re-open a deliverable, which is a planning choice the approved plan has to show.
 const RULE_ATTRIBUTE_KEY = /^[^#\s]+#business-rule:[^\s#]+$/;
+const closesFromUser = (f) => f?.kind === KIND_ANSWER && f.decidedBy === DECIDED_BY_USER && !blank(f.quote);
 export function closedRuleAttributes(records) {
-  return (records || [])
-    .filter((r) => r.fields?.kind === KIND_ANSWER && r.fields.decidedBy === DECIDED_BY_USER && !blank(r.fields.quote))
+  return (records || []).filter((r) => closesFromUser(r.fields))
     .flatMap((r) => scopeKeys(r.fields.closes).filter((k) => RULE_ATTRIBUTE_KEY.test(k)).map((key) => ({ key, decision: r.id })));
+}
+// A `Closes:` line that closes nothing is named, never dropped: on an entry that is not the user's own answer, and
+// for each address that is not a business-rule attribute.
+function closesIssues(r) {
+  const keys = scopeKeys(r.fields?.closes);
+  if (!keys.length) return [];
+  if (!closesFromUser(r.fields)) {
+    return [`\`Closes:\` closes a rule only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
+  }
+  return keys.filter((k) => !RULE_ATTRIBUTE_KEY.test(k))
+    .map((k) => `\`Closes:\` names \`${k}\`, which is not a business-rule attribute (\`<pageKey>#business-rule:<Attribute>\`)`);
 }
 
 // Who decided each entry, and in what words: `{ D<N>: { decidedBy, quote } }` for the entries that carry either
@@ -253,6 +265,6 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }

@@ -3,10 +3,13 @@
 // and a business rule the user accepted mid-build as built another way. Each is checked through the engine's
 // public entry points; the run-level plan version is checked where the answer could otherwise move it. Imported
 // and run by `run-mapper.mjs`, which hands it its `check` and the shared fixtures so the tally stays one number.
-import { packageNameOf } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { packageNameOf, textMismatches } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { closedRuleAttributes } from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
-export function runVerifyFalseNegativeChecks({ check, runMigration, checklistOpts, checklistGroups, renderVerify, resolveVk,
+export function runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, checklistOpts, checklistGroups, renderVerify, resolveVk,
   resolveRuleVk, verifyCtx, parseDecisionRecords, verifyManifest, DIR }) {
   // ---- the target package as a name ----
   const NOTED = "UsrOrdersApp (primary package of the new app; created by create-app)";
@@ -32,13 +35,17 @@ export function runVerifyFalseNegativeChecks({ check, runMigration, checklistOpt
     () => [placed("UsrOther"), placed("UsrOrdersApp", "UsrOrdersApp2")]);
 
   const addon = (packageName) => ({ success: true, packageName, pages: [{ pageSchemaName: "UsrOrdersApp_ItemPage" }] });
-  const related = (packageName) => resolveVk({ type: "relatedpage", entity: "Item", evidence: "relatedPage:Item", package: NOTED,
-    childKey: "child:Item" }, verifyCtx({ pages: { main: { viewConfig: { items: [] } },
+  const related = (packageName, created = null) => resolveVk({ type: "relatedpage", entity: "Item", evidence: "relatedPage:Item", package: NOTED,
+    childKey: "child:Item" }, { ...verifyCtx({ pages: { main: { viewConfig: { items: [] } },
     "child:Item": { schemaName: "UsrOrdersApp_ItemPage", viewConfig: { items: [] } } },
-  reachability: { "relatedPage:Item": addon(packageName) } }, "main"));
+  reachability: { "relatedPage:Item": addon(packageName) } }, "main"), createdPackage: created });
   check("related page: an add-on read from the package the noted plan names is matched on its pages, not reported as read from the wrong package",
     () => !/plan targets/.test(related("UsrOrdersApp")[1]) && /plan targets `UsrOrdersApp`/.test(related("UsrOther")[1]),
     () => [related("UsrOrdersApp"), related("UsrOther")]);
+  check("related page: once create-app's package is recorded, the add-on is compared against it",
+    () => !/plan targets/.test(related("UsrOrdersApp2", "UsrOrdersApp2")[1])
+      && /plan targets `UsrOrdersApp2`/.test(related("UsrOrdersApp", "UsrOrdersApp2")[1]),
+    () => [related("UsrOrdersApp2", "UsrOrdersApp2"), related("UsrOrdersApp", "UsrOrdersApp2")]);
 
   // The noted value is the plan's own: the rows keep it, so a task cut before create-app ran does not drift.
   const su = JSON.parse(verifyManifest);
@@ -72,6 +79,12 @@ export function runVerifyFalseNegativeChecks({ check, runMigration, checklistOpt
     .flatMap((p) => p.openRows || []);
   check("unjudged: `--verify`'s open row for that record carries `unjudgedRecord`, the field a repair round routes by",
     () => openRows.some((r) => r.unjudgedRecord === "main#quality-gates"), () => openRows.filter((r) => /NOT judged/.test(r.evidence)));
+  const judgedHalf = (verdict) => resolveVk({ type: "evidence", id: "main#quality-gates", part: "judged" }, verifyCtx({ pages: { main: { viewConfig: { items: [] } } },
+    evidence: { "main#quality-gates": filed }, judge: { "main#quality-gates": verdict } }, "main"));
+  check("unjudged: the judged half of a split evidence pair names its record the same way, and carries no id once judged",
+    () => judgedHalf({ convincing: null })[4]?.unjudged === "main#quality-gates"
+      && judgedHalf({ convincing: true, why: "x" })[2] === "ok" && judgedHalf({ convincing: true, why: "x" })[4] === undefined,
+    () => [judgedHalf({ convincing: null }), judgedHalf({ convincing: true, why: "x" })]);
 
   // ---- a rule attribute the user's later answer closes ----
   const DECISIONS_MD = [
@@ -107,10 +120,39 @@ export function runVerifyFalseNegativeChecks({ check, runMigration, checklistOpt
   check("closes: an answer naming an attribute the page's rules do not list is a named status issue, not a silent close",
     () => (typoRun.statusIssues || []).some((x) => x.key === "main#business-rule:Nope" && x.kind === "unknown-id"),
     () => typoRun.statusIssues);
+  const named = (id, re) => (answered.provenanceIssues || []).some((x) => x.key === id && re.test(x.problem));
+  check("closes: an address that is not a rule attribute, and a `Closes:` line on an orchestrator's entry, are each named — nothing is dropped silently",
+    () => named("D4", /names `main#business-rules`, which is not a business-rule attribute/) && named("D5", /only on the user's own answer/),
+    () => answered.provenanceIssues);
+  const several = parseDecisionRecords("## D7 — Two locks\n- Kind: answer\n- Decided by: user\n- Quote: \"both in code\"\n"
+    + "- Closes: `main#business-rule:A`, `main#business-rule:B`");
+  check("closes: a line naming several attributes closes each of them — the keys after the first keep no stray backtick",
+    () => closedRuleAttributes(several).map((c) => c.key).join() === "main#business-rule:A,main#business-rule:B",
+    () => closedRuleAttributes(several));
+
+  // ---- the same answer and the recorded package through the CLI's own `--verify` ----
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-verify-fn-"));
+  try {
+    fs.writeFileSync(path.join(tmp, "decisions.md"), DECISIONS_MD.split("## D5")[0].replace("- Closes:", "- Asked: Keep the lock in code?\n- Closes:")
+      .replace(", `main#business-rules`", ""));
+    fs.writeFileSync(path.join(tmp, "built.json"), JSON.stringify({ pages: { main: { packageName: "UsrOrdersApp2", viewConfig: { items: [] },
+      parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111",
+      businessRules: { count: others.length, rules: others.map(governs) } } } }));
+    const cliManifest = { ...noted, createdApp: { primaryPackage: "UsrOrdersApp2" } };
+    const res = runMigrate(["-", "--verify", "--built", path.join(tmp, "built.json")], { input: JSON.stringify(cliManifest) });
+    const out = res.stdout || "";
+    const line = (re) => out.split("\n").find((l) => re.test(l)) || "";
+    check("closes + createdApp (CLI): `--verify` reads decisions.md beside the payload and the manifest's `createdApp` — the answered rule row and the placement row are ✅",
+      () => line(/Business rules ×/).includes("✅") && /Calendar \(D4/.test(line(/Business rules ×/))
+        && line(/Package placement/).includes("✅"),
+      () => [res.status, line(/Business rules ×/), line(/Package placement/), (res.stderr || "").slice(0, 400)]);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // A caption the plan keys one way and the page keeps under the key its element is built with is a built caption.
-export function runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, coTextsManifest, FIX }) {
+export function runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, verifyCtx, coTextsManifest, FIX }) {
   const m = coTextsManifest();
   const run = runMigration(m, { baseDir: FIX });
   const strings = JSON.parse(JSON.stringify(run.changeSet.resourceCultures));
@@ -121,8 +163,34 @@ export function runCaptionKeyChecks({ check, runMigration, checklistOpts, render
     () => Object.keys(strings).length > 0 && rowWith(renamed).includes("✅"), () => rowWith(renamed));
   const [first] = Object.keys(strings);
   const changed = { ...renamed, [`${first}Renamed_title`]: Object.fromEntries(Object.keys(strings[first]).map((c) => [c, "Something else"])) };
+  const open = rowWith(changed);
   check("texts (renamed keys): a caption no key carries stays open and names the plan's key; the same key with other words is still ❌",
-    () => rowWith(changed).includes("⚠") && rowWith(changed).includes(`no text in ˋ${first}ˋ`)
+    () => open.includes("⚠") && open.includes(`no text in ˋ${first}ˋ`)
       && rowWith({ ...strings, [first]: changed[`${first}Renamed_title`] }).includes("MISSING"),
-    () => [rowWith(changed)]);
+    () => [open]);
+  check("texts (renamed keys): the verdict names the key each caption was found under",
+    () => rowWith(renamed).includes(`ˋ${first}ˋ as ˋ${first}Renamed_titleˋ`), () => rowWith(renamed));
+  // Only a key carrying the text in EVERY culture the plan lists stands in; a culture-by-culture patchwork of
+  // unrelated strings is not the caption.
+  const cultures = Object.keys(strings[first]);
+  const split = Object.fromEntries(Object.entries(renamed).filter(([k]) => k !== `${first}Renamed_title`));
+  cultures.forEach((c, i) => { split[`Unrelated${i}_caption`] = { [c]: strings[first][c] }; });
+  check("texts (renamed keys, anti-vacuity): the plan lists the caption in more than one culture",
+    () => cultures.length > 1, () => cultures);
+  check("texts (renamed keys): a caption matched only culture by culture across unrelated keys stays open",
+    () => rowWith(split).includes(`no text in ˋ${first}ˋ`), () => rowWith(split));
+  // Two plan keys with the same text cannot both be closed by one built string, and a key the plan expects for
+  // another text never stands in.
+  const page = (s) => verifyCtx({ pages: { main: { viewConfig: { items: [] }, resources: { strings: s } } } }, "main");
+  const notes = { "en-US": "Notes", "fr-FR": "Notes (fr)" };
+  const twins = [{ key: "NotesTabCaption", cultures: notes }, { key: "NotesFieldCaption", cultures: notes }];
+  const one = textMismatches(twins, page({ NotesTab_caption: notes }));
+  const both = textMismatches(twins, page({ NotesTab_caption: notes, Notes_label: notes }));
+  const planned = textMismatches(twins, page({ NotesTabCaption: { "en-US": "Notes", "fr-FR": "Notes (fr)" } }));
+  check("texts (renamed keys): one built key stands in for one plan key only, and two keys close two",
+    () => one.substituted.length === 1 && one.absent.length === 2 && both.substituted.length === 2 && !both.absent.length,
+    () => [one, both]);
+  check("texts (renamed keys): a key the plan expects for one caption is never taken as the stand-in for another",
+    () => planned.substituted.length === 0 && planned.absent.length === 2 && planned.absent.every((a) => a.includes("NotesFieldCaption")),
+    () => planned);
 }

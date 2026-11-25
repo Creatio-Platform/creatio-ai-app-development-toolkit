@@ -12617,6 +12617,28 @@ console.log("\n===== judging: every evidence record reaches a judge =====");
   check("judging: a task that writes a page carries no record list",
     () => set.tasks.filter((t) => t.writesTo).every((t) => !t.judgedRecords), () => set.tasks.filter((t) => t.writesTo && t.judgedRecords).map((t) => t.id));
 
+  // A frozen split has no `review:` artifact: an item judges the pages whose review rows it carries.
+  const splitSet = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
+  const judgesRows = (t) => t.rows.some((r) => /Quality gates/.test(r.group || ""));
+  check("judging (split): every evidence id the plan publishes is listed on a split item that carries its page's review rows",
+    () => !splitSet.refused && published.every((id) => splitSet.tasks.some((t) => (t.judgedRecords || []).includes(id))),
+    () => published.filter((id) => !splitSet.tasks.some((t) => (t.judgedRecords || []).includes(id))));
+  check("judging (split): an item carrying no review rows lists no records",
+    () => splitSet.tasks.filter((t) => !judgesRows(t)).every((t) => !t.judgedRecords),
+    () => splitSet.tasks.filter((t) => !judgesRows(t) && t.judgedRecords).map((t) => t.id));
+  check("judging (split, anti-vacuity): the split really has items with review rows",
+    () => splitSet.tasks.some(judgesRows) && splitSet.tasks.some((t) => !judgesRows(t)),
+    () => splitSet.tasks.map((t) => [t.id, [...new Set(t.rows.map((r) => r.group))]]));
+
+  // A run small enough to collapse has ONE review, and it rules on every page's records.
+  const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+  const whole = collapsed.tasks.filter((t) => String(t.artifact).startsWith("review:"));
+  check("judging (collapsed run): the single review lists every published evidence id, and its file carries each one verbatim — an id holding backticks or `<` included",
+    () => whole.length === 1 && whole[0].reviewsArtifacts && published.every((id) => whole[0].judgedRecords.includes(id))
+      && published.some((id) => /[`<>|]/.test(id))
+      && published.every((id) => renderTaskFile(whole[0], collapsed).includes(id)),
+    () => whole.map((t) => [t.id, published.filter((id) => !renderTaskFile(t, collapsed).includes(id))]));
+
   // A record filed and left unjudged is repaired by a judge, read-only, never by a builder of that page.
   const unjudged = (n, id) => ({ ...openRow(n, `Command-bar action — \`a${n}\``, "unverified", "⚠ verify",
     `evidence filed under \`${id}\` but NOT judged — a record nobody reviewed is not a closed row`), owner: "verifier", unjudgedRecord: id });
