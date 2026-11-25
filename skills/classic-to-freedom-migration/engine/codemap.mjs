@@ -20,7 +20,7 @@ import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { getAcornParse, walkAstBounded, staticPropKey, isFnNode, parseDefineModule } from "./engine.mjs";
 import { bundleDeps } from "./conventions.mjs";
-import { lintPageQuality, lintRunQuality, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES } from "./quality.mjs";
+import { lintPageQuality, lintRunQuality, runModuleLint, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES } from "./quality.mjs";
 import path from "node:path";
 import { moduleNameOf } from "./reads.mjs";
 // designspec.mjs imports this module for the verify row; neither module uses the other's exports while it loads,
@@ -161,18 +161,19 @@ export function runModuleFindings(root, pageKey, modules, thresholds = DEFAULT_Q
   // or through those modules. Two unrelated modules elsewhere in the folder are not this page's to fix.
   const reach = wholeRun ? null : importClosure(root, modules);
   const out = [];
-  for (const [key, lint] of lintRunQuality(pages, thresholds, new Set(), modules, wholeRun)) out.push(...pageModuleFindings(key, lint, reach));
+  const run = lintRunQuality(pages, thresholds, new Set(), modules, wholeRun);
+  for (const key of new Set([...run.keys(), ...run.modules.keys()])) out.push(...pageModuleFindings(key, run.get(key), runModuleLint(run, key), reach));
   return { modules: Object.keys(modules).length, findings: out, wholeRun };
 }
 
 // One page's run-module findings and unreadable modules. With `reach` (one page in hand), a module finding counts
 // only when it names a module the page reaches.
-function pageModuleFindings(key, lint, reach) {
+function pageModuleFindings(key, lint, moduleLint, reach) {
   const touches = (f) => !reach || !f.section?.startsWith("module ")
     || [...reach].some((n) => f.section === `module ${n}` || f.text.includes(`\`${n}\``));
   return [
-    ...(lint?.findings || []).filter((f) => RUN_MODULE_RULES.includes(f.rule) && touches(f)).map((f) => ({ page: key, ...f })),
-    ...(lint?.unreadable || []).filter((u) => u.startsWith("module ")).map((u) => ({ page: key, rule: "unreadable", text: `${u} could not be parsed` })),
+    ...[...(lint?.findings || []), ...moduleLint.findings].filter((f) => RUN_MODULE_RULES.includes(f.rule) && touches(f)).map((f) => ({ page: key, ...f })),
+    ...moduleLint.unreadable.map((u) => ({ page: key, rule: "unreadable", text: `${u} could not be parsed` })),
   ];
 }
 
