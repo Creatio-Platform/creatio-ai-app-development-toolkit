@@ -301,7 +301,16 @@ function endsInReturn(s) {
   if (s.type === "TryStatement") {
     return endsInReturn(s.finalizer) || (endsInReturn(s.block) && (!s.handler || endsInReturn(s.handler.body)));
   }
+  if (s.type === "SwitchStatement") return switchEndsInReturn(s);
   return false;
+}
+
+// A switch returns on every path when it has a `default`, its last case is not empty, and every case is either empty
+// (it falls through to the next one) or ends in a return or a throw.
+function switchEndsInReturn(s) {
+  const cases = s.cases;
+  if (!cases.some((c) => c.test === null) || !cases.at(-1)?.consequent.length) return false;
+  return cases.every((c) => !c.consequent.length || endsInReturn(c.consequent.at(-1)));
 }
 
 // The name of a handler's `next` parameter (`next` or `next = null`), or null when it takes none.
@@ -325,9 +334,12 @@ function checkPassesOn(handler, request, page) {
     return fail("never calls `next.handle(request)`, so the handlers after it never run");
   }
   const fromNext = namesFromNext(own, nextName);
-  const givesNext = (value) => {
+  // The result itself, a variable holding it, or a call chained on it (`next.handle(request).then(…)`).
+  const givesNext = (value, depth = 0) => {
     const v = unwrap(value);
-    return isNextCall(v, nextName) || (v?.type === "Identifier" && fromNext.has(v.name));
+    if (isNextCall(v, nextName) || (v?.type === "Identifier" && fromNext.has(v.name))) return true;
+    return depth < 50 && v?.type === "CallExpression" && v.callee.type === "MemberExpression" && !v.callee.computed
+      && givesNext(v.callee.object, depth + 1);
   };
   const passesOn = handler.body.type === "BlockStatement"
     ? endsInReturn(handler.body) && own.every((n) => n.type !== "ReturnStatement" || (n.argument && givesNext(n.argument)))

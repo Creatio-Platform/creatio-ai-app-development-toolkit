@@ -79,6 +79,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     "(request, next = null) => next?.handle(request)",
     "async (request, next) => { const r = await next.handle(request); if (r) { return r; } else { return r; } }",
     "async (request, next) => { try { return await next?.handle(request); } catch (e) { await show(e); throw e; } }",
+    "async (request, next) => { try { await before(); } finally { return next?.handle(request); } }",
+    "async (request, next) => { switch (request.kind) { case 1: case 2: return next.handle(request); default: return next.handle(request); } }",
+    "(request, next) => { return next.handle(request).then((r) => r); }",
   ];
   const endsChain = [
     ["async (request) => { await post(request); }", /takes no `next`/],
@@ -90,6 +93,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     ["async (request, next) => { if (await isLocked(request)) { await showLocked(request); return true; } return next?.handle(request); }", /does not return its result/],
     ["async (request, next) => { const r = await next.handle(request); if (r) return; return r; }", /does not return its result/],
     ["async (request, next) => { const r = await next.handle(request); if (r) { return r; } }", /does not return its result/],
+    ["async (request, next) => { switch (request.kind) { case 1: return next.handle(request); case 2: return next.handle(request); } }", /does not return its result/],
   ];
   const chainOf = (fn) => lintPageQuality({ handlers: `[{ request: "usr.Post", handler: ${fn} }]` }).findings.filter((f) => f.rule === R.handlerWithoutNext);
   check("quality: a handler that calls next.handle(request) and returns its result passes the request on",
