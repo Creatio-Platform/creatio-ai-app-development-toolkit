@@ -41,8 +41,8 @@ const CASES = [
     bad: handler("usr.Count", "for (let page = 0; page < 10; page++) { rows = await model.load({ options: { pagingConfig: { rowsOffset: page * 500, rowCount: 500 } } }); }"),
     good: handler("usr.Count", "rows = await model.load({ options: { pagingConfig: { rowsOffset: 0, rowCount: 10 } } });") },
   { rule: R.uncheckedWriteResult,
-    bad: handler("usr.Recalc", "async function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return null; } return 1; }\nawait save(1);"),
-    good: handler("usr.Recalc", "async function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return null; } return 1; }\nif ((await save(1)) == null) await showFailure(request);") },
+    bad: handler("usr.Recalc", "const model = await sdk.Model.create(\"A\");\nasync function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return null; } return 1; }\nawait save(1);"),
+    good: handler("usr.Recalc", "const model = await sdk.Model.create(\"A\");\nasync function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return null; } return 1; }\nif ((await save(1)) == null) await showFailure(request);") },
 ];
 const pageOf = (handlers) => ({ handlers: `[${handlers}]`, viewConfig: { items: [{ type: "crt.Button", name: "B", clicked: { request: "usr.Sent" } }] } });
 
@@ -76,6 +76,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     "async (request, next) => { let r; r = await next.handle(request); return r; }",
     "(request, next) => next?.handle(request)",
     "async (request, next) => { await before(); return next?.handle(request); }",
+    "(request, next = null) => next?.handle(request)",
+    "async (request, next) => { const r = await next.handle(request); if (r) { return r; } else { return r; } }",
+    "async (request, next) => { try { return await next?.handle(request); } catch (e) { await show(e); throw e; } }",
   ];
   const endsChain = [
     ["async (request) => { await post(request); }", /takes no `next`/],
@@ -84,6 +87,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     ["async (request, next) => { const r = await next?.handle(request); return true; }", /does not return its result/],
     ["async (request, next) => { [1].forEach(() => next.handle(request)); return null; }", /never calls/],
     ["(request, next) => post(request)", /never calls/],
+    ["async (request, next) => { if (await isLocked(request)) { await showLocked(request); return true; } return next?.handle(request); }", /does not return its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (r) return; return r; }", /does not return its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (r) { return r; } }", /does not return its result/],
   ];
   const chainOf = (fn) => lintPageQuality({ handlers: `[{ request: "usr.Post", handler: ${fn} }]` }).findings.filter((f) => f.rule === R.handlerWithoutNext);
   check("quality: a handler that calls next.handle(request) and returns its result passes the request on",
@@ -98,9 +104,25 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     "async function save(id) { try { await model.update({ A: 1 }, id); } catch (e) { return false; } return true; }\nconst ok = await save(1); if (!ok) await showFailure(request);")));
   const noFailureValue = lintPageQuality(pageOf(handler("usr.Recalc",
     "async function save(id) { await model.update({ A: 1 }, id); return true; }\nawait save(1);")));
+  const notDataWrites = [
+    "const selected = new Set(); function unselect(id) { if (!id) return false; selected.delete(id); return true; }\nunselect(1);",
+    "const model = await sdk.Model.create(\"A\");\nasync function save(id) { if (!id) return false; await model.update({ A: 1 }, id); return true; }\nawait save(1);",
+  ].map((code) => lintPageQuality(pageOf(handler("usr.Recalc", code))));
   check("quality: a write function's result used by its caller, or one that has no failure value to drop, is not an unchecked write",
     () => count(checkedWrite, R.uncheckedWriteResult) === 0 && count(noFailureValue, R.uncheckedWriteResult) === 0,
     () => [checkedWrite.findings, noFailureValue.findings]);
+  check("quality: only a data model's or the settings service's insert/update/delete is a data write, and a `return false` guard before the first write is not a failed write",
+    () => notDataWrites.every((p) => count(p, R.uncheckedWriteResult) === 0), () => notDataWrites.map((p) => p.findings));
+  const onePage = ["rows = await model.load({ options: { pagingConfig: { rowsOffset: request.offset, rowCount: 10 } } });",
+    "const { rowsOffset } = request; rows = await model.load({ options: { pagingConfig: { rowsOffset, rowCount: PAGE } } });",
+    "rows = await model.load({ options: { pagingConfig: { rowsOffset: pageIndex * PAGE, rowCount: PAGE } } });"]
+    .map((code) => lintPageQuality(pageOf(handler("usr.Page", code))));
+  check("quality: a computed rowsOffset outside any loop reads the one page asked for — not a paged read",
+    () => onePage.every((p) => count(p, R.pagedReadLoop) === 0), () => onePage.map((p) => p.findings));
+  const viaHelper = lintPageQuality(pageOf(handler("usr.Sum",
+    "async function loadPage(p) { return model.load({ options: { pagingConfig: { rowsOffset: p * 500, rowCount: 500 } } }); }\nfor (let p = 0; p < 9; p++) { await loadPage(p); }")));
+  check("quality: a computed rowsOffset in a helper that a loop calls is a paged read",
+    () => count(viaHelper, R.pagedReadLoop) === 1, () => viaHelper.findings);
 
   // The client modules the handlers call into are linted on their own, with the same rules.
   const moduleOf = (body) => `define("UsrOrderPageModule", ["@creatio-devkit/common"], function(sdk) {\n"use strict";\n${body}\nreturn {};\n});`;

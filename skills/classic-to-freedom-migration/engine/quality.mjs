@@ -133,6 +133,7 @@ function lintSection(src, section, ctx) {
 function lintTree(ast, comments, section, ctx) {
   walkSection(ast, section, false, ctx);
   checkUncheckedWrites(ast, section, ctx.page);
+  checkPagedReads(ast, section, ctx.page);
   for (const c of comments) checkComment(c, section, ctx.page);
 }
 
@@ -184,7 +185,7 @@ function checkNode(node, section, isElementId, ctx) {
   if (node.type === "CatchClause") {
     return node.body.body.every(isConsoleCall) ? finding(QUALITY_RULES.catchLogOnly, section, lineOf(node), "the catch block only logs the error") : null;
   }
-  if (node.type === "Property") return checkComparisonType(node, section) || checkPagedRead(node, section);
+  if (node.type === "Property") return checkComparisonType(node, section);
   if (node.type === "Literal" && typeof node.value === "string") return checkStringLiteral(node, section, isElementId, ctx);
   return null;
 }
@@ -200,14 +201,6 @@ function checkFunctionLength(node, section, { t, fnNames }) {
 function checkComparisonType(node, section) {
   if (staticPropKey(node) !== "comparisonType" || node.value?.type !== "Literal" || typeof node.value.value !== "number") return null;
   return finding(QUALITY_RULES.numericComparisonType, section, lineOf(node), `\`comparisonType: ${node.value.raw}\``);
-}
-
-// A `rowsOffset` worked out at run time is a hand-written loop over pages of rows: the way a client adds up a total
-// it should ask the server for. A literal offset (`0`) reads one fixed page.
-function checkPagedRead(node, section) {
-  if (staticPropKey(node) !== "rowsOffset" || node.value?.type === "Literal") return null;
-  return finding(QUALITY_RULES.pagedReadLoop, section, lineOf(node),
-    "a load pages through every row (`rowsOffset` computed at run time) — ask for the total with one aggregate query");
 }
 
 function checkStringLiteral(node, section, isElementId, ctx) {
@@ -299,37 +292,83 @@ function namesFromNext(own, nextName) {
   return names;
 }
 
-// A handler passes the request on: it takes `next`, calls `next.handle(…)` and returns what that call gives (directly,
-// or through a variable it assigned the call to; an arrow's expression body is what it returns). Anything else ends
-// the chain for the handlers after it; a handler meant to end it is accepted by a plan decision on the row.
+// True when every way out of a statement is a `return` or a `throw`: the body cannot run off its end.
+function endsInReturn(s) {
+  if (!s) return false;
+  if (s.type === "ReturnStatement" || s.type === "ThrowStatement") return true;
+  if (s.type === "BlockStatement") return endsInReturn(s.body.at(-1));
+  if (s.type === "IfStatement") return endsInReturn(s.consequent) && endsInReturn(s.alternate);
+  if (s.type === "TryStatement") {
+    return endsInReturn(s.finalizer) || (endsInReturn(s.block) && (!s.handler || endsInReturn(s.handler.body)));
+  }
+  return false;
+}
+
+// The name of a handler's `next` parameter (`next` or `next = null`), or null when it takes none.
+function nextParamName(handler) {
+  const p = handler.params[1];
+  const id = p?.type === "AssignmentPattern" ? p.left : p;
+  return id?.type === "Identifier" ? id.name : null;
+}
+
+// A handler passes the request on: it takes `next`, calls `next.handle(…)` and returns what that call gives on EVERY
+// path (directly, or through a variable it assigned the call to; an arrow's expression body is what it returns; a
+// bare `return;` or running off the end returns nothing). Anything else ends the chain for the handlers after it on
+// that path; a handler meant to end it is accepted by a plan decision on the row.
 function checkPassesOn(handler, request, page) {
   const fail = (why) => page.findings.push(finding(QUALITY_RULES.handlerWithoutNext, "handlers", lineOf(handler),
     `${request ? "`" + request + "`" : "a handler"} ${why}`, { request: request || null }));
-  const nextName = handler.params[1]?.type === "Identifier" ? handler.params[1].name : null;
+  const nextName = nextParamName(handler);
   if (!nextName) return fail("takes no `next`, so the handlers after it never run");
   const own = ownNodes(handler.body);
   if (!own.some((n) => n.type === "CallExpression" && isNextCall(n, nextName))) {
     return fail("never calls `next.handle(request)`, so the handlers after it never run");
   }
   const fromNext = namesFromNext(own, nextName);
-  const returned = handler.body.type === "BlockStatement"
-    ? own.filter((n) => n.type === "ReturnStatement" && n.argument).map((n) => n.argument) : [handler.body];
-  const passesOn = returned.some((value) => {
+  const givesNext = (value) => {
     const v = unwrap(value);
     return isNextCall(v, nextName) || (v?.type === "Identifier" && fromNext.has(v.name));
-  });
+  };
+  const passesOn = handler.body.type === "BlockStatement"
+    ? endsInReturn(handler.body) && own.every((n) => n.type !== "ReturnStatement" || (n.argument && givesNext(n.argument)))
+    : givesNext(handler.body);
   if (!passesOn) fail("calls `next.handle(request)` but does not return its result");
 }
 
 // ---- writes ----
 
 const WRITE_METHODS = new Set(["insert", "update", "delete"]);
-const isWriteCall = (n) => n.type === "CallExpression" && n.callee.type === "MemberExpression" && !n.callee.computed
-  && WRITE_METHODS.has(n.callee.property.name);
+const memberName = (n) => (n?.type === "Identifier" ? n.name : n?.type === "MemberExpression" && !n.computed ? n.property.name : null);
+// `await sdk.Model.create(…)` / `Model.create(…)` (a data model) or `new sdk.SysSettingsService()` (system settings).
+const isDataWriter = (init) => (init?.type === "CallExpression" && init.callee.type === "MemberExpression" && !init.callee.computed
+  && init.callee.property.name === "create" && isModelReference(init.callee.object))
+  || (init?.type === "NewExpression" && memberName(init.callee) === "SysSettingsService");
+
+// The variables of a source bound to a data model or the system settings service: only their insert/update/delete
+// write data (a `Set`'s or a `Map`'s `.delete` does not).
+function dataWriterNames(ast) {
+  const names = new Set();
+  walkAstBounded(ast, (n) => {
+    if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isDataWriter(unwrap(n.init))) names.add(n.id.name);
+  });
+  return names;
+}
+const isWriteCall = (n, writerNames) => n.type === "CallExpression" && n.callee.type === "MemberExpression" && !n.callee.computed
+  && WRITE_METHODS.has(n.callee.property.name) && n.callee.object.type === "Identifier" && writerNames.has(n.callee.object.name);
 // `return null;`, `return false;`, `return undefined;`: the value a write function gives back when it failed.
 const isFailureReturn = (n) => n.type === "ReturnStatement" && n.argument != null
   && ((n.argument.type === "Literal" && (n.argument.value === null || n.argument.value === false))
     || (n.argument.type === "Identifier" && n.argument.name === "undefined"));
+
+// A function's body writes data and, after its first write, can give back a failure value. A `return false` before
+// any write is a guard on the input, not a failed write.
+function failsAfterWrite(fn, writerNames) {
+  const body = ownNodes(fn.body);
+  const writes = body.filter((n) => isWriteCall(n, writerNames));
+  if (!writes.length) return false;
+  const firstWrite = Math.min(...writes.map((n) => n.start));
+  return body.some((n) => isFailureReturn(n) && n.start > firstWrite);
+}
 
 // `function name() {}` / `const name = () => {}` as `[name, function]`.
 function namedFunctionOf(n) {
@@ -342,14 +381,13 @@ function namedFunctionOf(n) {
 // A call to it as a bare statement (`await recalculate(…);`) drops that result: the write may have failed and nobody
 // is told. Within one source only: a function of another module is not seen.
 function checkUncheckedWrites(ast, section, page) {
+  const writerNames = dataWriterNames(ast);
+  if (!writerNames.size) return;
   const writers = new Set();
   const bareCalls = [];
   walkAstBounded(ast, (node) => {
     const named = namedFunctionOf(node);
-    if (named) {
-      const body = ownNodes(named[1].body);
-      if (body.some(isWriteCall) && body.some(isFailureReturn)) writers.add(named[0]);
-    }
+    if (named && failsAfterWrite(named[1], writerNames)) writers.add(named[0]);
     const call = node.type === "ExpressionStatement" ? unwrap(node.expression) : null;
     if (call?.type === "CallExpression" && call.callee.type === "Identifier") bareCalls.push([node, call.callee.name]);
   });
@@ -357,6 +395,35 @@ function checkUncheckedWrites(ast, section, page) {
     if (!writers.has(name)) continue;
     page.findings.push(finding(QUALITY_RULES.uncheckedWriteResult, section, lineOf(node),
       `\`${name}(…)\` writes data and returns a failure value, but this call ignores it — check it and tell the user`, { name }));
+  }
+}
+
+// ---- paged reads ----
+
+const LOOPS = new Set(["ForStatement", "ForInStatement", "ForOfStatement", "WhileStatement", "DoWhileStatement"]);
+
+// Every `rowsOffset` with a computed value, with the named function it sits in and whether a loop of that function
+// holds it, and the functions a loop calls. A named function starts outside any loop; an inline callback belongs to
+// the code around it.
+function collectPaging(node, fnName, inLoop, acc, depth = 0) {
+  if (!node || depth > 1000) return acc;
+  if (node.type === "Property" && staticPropKey(node) === "rowsOffset" && node.value?.type !== "Literal") acc.offsets.push({ node, fnName, inLoop });
+  if (inLoop && node.type === "CallExpression" && node.callee.type === "Identifier") acc.calledInLoop.add(node.callee.name);
+  const named = namedFunctionOf(node);
+  if (named) return collectPaging(named[1].body, named[0], false, acc, depth + 1);
+  const loop = inLoop || LOOPS.has(node.type);
+  for (const child of childNodes(node)) collectPaging(isFnNode(child) ? child.body : child, fnName, loop, acc, depth + 1);
+  return acc;
+}
+
+// A computed `rowsOffset` inside a loop — or in a function a loop calls — reads page after page of rows: the way a
+// client adds up a total it should ask the server for. A computed offset outside a loop reads the one page asked for.
+function checkPagedReads(ast, section, page) {
+  const { offsets, calledInLoop } = collectPaging(ast, null, false, { offsets: [], calledInLoop: new Set() });
+  for (const { node, fnName, inLoop } of offsets) {
+    if (!inLoop && !(fnName && calledInLoop.has(fnName))) continue;
+    page.findings.push(finding(QUALITY_RULES.pagedReadLoop, section, lineOf(node),
+      "a loop reads page after page of rows (`rowsOffset` computed in it) — ask for the total with one aggregate query"));
   }
 }
 
