@@ -307,6 +307,10 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   makes rather than rules the caller is asked to honour. The second one matters most: with
   several tokens open on one artifact, a single sub-agent can hold them all and close each with a valid
   signature, and every other check passes. The check compares `writesTo`, so a read-only task never conflicts.
+  It also holds every task that writes a page (`page:<id>`, `whole`) until `worklog.md` of the migration folder
+  records the browser answer as `Browser: page-smoke | surface | none` (`worklogBrowser`, the last line wins):
+  a builder cannot ask the user, so the question its post-save check depends on is asked before its dispatch.
+  `--next` and `--handoff` withhold those tasks through the same predicate (`browser`).
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing

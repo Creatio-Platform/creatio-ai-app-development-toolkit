@@ -9,6 +9,21 @@ Measured, one run: **18.6 minutes** in the browser to find one defect, of which 
 `Request timed out` calls into a page whose main thread was already blocked.** Nothing in those eight minutes
 could have returned anything. This file exists to make that loop impossible to repeat.
 
+## Which tool runs the check
+
+The `Browser:` line the orchestrator recorded with the user before the first page-writing task decides it, and the
+builder's prompt quotes it:
+
+- **`page-smoke`** — clio `page-smoke` opens a Freedom **form** page headless, waits for it to be ready and
+  returns its `buttons`, its `fields` (`required`, `readonly`, `value`, `error`) and its `consoleErrors`. That is
+  the render check and the state of each rule-driven field in one call, with no browser surface and no approval
+  prompt, so a builder can run it. It is read-only by default; `click` presses one button and is a WRITE (Save
+  can create a record), and its reply reports the toasts, dialogs and records the click produced. It cannot open
+  a list page or capture the data requests: those checks use a browser surface when one is available, and the
+  task's `## Notes` say which check could not run without one.
+- **`surface`** — an agent browser surface, by the evidence order below.
+- **`none`** — no check; the run ends with the page unexercised.
+
 ## Cheap evidence first
 
 Browser checks are at most TWO per task: a build task opens the browser once, after its last save — not after
@@ -178,6 +193,43 @@ writing a new walker each time:
   return JSON.stringify({ url: location.href, types: Object.keys(seen).length, seen });
 })();
 ```
+
+## When the check script fails, not the page
+
+A script that clicks or reads through a browser surface fails for reasons of its own. Each of these cost one
+migration several checks against a single item; rule them out before calling the page broken.
+
+**A snack bar takes the click.** A save leaves a snack bar over the lower part of the page for several seconds,
+and a click aimed at a grid cell or a button under it lands on the snack bar. Dismiss every open one, wait, then
+click:
+
+```js
+document.querySelectorAll('simple-snack-bar button, .mat-mdc-snack-bar-container button, crt-snack-bar button')
+  .forEach((b) => b.click());
+```
+
+Before calling a click lost, read what is under the point: `document.elementFromPoint(x, y)` naming a snack bar
+or a `.cdk-overlay-container` child is this trap. With `page-smoke`, `click` already reports the toasts and
+dialogs it met; read them off its reply.
+
+**The page is not ready yet.** A Freedom page renders its shell before its data, so reading fields right after the
+route change reads empty values. Poll for an element the page itself declares, once a second, up to a limit,
+and read only after it is there:
+
+```js
+// replace SaveButton with an element name from the page body
+!!document.querySelector('[data-item-marker="SaveButton"], crt-button[element-name="SaveButton"]');
+```
+
+`page-smoke` waits for readiness itself.
+
+**The selector names the wrong class.** Freedom renders its own components, so a class taken from the underlying
+library is often not on the page: an expansion panel's header is `crt-expansion-panel-header`, not
+`mat-expansion-panel-header`, and a script using the second never expands a panel, so nothing inside it mounts.
+Find elements by what the page body declares: `[data-item-marker="<element name>"]` or
+`[element-name="<element name>"]` for a field, a button or a grid; a column header by its caption inside the grid
+found that way; a row by the record's value in one of its cells. When a class still has to be named, take it from
+the rendered page (the census walker above lists every `crt-*` element) instead of from memory.
 
 ## A TIMEOUT IS THE ANSWER, NOT A REASON TO RETRY
 

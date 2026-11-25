@@ -436,9 +436,14 @@ rules.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
-  bypass-permissions session. Establish the surface BEFORE the first stand write and say so when
-  there is none. A stored preference that later proves unachievable is RE-ASKED, never silently
-  downgraded while still reporting itself as automatic.
+  bypass-permissions session. The orchestrator settles it with the user before the first build
+  task and your prompt quotes the outcome as the `Browser:` line; with
+  `page-smoke` the check needs no surface at all. A stored preference that later proves
+  unachievable is RE-ASKED, never silently downgraded while still reporting itself as automatic.
+- **One answer widened into a policy.** "I'll check it myself" about one page became "Browser
+  checks: 0" for every task of a four-day build, and nothing was ever opened. Only the `Browser:`
+  line decides whether you check; a remark about one page in your prompt or in `decisions.md` does
+  not switch the check off for yours.
 - **Registry filter bar / section actions dropped.** The Classic section body carries **quick
   filters** (`initFixedFiltersConfig`) and **custom section actions** (`getSectionActions`) — the
   engine now surfaces both in the plan's `### List page` block. They are page-CENTRIC blind spots
