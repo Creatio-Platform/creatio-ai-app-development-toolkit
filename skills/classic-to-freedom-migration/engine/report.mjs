@@ -184,8 +184,10 @@ function capBreachLines(capBreaches) {
 // writes one `Stand data changed: <what> <before> → <after>` line — the orchestrator in `worklog.md`, a builder under
 // its task's `## Notes` — and the orchestrator records each add-mode check the user agreed to as `Add-mode check:`.
 // Only FIELD lines count, as for `Browser checks`: a quoted line or one inside a code fence is prose about the line.
-const STAND_DATA = /^[\s*-]*Stand data changed\s*:\s*(.+)$/i;
-const ADD_MODE_CHECK = /^[\s*-]*Add-mode check\s*:\s*(.+)$/i;
+// Bold around the label is allowed on either side of the colon (`**Stand data changed:** x`, `**Stand data changed**: x`),
+// as for `Browser checks`: agents write these notes in free Markdown.
+export const STAND_DATA = /^[\s*-]*Stand data changed[\s*]*:[\s*]*(\S.*)$/i;
+export const ADD_MODE_CHECK = /^[\s*-]*Add-mode check[\s*]*:[\s*]*(\S.*)$/i;
 export function fieldLines(text, re) {
   const out = [];
   let fence = null;
@@ -197,7 +199,7 @@ export function fieldLines(text, re) {
       continue;
     }
     const m = fence ? null : re.exec(line);
-    if (m) out.push(m[1].trim());
+    if (m) out.push(m[1].replace(/\*+\s*$/, "").trim());
   }
   return out;
 }

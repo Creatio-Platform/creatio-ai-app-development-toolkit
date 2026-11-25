@@ -12,7 +12,7 @@ import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-mig
 import { writesOnOpen } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { dataWritingPages } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { buildTaskSet, renderTaskFile, dataWritingBlock } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { renderFinalReport, fieldLines } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, fieldLines, STAND_DATA, ADD_MODE_CHECK } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 
 // a page body whose methods are given as source text
 const page = (name, methods) => `define("${name}", [], function() { return { entitySchemaName: "UsrThing", diff: [], methods: { ${methods} } }; });`;
@@ -100,6 +100,20 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   check("writes-on-open: a later path with no mode test replaces an earlier add-mode path (isNewMode && …), never the reverse",
     () => { const w = opened(guardedFirst); return w.length === 1 && w[0].addModeOnly === false && w[0].hook === "onRender"; },
     () => opened(guardedFirst));
+  // The reviewer's shapes: a mode test that is negated, and one helper the hook reaches both inside and outside it.
+  const negated = page("UsrNegatedPage", [
+    'onEntityInitialized: function() { if (!this.isAddMode()) { this.usrStamp(); } }', stamp,
+  ].join(", "));
+  const twoHelpers = page("UsrTwoHelpersPage", [
+    'onEntityInitialized: function() { this.usrA(); this.usrB(); }',
+    'usrA: function() { if (this.isAddMode()) { this.usrStamp(); } }',
+    'usrB: function() { this.usrStamp(); }', stamp,
+  ].join(", "));
+  check("writes-on-open: `if (!this.isAddMode())` is no add-mode branch — the write runs on every open",
+    () => { const w = opened(negated); return w.length === 1 && w[0].addModeOnly === false; }, () => opened(negated));
+  check("writes-on-open: a write reached through one helper inside the add-mode branch and another outside it runs on every open",
+    () => { const w = opened(twoHelpers); return w.length === 1 && w[0].addModeOnly === false && w[0].path.join(">") === "onEntityInitialized>usrB>usrStamp"; },
+    () => opened(twoHelpers));
   check("writes-on-open: a write inside the add-mode branch of the hook itself is add-mode only",
     () => { const w = opened(inline); return w.length === 1 && w[0].addModeOnly === true && w[0].method === "onEntityInitialized"; },
     () => opened(inline));
@@ -180,7 +194,11 @@ function reportChecks({ check, run, plain, dir }) {
     () => !/Stand data this run changed/.test(none.markdown));
   check("writes-on-open: fieldLines reads field lines and list items, never a fenced or quoted one",
     () => fieldLines("- Stand data changed: a\n  Stand data changed: b\n> Stand data changed: c\n~~~\nStand data changed: d\n~~~",
-      /^[\s*-]*Stand data changed\s*:\s*(.+)$/i).join() === "a,b");
+      STAND_DATA).join() === "a,b");
+  check("writes-on-open: a bolded label is read on either side of the colon, and the closing bold is not part of the value",
+    () => fieldLines("**Stand data changed**: x 2 → 3\n- **Stand data changed:** y\n**Stand data changed: z**", STAND_DATA).join() === "x 2 → 3,y,z"
+      && fieldLines('**Add-mode check**: MbContract form page (user: "ok")', ADD_MODE_CHECK).join() === 'MbContract form page (user: "ok")',
+    () => fieldLines("**Stand data changed**: x 2 → 3\n- **Stand data changed:** y\n**Stand data changed: z**", STAND_DATA));
   fs.rmSync(path.join(dir, "worklog.md"));
   const unread = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [], planVersion: run.planVersion }, dir: tasksDir });
   const unreadSection = unread.markdown.split("\n## ").find((s) => s.startsWith("Stand data")) || "";
