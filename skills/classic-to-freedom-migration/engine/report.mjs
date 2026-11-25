@@ -30,6 +30,7 @@ import path from "node:path";
 import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
+  worklogFieldValues, addModeChecks, STAND_DATA_FIELD, STAND_DATA_MARKER,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -180,66 +181,30 @@ function capBreachLines(capBreaches) {
     ...capBreaches.map((b) => `- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`)];
 }
 // STAND DATA THE RUN CHANGED. A browser check is not read-only on every page: a page that assigns the
-// next number when it opens consumes a counter, and a `click` that saves creates a record. Whoever changed data
-// writes one `Stand data changed: <what> <before> → <after>` line — the orchestrator in `worklog.md`, a builder under
-// its task's `## Notes` — and the orchestrator records each add-mode check the user agreed to as `Add-mode check:`.
-// Only FIELD lines count, as for `Browser checks`: a quoted line or one inside a code fence is prose about the line.
-// Bold around the label is allowed on either side of the colon (`**Stand data changed:** x`, `**Stand data changed**: x`),
-// as for `Browser checks`: agents write these notes in free Markdown.
-// Read by plain string steps, not one regex: a pattern with optional decoration on both sides of the label backtracks.
-export const STAND_DATA = "Stand data changed";
-export const ADD_MODE_CHECK = "Add-mode check";
-const LEAD = new Set([" ", "\t", "*", "-"]);
-const LEAD_NO_DASH = new Set([" ", "\t", "*"]);
-const skipWhile = (s, chars) => {
-  let i = 0;
-  while (i < s.length && chars.has(s[i])) i++;
-  return s.slice(i);
-};
-// The value of a `<label>: <value>` field line, or null: list marker and bold allowed before the label, bold around
-// the colon, and a closing bold after the value, which is not part of it.
-export function labelValue(line, label) {
-  const s = skipWhile(line, LEAD);
-  if (s.slice(0, label.length).toLowerCase() !== label.toLowerCase()) return null;
-  const rest = skipWhile(s.slice(label.length), LEAD_NO_DASH);
-  if (!rest.startsWith(":")) return null;
-  let value = skipWhile(rest.slice(1), LEAD_NO_DASH).trimEnd();
-  while (value.endsWith("*")) value = value.slice(0, -1).trimEnd();
-  return value || null;
-}
-export function fieldLines(text, label) {
-  const out = [];
-  let fence = null;
-  for (const line of String(text || "").split(/\r?\n/)) {
-    const f = FENCE.exec(line);
-    if (f) {
-      if (!fence) fence = f[1];
-      else if (f[1].startsWith(fence)) fence = null;
-      continue;
-    }
-    const value = fence ? null : labelValue(line, label);
-    if (value) out.push(value);
-  }
-  return out;
-}
+// next number when it opens consumes a counter, and a `click` that saves creates a record. A builder records each
+// change as the `Stand data changed (row N):` marker of its `## Notes`, the orchestrator as a `Stand data changed:`
+// line of `worklog.md`, beside the `Add-mode check:` lines of the consent it recorded. Every reader of those lines is
+// in tasks.mjs, beside the one that writes the task files that teach them, so the two cannot drift apart.
 // Nothing for a run with no data-writing page and no recorded change, so an ordinary report reads as before.
 // `worklog` is the text `readWorklogBrowserAnswer` already read, so the file is read once per report.
 function standDataSection(result, tasks, { text: worklog = "", unread = null }, pageName) {
-  const changes = [...fieldLines(worklog, STAND_DATA).map((text) => ({ text, where: "`worklog.md`" })),
-    ...tasks.flatMap((t) => fieldLines(t.notes, STAND_DATA).map((text) => ({ text, where: `[${cell(t.group || t.id)}](${enc(t.file)})` })))];
-  const agreed = fieldLines(worklog, ADD_MODE_CHECK);
+  const changes = [...worklogFieldValues(worklog, STAND_DATA_FIELD).map((text) => ({ text, where: "`worklog.md`" })),
+    ...tasks.flatMap((t) => [...notesMarkers(t.notes, STAND_DATA_MARKER)].flatMap(([n, values]) => values.map((v) => ({
+      text: v.replace(/\*+$/, "").trimEnd(), where: `[${cell(t.group || t.id)}](${enc(t.file)}), row ${n}` }))))];
   const pages = dataWritingPages(result);
+  const { agreed, unknown } = addModeChecks(worklog, pages);
   if (!changes.length && !pages.length) return [];
   const L = [`## Stand data this run changed (${changes.length})`, ""];
   if (changes.length) L.push(...changes.map((c) => `- ${cell(c.text)} — ${c.where}`));
-  else if (unread) L.push(`\`worklog.md\` could not be read (${cell(unread)}), so the changes recorded there are not listed; only the task notes were read.`);
-  else L.push("No change to stand data was recorded by this run.");
+  if (unread) L.push(`\`worklog.md\` was not read (${cell(unread)}), so the changes recorded there are not listed; only the task notes were read.`);
+  else if (!changes.length) L.push("No change to stand data was recorded by this run.");
   if (pages.length) {
     const one = pages.length === 1;
     L.push("", `The plan named ${plural(pages.length, "page")} that write${one ? "s" : ""} data when opened, so ${one ? "it was" : "they were"}`
       + " to be opened only in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".",
-    agreed.length ? `Add-mode checks the user agreed to: ${agreed.map(cell).join("; ")}.`
+    agreed.size ? `Add-mode checks the user agreed to: ${[...agreed.values()].map(cell).join("; ")}.`
       : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule.");
+    if (unknown.length) L.push(`Not counted as consent — an \`Add-mode check:\` line that names no page key of the plan's list: ${unknown.map(cell).join("; ")}.`);
   }
   return L;
 }
@@ -954,7 +919,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
   const browser = browserSection(exercise, pageName, browserAnswer);
-  const standData = standDataSection(result, tasks, dir ? answerRead : {}, pageName);
+  const standData = standDataSection(result, tasks, dir ? answerRead : { unread: "no task folder was given" }, pageName);
   let sec = 3;
   const declined = declinedRows(tasks, decisions);
   const md = [

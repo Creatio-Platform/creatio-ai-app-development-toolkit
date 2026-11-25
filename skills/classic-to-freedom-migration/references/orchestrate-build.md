@@ -161,14 +161,17 @@ in EDIT mode on an existing record, and each task file of such a page says so. O
 page listed as writing *every time it opens*, at all) consumes stand data — the benchmark Contracts page takes the
 next `MbContractLastNumber` each time. So, in the same message as the browser question, list those pages and ask
 the user whether an add-mode check of any of them is wanted. Record each page the user agrees to as ONE line in
-`worklog.md`, and quote that line in the prompt of every builder of that page, beside the `Browser:` line:
+`worklog.md`, starting with the page KEY the plan's list prints in backticks:
 
-- `Add-mode check: <page> (user: "<their words>")`.
+- `Add-mode check: <page key> (user: "<their words>")`.
 
-No line means no consent: the builders keep to edit mode. An add-mode check you run yourself follows the builder's
+The engine reads these lines on every sync and writes the consent into the task file of that page, so the builder
+reads it in its own file; a line whose first word is not a page key of the list is not consent, and the result
+report says so. No line means no consent: the builders keep to edit mode. An add-mode check you run yourself follows the builder's
 rule: read each value the plan names for that page before it, and after it write
 `Stand data changed: <what> <before> → <after> (<page>)` into `worklog.md`. Any other data a check of yours
 changed — a `page-smoke` `click` that saved, its `click.created` records — is a `Stand data changed:` line too. The
+builders write theirs as the `Stand data changed (row N):` marker of their notes. The
 migration result report lists every such line, from `worklog.md` and from the task notes, under
 **Stand data this run changed**.
 

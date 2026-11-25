@@ -316,8 +316,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   `writesOnOpen` in `mapper.mjs` follows `this.<method>` calls from the open hooks (`init`, `onEntityInitialized`,
   `onRender`) to them. The plan lists such pages under *Pages that write data when opened*, each page's task file
   tells its builder to open it in edit mode (`page-smoke` with `record-id`) unless an `Add-mode check:` line in
-  `worklog.md` names it, and the result report lists every `Stand data changed:` line from `worklog.md` and the
-  task notes.
+  `worklog.md` names its page key (`addModeChecks` in `tasks.mjs` reads it on every sync and writes the consent into
+  the file), and the result report lists every `Stand data changed:` line of `worklog.md` and every
+  `Stand data changed (row N):` marker of the task notes.
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing

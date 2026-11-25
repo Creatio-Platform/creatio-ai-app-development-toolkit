@@ -11,8 +11,9 @@ import path from "node:path";
 import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { writesOnOpen } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { dataWritingPages } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { buildTaskSet, renderTaskFile, dataWritingBlock } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { renderFinalReport, fieldLines, STAND_DATA, ADD_MODE_CHECK } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { buildTaskSet, renderTaskFile, dataWritingBlock, syncTaskDir, worklogFieldValues, addModeChecks, notesMarkers,
+  STAND_DATA_FIELD, ADD_MODE_FIELD, STAND_DATA_MARKER } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 
 // a page body whose methods are given as source text
 const page = (name, methods) => `define("${name}", [], function() { return { entitySchemaName: "UsrThing", diff: [], methods: { ${methods} } }; });`;
@@ -46,6 +47,17 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
     () => factsOf(queries, "usrLog").dataWrites[0]?.target === "UsrOpenLog" && factsOf(queries, "usrLog").dataWrites[0]?.call === "Terrasoft.InsertQuery"
       && factsOf(queries, "usrStamp").dataWrites[0]?.target === "UsrCounter",
     () => [factsOf(queries, "usrLog").dataWrites, factsOf(queries, "usrStamp").dataWrites]);
+  // A BatchQuery is a container: the usual read batch on open writes nothing, and a batch carrying an insert still does.
+  const batch = page("UsrBatchPage", [
+    'onEntityInitialized: function() { this.usrRead(); this.usrBatchInsert(); }',
+    'usrRead: function() { var bq = Ext.create("Terrasoft.BatchQuery"); bq.add(this.getLookupQuery()); bq.execute(function() {}, this); }',
+    'usrBatchInsert: function() { var b = new Terrasoft.BatchQuery(); b.add(Ext.create("Terrasoft.InsertQuery", { rootSchemaName: "UsrOpenLog" })); b.execute(); }',
+  ].join(", "));
+  check("writes-on-open: a BatchQuery of reads is no data write; a batch carrying an InsertQuery is one, through the insert",
+    () => factsOf(batch, "usrRead").dataWrites.length === 0 && !factsOf(batch, "usrRead").kinds.includes("data-write")
+      && factsOf(batch, "usrBatchInsert").dataWrites.map((w) => `${w.call}:${w.target}`).join() === "Terrasoft.InsertQuery:UsrOpenLog"
+      && opened(batch).map((w) => w.method).join() === "usrBatchInsert",
+    () => [factsOf(batch, "usrRead").dataWrites, factsOf(batch, "usrBatchInsert").dataWrites, opened(batch)]);
 
   // AC-1, the walk: only writes reached from an open hook count, and the mode the hook asks for travels with them.
   const goldenOpen = opened(golden);
@@ -151,10 +163,16 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   const set = buildTaskSet(run, checklistOpts(manifest(golden)));
   const pageTasks = set.tasks.filter((t) => dataWritingBlock(t, set.dataWritingPages).length);
   const text = pageTasks.length ? renderTaskFile(pageTasks[0], set) : "";
-  check("writes-on-open: the page's task file says it writes data when it opens, and to open it with record-id unless an Add-mode check line names it",
-    () => pageTasks.length > 0 && /writes data when it opens/.test(text) && /record-id/.test(text)
-      && /Add-mode check:/.test(text) && /Stand data changed:/.test(text) && /MbContractLastNumber/.test(text),
+  check("writes-on-open: the page's task file says it writes data when it opens, where the record-id comes from, and that no add-mode check is agreed",
+    () => pageTasks.length > 0 && /writes data when it opens/.test(text) && /record-id/.test(text) && /odata-read/.test(text)
+      && /No add-mode check is agreed/.test(text) && /Stand data changed \(row N\)/.test(text) && /MbContractLastNumber/.test(text)
+      && !/Stand data changed:/.test(text),
     () => text.split("\n").filter((l) => /data|record-id/.test(l)));
+  const agreedText = pageTasks.length ? renderTaskFile(pageTasks[0], { ...set, addModeChecks: new Map([["main", 'main (user: "once")']]) }) : "";
+  check("writes-on-open: an agreed add-mode check of the page is written into its task file, with the user's words",
+    () => /The user agreed to an add-mode check of `main`/.test(agreedText) && /user: "once"/.test(agreedText)
+      && !/No add-mode check is agreed/.test(agreedText),
+    () => agreedText.split("\n").filter((l) => /add-mode/i.test(l)));
   check("writes-on-open: a task of another page gets no such block",
     () => dataWritingBlock({ pageKey: "list", rows: [{ pageKey: "list" }] }, set.dataWritingPages).length === 0
       && dataWritingBlock({ pageKey: "run", rows: [] }, set.dataWritingPages).length > 0);
@@ -162,6 +180,22 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   // AC-3 / AC-4, the result report lists what the run changed, from worklog.md and the task notes.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-writes-on-open-"));
   try { reportChecks({ check, run, plain, dir }); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const syncDir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-writes-on-open-sync-"));
+  try { syncChecks({ check, run, dir: syncDir }); } finally { fs.rmSync(syncDir, { recursive: true, force: true }); }
+}
+
+// The consent reaches the builder through the engine: a sync reads `worklog.md` and re-renders the page's task file.
+function syncChecks({ check, run, dir }) {
+  const tasksDir = path.join(dir, "build-tasks");
+  const pageFile = (set) => set.tasks.filter((t) => dataWritingBlock(t, set.dataWritingPages).length)
+    .map((t) => fs.readFileSync(path.join(tasksDir, t.file), "utf8"))[0] || "";
+  const before = pageFile(syncTaskDir(tasksDir, run, {}));
+  fs.writeFileSync(path.join(dir, "worklog.md"), 'Add-mode check: main (user: "yes, once")\nAdd-mode check: MbContract form page (user: "typo")\n');
+  const after = pageFile(syncTaskDir(tasksDir, run, {}));
+  check("writes-on-open: a sync writes the worklog's add-mode consent into the page's task file, and only for a page key of the plan",
+    () => /No add-mode check is agreed/.test(before) && /The user agreed to an add-mode check of `main`/.test(after)
+      && /yes, once/.test(after) && !/typo/.test(after),
+    () => [before, after].map((t) => t.split("\n").filter((l) => /add-mode/i.test(l))));
 }
 
 function reportChecks({ check, run, plain, dir }) {
@@ -169,19 +203,22 @@ function reportChecks({ check, run, plain, dir }) {
   fs.mkdirSync(tasksDir);
   fs.writeFileSync(path.join(dir, "worklog.md"), [
     "Browser: page-smoke (remembered on this machine)",
-    'Add-mode check: MbContract form page (user: "yes, check add mode once")',
+    'Add-mode check: main (user: "yes, check add mode once")',
+    'Add-mode check: MbContract form page (user: "a label, not a key")',
     "Stand data changed: MbContractLastNumber 2 → 3 (MbContract form page)",
     "```", "Stand data changed: an example inside a fence", "```",
     "> Stand data changed: a quoted example",
   ].join("\n"));
   const task = { id: "t1", group: "Form page", file: "t1.md", pageKey: "main", writesTo: "page:main", status: "done", rows: [],
-    notes: "Browser checks: 1 — loads clean\nStand data changed: MbContract record CON-00003 created by click Save (row 4)" };
+    notes: "Browser checks: 1 — loads clean\n**Stand data changed (row 4):** MbContract record CON-00003 created by click Save**\n"
+      + "Stand data changed: an unmarked note line" };
   const report = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [task], planVersion: run.planVersion }, dir: tasksDir });
   const section = report.markdown.split("\n## ").find((s) => s.startsWith("Stand data this run changed")) || "";
   check("writes-on-open: the result lists every Stand data changed line, from worklog.md and the task notes, and the agreed add-mode check",
     () => section.startsWith("Stand data this run changed (2)") && /MbContractLastNumber 2 → 3/.test(section)
-      && /CON-00003 created by click Save/.test(section) && /yes, check add mode once/.test(section)
-      && !/inside a fence/.test(section) && !/a quoted example/.test(section),
+      && /CON-00003 created by click Save — \[Form page\]\(t1\.md\), row 4/.test(section) && /yes, check add mode once/.test(section)
+      && !/Save\*/.test(section) && !/inside a fence/.test(section) && !/a quoted example/.test(section) && !/unmarked note/.test(section)
+      && /Not counted as consent.*a label, not a key/.test(section),
     () => section);
   fs.writeFileSync(path.join(dir, "worklog.md"), "Browser: page-smoke (remembered on this machine)\n");
   const quiet = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [], planVersion: run.planVersion }, dir: tasksDir });
@@ -192,20 +229,28 @@ function reportChecks({ check, run, plain, dir }) {
   const none = renderFinalReport({ result: plain, verifyRes: { rows: [] }, set: { tasks: [], planVersion: plain.planVersion }, dir: tasksDir });
   check("writes-on-open: a run with no data-writing page and no recorded change has no such section",
     () => !/Stand data this run changed/.test(none.markdown));
-  check("writes-on-open: fieldLines reads field lines and list items, never a fenced or quoted one",
-    () => fieldLines("- Stand data changed: a\n  Stand data changed: b\n> Stand data changed: c\n~~~\nStand data changed: d\n~~~",
-      STAND_DATA).join() === "a,b");
-  check("writes-on-open: a bolded label is read on either side of the colon, and the closing bold is not part of the value",
-    () => fieldLines("**Stand data changed**: x 2 → 3\n- **Stand data changed:** y\n**Stand data changed: z**", STAND_DATA).join() === "x 2 → 3,y,z"
-      && fieldLines('**Add-mode check**: MbContract form page (user: "ok")', ADD_MODE_CHECK).join() === 'MbContract form page (user: "ok")',
-    () => fieldLines("**Stand data changed**: x 2 → 3\n- **Stand data changed:** y\n**Stand data changed: z**", STAND_DATA));
+  check("writes-on-open: worklogFieldValues reads field lines and list items, never a fenced or quoted one",
+    () => worklogFieldValues("- Stand data changed: a\n  Stand data changed: b\n> Stand data changed: c\n~~~\nStand data changed: d\n~~~",
+      STAND_DATA_FIELD).join() === "a,b");
+  check("writes-on-open: a bolded label is read on either side of the colon, in the worklog and in the notes marker",
+    () => worklogFieldValues("**Stand data changed**: x 2 → 3\n- **Stand data changed:** y\n**Stand data changed: z**", STAND_DATA_FIELD).join() === "x 2 → 3,y,z"
+      && [...addModeChecks('**Add-mode check**: main (user: "ok")', [{ pageKey: "main" }]).agreed.values()].join() === 'main (user: "ok")'
+      && worklogFieldValues('Add-mode check: main', ADD_MODE_FIELD).join() === "main"
+      && [...notesMarkers("- **Stand data changed (row 2)**: a\n**Stand data changed (row 3):** b", STAND_DATA_MARKER)]
+        .map(([n, v]) => `${n}=${v.join()}`).join() === "2=a,3=b",
+    () => worklogFieldValues("**Stand data changed**: x 2 → 3\n- **Stand data changed:** y\n**Stand data changed: z**", STAND_DATA_FIELD));
   fs.rmSync(path.join(dir, "worklog.md"));
   const unread = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [], planVersion: run.planVersion }, dir: tasksDir });
   const unreadSection = unread.markdown.split("\n## ").find((s) => s.startsWith("Stand data")) || "";
   check("writes-on-open: with no worklog.md the result says it could not be read instead of claiming nothing changed",
-    () => /could not be read/.test(unreadSection) && !/No change to stand data was recorded/.test(unreadSection)
+    () => /was not read/.test(unreadSection) && !/No change to stand data was recorded/.test(unreadSection)
       && /no .worklog\.md. beside the task folder/.test(unreadSection),
     () => unreadSection);
+  const noDir = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [], planVersion: run.planVersion } });
+  const noDirSection = noDir.markdown.split("\n## ").find((s) => s.startsWith("Stand data")) || "";
+  check("writes-on-open: with no task folder the result says worklog.md was not read, never that nothing changed",
+    () => /was not read \(no task folder was given\)/.test(noDirSection) && !/No change to stand data was recorded/.test(noDirSection),
+    () => noDirSection);
   check("writes-on-open: the stand-data sentence states the edit-mode rule, not that checks obeyed it, with one page as 'it'",
     () => /so it was to be opened only in edit mode/.test(unreadSection), () => unreadSection);
 }
