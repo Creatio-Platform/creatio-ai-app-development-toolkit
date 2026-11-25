@@ -26,7 +26,8 @@ gaps, and the enumeration count is then wrong in an unknowable direction.
    as references from counted extension layers.
 1. **Ask the platform for the surface, not the filesystem.**
    `list-entity-client-schemas` (arg: `entity-name`) returns `sections` + `editPages`, each
-   with `kind: classic|freedom`, its per-type `typeColumnValue`, and `miniPageSchema`. This
+   with the page it opens in `cardSchema` / `cardSchemaUId`, `kind: classic|freedom`, its
+   per-type `typeColumnValue`, and `miniPageSchema`. This
    is the authoritative answer to "which pages does this entity have, and is a given one
    Classic or Freedom".
 2. **Assemble each page's chain in one call.**
