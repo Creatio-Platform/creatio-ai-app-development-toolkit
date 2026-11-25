@@ -79,10 +79,10 @@ export function processTemplateOfManifest(manifest) {
 // `handlers: { <Classic button name>: "complete-save" | "complete-no-save" | "close-open" }` records what the user
 // decided a customer handler does to the step (the plan's ⚠ row); the button is then mapped and checked like a
 // routed one.
-const DECIDABLE = [PROCESS_BEHAVIOUR.COMPLETE_SAVE, PROCESS_BEHAVIOUR.COMPLETE_NO_SAVE, PROCESS_BEHAVIOUR.CLOSE_OPEN];
+const DECIDABLE = new Set([PROCESS_BEHAVIOUR.COMPLETE_SAVE, PROCESS_BEHAVIOUR.COMPLETE_NO_SAVE, PROCESS_BEHAVIOUR.CLOSE_OPEN]);
 function handlerDecisionsOf(manifest) {
   const recorded = plainObject(plainObject(manifest?.processPage).handlers);
-  return Object.fromEntries(Object.entries(recorded).filter(([, v]) => DECIDABLE.includes(v)));
+  return Object.fromEntries(Object.entries(recorded).filter(([, v]) => DECIDABLE.has(v)));
 }
 function processStepsOf(manifest) {
   const pp = plainObject(manifest?.processPage);
