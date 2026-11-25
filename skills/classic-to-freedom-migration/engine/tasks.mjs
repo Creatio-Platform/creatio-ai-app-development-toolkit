@@ -5193,7 +5193,7 @@ export function worklogFieldValues(worklogText, field) {
   for (const line of String(worklogText || "").split(/\r?\n/)) {
     const f = FENCE_OPEN.exec(line);
     if (f && !fence) fence = f[1];
-    else if (f && f[1].startsWith(fence)) fence = null;
+    else if (f?.[1].startsWith(fence)) fence = null;
     else if (!fence) {
       // bold first: `plainLine` alone takes the first `*` of a leading `**` for a list bullet
       const plain = plainLine(line.replaceAll("**", ""));
