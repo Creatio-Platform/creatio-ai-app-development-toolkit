@@ -10,7 +10,8 @@ import path from "node:path";
 import { assembleBuilt, PROCESS_FILE } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { launchedProcessesInfo, LAUNCHED_DECISION } from "../../skills/classic-to-freedom-migration/engine/launched-processes.mjs";
 
-export function runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FIX }) {
+export function runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS,
+  FULL_PLACEMENT, FULL_CONVENTIONS, FIX }) {
   const dir = path.join(FIX, "launched-processes");
   const body = (f) => fs.readFileSync(path.join(dir, f), "utf8");
   const BASE = body("MbBaseDocumentPage.js"), CONTRACT = body("MbContractPage.js"), SECTION = body("MbContractSection.js");
@@ -45,9 +46,31 @@ export function runLaunchedProcessesChecks({ check, runMigration, runMigrate, re
       && !/Connected processes:\*\* none \(checked on-stand/.test(withMenuNone.plan),
     () => withMenuNone.plan.split("\n").filter((l) => /Connected processes/.test(l)));
 
-  check("started processes: the process-launch decision keeps a button whose process the code names, whatever ProcessInModules lists",
+  check("started processes: the process-launch decision keeps a button whose process the code names, placed as a menu item on the Classic button's surface",
     () => (unrecorded.changeSet.needsDecision || []).some((n) => n.kind === "process-launch"
-      && /EXCEPT a process the code names \(MbApproveContractProcess\).*keep the action where the Classic button is/.test(n.reason)));
+      && /The drop rule does NOT apply to a process the code names \(MbApproveContractProcess\).*place it as a MENU ITEM in the Actions button of the surface the Classic button is on/.test(n.reason)
+      && !/keep the action where the Classic button is/.test(n.reason)));
+  // A quoted string that only looks like a process name (a resource caption, a platform module) is not a started process.
+  const noisy = CONTRACT.replace('ProcessModuleUtilities.executeProcess({',
+    'this.get("Resources.Strings.MbStartApprovalProcessCaption"); this.set("MbModule", "ProcessModuleUtilities");\n\t\t\t\tProcessModuleUtilities.executeProcess({');
+  const noisyRun = runMigration({ ...manifest(), schemas: [{ pkg: "MbMigrationBench", body: noisy }] });
+  check("started processes: a resource caption or a platform module named like a process is not a started process",
+    () => noisy !== CONTRACT && noisyRun.launchedProcesses.processes.map((p) => p.name).join() === PROCESS && noisyRun.launchedProcessesBlockers.length === 1,
+    () => noisyRun.launchedProcesses.processes.map((p) => p.name));
+
+  const sigOf = (processes) => runMigration({ ...manifest(followed()), signals: { processes } }).plan.split("\n").find((l) => /Connected processes/.test(l)) || "";
+  check("started processes: with the section process menu not resolved, the line says so and still names what the code starts",
+    () => /⚠ section process menu not resolved — run the on-stand check; the code starts `MbApproveContractProcess`/.test(sigOf({ resolved: false })), () => sigOf({ resolved: false }));
+  check("started processes: with processes in the section menu, the line keeps the menu's list and adds what the code starts",
+    () => /present — Approve deal → build it; the code starts `MbApproveContractProcess`/.test(sigOf({ resolved: true, present: true, names: ["Approve deal"] })),
+    () => sigOf({ resolved: true, present: true, names: ["Approve deal"] }));
+  // A process the section starts is followed like one the page starts.
+  const SECTION_START = 'define("MbContractSection",[],function(){return{entitySchemaName:"MbContract",methods:{mbRun:function(){ProcessModuleUtilities.executeProcess({sysProcessName:"MbSectionProcess"});}},diff:[]};});';
+  const sectionRun = runMigration({ ...manifest(followed()), section: [{ pkg: "MbMigrationBench", body: SECTION_START }] });
+  check("started processes: a process the section starts is listed from the section and blocks until followed",
+    () => sectionRun.launchedProcesses.processes.some((p) => p.name === "MbSectionProcess" && p.from.join() === "section")
+      && sectionRun.launchedProcessesBlockers.some((i) => /MbSectionProcess, which the section starts/.test(i)),
+    () => [sectionRun.launchedProcesses.processes, sectionRun.launchedProcessesBlockers]);
 
   // A followed process: each Classic user-task page is a decision.
   const pending = runMigration(manifest(followed()));
@@ -123,12 +146,18 @@ export function runLaunchedProcessesChecks({ check, runMigration, runMigrate, re
   const taskPage = runMigration({ entity: "", seed: processSeed, schemas: [{ pkg: "MbMigrationBench", body: body(`${PAGE}.js`) }],
     processPage: { stepsResolved: true, evidence: "the user named the approval process", steps: [{ process: PROCESS, element: TASK.element, consent: "pending" }] } });
   check("started processes: the benchmark user-task page is recognised as a process page and keeps its ContractId parameter",
-    () => taskPage.processPage?.template === "BasePageProcessTemplate" && taskPage.processPage.pageName === PAGE && /ContractId|MbComment/.test(taskPage.plan),
+    () => taskPage.processPage?.template === "BasePageProcessTemplate" && taskPage.processPage.pageName === PAGE && /ContractId/.test(taskPage.plan),
     () => taskPage.processPage);
 
-  // `--plan` from the CLI says the started process is not followed (the followed case is the in-process `pending`).
-  const cliOpen = runMigrate(["-", "--plan"], { input: JSON.stringify(manifest()), cwd: dir });
-  check("started processes (CLI): --plan exits 2 and stderr names the started process",
-    () => cliOpen.status === 2 && /PLAN INCOMPLETE — started processes not followed: .*MbApproveContractProcess/.test(cliOpen.stderr || ""),
-    () => [cliOpen.status, (cliOpen.stderr || "").slice(0, 300)]);
+  // `--plan` from the CLI on a page whose only open item is the started process: exit 2 until it is followed, 0 after.
+  const STARTER = 'define("UsrStartPage",[],function(){return{entitySchemaName:"UsrStart",methods:{usrStart:function(){ProcessModuleUtilities.executeProcess({sysProcessName:"MbApproveContractProcess"});}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});';
+  const settled = (lp) => JSON.stringify({ entity: "UsrStart", seed: CLEAN_SEED, schemas: [{ pkg: "UsrStart", body: STARTER }], targetPackage: "UsrSU",
+    entityColumns: { Name: { type: "Text", title: "Name" } },
+    planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, projectConventions: FULL_CONVENTIONS, ...(lp ? { launchedProcesses: lp } : {}) });
+  const cliOpen = runMigrate(["-", "--plan"], { input: settled(), cwd: dir });
+  const cliFollowed = runMigrate(["-", "--plan"], { input: settled(followed()), cwd: dir });
+  check("started processes (CLI): --plan exits 2 when the started process is the only open item, and 0 once it is followed",
+    () => cliOpen.status === 2 && /PLAN INCOMPLETE — started processes not followed: .*MbApproveContractProcess/.test(cliOpen.stderr || "")
+      && cliFollowed.status === 0 && !/PLAN INCOMPLETE/.test(cliFollowed.stdout || ""),
+    () => ({ open: [cliOpen.status, (cliOpen.stderr || "").slice(0, 300)], followed: [cliFollowed.status, (cliFollowed.stderr || "").slice(0, 400)] }));
 }

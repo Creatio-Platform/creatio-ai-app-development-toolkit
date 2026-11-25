@@ -75,10 +75,15 @@ function issuesOf(launched, unnamedFrom, recorded, extra) {
   return [...missing, ...unnamed, ...recorded.processes.flatMap(followIssues)];
 }
 
+// A name the parser quoted that can be a process schema name: one identifier, not a dotted path
+// (`Resources.Strings.*`, `Terrasoft.*`) and not one of the platform's process modules.
+const PROCESS_MODULES = new Set(["ProcessModuleUtilities", "ProcessSchemaManager", "ProcessEntryPointUtilities", "ProcessModuleV2"]);
+const isProcessName = (n) => typeof n === "string" && /^[A-Za-z]\w*$/.test(n) && !PROCESS_MODULES.has(n);
+
 // The started processes, their user-task pages and the plan's open questions — or null when the code starts none.
 // `sources`: `[{ from, launch, names }]`, one per page the run covers (the page, its section, its folded sub-pages).
 export function launchedProcessesInfo({ sources, manifest }) {
-  const facts = sources.map((s) => ({ from: s.from, launch: !!s.launch, names: s.names || [] }));
+  const facts = sources.map((s) => ({ from: s.from, launch: !!s.launch, names: (s.names || []).filter(isProcessName) }));
   const launched = launchedOf(facts);
   const unnamedFrom = facts.filter((s) => s.launch && !s.names.length).map((s) => s.from);
   if (!launched.size && !unnamedFrom.length) return null;
@@ -118,7 +123,8 @@ export function launchedProcessesPlanLines(info, esc) {
   if (!info) return [];
   const started = info.processes.filter((p) => p.from.length)
     .map((p) => `${code(esc(p.name))} (from the ${p.from.map(esc).join(" and ")})`).join(", ");
-  const runtime = info.unnamedFrom.length ? `The ${info.unnamedFrom.map(esc).join(" and ")} also starts a process it names at runtime${info.evidence ? " (" + esc(info.evidence) + ")" : ""}. ` : "";
+  const evidenceNote = info.evidence ? ` (${esc(info.evidence)})` : "";
+  const runtime = info.unnamedFrom.length ? `The ${info.unnamedFrom.map(esc).join(" and ")} also starts a process it names at runtime${evidenceNote}. ` : "";
   return ["### Processes this page starts",
     `The page code starts ${started || "a business process"}. ${runtime}A process's user-task pages are not in this page's chain: each Classic one is a decision — migrate it with the process-page profile, or keep it Classic.`,
     "",

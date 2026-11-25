@@ -10756,7 +10756,7 @@ runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups
 runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX, ENGINE_DIR });
 runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta });
 runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
-runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FIX });
+runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
