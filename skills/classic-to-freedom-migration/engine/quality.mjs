@@ -427,7 +427,9 @@ function groupBy(items, keyOf) {
 
 // Every built page of the run linted once, then the check that needs more than one page: a helper copied from another
 // page. `pages` is `{ pageKey: bundle entry }`.
-export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null) {
+// `wholeRun` says `pages` are ALL the run's pages (the verify payload): only then is an export nobody uses known to be
+// unused — one page alone cannot see what the others import.
+export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, wholeRun = true) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   const helperOwners = new Map();
@@ -435,7 +437,7 @@ export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, c
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
   for (const [key, page] of byPage) if (page) reportCopiesFromOtherPages(key, page, helperOwners);
-  lintRunModules(byPage, pages || {}, modules);
+  lintRunModules(byPage, pages || {}, modules, wholeRun);
   return byPage;
 }
 
@@ -482,7 +484,7 @@ function emptyPageLint() {
   return { findings: [], helpers: [], unreadable: [], handlerShapes: [] };
 }
 
-function lintRunModules(byPage, pages, modules) {
+function lintRunModules(byPage, pages, modules, wholeRun) {
   const keys = Object.keys(pages);
   const lintOf = (key) => {
     if (!byPage.get(key)) byPage.set(key, emptyPageLint());
@@ -498,9 +500,11 @@ function lintRunModules(byPage, pages, modules) {
   reportModuleCopies(read, byPage, ownerOf, lintOf);
   reportSharedValues(read, ownerOf, lintOf);
   const importers = importerSources(pages, read);
-  reportUnusedExports(read, importers, ownerOf, lintOf);
+  if (wholeRun) reportUnusedExports(read, importers, ownerOf, lintOf);
   // A page's own module is `<PageSchema>Module`; every other module is one the pages share.
-  const ownModules = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
+  // By the pages it knows, and by name (`…PageModule`) for pages the input does not carry.
+  const ownModules = new Set([...keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"),
+    ...read.map((m) => m.name).filter((n) => /Page\w*Module$/.test(n))]);
   reportInlinedWrappers(read, importers, ownerOf, lintOf, ownModules);
 }
 
