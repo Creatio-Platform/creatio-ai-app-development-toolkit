@@ -281,6 +281,11 @@ export function renderReadPlan(plan, dir) {
     + " bundle slot. That reports the page ❌ MISSING and opens a repair. Leaving them unwritten instead says \"I"
     + " could not ask\", which is a re-read and never closes; writing `false` into only one of the two is read as a"
     + " copy error, because one `get-page` call cannot answer both ways.");
+  L.push("", `**Then the client modules the built pages import.** For each project module in a page bundle's \`deps\` (and in`
+    + " those modules' own `define` lists; not `@creatio-devkit/...` and not the project's declared helper or constants"
+    + ` modules), \`get-page\` the module and copy its \`.clio-pages/<Module>/body.js\` whole to`
+    + ` \`${path.posix.join(READS_DIR, "modules")}/<Module>.js\`. The page's code is held to the same rules there, and the`
+    + " `Page code` and `Code quality` rows name every module whose source is missing.");
 
   // Named, not dropped: these keys gate rows like any other, and a reader who sees only the read list would take
   // the rows that depend on them for rows nobody owes anything on.

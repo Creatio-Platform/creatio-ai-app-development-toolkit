@@ -37,6 +37,12 @@ goes into. Run those reads; nothing else.
   one is reported as unread. **A page the stand DENIES is different from one it could not read** —
   write the literal `false` into that page's slot and the gate reports it ❌ MISSING (a repair),
   rather than ⚠ unread (a re-read).
+- **Then the client modules the pages import.** Each copied bundle's `deps` names the modules its page
+  imports. For every project module there (not `@creatio-devkit/...`, not the project's declared
+  helper or constants modules), and every project module those modules list in their own `define`,
+  run `get-page` on the module and copy its `.clio-pages/<Module>/body.js` whole to
+  `reads/modules/<Module>.js`. The page's code is measured there too; a module left out is named by
+  the `Page code` and `Code quality` rows as unread.
 - **Copy, do not print.** Use `--output-file` where the command supports it, so the body goes
   from the stand straight to its slot; otherwise put it there with `cp` or a shell redirect
   (`> <slot>`). A response an MCP tool returns is already in your conversation once it arrives:

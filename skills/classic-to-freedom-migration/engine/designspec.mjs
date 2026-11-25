@@ -3147,8 +3147,18 @@ function qualityGateRows(pageKey) {
 // The label names the threshold KEY, never its value, so a decision recorded on the row survives a changed limit.
 function pageCodeRows(opts) {
   return [{ deliverableId: "page-code", label: "Page code — no function longer than `maxFunctionLines`, no helper declared twice on the page, no request declared but never sent",
-    vk: { type: "pagecode", thresholds: opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS } }];
+    vk: { type: "pagecode", thresholds: opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS, externalModules: externalModulesOf(opts) } }];
 }
+// The modules the code rows do not follow into: the project's declared helper and constants modules, existing code
+// the run did not write. Every other module a built page imports is read back and held to the same rules.
+function externalModulesOf(opts) {
+  const c = opts.projectConventions;
+  return [...new Set([...(c?.helperModules || []), ...(c?.constantsModules || [])].filter((m) => typeof m === "string"))];
+}
+// What a page's imported modules owe the code rows: a module the read-back did not file cannot be measured.
+const MODULE_READ_HINT = "`get-page` each one and copy its `.clio-pages/<Module>/body.js` to `reads/modules/<Module>.js`, then re-run"
+  + " — a module that is existing project code, not written by this run, goes in `projectConventions.helperModules` instead";
+const unreadModulesText = (names) => `imports ${names.map((n) => "`" + esc(n) + "`").join(", ")}, whose source the read-back did not file — ${MODULE_READ_HINT}`;
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
 // permanently-unverified run. Own fn so `buildPageRows` gains no branch of its own (Sonar CC 15).
@@ -5082,14 +5092,24 @@ export function resolvePageCodeVk(vk, ctx) {
     return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
   }
   // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
-  const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey),
-    vk.thresholds || DEFAULT_QUALITY_THRESHOLDS, sections);
+  const thresholds = vk.thresholds || DEFAULT_QUALITY_THRESHOLDS;
+  const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey), thresholds, sections);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
+  // The functions of the modules the page imports are the page's code too, held to the same length limit.
+  const external = vk.externalModules || [];
+  const run = runQualityOf(ctx.root, thresholds, [], qualityRunKey(thresholds, [], external), external).get(ctx.pageKey);
+  if (run?.unreadModules?.length) return ["⚠ verify", unreadModulesText(run.unreadModules), "unverified"];
+  a.findings.push(...moduleLengthFindings(run));
   if (!findingCount(a)) {
     const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
     return ["✅ Done", `${a.handlers.length} handler(s): none over ${a.maxFunctionLines} lines, no helper declared twice, ${sends}`, "ok"];
   }
   return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception (a request sent only from a module outside the built pages is one)`, "unverified"];
+}
+// The over-limit functions of a page's imported modules, as `Page code` findings named `Module › function`.
+function moduleLengthFindings(run) {
+  return (run?.findings || []).filter((f) => f.rule === QUALITY_RULES.functionTooLong && f.section.startsWith("module "))
+    .map((f) => ({ rule: f.rule, where: `${f.section.slice("module ".length)} › ${f.name || "line " + f.line}`, lines: f.value, limit: f.limit }));
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
@@ -5261,13 +5281,14 @@ function codeQualityGroups(planGroups, opts) {
 function codeQualityRows(opts) {
   const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
   const constantsGuids = opts.constantsGuids || [];
-  const runKey = qualityRunKey(thresholds, constantsGuids);
+  const externalModules = externalModulesOf(opts);
+  const runKey = qualityRunKey(thresholds, constantsGuids, externalModules);
   // A rule whose check needs something the run did not record says so on its own row.
   const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
   return QUALITY_ROW_RULES.map(({ rule, label }) => ({
     deliverableId: `quality:${rule}`,
     label: `[code-quality] ${rule} — ${label}`,
-    vk: { type: "quality", rule, thresholds, constantsGuids, runKey, note: notes[rule] || "" },
+    vk: { type: "quality", rule, thresholds, constantsGuids, externalModules, runKey, note: notes[rule] || "" },
   }));
 }
 const QUALITY_LISTED = 5;
@@ -5277,9 +5298,10 @@ const QUALITY_LISTED = 5;
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
-  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey).get(ctx.pageKey);
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey, vk.externalModules).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
+  if (page.unreadModules?.length) return ["⚠ verify", unreadModulesText(page.unreadModules), "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
   const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
     + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");

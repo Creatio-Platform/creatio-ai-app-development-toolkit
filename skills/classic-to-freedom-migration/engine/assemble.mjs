@@ -18,6 +18,11 @@ import { READS_DIR, READS_INDEX_FILE } from "./reads.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
+// The client modules the built pages import: `get-page` of a module writes its source to
+// `.clio-pages/<Module>/body.js`, copied here whole as `<Module>.js`. The code rows ask for each module a page imports
+// and name the ones not filed, so the folder needs no index of its own.
+export const MODULES_DIR = "modules";
+const MODULE_FILE = /^([\w.-]+)\.js$/;
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
 // together or not at all.
 export const VERIFY_FILE = "verify.md";
@@ -354,6 +359,21 @@ function mergeSideFiles(dir, built, acc, problems) {
   }
   const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
   for (const key of ["processSteps", "processStandCheck"]) if (proc?.[key] != null) built[key] = proc[key];
+  const modules = readModuleSources(dir);
+  if (modules) built.modules = modules;
+}
+
+// `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. A file whose name is not a
+// module name is not read.
+function readModuleSources(dir) {
+  const root = path.join(dir, READS_DIR, MODULES_DIR);
+  if (!fs.existsSync(root)) return null;
+  const modules = {};
+  for (const file of fs.readdirSync(root).sort((a, b) => a.localeCompare(b))) {
+    const name = MODULE_FILE.exec(file)?.[1];
+    if (name && !UNSAFE_KEYS.has(name)) modules[name] = fs.readFileSync(path.join(root, file), "utf8");
+  }
+  return modules;
 }
 
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload
