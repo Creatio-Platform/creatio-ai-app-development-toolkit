@@ -81,6 +81,7 @@ import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VER
 import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 import { processTemplateOf, processTemplateOfManifest, recordProcessTemplate, processPageInfo, processButtonMap } from "./process-page.mjs";
+import { launchedProcessesInfo } from "./launched-processes.mjs";
 import { qualityThresholdsOf } from "./quality.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -3247,6 +3248,13 @@ function processPageOfRun(manifest, opts, { seedTemplate, schemas, eff }) {
 }
 
 const processPageBlockersOf = (processPage) => processPage?.issues || [];
+// The processes the page and its section start (launched-processes.mjs): the root run follows them; a nested fold's
+// own launches stay its `process-launch` decision.
+function launchedProcessesOfRun(manifest, opts, eff, section) {
+  if (isNestedFold(opts)) return null;
+  return launchedProcessesInfo({ page: { launch: !!eff.processLaunch, names: eff.processNames || [] },
+    section: { launch: !!section?.processLaunch, names: section?.processNames || [] }, manifest });
+}
 // A process page is opened by its process step: it has no section, so no add-record mini page is folded for it.
 const miniPageNameOf = (processPage, mpDecl, secMpName) => (processPage ? null : resolveMiniPageName(mpDecl, secMpName));
 
@@ -3572,6 +3580,8 @@ export function runMigration(manifest, opts = {}) {
   const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
   out.processPage = processPage;
   out.processPageBlockers = processPageBlockersOf(processPage);
+  out.launchedProcesses = launchedProcessesOfRun(manifest, opts, eff, section);
+  out.launchedProcessesBlockers = out.launchedProcesses?.issues || [];
   out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
     ...folded.flatMap((f) => f.conventionsBlockers || [])])];
   // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
@@ -5286,7 +5296,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
   const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0)
-    || (result.conventionsBlockers?.length > 0) || (result.processPageBlockers?.length > 0));
+    || (result.conventionsBlockers?.length > 0) || (result.processPageBlockers?.length > 0) || (result.launchedProcessesBlockers?.length > 0));
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
@@ -5417,6 +5427,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (planMode && result.conventionsBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — project conventions not settled: " + result.conventionsBlockers.join(" | ") + "\n");
   if (planMode && result.processPageBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — process steps not recorded: " + result.processPageBlockers.join(" | ") + "\n");
+  if (planMode && result.launchedProcessesBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — started processes not followed: " + result.launchedProcessesBlockers.join(" | ") + "\n");
   // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
   // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
   // the built pages and nothing about who built them.

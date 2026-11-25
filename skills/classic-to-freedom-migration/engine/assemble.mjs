@@ -353,7 +353,7 @@ function mergeSideFiles(dir, built, acc, problems) {
     if (j != null) built[key] = j;
   }
   const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
-  for (const key of ["processSteps", "processStandCheck"]) if (proc?.[key] != null) built[key] = proc[key];
+  for (const key of ["processSteps", "processStandCheck", "processPagesMigrated"]) if (proc?.[key] != null) built[key] = proc[key];
 }
 
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload

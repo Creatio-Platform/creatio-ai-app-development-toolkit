@@ -116,3 +116,38 @@ The `Process page` rows of `--verify` read, besides the page itself, two fields 
 **The stand check is mandatory.** Open the page from a running instance of the process step and press each
 button: a completing button must end the step, an exit must leave it waiting. Without the record the row reads
 *built, not exercised* and the run is not COMPLETE.
+
+## Processes a migrated page starts
+
+A button or request that starts a business process (`ProcessModuleUtilities.executeProcess`, `runProcess`,
+`crt.RunBusinessProcessRequest`, …) reaches the process's own user-task pages. They are not in the migrated page's
+chain, and `ProcessInModules` does not list a process the page code starts, so without this step they stay Classic
+while the plan says *Connected processes: none*. When the page or its section starts a process, the plan is
+incomplete (⛔ *started processes not followed*) until `manifest.launchedProcesses` records each one:
+
+1. For each process the banner names, read it with `describe-business-process` and take each Pre-configured page
+   step: the element name, the page it opens, and whether that page is Classic or Freedom UI.
+2. A process the code names at runtime (no literal name): ask the user which process it is and record it, or say in
+   `evidence` why none can be named.
+3. Record it:
+
+```json
+"launchedProcesses": {
+  "resolved": true,
+  "processes": [
+    { "name": "MbApproveContractProcess", "caption": "Approve contract",
+      "userTasks": [{ "element": "ApproveContractPageUserTask", "page": "MbApproveContractProcessPage",
+                      "ui": "classic", "decision": "pending" }] }
+  ]
+}
+```
+
+`userTasks: []` records a process with no user-task page. `boundary: "<why>"` in place of `userTasks` records why
+its pages are out of this migration's scope; the plan states it.
+
+The plan lists the processes under **Processes this page starts**, and the `Connected processes` line names them.
+Every Classic user-task page is a decision the user takes with the plan: `"decision": "migrate"` (a separate run of
+that page, planned with the process-page profile above) or `"keep-classic"`. Until it is recorded, its
+`[process user task]` row reads ⚠ *decide with the user*. A page to migrate keeps the row open until its own run is
+done and `<migration-folder>/process.json` records it as `"processPagesMigrated": [{ "page": "<Classic page>",
+"freedomPage": "<Freedom page>" }]`.
