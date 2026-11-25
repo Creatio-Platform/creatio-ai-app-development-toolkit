@@ -584,6 +584,70 @@ check("entity-filter: dynamic filter → incomplete + folded into ONE concrete e
 check("entity-filter: static filter marked complete + NOT in the folded line",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && /\bSt by\b/.test(n.reason)));
 
+/* ---- object-wide scope: a Classic FILTRATION is page-scoped, its Freedom entity rule is object-wide ---- */
+// Freedom page rules carry no lookup filter, so every FILTRATION becomes an entity rule that reaches every page and
+// list of the object. The plan states that on the rule and asks the user once per page before anything is built.
+{
+  const scope = efcs.needsDecision.filter((n) => n.kind === "object-wide-scope");
+  check("object-wide scope: every entity rule names the object it reaches and says it applies on all its pages",
+    () => efcs.entityBusinessRules.length === 2
+      && efcs.entityBusinessRules.every((r) => r.entity === "X" && /applies on ALL pages and lists of the object/.test(r.note)),
+    () => efcs.entityBusinessRules.map((r) => [r.entity, r.note]));
+  check("object-wide scope: ONE folded decision per page, fixed item, naming every filtered lookup",
+    () => scope.length === 1 && scope[0].item === "entity business rules"
+      && /\bLk\b/.test(scope[0].reason) && /\bSt\b/.test(scope[0].reason),
+    () => scope);
+  check("object-wide scope: the decision tells the agent to name the other pages and what a refusal means",
+    () => /list-pages/.test(scope[0]?.reason) && /ALL pages and lists of X/.test(scope[0]?.reason)
+      && /not migrated — add manually: Freedom page rules have no lookup filter/.test(scope[0]?.reason)
+      && /`wont-do`/.test(scope[0]?.reason) && /--decide D<N> --wont-do/.test(scope[0]?.reason),
+    () => scope[0]?.reason);
+  const spec = renderDesignSpec({ entity: "X", changeSet: efcs });
+  check("object-wide scope: the plan's rule row carries the label and ⚠ Confirm carries the folded row",
+    () => /entity business rule — applies on ALL pages of `X`/.test(spec)
+      && /- \*\*\[object-wide-scope\]\*\* entity business rules — /.test(spec),
+    () => spec.split("\n").filter((l) => /entity business rule|object-wide/.test(l)).join("\n"));
+  const groups = checklistGroups({ entity: "X", changeSet: efcs }, {})
+    .filter((g) => g.baseTitle === "⚠ Confirm worklist").flatMap((g) => g.rows);
+  check("object-wide scope: the decision reaches the checklist, not only plan.md",
+    () => groups.filter((r) => r.confirm?.kind === "object-wide-scope").length === 1,
+    () => groups.map((r) => r.label));
+  // The decline path names a deliverable id; it must be a row of this plan that holds the entity rules and nothing
+  // else, so closing it `wont-do` leaves the page rules to be built.
+  const named = /`<pageKey>#([\w-]+)`/.exec(scope[0]?.reason || "")?.[1];
+  const mixed = { ...efcs, pageBusinessRules: [{ action: "show", element: "Shown", inverseAction: "hide" }] };
+  const rows = checklistGroups({ entity: "X", changeSet: mixed }, {}).flatMap((g) => g.rows);
+  const declined = rows.find((r) => r.deliverableId === named);
+  const pageRules = rows.find((r) => r.deliverableId === "business-rules");
+  check("object-wide scope: the id the decline path names is a checklist row holding exactly the entity rules",
+    () => named === "entity-rules" && declined?.vk?.type === "rule"
+      && [...declined.vk.names].sort().join() === "Lk,St"
+      && pageRules?.vk?.names.join() === "Shown" && !pageRules.vk.names.some((n) => declined.vk.names.includes(n)),
+    () => ({ named, declined, pageRules }));
+  const closed = checklistGroups({ entity: "X", changeSet: mixed },
+    { deliverableStatus: { "main#entity-rules": { status: "wont-do", decision: "D1" } } }).flatMap((g) => g.rows);
+  check("object-wide scope: closing `main#entity-rules` wont-do closes only that row; the page rules stay open",
+    () => closed.find((r) => r.deliverableId === "entity-rules")?.status?.kind === "wont-do"
+      && closed.find((r) => r.deliverableId === "business-rules")?.status?.kind !== "wont-do",
+    () => closed.filter((r) => /rules/.test(r.deliverableId || "")).map((r) => [r.deliverableId, r.status]));
+}
+// With no entity on the page, the row and the decision still read as instructions the agent can follow.
+{
+  const noEnt = mapToFreedom(mergeHierarchy([L("Client", {
+    diff: [di({ name: "Lk", parentName: "Header", propertyName: "items", bindTo: "Lk" })],
+    businessRules: { Lk: { r: { ruleType: 1, baseAttributePatch: "OtherCol" } } } })]));
+  const d = (noEnt.needsDecision || []).find((n) => n.kind === "object-wide-scope");
+  const spec = renderDesignSpec({ entity: null, changeSet: noEnt });
+  check("object-wide scope (no entity): the decision asks for the entity first instead of `list-pages` by a placeholder, and the rule row names the object generically",
+    () => noEnt.entity === "?" && /read this page's entity on-stand/.test(d?.reason) && !/by entity (the object|\?)/.test(d?.reason)
+      && !/ALL pages and lists of \?/.test(d?.reason) && !/ALL pages of `\?`/.test(spec)
+      && /entity business rule — applies on ALL pages of the object/.test(spec),
+    () => ({ entity: noEnt.entity, reason: d?.reason }));
+}
+check("object-wide scope (negative): a page with no FILTRATION raises no object-wide decision",
+  () => !dcs.needsDecision.some((n) => n.kind === "object-wide-scope") && (dcs.entityBusinessRules || []).length === 0,
+  () => dcs.needsDecision.map((n) => n.kind));
+
 /* ---- image component + tooltip carry (Product gaps) ---- */
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Photo", parentName: "Header", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
@@ -13529,10 +13593,15 @@ const n2TreeManifest = (titleA, titleB) => ({
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
-    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => r.label.startsWith("Business rules ×"));
-    check("T4 (R3): the Business rules checklist row carries a `rule` vk (never a vk-less skip) with the expected identities",
-      ruleRow?.vk?.type === "rule" && ruleRow.vk.names.includes("Contact") && ruleRow.vk.names.includes("Owner"),
-      () => ruleRow);
+    const rrRows = checklistGroups(rr, {}).flatMap((g) => g.rows);
+    const ruleRow = rrRows.find((r) => r.label.startsWith("Business rules ×"));
+    const entityRow = rrRows.find((r) => r.label.startsWith("Entity business rules ×"));
+    check("T4 (R3): the page and entity business-rule rows each carry a `rule` vk (never a vk-less skip) with their own identities",
+      ruleRow?.vk?.type === "rule" && ruleRow.deliverableId === "business-rules"
+        && ruleRow.vk.names.join() === "Contact" && ruleRow.vk.n === 1
+        && entityRow?.vk?.type === "rule" && entityRow.deliverableId === "entity-rules"
+        && entityRow.vk.names.join() === "Owner" && entityRow.vk.n === 1,
+      () => ({ ruleRow, entityRow }));
   }
   // Applicant-case contract fixture — a built payload mirroring the real Applicant page: 11 business rules read off
   // the slot and the native crt.CommunicationOptions. The whole point of N1: NONE of this reads ❌ MISSING now.

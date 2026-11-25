@@ -340,14 +340,16 @@ function rowCounts(rows) {
 }
 
 // --- sections -------------------------------------------------------------------------------------------------
-function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }) {
-  const withRef = boundaries.filter((b) => b.refs.resolved.length).length;
-  const boundNote = boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : "";
+function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined = [], rc, repair, handLeft }) {
+  // Declined rows are closed by a recorded decision, so they count here exactly as section 2 lists them.
+  const without = boundaries.filter((b) => !b.refs.resolved.length).length;
+  const closed = boundaries.length + declined.length;
+  const boundNote = closed ? ` — with a recorded decision ${closed - without} · without ${without}` : "";
   const L = ["| | |", "| --- | --- |",
     `| Tasks | ${tc.total} — ${statusParts(tc).join(" · ")} |`,
     `| Open questions (plan items recorded NOT BUILT, no decision yet) | ${openNotBuilt.length} |`,
     ...(decidedNotBuilt.length ? [`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`] : []),
-    `| Boundaries the agent closed | ${boundaries.length}${boundNote} |`,
+    `| Boundaries the agent closed | ${closed}${boundNote} |`,
     `| Plan items confirmed (on the built page, or by review) | ${rc.machineOk + rc.judgeOk}/${rc.machine + rc.judge} |`,
     `| Plan items to confirm manually | ${handLeft} |`];
   if (repair) {
@@ -400,13 +402,29 @@ function decisionsSection(open, pageName, repairBuilt) {
   return L;
 }
 
-function boundariesSection(boundaries, decidedNotBuilt, pageName) {
+// `wont-do` rows whose reason cites a decision `decisions.md` holds: a person declined the item, and section 2 lists it
+// beside the other recorded decisions so the reader sees what was left out and why (for example a lookup filter
+// the user did not want object-wide, which then has to be added by hand).
+function declinedRows(tasks, decisions) {
+  const out = [];
+  for (const t of tasks || []) {
+    if (t.unread) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (r.outcomeKind !== O_WONT_DO) return;
+      const refs = decisionRefs(r.outcomeReason, decisions);
+      if (refs.resolved.length) out.push({ task: t, row: r, n: i + 1, refs });
+    });
+  }
+  return out;
+}
+
+function boundariesSection(boundaries, decidedNotBuilt, pageName, declined = []) {
   // A boundary row that is the decision behind a not-built item is rendered ONCE, as that item's entry.
   const deciding = new Set(decidedNotBuilt.map((it) => it.decidedBy));
-  const withRef = boundaries.filter((b) => b.refs.resolved.length && !deciding.has(b));
+  const withRef = [...boundaries.filter((b) => b.refs.resolved.length && !deciding.has(b)), ...declined];
   const without = boundaries.filter((b) => !b.refs.resolved.length);
   const L = [`## 2. Boundaries the agent closed (${withRef.length + without.length + decidedNotBuilt.length})`, ""];
-  if (!boundaries.length && !decidedNotBuilt.length) { L.push("None — every `not-applicable` in the folder is a boundary the plan itself approved."); return L; }
+  if (!boundaries.length && !decidedNotBuilt.length && !declined.length) { L.push("None — every `not-applicable` in the folder is a boundary the plan itself approved."); return L; }
   if (without.length) {
     L.push(`**Without a recorded decision (${without.length}) — confirm each, or send it back as a row to build.**`
       + " Nothing was built for these and nobody but the agent said there was nothing to build.", "",
@@ -732,6 +750,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
   let sec = 3;
+  const declined = declinedRows(tasks, decisions);
   const md = [
     `# Migration result${entity}`, "",
     `**Verdict:** ${verdict}`, "",
@@ -739,9 +758,9 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
       + ` \`migrate.mjs --verify ${source || "--from <migration-folder>"} --tasks <dir>\` from the task files AND the built pages — present it`
       + ` verbatim; it supersedes \`build-tasks/index.md\`.`,
     "", "## Summary", "",
-    ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),
+    ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
-    "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
+    "", ...boundariesSection(boundaries, decidedNotBuilt, pageName, declined),
     ...(carryOver.length ? ["", ...carryOver] : []),
     ...(withoutYou.length ? ["", ...withoutYou] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),

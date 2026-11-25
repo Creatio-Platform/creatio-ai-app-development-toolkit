@@ -5889,6 +5889,29 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
   }
+  // A filter the user did not want object-wide is closed `wont-do` under its decision: section 2 lists it with
+  // the decision, so the reader learns it was not migrated and has to be added by hand. A `wont-do` citing no
+  // recorded decision is not listed there.
+  {
+    const baseW = tmp("result-report-declined"); fs.mkdirSync(baseW, { recursive: true });
+    fs.writeFileSync(path.join(baseW, "decisions.md"), "# Decisions\n\n## D4 — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter\n");
+    const dW = path.join(baseW, "build-tasks");
+    const wnt = (id, reason) => ({ id, file: `${id}.md`, group: "Logic", pageKey: "main", status: "done", kind: "build", notes: "",
+      rows: [{ label: `Filter · ${id}`, outcomeKind: "wont-do", outcome: `wont-do — ${reason}`, outcomeReason: reason, na: null }] });
+    const repW = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [wnt("Lk", "declined object-wide scope (D4)"), wnt("St", "not wanted")] }, dir: dW });
+    const s2 = repW.markdown.slice(repW.markdown.indexOf("## 2."), repW.markdown.indexOf("## 3.") > 0 ? repW.markdown.indexOf("## 3.") : undefined);
+    check("report section 2 lists a `wont-do` row that cites a recorded decision, with the decision's title — a declined filter is visible as not migrated",
+      () => /Closed by a recorded decision/.test(s2) && /Filter · Lk/.test(s2)
+        && /\*\*D4\*\* — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter/.test(s2),
+      () => s2);
+    check("report section 2 does not list a `wont-do` row that cites no recorded decision",
+      () => !/Filter · St/.test(s2), () => s2);
+    const summaryN = /\| Boundaries the agent closed \| (\d+)/.exec(repW.markdown)?.[1];
+    const headingN = /## 2\. Boundaries the agent closed \((\d+)\)/.exec(repW.markdown)?.[1];
+    check("report summary counts the declined row as a boundary closed by a recorded decision, the same number section 2's heading gives",
+      () => summaryN === "1" && headingN === "1" && /Boundaries the agent closed \| 1 — with a recorded decision 1 · without 0/.test(repW.markdown),
+      () => ({ summaryN, headingN }));
+  }
   // decisions.md written as a TABLE (`| D1 | **title** | … |`), per references/migration-documentation.md — the
   // second cell is the title (bold lead lifted). Structured shapes (heading / table) take precedence, so a plain
   // `D<n> —` PROSE line in the same file does NOT register a decision.
@@ -9270,6 +9293,35 @@ check("identity digest guard: rendering the identity condition does NOT move any
     return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
   },
   () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+
+// The RelatedPage add-on is per object, so every wiring row says so and that an existing entry moves only on the
+// user's answer — the builder reads the row, not the reference, at the moment it writes the add-on.
+check("child page wiring: every binding row states that the add-on is object-wide and moves an existing entry only on the user's answer",
+  () => {
+    const rows = SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).filter((r) => !r.na);
+    return rows.length > 0 && rows.every((r) => /The add-on is object-wide/.test(r.label) && /only on the user's answer/.test(r.label));
+  },
+  () => SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).map((r) => r.label));
+// The wiring step reads the edit cards through a named call and the fields it acts on, so a builder can run it as
+// written instead of inventing a lookup into a system table.
+check("child page wiring: build-page.md names the call, argument and fields of the SysModuleEdit read",
+  () => {
+    const doc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/references/build-page.md"), "utf8");
+    const step = doc.slice(doc.indexOf("read the entity's `SysModuleEdit` cards"), doc.indexOf("one line\n     per Classic entry"));
+    return step.length > 0 && /`list-entity-client-schemas` with `entity-name`/.test(step)
+      && /`editPages\[\]`/.test(step) && /`cardSchema`/.test(step) && /`kind: classic`/.test(step)
+      && /never write `SysModuleEdit`/.test(step);
+  });
+// The field the wiring step reads must be the one the skill's canonical description of the tool response names, so
+// a rename in one place fails here instead of leaving the builder reading an undefined property.
+check("child page wiring: the `editPages[]` page field the wiring step reads is the one SKILL.md's Arg-facts names",
+  () => {
+    const skill = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+    const argFacts = skill.split("\n").find((l) => l.startsWith("> Arg-facts:") && l.includes("list-entity-client-schemas")) || "";
+    return /`editPages` \(each with the page it opens in `cardSchema`/.test(argFacts);
+  });
 
 // Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
 // add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the

@@ -561,7 +561,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- rules ---- (pass ALL known element names so a rule targeting a tab/group/container — not just a field —
   // is recognised as a valid target, not mis-flagged as "no field for it")
-  const _r = mapRules(payloadRules, payloadFields, new Set((eff.items || []).map(i => i.name)));
+  const _r = mapRules(payloadRules, payloadFields, new Set((eff.items || []).map(i => i.name)), eff.entity);
   const { pageBusinessRules, entityBusinessRules } = _r;
   _r.needsDecision.forEach(d => needsDecision.push(d));
 
@@ -2502,7 +2502,12 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
 const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 // The `lookup-value` row's `item`: fixed, so the evidence id derived from it survives a rule being added.
 const LOOKUP_VALUE_ITEM = "business-rule conditions";
-function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
+// The `object-wide-scope` row's `item`: fixed for the same reason.
+const OBJECT_WIDE_SCOPE_ITEM = "entity business rules";
+// The checklist deliverable that holds a page's entity rules, apart from its page rules, so declining the object-wide
+// scope closes exactly the entity rules.
+export const ENTITY_RULES_DELIVERABLE = "entity-rules";
+function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, entityName) {
   if (r.ruleType === "FILTRATION") {
     const filter = r.filterColumn
       ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
@@ -2510,8 +2515,10 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
     // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
     // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
     const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
-    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-      conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+    // A Classic FILTRATION belongs to one page; Freedom has a lookup filter only in entity rules, so the rule this
+    // becomes applies on every page and list of the object. `entity` names that object for the plan's rule row.
+    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete, entity: entityName || null,
+      conditions: r.conditions, note: "entity-level — applies on ALL pages and lists of the object; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
       provenance: r.provenance });
     // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
     // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
@@ -2530,9 +2537,11 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
 }
 
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
-function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
+function mapRules(payloadRules, payloadFields, knownElements = new Set(), entity = null) {
+  // The merge marks an unread entitySchemaName as "?": that is no name to list pages by or to print as one.
+  const entityName = entity && entity !== "?" ? entity : null;
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
-  for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision);
+  for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, entityName);
   // C4: flag a rule ONLY when its target resolves to NOTHING on the page — neither a mapped field NOR any known
   // element (tab / group / container). Business rules legitimately target more than fields: hiding a TAB or GROUP
   // hides all its fields, so a rule targeting `…TabLabel` / `…Group…` is valid, not a dangling reference. Those
@@ -2550,7 +2559,27 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
   foldLookupValueRules();
+  foldObjectWideScope();
   return { pageBusinessRules, entityBusinessRules, needsDecision };
+
+  // ONE row per page asks the user to accept the object-wide reach of every entity rule this page produces. `item`
+  // is fixed (it is the evidence id); the targets ride in `reason`.
+  function foldObjectWideScope() {
+    const targets = [...new Set(entityBusinessRules.map((r) => r.targetAttribute).filter(Boolean))];
+    if (!targets.length) return;
+    const entity = entityName || "the object";
+    const listPages = entityName ? `run \`list-pages\` by entity ${entityName}`
+      : "read this page's entity on-stand (its `entitySchemaName`), run `list-pages` by it";
+    needsDecision.push({ kind: "object-wide-scope", item: OBJECT_WIDE_SCOPE_ITEM,
+      reason: `the Classic page filters ${targets.join(", ")} for THIS page only, but Freedom page rules have no lookup `
+        + `filter, so each becomes an entity business rule that applies on ALL pages and lists of ${entity}. Before `
+        + `building, ${listPages} and name its other Freedom pages when you ask the user. `
+        + "Accepted: build the entity rules. Declined: build none of them; record the answer as its own D<N> in "
+        + "`decisions.md` (not migrated — add manually: Freedom page rules have no lookup filter) and close the "
+        + `\`Entity business rules × N\` row \`wont-do\` under it: \`manifest.deliverableStatus\` key `
+        + `\`<pageKey>#${ENTITY_RULES_DELIVERABLE}\` at plan approval, \`--decide D<N> --wont-do --row <task>:<n>\` on `
+        + "that row during the build. The page's own `Business rules × N` row is not part of the answer and is still built" });
+  }
 
   // A condition comparing against a lookup-record GUID reads as an opaque id, so the display name is resolved
   // on-stand before the rule is rebuilt. ONE row per page, and the targets ride in `reason`: `item` is the
