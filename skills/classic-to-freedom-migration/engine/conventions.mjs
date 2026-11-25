@@ -345,7 +345,8 @@ export function bundleArgs(entry) {
   if (v == null) return null;
   if (Array.isArray(v)) return v.map((a) => (IDENT_RE.test(String(a).trim()) ? String(a).trim() : null));
   const text = String(v).trim();
-  const fn = parseJsExpression(`function ${text.startsWith("(") ? text : `(${text})`} {}`);
+  const params = text.startsWith("(") ? text : "(" + text + ")";
+  const fn = parseJsExpression(`function ${params} {}`);
   return fn?.type === "FunctionExpression" ? fn.params.map(paramName) : null;
 }
 // A dependency a `modules/<schema>.js` file can exist for: a schema name. An npm-scoped package

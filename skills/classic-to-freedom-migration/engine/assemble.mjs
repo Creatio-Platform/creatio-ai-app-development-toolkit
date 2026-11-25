@@ -39,7 +39,7 @@ export const PROCESS_FILE = "process.json";
 // copied whole to `modules/<schema>.js`. Optional and not a read of the plan, because the modules are the build's
 // choice: `--verify` reads one only to follow a request a page handler hands to it (`built.modules`).
 export const MODULES_DIR = "modules";
-const MODULE_FILE = new RegExp(`^(${MODULE_SCHEMA_NAME.source.slice(1, -1)})\\.js$`);
+const MODULE_FILE = new RegExp(String.raw`^(${MODULE_SCHEMA_NAME.source.slice(1, -1)})\.js$`);
 // The provenance field's shape (defined once, in conventions.mjs): the drop-sweep here applies the same test the
 // payload guard will. migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export { GUID_RE };
@@ -460,8 +460,11 @@ function unreadModuleNotes(pages, modules) {
 // The notes as lines: stderr and the top of the verify artifact both carry them.
 export function moduleNoteLines(notes) {
   if (!notes?.length) return [];
-  const list = [...new Set(notes.map((n) => n.module))].map((m) => `\`${MODULES_DIR}/${m}.js\``).join(", ");
-  return [`> ⚠ **Client module sources not copied:** ${list}. A built page imports each (${notes.map((n) => `\`${n.pageKey}\` → \`${n.module}\``).join(", ")}),`
+  const fileOf = (m) => "`" + MODULES_DIR + "/" + m + ".js`";
+  const importOf = (n) => "`" + n.pageKey + "` → `" + n.module + "`";
+  const list = [...new Set(notes.map((n) => n.module))].map(fileOf).join(", ");
+  const imports = notes.map(importOf).join(", ");
+  return [`> ⚠ **Client module sources not copied:** ${list}. A built page imports each (${imports}),`
     + " so a row that follows a request into it stays open. `get-page` each module and copy its `body.js` there whole.", ""];
 }
 

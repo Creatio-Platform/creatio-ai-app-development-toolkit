@@ -92,7 +92,7 @@ export function runModuleDepChecks({ check, verifyCtx, resolveVk, FIX }) {
     viewConfig: [{ type: "crt.Button", name: "StartBtn", clicked: { request: "usr.StartClicked" } }],
     handlers: `[{ request: "usr.StartClicked", handler: async (request, next) => { const m = new sdk.Model(); ${call}; return next?.handle(request); } }]`,
     deps: '["@creatio-devkit/common", "UsrX_FormPageModule"]', args: "(sdk, xPage)" });
-  const via = (call, modules = { [MOD]: xModule }) => resolveVk(cardVk, verifyCtx({ pages: { main: xPage(call) }, modules }, "main"));
+  const via = (call, modules = null) => resolveVk(cardVk, verifyCtx({ pages: { main: xPage(call) }, modules: modules ?? { [MOD]: xModule } }, "main"));
   const viaHelper = via("await xPage.startApproval(request)");
   const viaOther = via("await xPage.refresh(request)");
   const viaExport = via("await xPage.otherProcess(request)");

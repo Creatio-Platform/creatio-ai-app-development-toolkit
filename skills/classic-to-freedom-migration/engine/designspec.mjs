@@ -4213,21 +4213,27 @@ const calledMembers = (code, name) => [...code.matchAll(new RegExp(String.raw`${
 // Whether module function `fn` sends `request`, itself or through the module's own functions it calls. Each module's
 // functions are parsed once per payload; a module that does not parse, or a name it does not define, sends nothing.
 const MODULE_FUNCTIONS = new WeakMap();
-function moduleFunctionSends(ctx, module, fn, request) {
+function moduleFunctionsOf(ctx, module) {
   if (!MODULE_FUNCTIONS.has(ctx.modules)) MODULE_FUNCTIONS.set(ctx.modules, new Map());
   const cache = MODULE_FUNCTIONS.get(ctx.modules);
   if (!cache.has(module)) cache.set(module, moduleFunctions(ctx.modules.get(module)));
-  const fns = cache.get(module);
+  return cache.get(module);
+}
+function moduleFunctionSends(ctx, module, fn, request) {
+  const fns = moduleFunctionsOf(ctx, module);
   if (!fns) return false;
+  // `seen` grows while it is walked: a function reached from one already seen is checked in turn.
   const seen = new Set([fn]);
   for (const name of seen) {
-    for (const body of fns.get(name) || []) {
-      if (typeSent(body, request)) return true;
-      const code = codeOnly(body);
-      for (const other of fns.keys()) if (!seen.has(other) && calledIn(code, other)) seen.add(other);
-    }
+    const bodies = fns.get(name) || [];
+    if (bodies.some((body) => typeSent(body, request))) return true;
+    for (const body of bodies) addCallees(codeOnly(body), fns, seen);
   }
   return false;
+}
+// The module functions `code` calls, added to `seen`.
+function addCallees(code, fns, seen) {
+  for (const other of fns.keys()) if (!seen.has(other) && calledIn(code, other)) seen.add(other);
 }
 // A custom `getActions` item is Done only when a built element identifies the action: its name, its caption (the
 // raw binding or the resolved text) or its `clicked.request` contains the action name, compared as lowercase letters
