@@ -187,10 +187,17 @@ function capBreachLines(capBreaches) {
 // in tasks.mjs, beside the one that writes the task files that teach them, so the two cannot drift apart.
 // Nothing for a run with no data-writing page and no recorded change, so an ordinary report reads as before.
 // `worklog` is the text `readWorklogBrowserAnswer` already read, so the file is read once per report.
+// A marker value without the bold that closed its line (`**Stand data changed (row 4): x**`), stripped by a loop:
+// a `\*+$` pattern backtracks on a long run of stars.
+function withoutClosingBold(value) {
+  let s = value.trimEnd();
+  while (s.endsWith("*")) s = s.slice(0, -1).trimEnd();
+  return s;
+}
 function standDataSection(result, tasks, { text: worklog = "", unread = null }, pageName) {
   const changes = [...worklogFieldValues(worklog, STAND_DATA_FIELD).map((text) => ({ text, where: "`worklog.md`" })),
     ...tasks.flatMap((t) => [...notesMarkers(t.notes, STAND_DATA_MARKER)].flatMap(([n, values]) => values.map((v) => ({
-      text: v.replace(/\*+$/, "").trimEnd(), where: `[${cell(t.group || t.id)}](${enc(t.file)}), row ${n}` }))))];
+      text: withoutClosingBold(v), where: `[${cell(t.group || t.id)}](${enc(t.file)}), row ${n}` }))))];
   const pages = dataWritingPages(result);
   const { agreed, unknown } = addModeChecks(worklog, pages);
   if (!changes.length && !pages.length) return [];
