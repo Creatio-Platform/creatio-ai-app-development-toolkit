@@ -163,16 +163,17 @@ const addModeText = (am) => {
   return add + (rows ? ` — ${rows}` : "");
 };
 // The removed Classic row actions the Freedom rows must drop. Edit is left out: a Freedom related-list row has no
-// separate Edit action — it opens on click, and keeps doing so — so a removed Classic Edit asks nothing of the rows.
-// The one place this rule lives; the plan decision and the Layout note both read it.
-export const freedomRowActionsToDrop = (removed = []) => removed.filter((a) => a !== "Edit");
+// separate Edit action — it opens on click — so a removed Classic Edit asks nothing of the rows. Open is dropped when
+// a Classic row opens nothing. The one place this rule lives; the plan decision, the Layout note and the Detail
+// features rows read it.
+export const freedomRowActionsToDrop = (removed = [], opensNothing = false) => [...(opensNothing ? ["Open"] : []), ...removed.filter((a) => a !== "Edit")];
 
 // A detail's row-action overrides (from migrate.mjs detection) → a short ⚠ note naming what the Freedom rows must not
 // offer, or that an override could not be read and must be checked by hand.
 function rowActionsNote(am) {
-  const drop = freedomRowActionsToDrop(am?.rowActionsRemoved);
+  const drop = freedomRowActionsToDrop(am?.rowActionsRemoved, am?.rowsOpenNothing);
   const notes = [];
-  if (drop.length) notes.push(`⚠ no row ${drop.map(esc).join("/")} (keep open-on-click)`);
+  if (drop.length) notes.push(`⚠ no row ${drop.map(esc).join("/")}${am?.rowsOpenNothing ? " (rows open nothing — links off)" : " (keep open-on-click)"}`);
   if (am?.rowActionsUnreadable?.length) notes.push("⚠ row-action override unread — check by hand");
   return notes.join(" · ");
 }
@@ -1233,21 +1234,20 @@ export function detailFeatureRows(cs) {
 // The row settings of a related list: which row actions remain, whether a row opens, and the order rows load in.
 // Each is a plan row and a `--verify` row, because a builder that starts from the standard grid loses all three.
 const ROW_ACTION_REQUEST = { Open: "crt.UpdateRecordRequest", Copy: "crt.CopyRecordRequest", Delete: "crt.DeleteRecordRequest" };
-// The Freedom row actions a detail leaves out: Copy and Delete as Classic removed them, and Open when a row opens
-// nothing. Classic's Edit has no Freedom row action of its own.
+// The Freedom row actions a detail leaves out (`freedomRowActionsToDrop`), the requests their toolbar items send, and
+// whether no action is left, so the list shows no row toolbar at all.
 function droppedRowActions(d) {
-  const removed = (d.addMode?.rowActionsRemoved || []).filter((a) => ROW_ACTION_REQUEST[a]);
-  return d.features?.rowsOpen === false ? ["Open", ...removed] : removed;
+  const names = freedomRowActionsToDrop(d.addMode?.rowActionsRemoved, d.addMode?.rowsOpenNothing).filter((a) => ROW_ACTION_REQUEST[a]);
+  return { names, requests: names.map((a) => ROW_ACTION_REQUEST[a]), noToolbar: names.length === Object.keys(ROW_ACTION_REQUEST).length };
 }
 function detailRowSettingRows(name, d) {
   const rows = [];
   const dropped = droppedRowActions(d);
-  if (dropped.length) {
-    const none = dropped.length === Object.keys(ROW_ACTION_REQUEST).length;
-    rows.push([name, "Row actions", `${dropped.join(", ")} not offered on a row`,
-      none ? "`rowToolbarItems: []` and `features.rows.toolbar: false` — no row toolbar" : `\`rowToolbarItems\` without ${dropped.join(", ")}`]);
+  if (dropped.names.length) {
+    rows.push([name, "Row actions", `${dropped.names.join(", ")} not offered on a row`,
+      dropped.noToolbar ? "`rowToolbarItems: []` and `features.rows.toolbar: false` — no row toolbar" : `\`rowToolbarItems\` without ${dropped.names.join(", ")}`]);
   }
-  if (d.features?.rowsOpen === false) rows.push([name, "Row links", "a click on a row opens nothing (`editRecord` switched off)", "`features.cells.disableLinks: true`"]);
+  if (d.addMode?.rowsOpenNothing) rows.push([name, "Row links", "a click on a row opens nothing (`editRecord` switched off)", "`features.cells.disableLinks: true`"]);
   const s = d.features?.sort;
   if (s) {
     const order = s.direction === "desc" ? "descending" : "ascending";
@@ -4786,21 +4786,21 @@ function resolveListColumnsVk(vk, ctx) {
 // row actions changed must declare its row toolbar. Every other row of the block is a decision or a build note.
 function detailFeatureCheckRows(cs) {
   const rows = [];
+  const toolbarLists = [], unlinked = [], sorted = [];
   for (const d of (cs.details || []).filter(placed)) {
     for (const q of d.features?.quickFilters || []) {
       rows.push({ deliverableId: `detail-filter:${q.element}`, label: `Detail quick filter \`${esc(q.element)}\` (${esc(q.kind)}, \`${esc(q.attribute)}\`) on ${detailName(d)}`,
         vk: { type: "detailfilter", n: 1, names: [q.element] } });
     }
+    const name = d.element || d.detailSchema;
+    const dropped = droppedRowActions(d);
+    if (dropped.names.length || d.addMode?.rowActionsRemoved?.length || d.addMode?.customAction) toolbarLists.push({ name, drop: dropped.requests, noToolbar: dropped.noToolbar });
+    if (d.addMode?.rowsOpenNothing) unlinked.push({ name });
+    if (d.features?.sort) sorted.push({ name, column: d.features.sort.column, direction: d.features.sort.direction });
   }
-  const listName = (d) => d.element || d.detailSchema;
-  const quoted = (names) => names.map((n) => "`" + esc(n) + "`").join(", ");
-  const toolbarLists = (cs.details || []).filter((d) => placed(d) && (d.addMode?.rowActionsRemoved?.length || d.addMode?.customAction || d.features?.rowsOpen === false))
-    .map((d) => { const drop = droppedRowActions(d); return { name: listName(d), drop: drop.map((a) => ROW_ACTION_REQUEST[a]), noToolbar: drop.length === Object.keys(ROW_ACTION_REQUEST).length }; });
-  const toolbars = toolbarLists.map((l) => l.name);
-  if (toolbars.length) rows.push({ deliverableId: "detail-row-toolbar", label: `Related lists with changed row actions declare \`rowToolbarItems\` without the actions Classic did not offer: ${quoted(toolbars)}`, vk: { type: "rowtoolbar", n: toolbars.length, names: toolbars, lists: toolbarLists } });
-  const unlinked = (cs.details || []).filter((d) => placed(d) && d.features?.rowsOpen === false).map(listName);
-  if (unlinked.length) rows.push({ deliverableId: "detail-row-links", label: `Related lists whose rows open nothing set \`features.cells.disableLinks: true\`: ${quoted(unlinked)}`, vk: { type: "rowlinks", n: unlinked.length, names: unlinked } });
-  const sorted = (cs.details || []).filter((d) => placed(d) && d.features?.sort).map((d) => ({ name: listName(d), column: d.features.sort.column, direction: d.features.sort.direction }));
+  const quoted = (lists) => lists.map((l) => "`" + esc(l.name) + "`").join(", ");
+  if (toolbarLists.length) rows.push({ deliverableId: "detail-row-toolbar", label: `Related lists with changed row actions declare \`rowToolbarItems\` without the actions Classic did not offer: ${quoted(toolbarLists)}`, vk: { type: "rowtoolbar", n: toolbarLists.length, names: toolbarLists.map((l) => l.name), lists: toolbarLists } });
+  if (unlinked.length) rows.push({ deliverableId: "detail-row-links", label: `Related lists whose rows open nothing set \`features.cells.disableLinks: true\`: ${quoted(unlinked)}`, vk: { type: "rowlinks", n: unlinked.length, lists: unlinked } });
   if (sorted.length) rows.push({ deliverableId: "detail-sort", label: `Related lists keep Classic's row order in \`sortingConfig.default\`: ${sorted.map((l) => `\`${esc(l.name)}\` (${esc(l.column || "column not read")} ${l.direction})`).join(", ")}`, vk: { type: "listsort", n: sorted.length, lists: sorted } });
   const readOnly = (cs.viewConfigDiff || []).filter((o) => isField(o) && o.values?.readOnlyStatic).map((o) => o.name);
   if (readOnly.length) rows.push({ deliverableId: "fields-readonly-static", label: `Fields read-only in Classic built read-only × ${readOnly.length}`, vk: { type: "readonly", n: readOnly.length, names: readOnly } });
@@ -4834,62 +4834,52 @@ function gridNamedAfter(ops, n) {
   return found.length ? { grid: found[0] } : {};
 }
 const ambiguousGrids = (w) => esc(String(w.n)) + " (" + w.ambiguous.map((g) => esc(g)).join(", ") + ")";
-// A row toolbar that still offers an action Classic did not (its request among `drop`), or that is shown when no
-// action remains (`noToolbar` and `features.rows.toolbar` not `false`), is the same failure as no toolbar at all.
-function rowToolbarExtras(w, list) {
-  const offered = (list?.drop || []).filter((r) => (w.grid.rowToolbarRequests || []).includes(r));
-  if (offered.length) return `${esc(String(w.n))} still offers ${offered.map((r) => "`" + esc(r) + "`").join(", ")}`;
-  return list?.noToolbar && w.grid.rowToolbarOff !== true ? `${esc(String(w.n))} shows a row toolbar with no action left (\`features.rows.toolbar\` is not \`false\`)` : null;
+// One check over the related lists a vk names (`lists`, or the older `names`): each list's grid is found by name
+// (`gridNamedAfter`), and `gapOf(grid, list, ctx)` returns the text of a setting the grid lacks, `{ unverified }`
+// when it cannot tell, or null. A list that is missing or ambiguous on the built page stays unverified, never Done.
+function resolveDetailGridVk(vk, ctx, what, gapOf) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the related lists' ${what}`);
+  const lists = vk.lists || (vk.names || []).map((name) => ({ name }));
+  const missing = [];
+  const unverified = [];
+  for (const l of lists) {
+    const found = gridNamedAfter(ctx.ops, l.name);
+    const gap = found.grid ? gapOf(found.grid, l, ctx) : null;
+    if (found.ambiguous) unverified.push(`more than one grid is named after ${ambiguousGrids({ n: l.name, ambiguous: found.ambiguous })}`);
+    else if (!found.grid) unverified.push(`no grid named after ${esc(String(l.name))} on the built page`);
+    else if (typeof gap === "string") missing.push(gap);
+    else if (gap?.unverified) unverified.push(gap.unverified);
+  }
+  if (missing.length) return ["❌ MISSING", missing.join("; "), "missing"];
+  if (unverified.length) return ["⚠ verify", `${unverified.join("; ")} — confirm the ${what} on the stand`, "unverified"];
+  return ["✅ Done", `${lists.length} list(s): ${what} as Classic had, matched by name`, "ok"];
 }
-function resolveRowToolbarVk(vk, ctx) {
-  if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' row toolbars");
-  const want = (vk.names || []).map((n) => ({ n, ...gridNamedAfter(ctx.ops, n) }));
-  const bare = want.filter((w) => w.grid && !w.grid.rowToolbar).map((w) => w.n);
-  if (bare.length) return ["❌ MISSING", `${bare.map((n) => esc(String(n))).join(", ")} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones`, "missing"];
-  const listOf = new Map((vk.lists || []).map((l) => [l.name, l]));
-  const extras = want.filter((w) => w.grid).map((w) => rowToolbarExtras(w, listOf.get(w.n))).filter(Boolean);
-  if (extras.length) return ["❌ MISSING", `${extras.join("; ")} — Classic did not offer it on a row`, "missing"];
-  const ambiguous = want.filter((w) => w.ambiguous);
-  if (ambiguous.length) return ["⚠ verify", `more than one grid is named after ${ambiguous.map(ambiguousGrids).join("; ")} — confirm the related list's \`rowToolbarItems\` on the stand`, "unverified"];
-  const unfound = want.filter((w) => !w.grid).map((w) => w.n);
-  if (unfound.length) return ["⚠ verify", `no grid named after ${unfound.map((n) => esc(String(n))).join(", ")} on the built page — confirm its \`rowToolbarItems\` on the stand`, "unverified"];
-  return ["✅ Done", `${want.length} list(s) declare \`rowToolbarItems\`, matched by name`, "ok"];
+// A related list whose Classic row actions changed declares its row toolbar, without any action Classic did not offer
+// (a request among `drop`), and with no toolbar shown when no action remains (`features.rows.toolbar: false`).
+function rowToolbarGap(grid, l) {
+  const n = esc(String(l.name));
+  if (!grid.rowToolbar) return `${n} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones`;
+  const offered = (l.drop || []).filter((r) => (grid.rowToolbarRequests || []).includes(r));
+  if (offered.length) return `${n} still offers ${offered.map((r) => "`" + esc(r) + "`").join(", ")} — Classic did not offer it on a row`;
+  return l.noToolbar && grid.rowToolbarOff !== true ? `${n} shows a row toolbar with no action left (\`features.rows.toolbar\` is not \`false\`)` : null;
 }
-// A related list whose rows open nothing must not link its primary column (`features.cells.disableLinks: true`).
-function resolveRowLinksVk(vk, ctx) {
-  if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' row links");
-  const want = (vk.names || []).map((n) => ({ n, ...gridNamedAfter(ctx.ops, n) }));
-  const linked = want.filter((w) => w.grid && w.grid.linksDisabled !== true).map((w) => esc(String(w.n)));
-  if (linked.length) return ["❌ MISSING", `${linked.join(", ")} built with row links — Classic rows open nothing; set \`features.cells.disableLinks: true\``, "missing"];
-  const unsure = want.filter((w) => !w.grid).map((w) => esc(String(w.n)));
-  if (unsure.length) return ["⚠ verify", `no single grid named after ${unsure.join(", ")} on the built page — confirm \`disableLinks\` on the stand`, "unverified"];
-  return ["✅ Done", `${want.length} list(s) set \`disableLinks\`, matched by name`, "ok"];
-}
+const resolveRowToolbarVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "row toolbars", rowToolbarGap);
+// A related list whose rows open nothing does not link its primary column (`features.cells.disableLinks: true`).
+const resolveRowLinksVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "row links", (grid, l) => (grid.linksDisabled === true ? null
+  : `${esc(String(l.name))} built with row links — Classic rows open nothing; set \`features.cells.disableLinks: true\``));
 // A related list keeps Classic's row order: the attribute its grid binds (`items: "$X"`) carries
 // `modelConfig.sortingConfig.default` with the same column first, in the same direction.
-function listSortOf(ctx, grid) {
+function listSortGap(grid, l, ctx) {
+  const n = esc(String(l.name));
+  if (!l.column) return { unverified: `${n}: the Classic sort column was not read` };
   const attr = typeof grid.items === "string" ? grid.items.replace(/^\$/, "") : null;
-  const first = attr ? ctx.vmAttributes?.[attr]?.modelConfig?.sortingConfig?.default?.[0] : null;
-  return { attr, first };
+  if (!ctx.vmAttributes || !attr) return { unverified: `${n}: the built page's view-model attributes were not reported` };
+  const first = ctx.vmAttributes[attr]?.modelConfig?.sortingConfig?.default?.[0];
+  if (first && first.columnName === l.column && String(first.direction || "").toLowerCase() === l.direction) return null;
+  const actual = first ? `by \`${esc(String(first.columnName))}\` ${esc(String(first.direction))}` : "in the default order";
+  return `${n} loads ${actual}, not \`${esc(l.column)}\` ${l.direction} — set the list's \`sortingConfig.default\``;
 }
-function listSortGap(ctx, l) {
-  const found = gridNamedAfter(ctx.ops, l.name);
-  if (!found.grid) return { unverified: `no single grid named after ${esc(l.name)}` };
-  if (!l.column) return { unverified: `${esc(l.name)}: the Classic sort column was not read` };
-  const { attr, first } = listSortOf(ctx, found.grid);
-  if (!ctx.vmAttributes || !attr) return { unverified: `${esc(l.name)}: the built page's view-model attributes were not reported` };
-  const ok = first && first.columnName === l.column && String(first.direction || "").toLowerCase() === l.direction;
-  return ok ? null : { missing: `${esc(l.name)} loads ${first ? `by \`${esc(String(first.columnName))}\` ${esc(String(first.direction))}` : "in the default order"}, not \`${esc(l.column)}\` ${l.direction}` };
-}
-function resolveListSortVk(vk, ctx) {
-  if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' sort order");
-  const gaps = (vk.lists || []).map((l) => listSortGap(ctx, l)).filter(Boolean);
-  const missing = gaps.filter((g) => g.missing).map((g) => g.missing);
-  if (missing.length) return ["❌ MISSING", `${missing.join("; ")} — set the list's \`sortingConfig.default\``, "missing"];
-  const unverified = gaps.filter((g) => g.unverified).map((g) => g.unverified);
-  if (unverified.length) return ["⚠ verify", `${unverified.join("; ")} — confirm the order on the stand`, "unverified"];
-  return ["✅ Done", `${(vk.lists || []).length} list(s) keep Classic's row order`, "ok"];
-}
+const resolveListSortVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "sort order", listSortGap);
 // A filter row needs BOTH halves: the element name AND `crt.QuickFilter`. Name alone closed on any component that
 // happened to carry the name — and the control IS the deliverable here, which is why the unit publishes the type.
 // The same check serves the list page's filter bar and a related list's quick filter on the form page; only the words
@@ -5665,11 +5655,12 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
   // too); `vmAttrs` are `bundle.viewModelConfig.attributes` keys. Both OPTIONAL: absent ⇒ that row is not checkable.
   let handlersSrc = null;
   if (entry?.handlers != null) handlersSrc = typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers);
-  const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
+  const vmAttributes = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? entry.viewModelConfig.attributes : null;
+  const vmAttrs = vmAttributes ? new Set(Object.keys(vmAttributes)) : null;
   return {
     pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
     // the view-model attributes themselves, for a related list's sort order
-    vmAttributes: entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? entry.viewModelConfig.attributes : null,
+    vmAttributes,
     // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
     // read for the project-conventions rows; null when the bundle did not carry them.
     deps: bundleDeps(entry),

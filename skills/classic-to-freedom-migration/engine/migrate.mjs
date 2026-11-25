@@ -1441,7 +1441,7 @@ const openCardIsTheWholeStory = (am) => !!am.openCardOverridden && !anyAddSignal
 const ADD_SIGNALS = ["lookup", "service", "editableGrid", "openCardOverridden", "addDisabled", "customAction", "fixedFilters"];
 const anyAddSignal = (am, ...except) => ADD_SIGNALS.some((k) => !except.includes(k) && am[k]);
 const hasAddMechanism = (am) => anyAddSignal(am);
-const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length);
+const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length || am.rowsOpenNothing);
 
 // What to BUILD for this add mode, as opposed to what it IS (`describeAddMode`). Conditional: one unconditional
 // instruction contradicts the modes it does not fit — "build a CUSTOM add request-handler" on a detail whose own
@@ -1488,8 +1488,8 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
 }
 
 // The questions a detail's feature inventory leaves for the user. A quick filter that Classic kept in the user's
-// profile may lose that memory, since no guidance states that `crt.QuickFilter` keeps it; summaries are an
-// improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
+// profile stays kept, since `crt.QuickFilter` saves its value per user too: the question recommends that default and
+// names the code only a reset needs. Summaries are an improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
 // bar is recorded on the change set (`summaryBar`) so the plan reads it as data. Exported for the goldens.
 export function attachDetailFeatureDecisions(changeSet) {
   for (const d of (changeSet.details || [])) {
@@ -1499,7 +1499,6 @@ export function attachDetailFeatureDecisions(changeSet) {
     const label = detailLabel(d);
     for (const q of f.quickFilters.filter((x) => x.persisted)) {
       changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
-        recommended: "keep",
         reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. \`crt.QuickFilter\` does the same: the platform saves its value per user in the page's schema profile (\`get-component-info crt.QuickFilter\`), so the built filter keeps it with no code. Recommended: keep (platform default) — nothing to build. Only "reset on every visit" needs code, which clears the value the platform saved` });
     }
     if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
@@ -1574,34 +1573,39 @@ function addMechanismDecision(am, label) {
 function rowActionsDecision(am, label) {
   const removed = am.rowActionsRemoved || [];
   const unreadable = am.rowActionsUnreadable || [];
-  const parts = [...removedActionsSentences(removed), ...unreadableOverrideSentences(unreadable, removed.length > 0)];
+  const parts = [...removedActionsSentences(removed, !!am.rowsOpenNothing), ...unreadableOverrideSentences(unreadable, removed.length > 0, !!am.rowsOpenNothing)];
   return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
     reason: `Detail '${label}' ${parts.join(" ")}` };
 }
 
 const plural = (n) => (n > 1 ? "s" : "");
 
-// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing was removed.
-function removedActionsSentences(removed) {
-  if (!removed.length) return [];
+// How a Freedom row opens its record, as the decision's closing clause: on click, or not at all when Classic rows
+// open nothing.
+const openClause = (opensNothing) => (opensNothing
+  ? "set `features.cells.disableLinks: true` and offer no Open row action, since a click on a row opens nothing in Classic (`editRecord` switched off)."
+  : "keep records opening from the list (open-on-click).");
+// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing changed.
+function removedActionsSentences(removed, opensNothing) {
+  if (!removed.length) return opensNothing ? [`opens nothing on a row click in Classic. Build its list rows so they ${openClause(true)}`] : [];
   const drop = freedomRowActionsToDrop(removed);
   const build = drop.length
-    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
-    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
-  const edit = removed.includes("Edit")
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and ${openClause(opensNothing)}`
+    : `Nothing to remove from the Freedom list rows — ${openClause(opensNothing)}`;
+  const edit = removed.includes("Edit") && !opensNothing
     ? ["Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."]
     : [];
   return [`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`, build, ...edit];
 }
 
 // The manual-read request for overrides the scan could not read; [] when every override was read.
-function unreadableOverrideSentences(unreadable, afterRemoved) {
+function unreadableOverrideSentences(unreadable, afterRemoved, opensNothing) {
   if (!unreadable.length) return [];
   const lead = afterRemoved ? "It also overrides" : "overrides";
   const members = unreadable.map((m) => "`" + m + "`").join(", ");
   const subject = unreadable.length > 1 ? "they remove" : "it removes";
   return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
-    "Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click)."];
+    `Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and ${openClause(opensNothing)}`];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -2501,8 +2505,6 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
   const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index))
     && !switchedOff(text, "getSummaryVisible", spans);
   return {
-    // `editRecord` switched off: a click on a row opens nothing
-    rowsOpen: !switchedOff(text, "editRecord", spans),
     sort: gridSortOf(text, spans),
     toolsMenu: toolsMenuDeviations(text, spans),
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
@@ -2519,6 +2521,7 @@ const ORDER_DIRECTION_RETURNED = /return\s{1,5}(?:this\.)?(?:Terrasoft\.)?OrderD
 const SORTED_COLUMN = /(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']/g;
 const SORT_LOCKED = /set\s{0,5}\(\s{0,5}["']IsSortable["']\s{0,5},\s{0,5}false\b/;
 function gridSortOf(text, spans) {
+  if (!text.includes("OrderDirection")) return null;
   const cols = lastMemberCode(text, "addGridDataColumns", spans, { raw: true });
   const set = cols?.code ? ORDER_DIRECTION_SET.exec(cols.code) : null;
   const returned = set ? null : ORDER_DIRECTION_RETURNED.exec(lastMemberCode(text, "getGridSortDirection", spans)?.code || "");
@@ -2574,7 +2577,9 @@ export function detectAddMode(body, scan = {}) {
   const { fixedFilters, filterCols } = fixedFilterSignal(body, filters);
   const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
     openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
-    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };
+    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable,
+    // `editRecord` switched off: a click on a row opens nothing
+    rowsOpenNothing: switchedOff(body, "editRecord", spans) };
   return hasAddMechanism(am) || hasRowActionSignal(am) ? am : null;
 }
 

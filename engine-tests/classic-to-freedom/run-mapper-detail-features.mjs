@@ -266,7 +266,7 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => toggle.changeSet.needsDecision.filter((n) => n.kind === "detail-filter-persistence"));
   const persistence = toggle.changeSet.needsDecision.find((n) => n.kind === "detail-filter-persistence");
   check("detail features: the persistence question states that `crt.QuickFilter` keeps its value per user, and recommends keeping it (the platform default)",
-    () => persistence?.recommended === "keep"
+    () => !!persistence
       && /`crt\.QuickFilter` does the same: the platform saves its value per user/.test(persistence.reason)
       && /Recommended: keep \(platform default\) — nothing to build/.test(persistence.reason)
       && /"reset on every visit" needs code/.test(persistence.reason) && !/No guidance confirms/.test(persistence.reason)
@@ -506,9 +506,9 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
   const payments = run("PaymentDetail", "Payment", PAYMENTS_BODY);
   const payDetail = detailOf(payments, "PaymentDetail");
   check("detail features: the scan reads a list whose rows open nothing and its Classic order (column, direction, re-sort locked)",
-    () => payDetail.features.rowsOpen === false && payDetail.features.sort?.column === "PayDate"
+    () => payDetail.addMode?.rowsOpenNothing === true && payDetail.features.sort?.column === "PayDate"
       && payDetail.features.sort.direction === "desc" && payDetail.features.sort.locked === true
-      && detailOf(toggle, "LimitDetail").features.rowsOpen === true && detailOf(toggle, "LimitDetail").features.sort === null,
+      && !detailOf(toggle, "LimitDetail").addMode?.rowsOpenNothing && detailOf(toggle, "LimitDetail").features.sort === null,
     () => payDetail.features);
   const payRows = payments.plan.split("\n").filter((l) => /^\| PaymentDetail \| (Row actions|Row links|Sort) \|/.test(l));
   check("detail features: the plan carries Row actions, Row links and Sort rows that say what to set on the Freedom list",
@@ -516,6 +516,12 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && payRows.some((l) => /Row links/.test(l) && /`features\.cells\.disableLinks: true`/.test(l))
       && payRows.some((l) => /\| Sort \|/.test(l) && /`PayDate` descending; the user cannot re-sort/.test(l) && /sortingConfig\.default/.test(l) && /columnName: "PayDate", direction: "desc"/.test(l)),
     () => payRows);
+  const payDecision = payments.changeSet.needsDecision.find((n) => n.kind === "detail-row-actions");
+  check("detail features: for a list whose rows open nothing, the row-action decision and the Layout note say links off and no Open — never open-on-click",
+    () => /disableLinks: true` and offer no Open row action/.test(payDecision?.reason || "") && !/open-on-click|still open on click/.test(payDecision.reason)
+      && payments.plan.split("\n").some((l) => /no row Open\/Copy\/Delete \(rows open nothing — links off\)/.test(l))
+      && !payments.plan.split("\n").some((l) => /PaymentDetail|Payment/.test(l) && /keep open-on-click/.test(l)),
+    () => ({ payDecision, notes: payments.plan.split("\n").filter((l) => /no row /.test(l)) }));
   const payChecks = checklistGroups(payments, {}).flatMap((g) => g.rows);
   const byType = (t) => payChecks.find((r) => r.vk?.type === t);
   const sortAttrs = (dir) => ({ DList: { modelConfig: { path: "DListDS", sortingConfig: { default: [{ columnName: "PayDate", direction: dir }] } } } });
