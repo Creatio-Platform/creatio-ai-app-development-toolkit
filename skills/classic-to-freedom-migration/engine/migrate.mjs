@@ -1293,6 +1293,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   c.spec = res.designSpec;
   c.changeSet = pageTextsOf(res.changeSet);
   c.recordIds = res.recordIds; c.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
+  c.processStarts = res.processStarts; // the processes it starts, followed by the root run
   c.mappedEntity = res.entity;
   c.resolvedFrom = key;
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
@@ -1355,6 +1356,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     const res = f.res;
     t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
     t.recordIds = res.recordIds; t.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
+    t.processStarts = res.processStarts; // the processes it starts, followed by the root run
     t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
     t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
     t.coverage = res.coverage || null;        // aggregated into the parent's coverage gate
@@ -1396,6 +1398,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     const res = f.res;
     miniPage.spec = res.designSpec; miniPage.changeSet = pageTextsOf(res.changeSet); miniPage.blocked = !!res.gate?.blocked;
     miniPage.recordIds = res.recordIds; miniPage.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
+    miniPage.processStarts = res.processStarts; // the processes it starts, followed by the root run
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
@@ -3247,13 +3250,20 @@ function processPageOfRun(manifest, opts, { seedTemplate, schemas, eff }) {
   return processPageInfo({ template, pageName: schemas.at(-1)?.moduleName, items: eff.items, methods: eff.methods, manifest });
 }
 
-const processPageBlockersOf = (processPage) => processPage?.issues || [];
-// The processes the page and its section start (launched-processes.mjs): the root run follows them; a nested fold's
-// own launches stay its `process-launch` decision.
-function launchedProcessesOfRun(manifest, opts, eff, section) {
+// The open questions of a profile (process page, started processes) that keep the plan incomplete.
+const processPageBlockersOf = (profile) => profile?.issues || [];
+// The processes each page of the run starts: this page's own, then every folded sub-page's (child, typed, mini), so the
+// root run sees the whole tree.
+function processStartsOf(schemas, eff, folded) {
+  const own = { from: `page ${schemas.at(-1)?.moduleName || "?"}`, launch: !!eff.processLaunch, names: eff.processNames };
+  return [own, ...folded.flatMap((f) => f.processStarts || [])];
+}
+// The processes the run's pages and its section start (launched-processes.mjs): the root run follows them for the
+// whole tree; a nested fold only reports its own upward.
+function launchedProcessesOfRun(manifest, opts, processStarts, section) {
   if (isNestedFold(opts)) return null;
-  return launchedProcessesInfo({ page: { launch: !!eff.processLaunch, names: eff.processNames || [] },
-    section: { launch: !!section?.processLaunch, names: section?.processNames || [] }, manifest });
+  const sectionStart = { from: "section", launch: !!section?.processLaunch, names: section?.processNames };
+  return launchedProcessesInfo({ sources: [...processStarts, sectionStart], manifest });
 }
 // A process page is opened by its process step: it has no section, so no add-record mini page is folded for it.
 const miniPageNameOf = (processPage, mpDecl, secMpName) => (processPage ? null : resolveMiniPageName(mpDecl, secMpName));
@@ -3580,8 +3590,9 @@ export function runMigration(manifest, opts = {}) {
   const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
   out.processPage = processPage;
   out.processPageBlockers = processPageBlockersOf(processPage);
-  out.launchedProcesses = launchedProcessesOfRun(manifest, opts, eff, section);
-  out.launchedProcessesBlockers = out.launchedProcesses?.issues || [];
+  out.processStarts = processStartsOf(schemas, eff, folded);
+  out.launchedProcesses = launchedProcessesOfRun(manifest, opts, out.processStarts, section);
+  out.launchedProcessesBlockers = processPageBlockersOf(out.launchedProcesses);
   out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
     ...folded.flatMap((f) => f.conventionsBlockers || [])])];
   // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared

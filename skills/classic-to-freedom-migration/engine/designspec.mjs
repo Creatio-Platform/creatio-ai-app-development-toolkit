@@ -31,7 +31,7 @@ import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } f
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
 import { processPagePlanLines, processPageRows, PROCESS_VK_RESOLVERS } from "./process-page.mjs";
-import { launchedProcessesPlanLines, launchedProcessesRows, launchedProcessesSignalNote, LAUNCHED_VK_RESOLVERS } from "./launched-processes.mjs";
+import { launchedProcessesPlanLines, launchedProcessesRows, launchedProcessNames, LAUNCHED_VK_RESOLVERS } from "./launched-processes.mjs";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -2226,18 +2226,29 @@ function renderRunDiagnostics(raw) {
   return [renderDiagnosticsBlock(normalizeDiagnostics(raw, esc)).trimEnd(), ""];
 }
 
-// The started-processes banner: empty when every process the code starts is followed.
-function launchedProcessesBanner(blockers) {
+// A PLAN INCOMPLETE banner: empty when nothing blocks it; otherwise its title, why the plan stops, each blocker and
+// what to do.
+function incompleteBanner(title, lead, blockers, remedy) {
   if (!blockers.length) return [];
-  return [`> ⛔ **PLAN INCOMPLETE — started processes not followed:** the page code starts a business process whose user-task pages are not in this page's chain. ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> Read each process with \`describe-business-process\`; record its Pre-configured page steps (the page each opens and whether that page is Classic or Freedom) in \`manifest.launchedProcesses\`, then re-run \`migrate.mjs --plan\`.`, ""];
+  return [`> ⛔ **PLAN INCOMPLETE — ${title}:** ${lead} ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> ${remedy}`, ""];
 }
-function processStepsBanner(blockers) {
-  if (!blockers.length) return [];
-  return [`> ⛔ **PLAN INCOMPLETE — process steps not recorded:** this is a process page, and the plan must name the steps that open it. ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> Ask the user which business processes and steps open the page; for each, read the Pre-configured page element with \`describe-business-process\` (its \`Buttons\` and whether a conditional flow branches on its result) and record it in \`manifest.processPage.steps\`, then re-run \`migrate.mjs --plan\`.`, ""];
-}
-function conventionsBanner(blockers) {
-  if (!blockers.length) return [];
-  return [`> ⛔ **PLAN INCOMPLETE — project conventions not settled:** the plan cannot say which namespace this team names its requests in, or which of its modules the builders reuse. ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> Detect them read-only (the skill's step 4.2): custom request names in the existing Freedom pages of the target package and its direct customer-package dependencies (\`get-page\` → \`ownBodySummary.handlerRequests\`, majority namespace), else the team's schema name prefix, else the \`SchemaNamePrefix\` system setting, else \`usr\`. Record them in \`manifest.projectConventions\` with the module bodies in \`manifest.constantsModules\`, then re-run \`migrate.mjs --plan\`.`, ""];
+const launchedProcessesBanner = (blockers) => incompleteBanner("started processes not followed",
+  "the page code starts a business process whose user-task pages are not in this page's chain.", blockers,
+  "Read each process with `describe-business-process`; record its Pre-configured page steps (the page each opens and whether that page is Classic or Freedom) in `manifest.launchedProcesses`, then re-run `migrate.mjs --plan`.");
+const processStepsBanner = (blockers) => incompleteBanner("process steps not recorded",
+  "this is a process page, and the plan must name the steps that open it.", blockers,
+  "Ask the user which business processes and steps open the page; for each, read the Pre-configured page element with `describe-business-process` (its `Buttons` and whether a conditional flow branches on its result) and record it in `manifest.processPage.steps`, then re-run `migrate.mjs --plan`.");
+const conventionsBanner = (blockers) => incompleteBanner("project conventions not settled",
+  "the plan cannot say which namespace this team names its requests in, or which of its modules the builders reuse.", blockers,
+  "Detect them read-only (the skill's step 4.2): custom request names in the existing Freedom pages of the target package and its direct customer-package dependencies (`get-page` → `ownBodySummary.handlerRequests`, majority namespace), else the team's schema name prefix, else the `SchemaNamePrefix` system setting, else `usr`. Record them in `manifest.projectConventions` with the module bodies in `manifest.constantsModules`, then re-run `migrate.mjs --plan`.");
+// The `Connected processes` line reads two facts: the section's process menu (`ProcessInModules`) and the processes
+// the page code starts. A menu with no process is not "none" while the code starts one.
+function processesSigLine(sigLine, sig, started) {
+  if (!started) return sigLine("processes", "Connected processes");
+  const see = `the code starts ${started} — see **Processes this page starts**`;
+  if (sig?.resolved === true && sig.present) return `${sigLine("processes", "Connected processes")}; ${see}`;
+  const menu = sig?.resolved === true ? "none in the section process menu" : "⚠ section process menu not resolved — run the on-stand check";
+  return `- **Connected processes:** ${menu}; ${see}`;
 }
 export function renderPlan(result, opts = {}) {
   return renderPlanWith(result, { ...opts, printedStatus: new Set() });
@@ -2329,7 +2340,7 @@ function renderPlanWith(result, opts) {
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
   const signalLines = opts.processPage ? ["- not applicable — a process page has no section, list page or object; its process steps are listed under **Process page**"]
-    : [sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes") + launchedProcessesSignalNote(result.launchedProcesses, esc), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check")];
+    : [sigLine("dcm", "DCM case"), processesSigLine(sigLine, signals.processes, launchedProcessNames(result.launchedProcesses, esc)), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check")];
   P.push("### On-stand signals", ...signalLines, "",
     ...conventionsPlanLines(opts.projectConventions, opts.recordIds || [], esc));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
