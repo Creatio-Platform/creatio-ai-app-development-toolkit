@@ -338,7 +338,10 @@ export function bundleArgs(entry) {
   const v = entry?.args;
   if (v == null) return null;
   const list = Array.isArray(v) ? v : String(v).trim().replace(/^\(/, "").replace(/\)$/, "").split(",");
-  return list.map((a) => String(a).trim()).map((a) => (IDENT_RE.test(a) ? a : null));
+  return list.map((a) => {
+    const name = String(a).trim();
+    return IDENT_RE.test(name) ? name : null;
+  });
 }
 // The local name each `define()` dependency goes by on the page: `deps[i]` -> `args[i]`, null where the page gave it
 // none (or the bundle carried no `args`). null when the bundle carried no `deps`.
@@ -348,18 +351,26 @@ export function moduleAliases(entry) {
   const args = bundleArgs(entry) || [];
   return new Map(deps.map((d, i) => [d, args[i] ?? null]));
 }
-// The source of every top-level handler entry that answers `request`, in order. null when the handlers are not
-// source that parses as an array: a text over-read here would credit a request some other handler sends.
-export function handlerEntrySources(src, request) {
+// The request a parsed handler entry answers (`{ request: "<name>", handler: … }`), or null.
+function entryRequest(el) {
+  if (el?.type !== "ObjectExpression") return null;
+  const req = el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value;
+  return isStringLiteral(req) ? req.value : null;
+}
+// Each request the page's handlers answer -> the source of every top-level entry that answers it, in order. null
+// when the handlers are not source that parses as an array: a text over-read here would credit a request some other
+// handler sends.
+export function handlerEntriesByRequest(src) {
   if (typeof src !== "string") return null;
   const node = parseJsExpression(src);
   if (node?.type !== "ArrayExpression") return null;
-  const answers = (el) => {
-    const req = el?.type === "ObjectExpression" ? el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value : null;
-    return isStringLiteral(req) && req.value === request;
-  };
-  // `parseJsExpression` reads the text wrapped in `(`, so every node offset is one past the source's own.
-  return node.elements.filter(answers).map((el) => src.slice(el.start - 1, el.end - 1));
+  const out = new Map();
+  for (const el of node.elements) {
+    const request = entryRequest(el);
+    // `parseJsExpression` reads the text wrapped in `(`, so every node offset is one past the source's own.
+    if (request != null) out.set(request, [...(out.get(request) || []), src.slice(el.start - 1, el.end - 1)]);
+  }
+  return out;
 }
 // The custom names a built page DECLARES, per kind: the request of each handler entry, validator and converter
 // registrations. A request a handler body only dispatches (`next?.handle({ request: "pkg.X" })`) or a button only
@@ -382,9 +393,7 @@ function handlerRequests(v) {
   if (Array.isArray(v)) return v.map((h) => (isObj(h) && typeof h.request === "string" ? h.request : null)).filter(Boolean);
   const node = parseJsExpression(v);
   if (node?.type !== "ArrayExpression") return [...String(v).matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)].map((m) => m[1]);
-  return node.elements.filter((el) => el?.type === "ObjectExpression")
-    .map((el) => el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value)
-    .filter(isStringLiteral).map((n) => n.value);
+  return node.elements.map(entryRequest).filter((r) => r != null);
 }
 // The keys of a validators/converters registration object: `{ "ab.Positive": { … } }`, a name of any number of
 // segments (`ab.Order.Approve`). Source that does not parse is read as text, every quoted dotted key in it.

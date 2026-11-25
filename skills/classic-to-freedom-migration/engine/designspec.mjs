@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
-import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntrySources } from "./conventions.mjs";
+import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest } from "./conventions.mjs";
 import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
@@ -4180,33 +4180,27 @@ function resolveRequestCardActionVk(vk, ctx) {
 // request is the evidence; which of its functions sends it is not traced. `text` on a miss names a module the
 // handler calls whose source is not in the payload, so the reader knows what to add.
 function relayedRequest(request, ctx) {
-  let missing = "";
-  for (const o of ctx.ops) {
-    const fired = isRemove(o) ? null : opRequest(o);
-    if (!fired || fired === request) continue;
-    for (const body of handlerEntrySources(ctx.handlersSrc, fired) || []) {
-      const hit = relayFromHandler(body, request, ctx);
-      if (hit.ok) return { ok: true, text: `\`${esc(o.name)}\` fires \`${esc(fired)}\`, whose handler ${hit.text}` };
-      missing ||= hit.text;
-    }
-  }
-  return { ok: false, text: missing };
+  // One parse of the page's handlers, shared by every card-action row of the page.
+  if (ctx._handlerEntries === undefined) ctx._handlerEntries = handlerEntriesByRequest(ctx.handlersSrc);
+  const hits = ctx.ops.filter((o) => !isRemove(o)).flatMap((o) => {
+    const fired = opRequest(o);
+    if (!fired || fired === request) return [];
+    return (ctx._handlerEntries?.get(fired) || []).map((body) => ({ ...relayFromHandler(body, request, ctx), via: `\`${esc(o.name)}\` fires \`${esc(fired)}\`, whose handler ` }));
+  });
+  const hit = hits.find((h) => h.ok);
+  return hit ? { ok: true, text: hit.via + hit.text } : { ok: false, text: hits.find((h) => h.text)?.text || "" };
 }
+// What one handler entry does with `request`: sends it, or calls a module that sends it. A miss names a module the
+// handler calls whose source the payload does not carry.
 function relayFromHandler(body, request, ctx) {
-  if (requestSent(withoutComments(body), "null", request)) return { ok: true, text: `sends \`${esc(request)}\`` };
+  if (typeSent(withoutComments(body), request)) return { ok: true, text: `sends \`${esc(request)}\`` };
   const code = codeOnly(body);
-  let missing = "";
-  for (const [module, alias] of ctx.aliases || []) {
-    const via = [alias, module].filter(Boolean).find((name) => calledMemberOf(code, name));
-    if (!via) continue;
-    const src = ctx.modules.get(module);
-    if (src == null) {
-      missing ||= `a handler calls module \`${esc(module)}\`, whose source the payload does not carry — add it as \`modules/${esc(module)}.js\``;
-    } else if (requestSent(withoutComments(src), "null", request)) {
-      return { ok: true, text: `calls module \`${esc(module)}\` (\`${esc(via)}.…\`), which sends \`${esc(request)}\`` };
-    }
-  }
-  return { ok: false, text: missing };
+  const called = [...(ctx.aliases || [])].map(([module, alias]) => ({ module, via: [alias, module].filter(Boolean).find((name) => calledMemberOf(code, name)) }))
+    .filter((m) => m.via);
+  const sender = called.find((m) => typeSent(ctx.modules.get(m.module) ?? "", request));
+  if (sender) return { ok: true, text: `calls module \`${esc(sender.module)}\` (\`${esc(sender.via)}.…\`), which sends \`${esc(request)}\`` };
+  const unread = called.find((m) => !ctx.modules.has(m.module));
+  return { ok: false, text: unread ? `a handler calls module \`${esc(unread.module)}\`, whose source the payload does not carry — add it as \`modules/${esc(unread.module)}.js\`` : "" };
 }
 // Whether `code` calls a member of `name` (`name.fn(…)`), `name` not itself a member of something else.
 const calledMemberOf = (code, name) => new RegExp(String.raw`${NOT_IN_WORD}${NOT_A_MEMBER}${reEsc(name)}\s*\.\s*${IDENT}\s*\(`).test(code);
@@ -5005,9 +4999,11 @@ const definedIn = (code, name) => new RegExp(String.raw`function\s+${reEsc(name)
 // A request a page sends: a handler's `type: "<request>"` or an element's `request: "<request>"` in the view config.
 // A handler DECLARING it (`request: "<request>", handler: …`) only answers it, so the declaration alone is not a
 // sender.
+const requestLiteral = (request) => String.raw`["'\`]${reEsc(request)}["'\`]`;
+// A request sent from code: `type: "<request>"` (an `executeRequest` / `next?.handle` payload).
+const typeSent = (src, request) => new RegExp(String.raw`\btype\s*:\s*${requestLiteral(request)}`).test(src);
 function requestSent(src, viewConfigJson, request) {
-  const lit = String.raw`["'\`]${reEsc(request)}["'\`]`;
-  return new RegExp(String.raw`\btype\s*:\s*${lit}`).test(src) || new RegExp(String.raw`"request"\s*:\s*${lit}`).test(viewConfigJson);
+  return typeSent(src, request) || new RegExp(String.raw`"request"\s*:\s*${requestLiteral(request)}`).test(viewConfigJson);
 }
 const requestDeclared = (src, request) => new RegExp(String.raw`\brequest\s*:\s*["'\`]${reEsc(request)}["'\`]`).test(src);
 // What a `Ported as` line may name: a page function (`applyRights`) or a dotted symbol — a request type
@@ -5030,12 +5026,14 @@ function pageFunctionVerdict(code, sym) {
 function moduleFunctionVerdict(sym, [, module, fn], ctx, code) {
   if (!ctx.aliases) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
   if (!ctx.aliases.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
-  if (calledIn(code, sym)) return { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` };
   const alias = ctx.aliases.get(module);
+  // One rule for both spellings: a call of the module's own member, never `x.Module.fn(…)` / `x.contractPage.fn(…)`.
+  const via = [module, alias].filter(Boolean).find((name) => calledIn(code, `${name}.${fn}`, true));
+  if (via === module) return { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` };
+  if (via) return { ok: true, text: `a handler calls \`${esc(alias)}.${esc(fn)}\` (\`${esc(alias)}\` is module \`${esc(module)}\` in the page's \`define()\`)` };
   if (!alias) {
     return { ok: false, text: `no handler calls \`${esc(sym)}\`, and the page entry carries no \`args\` (its \`define()\` parameters) naming the module's local name — pass get-page's bundle whole` };
   }
-  if (calledIn(code, `${alias}.${fn}`)) return { ok: true, text: `a handler calls \`${esc(alias)}.${esc(fn)}\` (\`${esc(alias)}\` is module \`${esc(module)}\` in the page's \`define()\`)` };
   return { ok: false, text: `no handler calls \`${esc(sym)}\` or \`${esc(alias)}.${esc(fn)}\`` };
 }
 // One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
@@ -5615,15 +5613,16 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
   let handlersSrc = null;
   if (entry?.handlers != null) handlersSrc = typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers);
   const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
+  const aliases = moduleAliases(entry);
   return {
     pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
     // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
     // read for the project-conventions rows; null when the bundle did not carry them.
-    deps: bundleDeps(entry),
+    deps: aliases && [...aliases.keys()],
     // Each `define()` dependency and the local name the page's factory gives it (`bundle.args`); null without deps.
-    aliases: moduleAliases(entry),
+    aliases,
     // `--built.modules`: the source of each custom module the pages import, keyed by schema name (get-page of the
-    // module, its `body.js`). Read only to follow a request a page handler hands to the module.
+    // module, its `body.js`), comments already blanked. Read only to follow a request a page handler hands to it.
     modules: moduleSourcesOf(root),
     customNames: bundleCustomNames(entry, handlersSrc),
     containers: pageContainersOf(page),
@@ -5643,10 +5642,15 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
     parentTpl: entryObject(page)?.parentSchemaName || "",
   };
 }
+// Built once per payload (every page's ctx shares it): the root-level module sources, comments blanked.
+const MODULE_SOURCES = new WeakMap();
 function moduleSourcesOf(root) {
   const m = root?.modules;
   if (!m || typeof m !== "object" || Array.isArray(m)) return new Map();
-  return new Map(Object.entries(m).map(([k, v]) => [k, typeof v === "string" ? v : v?.body]).filter(([, v]) => typeof v === "string"));
+  if (!MODULE_SOURCES.has(root)) {
+    MODULE_SOURCES.set(root, new Map(Object.entries(m).filter(([, v]) => typeof v === "string").map(([k, v]) => [k, withoutComments(v)])));
+  }
+  return MODULE_SOURCES.get(root);
 }
 function verifyCtxFactory(root, reconcileMode = null) {
   const cache = new Map();
