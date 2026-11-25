@@ -2404,15 +2404,17 @@ export function classifyDetailFilters(body, spans = literalSpans(body)) {
 }
 
 // The fixed half of a detail's filters: the columns `classifyDetailFilters` read as fixed. When it read none, a body
-// that still builds column filters (deeper than one helper) names them body-wide, less the quick filters' columns, so a
-// fixed filter is never dropped because a quick filter sits beside it.
+// that still builds column filters (deeper than one helper) names them body-wide — comparison and IN filters alike —
+// less the quick filters' columns, so a fixed filter is never dropped because a quick filter sits beside it.
 const BODY_FILTER_COLUMN = /ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["']([A-Za-z]\w{0,80})["']/g;
+const BODY_IN_FILTER_COLUMN = /createColumnInFilterWithParameters\s{0,10}\(\s{0,10}["']([A-Za-z]\w{0,80})["']/g;
 function fixedFilterSignal(body, filters) {
   if (!filters.present) return { fixedFilters: false, filterCols: [] };
   if (filters.fixedColumns.length) return { fixedFilters: true, filterCols: filters.fixedColumns };
   if (!/createColumn(?:In)?Filter\w{0,40}/.test(body)) return { fixedFilters: false, filterCols: [] };
   const quickCols = new Set(filters.quickFilters.flatMap((q) => q.columns));
-  const rest = [...new Set([...body.matchAll(BODY_FILTER_COLUMN)].map((m) => m[1]))].filter((c) => !quickCols.has(c));
+  const bodyCols = [BODY_FILTER_COLUMN, BODY_IN_FILTER_COLUMN].flatMap((re) => [...body.matchAll(re)].map((m) => m[1]));
+  const rest = [...new Set(bodyCols)].filter((c) => !quickCols.has(c));
   // with no quick filter every column filter is fixed, named or not; beside one, only the columns no quick filter owns
   if (!filters.quickFilters.length) return { fixedFilters: true, filterCols: rest };
   return { fixedFilters: rest.length > 0, filterCols: rest };

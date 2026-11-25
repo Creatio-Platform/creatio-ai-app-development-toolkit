@@ -81,6 +81,25 @@ const TOGGLE_AND_HELPER_BODY = `define("BothDetail",[],function(){return{entityS
       if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
       this.addCategoryFilter(f);return f;},
     addCategoryFilter:function(f){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));}}};});`;
+// Fixed filters two helpers below getFilters — an IN filter and a comparison filter — read body-wide.
+const DEEP_FIXED_BODY = `define("DeepDetail",[],function(){return{entitySchemaName:"Req",
+  methods:{getFilters:function(){var f=this.callParent(arguments);this.addScopeFilters(f);return f;},
+    addScopeFilters:function(f){this.addOwnerFilters(f);},
+    addOwnerFilters:function(f){f.addItem(this.Terrasoft.createColumnInFilterWithParameters("Owner",[this.$MasterId]));
+      f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));}}};});`;
+// A toggle in getFilters beside a fixed IN filter two helpers down: the IN column stays fixed.
+const DEEP_IN_BESIDE_TOGGLE_BODY = `define("DeepToggleDetail",[],function(){return{entitySchemaName:"Req",
+  attributes:{"IsActiveOnly":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:true}},
+  methods:{onActiveOnlyButtonClick:function(){this.$IsActiveOnly=!this.$IsActiveOnly;this.reloadGridData();},
+    getFilters:function(){var f=this.callParent(arguments);
+      if(this.$IsActiveOnly){f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"IsActive",true));}
+      this.addScopeFilters(f);return f;},
+    addScopeFilters:function(f){this.addOwnerFilters(f);},
+    addOwnerFilters:function(f){f.addItem(this.Terrasoft.createColumnInFilterWithParameters("Owner",[this.$MasterId]));}}};});`;
+// A getFilters the engine cannot read (a reference, not a function body): the body's column filters still signal FIXED.
+const UNREADABLE_FILTERS_BODY = `define("OpaqueDetail",[],function(){return{entitySchemaName:"Req",
+  methods:{getFilters:helpers.filters,
+    scope:function(f){f.addItem(this.Terrasoft.createColumnInFilterWithParameters("Owner",[this.$MasterId]));}}};});`;
 // An attribute set only while the list initialises: the user never changes it, so its filter is fixed.
 const INIT_ONLY_BODY = `define("MineDetail",[],function(){return{entitySchemaName:"Task",
   methods:{init:function(){this.$CurrentContact=Terrasoft.SysValue.CURRENT_USER_CONTACT.value;this.callParent(arguments);},
@@ -166,6 +185,23 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && mixedDetail.addMode?.fixedFilters === true && mixedDetail.addMode.filterCols.join(",") === "Category"
       && /FIXED list filters on Category/.test(mixed.plan),
     () => ({ addMode: mixedDetail.addMode, quick: mixedDetail.features.quickFilters }));
+
+  const deep = detailOf(run("DeepDetail", "Req", DEEP_FIXED_BODY), "DeepDetail");
+  check("detail features: an IN filter and a comparison filter two helpers below getFilters stay FIXED, both columns named",
+    () => deep.features.quickFilters.length === 0 && deep.addMode?.fixedFilters === true
+      && [...deep.addMode.filterCols].sort().join(",") === "Category,Owner",
+    () => ({ addMode: deep.addMode, quick: deep.features.quickFilters }));
+  const opaque = detailOf(run("OpaqueDetail", "Req", UNREADABLE_FILTERS_BODY), "OpaqueDetail");
+  check("detail features: a getFilters the engine cannot read still gives the fixed-filter signal with the body's columns",
+    () => opaque.addMode?.fixedFilters === true && opaque.addMode.filterCols.join(",") === "Owner",
+    () => opaque.addMode);
+  const deepToggleRun = run("DeepToggleDetail", "Req", DEEP_IN_BESIDE_TOGGLE_BODY);
+  const deepToggle = detailOf(deepToggleRun, "DeepToggleDetail");
+  check("detail features: a deep fixed IN filter beside a quick filter keeps only the column no quick filter owns",
+    () => deepToggle.features.quickFilters.map((q) => `${q.attribute}:${q.columns.join("+")}`).join(",") === "IsActiveOnly:IsActive"
+      && deepToggle.addMode?.fixedFilters === true && deepToggle.addMode.filterCols.join(",") === "Owner"
+      && /FIXED list filters on Owner/.test(deepToggleRun.plan),
+    () => ({ addMode: deepToggle.addMode, quick: deepToggle.features.quickFilters }));
 
   // AC 2 — a date filter is a quick filter on its columns; a filter kept in the profile raises the persistence question.
   const date = run("ActiveProductDetail", "ActiveProduct", DATE_BODY);
@@ -333,6 +369,15 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "D", values: { rowToolbarItems: [] } }]))[0] === "✅ Done"
       && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "OtherGrid", rowToolbarItems: [] }]))[0] !== "✅ Done",
     () => tbRow);
+  const prefixVk = { type: "rowtoolbar", n: 1, names: ["Activity"] };
+  check("detail features: --verify never takes a grid whose name merely starts with the detail's — the exact name wins, a longer name is not the list",
+    () => resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityTypeGrid", rowToolbarItems: [] }, { type: "crt.DataGrid", name: "Activity" }]))[0] === "❌ MISSING"
+      && resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityTypeGrid" }, { type: "crt.DataGrid", name: "Activity", rowToolbarItems: [] }]))[0] === "✅ Done"
+      && resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityTypeGrid", rowToolbarItems: [] }]))[0] === "⚠ verify",
+    () => prefixVk);
+  check("detail features: --verify reads two grids named after the detail (`<Detail>DataGrid` and `<Detail>Grid`) as ambiguous, never Done",
+    () => resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityDataGrid", rowToolbarItems: [] }, { type: "crt.DataGrid", name: "ActivityGrid", rowToolbarItems: [] }]))[0] === "⚠ verify",
+    () => prefixVk);
   const groupTitles = checklistGroups(date, {}).map((g) => g.baseTitle || g.title);
   check("detail features: the checklist carries a `Form — Detail features` group, and the build orders it after the layout and coverage",
     () => groupTitles.includes("Form — Detail features") && GROUP_PHASE.get("Form — Detail features") > GROUP_PHASE.get("Form — Coverage (verified)"),

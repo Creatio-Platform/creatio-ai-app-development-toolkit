@@ -4706,15 +4706,27 @@ function resolveReadonlyVk(vk, ctx) {
 }
 // A related list whose Classic row actions changed must declare its row toolbar (`rowToolbarItems`), or the built list
 // shows the standard actions Classic took away.
-// The list is found by the Classic detail's element name: a grid named after it (`<Detail>`, `<Detail>DataGrid`, …).
-// Another grid's toolbar never closes the row; a list the engine cannot find by name stays unverified, never Done.
+// The list is found by the Classic detail's element name: the grid named exactly after it, else the one grid named
+// `<Detail>` plus a grid suffix (`DataGrid`, `Grid`, `List`, `ListGrid`, `DataTable`). Another grid whose name merely
+// starts with it (`Activity` vs `ActivityTypeGrid`) is never matched; two candidates are ambiguous. A list the engine
+// cannot find, or cannot tell apart, stays unverified, never Done.
+const GRID_TYPE = /DataGrid|DataTable|ListGrid/;
+const GRID_NAME_SUFFIX = /^(?:DataGrid|Grid|List|ListGrid|DataTable)$/;
+function gridNamedAfter(ops, n) {
+  const grids = ops.filter((o) => o.name && GRID_TYPE.test(o.type || ""));
+  const exact = grids.filter((o) => o.name === n);
+  const found = exact.length ? exact : grids.filter((o) => o.name.startsWith(n) && GRID_NAME_SUFFIX.test(o.name.slice(n.length)));
+  if (found.length > 1) return { ambiguous: found.map((o) => o.name) };
+  return found.length ? { grid: found[0] } : {};
+}
 function resolveRowToolbarVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' row toolbars");
-  const want = vk.names || [];
-  const gridOf = (n) => ctx.ops.find((o) => o.name && (o.name === n || o.name.startsWith(n)) && /DataGrid|DataTable|ListGrid/.test(o.type || ""));
-  const bare = want.filter((n) => gridOf(n) && !gridOf(n).rowToolbar);
+  const want = (vk.names || []).map((n) => ({ n, ...gridNamedAfter(ctx.ops, n) }));
+  const bare = want.filter((w) => w.grid && !w.grid.rowToolbar).map((w) => w.n);
   if (bare.length) return ["❌ MISSING", `${bare.map((n) => esc(String(n))).join(", ")} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones`, "missing"];
-  const unfound = want.filter((n) => !gridOf(n));
+  const ambiguous = want.filter((w) => w.ambiguous);
+  if (ambiguous.length) return ["⚠ verify", `more than one grid is named after ${ambiguous.map((w) => `${esc(String(w.n))} (${w.ambiguous.map((g) => esc(g)).join(", ")})`).join("; ")} — confirm the related list's \`rowToolbarItems\` on the stand`, "unverified"];
+  const unfound = want.filter((w) => !w.grid).map((w) => w.n);
   if (unfound.length) return ["⚠ verify", `no grid named after ${unfound.map((n) => esc(String(n))).join(", ")} on the built page — confirm its \`rowToolbarItems\` on the stand`, "unverified"];
   return ["✅ Done", `${want.length} list(s) declare \`rowToolbarItems\`, matched by name`, "ok"];
 }
