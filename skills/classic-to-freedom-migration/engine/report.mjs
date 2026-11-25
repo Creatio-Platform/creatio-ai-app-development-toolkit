@@ -28,7 +28,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
-import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
+import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -47,6 +48,134 @@ const labelKey = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " 
 // state the question, which is itself the finding.
 export const DECISION_MARKER = /^[\s*>-]*Decision needed \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
 export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
+// `Browser checks: N — <what each check answered>`, the line every page-writing task writes under `## Notes`. The
+// number decides the verdict; the prose is not judged, only quoted beside each exercised page in the result report,
+// so a person reads what the builder says each check answered instead of trusting a typed number. null when the
+// task wrote no such line, which the verdict counts as 0. Only a FIELD line counts: one that opens with the label,
+// as plain text or a list item. A quoted line (`>`), a line inside a code fence and a mention mid-sentence or in
+// inline code are prose about the line, such as the brief's own example, and never set the count. Of the field
+// lines the LAST wins, so a builder corrects its count by writing the line again.
+const BROWSER_CHECKS = /^[\s*-]*Browser checks[\s:*]*(\d+)/i;
+const FENCE = /^\s*(`{3,}|~{3,})/;
+function browserChecksLine(notes) {
+  let found = null;
+  let fence = null;
+  for (const line of String(notes || "").split(/\r?\n/)) {
+    const f = FENCE.exec(line);
+    if (f) {
+      if (!fence) fence = f[1];
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const m = fence ? null : BROWSER_CHECKS.exec(line);
+    if (m) found = { n: Number(m[1]), text: line.slice(m[0].length).trim().replace(/^[—–-]+/, "").trim() };
+  }
+  return found;
+}
+export const browserChecksOf = (notes) => browserChecksLine(notes)?.n ?? null;
+// The cap a task's browser checks are held to: the second only confirms a fix the first one found.
+const BROWSER_CHECK_CAP = 2;
+// A task that saved something on its page: closed `done`, or `partial` with part of it built. One closed
+// `wont-do` / `not-applicable` saved nothing, and a `postponed` one has not built yet, so neither owes a check.
+const BUILT_STATUSES = new Set([S_DONE, S_PARTIAL]);
+// WHICH BUILT PAGES A BROWSER CHECK EXERCISED. A page is the artifact its page-writing tasks write; it is exercised
+// when the LAST of them that built something, in queue order, reports a check: a page cut into chunks or repaired
+// later is opened as it finally stands, not as an earlier chunk left it. A run can be complete and still have pages
+// nobody opened after their last save, and those pages are what a person has to check by hand. Under
+// `Browser: none` the user declined the check for the run, so no built page counts as exercised whatever its notes
+// say. A page the recorded tool cannot open (a list page under `Browser: page-smoke` with no browser surface) is
+// unexercised too, on purpose: nobody saw it run, so a person still has to open it; the section quotes the builder's
+// reason, which tells that case apart from a check nobody ran. `tasks` arrive in queue order (`planTasks`).
+function browserExercise(tasks, declined = false) {
+  const pages = new Map();
+  const capBreaches = [];
+  for (const t of tasks) {
+    if (!writesPage(t.writesTo) || !BUILT_STATUSES.has(t.status)) continue;
+    const line = browserChecksLine(t.notes);
+    const n = line?.n ?? 0;
+    if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
+    const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
+    page.exercised = n > 0 && !declined;
+    page.evidence = { task: t, n, text: line?.text || "", reported: !!line };
+    page.tasks.push(t);
+    pages.set(t.writesTo, page);
+  }
+  const all = [...pages.values()];
+  return { exercised: all.filter((p) => p.exercised), unexercised: all.filter((p) => !p.exercised), capBreaches };
+}
+// BUILT, NOT EXERCISED on stderr, so a caller reading stderr alone learns which pages still need a person; "" for
+// any other verdict. It is a note, not an exit-2 leg: every task closed and every built row checks out, so the exit
+// code keeps its meaning (open work for the machine), and the unchecked pages are work for a person, as 🟠 says.
+export function unexercisedNote(report) {
+  if (!report?.complete || !report.unexercisedPages?.length) return "";
+  return `migrate.mjs: 🟠 BUILT, NOT EXERCISED — no browser check after the last save of ${report.unexercisedPages.join(", ")}.`
+    + " Check them on the stand; the migration result report lists what to check.\n";
+}
+// The browser answer could not be read on stderr, so a caller reading stderr alone learns the browser verdict was
+// reached without it; "" when the answer file was read.
+export function browserAnswerUnreadNote(report) {
+  if (!report?.browserAnswerUnread) return "";
+  return `migrate.mjs: ⚠ BROWSER ANSWER NOT READ — ${report.browserAnswerUnread}, so the browser verdict was reached`
+    + " without the recorded answer. Run --verify with the task folder inside its migration folder.\n";
+}
+// `answer` is `{ line, unread }` from `readWorklogBrowserAnswer`: the recorded `Browser:` line, and why worklog.md could
+// not be read. An unread answer is said first, whatever the pages show: without it a recorded `Browser: none` cannot
+// be applied, so a page with a reported check counts as exercised and the verdict may be greener than the answer.
+function browserSection({ exercised, unexercised, capBreaches }, pageName, answer) {
+  const blocks = [answer.unread ? answerUnreadLines(answer.unread) : [],
+    unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [],
+    exercised.length ? exercisedLines(exercised, pageName) : [], capBreaches.length ? capBreachLines(capBreaches) : []];
+  return blocks.filter((b) => b.length).flatMap((b, i) => (i ? ["", ...b] : b));
+}
+const answerUnreadLines = (unread) => ["## Browser answer not read", "",
+  `The browser answer for this run could not be read: ${unread}. A recorded \`Browser: none\` is therefore not`
+    + " applied, and each page below counts as exercised on its own task's notes alone. Run `--verify` with the task"
+    + " folder inside the migration folder that holds its `worklog.md`."];
+// What each exercised page's last built task says its checks answered, quoted as written: the verdict counts the
+// number, and this is the prose a person reads to see whether the number stands for a real check.
+function exercisedLines(exercised, pageName) {
+  return [`## Exercised in a browser (${exercised.length})`, "",
+    "The last build task of each page reports these browser checks after its last save. The count decides the"
+      + " verdict; the words are the build agent's own account of what each check answered.", "",
+    ...exercised.map(({ writesTo, pageKey, evidence: { task: t, n, text } }) =>
+      `- **${pageName(pageKey)}** (\`${esc(writesTo)}\`) — [${cell(t.group || t.id)}](${enc(t.file)}), ${plural(n, "check")}: `
+        + (text ? cell(text) : "no account of what the checks answered"))];
+}
+// Under `Browser: none` the intro says the user declined the check, because a page whose task did report one is
+// listed here too and "no build task opened them" would be false for it.
+function unexercisedLines(unexercised, pageName, { line, unread }) {
+  const recorded = line ? `\`${esc(line)}\`` : `none — ${unread ? "`worklog.md` could not be read" : "`worklog.md` has no `Browser:` line"}`;
+  const intro = browserAnswerOf(line) === "none"
+    ? "The user declined the browser check for this run, so no built page counts as exercised, including any a build"
+      + " task did report a check for: a declined run is a conscious opt-out, and a person opens each page on the"
+      + " stand and goes through its checks below. Each page names its last build task and quotes what it reported."
+    : "These pages were built and read back, but no build task opened them after its last save, so what only the"
+      + " running page shows — a render error, a rule that does not fire, a save that writes the wrong column — is"
+      + " unchecked. Open each one on the stand and go through its checks below. Each page names its last build task"
+      + " and quotes why it reports no check: a refused or impossible check wants the consent or the tool fixed first.";
+  const L = [`## Not exercised in a browser (${unexercised.length})`, "", intro,
+    "", `Browser answer recorded for this run: ${recorded}.`, ""];
+  for (const p of unexercised) {
+    L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`) — ${unexercisedReason(p.evidence)}`);
+    for (const t of p.tasks) L.push(...checkOnStandLines(t));
+  }
+  return L;
+}
+// Why the page's last built task opened nothing, in the builder's words: a refused or impossible check wants the
+// consent or the tool fixed, a check nobody ran wants the page opened, and a missing line says nothing either way.
+function unexercisedReason({ task: t, n, text, reported }) {
+  const where = `[${cell(t.group || t.id)}](${enc(t.file)})`;
+  if (!reported) return `${where} wrote no \`Browser checks\` line`;
+  return `${where}, \`Browser checks: ${n}\`: ${text ? cell(text) : "no account of why"}`;
+}
+const checkOnStandLines = (t) => [...markers(t.notes, CHECK_MARKER)]
+  .map(([n, text]) => `  - [${cell(t.group || t.id)}](${enc(t.file)}), row ${n}: ${cell(text)}`);
+function capBreachLines(capBreaches) {
+  return [`## Browser checks over the cap of ${BROWSER_CHECK_CAP} (${capBreaches.length})`, "",
+    "A task opens the page once after its last save and once more only to confirm a fix; a third check is a"
+      + " save-check-fix loop. Read these tasks' notes for what each check answered.", "",
+    ...capBreaches.map((b) => `- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`)];
+}
 function markers(notes, re) {
   const out = new Map();
   for (const line of String(notes || "").split(/\r?\n/)) {
@@ -100,7 +229,7 @@ function readDecisionsMd(text, addHeading, add) {
   const lines = text.split(/\r?\n/);
   let structured = false;
   for (const dl of lines) {
-    const h = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
+    const h = DECISION_HEADING.exec(dl);
     if (h) { addHeading(h[1], h[2]); structured = true; continue; }
     const t = /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl);   // table row — second cell is the title ([^|] can't cross the cell)
     if (t) { add(t[1], t[2]); structured = true; }
@@ -115,7 +244,7 @@ export function readDecisions(migrationDir) {
   // A heading keeps its title verbatim (bar the leading separator); a table cell / plain line goes through
   // decisionTitle, which lifts the bold lead and caps a long cell. Headings are last-wins (a later heading refines
   // an earlier one); table/plain are first-wins.
-  const addHeading = (id, raw) => { const t = String(raw || "").replace(/^[\s—–:.-]+/, "").trim(); if (t) out.set(`D${id}`, t); };
+  const addHeading = (id, raw) => { const t = headingTitle(raw); if (t) out.set(`D${id}`, t); };
   const add = (id, raw) => { const k = `D${id}`; const t = decisionTitle(raw); if (t && !out.has(k)) out.set(k, t); };
   try {
     readDecisionsMd(fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8"), addHeading, add);
@@ -124,6 +253,43 @@ export function readDecisions(migrationDir) {
     const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
     const at = plan.search(/^###\s+Adjustments/m);
     if (at >= 0) for (const m of plan.slice(at).matchAll(/^(\d+)\.\s+\*\*(.+?)\*\*/gm)) out.set(`Adjustment ${m[1]}`, m[2].trim());
+  } catch { /* same */ }
+  return out;
+}
+// THE TEXT under each decision, keyed like `readDecisions`: the lines below a `D<N>` heading up to the next heading,
+// and the lines of a numbered `### Adjustments` item up to the next item. A table or plain-line decision has only
+// its title, so it has no entry here. The task card hands this text to a writer that is told not to read the files.
+export function readDecisionTexts(migrationDir) {
+  const out = new Map();
+  const collect = (lines, startOf, isEnd) => {
+    let id = null, body = [];
+    const flush = () => { if (id && body.some((l) => l.trim())) out.set(id, body.join("\n").trim()); };
+    for (const line of lines) {
+      const start = startOf(line);
+      if (start) { flush(); id = start; body = []; continue; }
+      if (isEnd(line)) { flush(); id = null; body = []; continue; }
+      if (id) body.push(line);
+    }
+    flush();
+  };
+  const heading = (l) => /^#{1,4}\s/.test(l);
+  try {
+    const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
+    collect(text.split(/\r?\n/), (l) => { const h = /^#{1,4}\s+D(\d+)\b/.exec(l); return h ? `D${h[1]}` : null; }, heading);
+  } catch { /* no decisions file — the card then carries titles only */ }
+  try {
+    const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
+    const at = plan.search(/^###\s+Adjustments/m);
+    if (at >= 0) {
+      const lines = plan.slice(at).split(/\r?\n/).slice(1);
+      collect(lines, (l) => { const m = /^(\d+)\. +\*\*[^*\n]+\*\*/.exec(l); return m ? `Adjustment ${m[1]}` : null; }, heading);
+      // An Adjustments item's first line is its title AND its text: keep that line as the start of the body.
+      for (const m of plan.slice(at).matchAll(/^(\d+)\. +\*\*([^*\n]+)\*\*([^\n]*)$/gm)) {
+        const rest = m[3].replace(/^[\s—–:.-]+/, "").trim();
+        const key = `Adjustment ${m[1]}`;
+        if (rest) out.set(key, [rest, out.get(key)].filter(Boolean).join("\n"));
+      }
+    }
   } catch { /* same */ }
   return out;
 }
@@ -302,14 +468,16 @@ function rowCounts(rows) {
 }
 
 // --- sections -------------------------------------------------------------------------------------------------
-function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }) {
-  const withRef = boundaries.filter((b) => b.refs.resolved.length).length;
-  const boundNote = boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : "";
+function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined = [], rc, repair, handLeft }) {
+  // Declined rows are closed by a recorded decision, so they count here exactly as section 2 lists them.
+  const without = boundaries.filter((b) => !b.refs.resolved.length).length;
+  const closed = boundaries.length + declined.length;
+  const boundNote = closed ? ` — with a recorded decision ${closed - without} · without ${without}` : "";
   const L = ["| | |", "| --- | --- |",
     `| Tasks | ${tc.total} — ${statusParts(tc).join(" · ")} |`,
     `| Open questions (plan items recorded NOT BUILT, no decision yet) | ${openNotBuilt.length} |`,
     ...(decidedNotBuilt.length ? [`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`] : []),
-    `| Boundaries the agent closed | ${boundaries.length}${boundNote} |`,
+    `| Boundaries the agent closed | ${closed}${boundNote} |`,
     `| Plan items confirmed (on the built page, or by review) | ${rc.machineOk + rc.judgeOk}/${rc.machine + rc.judge} |`,
     `| Plan items to confirm manually | ${handLeft} |`];
   if (repair) {
@@ -362,13 +530,29 @@ function decisionsSection(open, pageName, repairBuilt) {
   return L;
 }
 
-function boundariesSection(boundaries, decidedNotBuilt, pageName) {
+// `wont-do` rows whose reason cites a decision `decisions.md` holds: a person declined the item, and section 2 lists it
+// beside the other recorded decisions so the reader sees what was left out and why (for example a lookup filter
+// the user did not want object-wide, which then has to be added by hand).
+function declinedRows(tasks, decisions) {
+  const out = [];
+  for (const t of tasks || []) {
+    if (t.unread) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (r.outcomeKind !== O_WONT_DO) return;
+      const refs = decisionRefs(r.outcomeReason, decisions);
+      if (refs.resolved.length) out.push({ task: t, row: r, n: i + 1, refs });
+    });
+  }
+  return out;
+}
+
+function boundariesSection(boundaries, decidedNotBuilt, pageName, declined = []) {
   // A boundary row that is the decision behind a not-built item is rendered ONCE, as that item's entry.
   const deciding = new Set(decidedNotBuilt.map((it) => it.decidedBy));
-  const withRef = boundaries.filter((b) => b.refs.resolved.length && !deciding.has(b));
+  const withRef = [...boundaries.filter((b) => b.refs.resolved.length && !deciding.has(b)), ...declined];
   const without = boundaries.filter((b) => !b.refs.resolved.length);
   const L = [`## 2. Boundaries the agent closed (${withRef.length + without.length + decidedNotBuilt.length})`, ""];
-  if (!boundaries.length && !decidedNotBuilt.length) { L.push("None — every `not-applicable` in the folder is a boundary the plan itself approved."); return L; }
+  if (!boundaries.length && !decidedNotBuilt.length && !declined.length) { L.push("None — every `not-applicable` in the folder is a boundary the plan itself approved."); return L; }
   if (without.length) {
     L.push(`**Without a recorded decision (${without.length}) — confirm each, or send it back as a row to build.**`
       + " Nothing was built for these and nobody but the agent said there was nothing to build.", "",
@@ -549,6 +733,26 @@ const renderDestination = (d) => {
   if (ISSUE_KEY_RE.test(s)) return `[${cell(s)}](https://creatio.atlassian.net/browse/${encodeURIComponent(s)})`;
   return cell(s);
 };
+// Every decisions.md entry recorded `Decided by: orchestrator`: choices the agent made without asking the person who
+// owns the migration. Listed so that person can see each one and overturn it; a choice they never hear about is one
+// they cannot overturn.
+function decidedWithoutYouSection(entries) {
+  if (!entries.length) return [];
+  return [`## Decided without you (${entries.length})`, "",
+    "The agent made these choices itself (`Decided by: orchestrator` in `decisions.md`). Each is open to change: say so, and it becomes a question.", "",
+    ...entries.map((d) => `- **${esc(d.id)}** — ${esc(d.title || "?")}`)];
+}
+// The section for the decisions.md above the task folder `dir`. Read only beside a task folder: with none, `..`
+// would name whatever folder the process happens to run in.
+function decidedWithoutYouFor(dir) {
+  if (!dir) return [];
+  try {
+    return decidedWithoutYouSection(orchestratorDecisions(readDecisionRecords(path.join(dir, ".."))));
+  } catch (e) {
+    // An unreadable decisions.md does not stop the report; the section says it could not be listed.
+    return ["## Decided without you", "", `⚠ decisions.md could not be read (${esc(e.message)}), so the choices the agent made without asking are not listed.`];
+  }
+}
 function carryOverSection(items, pageName) {
   if (!items.length) return [];
   const L = [`## Carry-over — postponed items (${items.length})`, "",
@@ -616,6 +820,33 @@ function postponedUnbackedReasons(postponedRows, decisions) {
     + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
     + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`];
 }
+// THE VERDICT LADDER, text and colour from one place, first match wins: red, orange, yellow, green.
+function verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName }) {
+  if (!complete) {
+    // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
+    // hide a shortfall.
+    return { verdictColour: "red", verdict: `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}` };
+  }
+  if (unexercised.length) {
+    // Built is not exercised: the run closed every task, but some page was never opened after a save. Ranked above
+    // 🟡 because an unchecked page is work for a person now, a postponed row is work for later.
+    return { verdictColour: "orange", verdict: `🟠 **BUILT, NOT EXERCISED** — ${plural(unexercised.length, "page")} never`
+      + ` opened in a browser after its last save: ${unexercised.map((p) => pageName(p.pageKey)).join(", ")} — check them`
+      + ` on the stand (see the browser section)${postponedNote}${manualNote}` };
+  }
+  if (postponedRows.length) {
+    // The 🟡 wording names one decision + destination if every postponed row shares one (the common
+    // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
+    // section carries the full list; this line is the headline.
+    const count = postponedRows.length;
+    const grouped = postponedGroups(postponedRows);
+    const headline = grouped.length === 1
+      ? `${plural(count, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
+      : `${plural(count, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section`;
+    return { verdictColour: "yellow", verdict: `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}` };
+  }
+  return { verdictColour: "green", verdict: `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}` };
+}
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null, source = null }) {
   const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
@@ -652,27 +883,20 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const postponedCount = postponedRows.length;
   const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
-  let verdict;
-  if (!complete) {
-    // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
-    // hide a shortfall.
-    verdict = `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}`;
-  } else if (postponedCount) {
-    // The 🟡 wording names one decision + destination if every postponed row shares one (the common
-    // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
-    // section carries the full list; this line is the headline.
-    const grouped = postponedGroups(postponedRows);
-    const headline = grouped.length === 1
-      ? `${plural(postponedCount, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
-      : `${plural(postponedCount, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section`;
-    verdict = `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}`;
-  } else {
-    verdict = `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`;
-  }
+  const answerRead = dir ? readWorklogBrowserAnswer(dir) : { line: null, unread: null };
+  const exercise = browserExercise(tasks, browserAnswerOf(answerRead.line) === "none");
+  // An unread answer is a finding only when a built page's verdict rests on it.
+  const browserAnswer = { ...answerRead,
+    unread: exercise.exercised.length || exercise.unexercised.length ? answerRead.unread : null };
+  const { unexercised } = exercise;
+  const { verdict, verdictColour } = verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName });
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
+  const withoutYou = decidedWithoutYouFor(dir);
+  const browser = browserSection(exercise, pageName, browserAnswer);
   let sec = 3;
+  const declined = declinedRows(tasks, decisions);
   const md = [
     `# Migration result${entity}`, "",
     `**Verdict:** ${verdict}`, "",
@@ -680,17 +904,18 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
       + ` \`migrate.mjs --verify ${source || "--from <migration-folder>"} --tasks <dir>\` from the task files AND the built pages — present it`
       + ` verbatim; it supersedes \`build-tasks/index.md\`.`,
     "", "## Summary", "",
-    ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),
+    ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
-    "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
+    "", ...boundariesSection(boundaries, decidedNotBuilt, pageName, declined),
     ...(carryOver.length ? ["", ...carryOver] : []),
+    ...(withoutYou.length ? ["", ...withoutYou] : []),
+    ...(browser.length ? ["", ...browser] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
-  let verdictColour = "green";
-  if (!complete) verdictColour = "red";
-  else if (postponedCount) verdictColour = "yellow";
   return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
-    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount } };
+    unexercisedPages: unexercised.map((p) => pageName(p.pageKey)), browserAnswerUnread: browserAnswer.unread,
+    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount,
+      unexercised: unexercised.length, capBreaches: exercise.capBreaches.length } };
 }

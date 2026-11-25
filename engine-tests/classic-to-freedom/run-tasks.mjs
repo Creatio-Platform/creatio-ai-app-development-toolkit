@@ -11,28 +11,31 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, browserChecksOf, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
-  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
+  startBlocker, startableTasks, HOLD_BROWSER, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
+  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf, pageWorkBegun, browserAnswerOwed, browserAnswerUngated,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
-  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { writeFileAtomic, FileBusyError, LEDGER_RENAME } from "../../skills/classic-to-freedom-migration/engine/fsatomic.mjs";
-import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE, isFiledGateRow } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME_ATTEMPTS, isRenameLockError } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { approvePlan } from "./_testkit.mjs";
+import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
+import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
+  from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -82,7 +85,7 @@ const C1_BUNDLE = { entity: "C1", seed: SEED,
 //                                              payload moves, which is the drift a label-only digest missed;
 //   `bulk` adds many fields and handlers      → the `page:main` bucket outgrows the budget, so the chunking path
 //                                              is exercised instead of the monolithic one.
-const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
+const mainBody = ({ extraChild, extraField, renameField, bulk, handlers }) => {
   const dets = ['R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}}'];
   const items = ['{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}}'];
   if (extraChild) {
@@ -97,8 +100,10 @@ const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
   }
   // Handlers are the heaviest row kind per unit, so a handful of them is what pushes a bucket over the budget
   // without needing a page body so large it stops resembling a real one.
-  const methods = bulk
-    ? ",methods:{" + Array.from({ length: 8 }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
+  // `handlers` sets their number for a page whose weight is mostly handlers, the shape of a big custom form page.
+  const methodCount = handlers ?? (bulk ? 8 : 0);
+  const methods = methodCount
+    ? ",methods:{" + Array.from({ length: methodCount }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
     : "";
   return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]${methods}};});`;
 };
@@ -175,6 +180,20 @@ const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === page
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
 const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
+
+// The budget: a chunk is two sittings, so a big page is written by about half as many fresh contexts as at one
+// sitting per chunk, and a page within one chunk is still written by one.
+{
+  // A page whose weight is mostly handlers (30 of them, about a big custom form page with ~20 handlers and ~40 rules).
+  const BIG = manifestOf({ bulk: 2, handlers: 30 });
+  const bigRun = runMigration(BIG);
+  const atOneSitting = tasksOn(buildTaskSet(bigRun, { ...optsOf(BIG), taskBudget: { chunk: 40 } }), "page:main").length;
+  const now = tasksOn(buildTaskSet(bigRun, optsOf(BIG)), "page:main").length;
+  check("budget: a big handler-heavy page is cut into at most half the tasks one sitting per chunk gave it, and still more than one",
+    () => TASK_BUDGET.chunk === 80 && atOneSitting >= 4 && now > 1 && now * 2 <= atOneSitting, () => ({ atOneSitting, now }));
+  check("budget: a page within one chunk stays ONE task", () => tasksOn(SET, "page:main").length === 1,
+    () => tasksOn(SET, "page:main").map((t) => t.id));
+}
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
 // The user's approval of the plan a manifest renders, recorded in the migration folder above `dir` — `--tasks`,
 // `--start` and `--route` write nothing without it. The version is computed once per manifest.
@@ -187,7 +206,11 @@ const planVersionOf = (manifest, baseDir = DIR) => {
 const approve = (dir, manifest = MANIFEST, baseDir = DIR) => approvePlan(dir, planVersionOf(manifest, baseDir));
 const approveTasksArg = (args, manifest, baseDir) => {
   const at = args.indexOf("--tasks");
-  if (at >= 0 && args[at + 1]) approve(args[at + 1], manifest, baseDir);
+  if (at >= 0 && args[at + 1]) {
+    approve(args[at + 1], manifest, baseDir);
+    // `--start` and `--next` hold a page-writing task until worklog.md records the browser answer (step 7.0b).
+    if (args.includes("--start") || args.includes("--next")) recordBrowserAnswer(args[at + 1]);
+  }
 };
 // THE BUILD LOOP OF AN APPROVED PLAN: `migrate.mjs` on a manifest piped to stdin, run the way the orchestrator runs
 // it once the user approved the plan — so a `--tasks <dir>` run first records that approval for the manifest it
@@ -560,8 +583,11 @@ check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that 
     const a = tasksOn(SET5, "page:main"), b = tasksOn(SET6, "page:main");
     const la = a.flatMap((t) => t.rows.map((r) => r.label)).join("|");
     const lb = b.flatMap((t) => t.rows.map((r) => r.label)).join("|");
+    // Only a chunk that STARTS on a count row is asked about: a chunk may also start on a handler whose own name
+    // carries a digit (`onBulk7`), and that digit is a name, not a count the mask is for.
+    const counted = a.filter((t) => /\d fields?/.test(t.rows[0].label));
     return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
-      && a.some((t) => /\d/.test(t.rows[0].label)) && a.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
+      && counted.length > 0 && counted.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
   }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
 check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the renamed field is its own deliverable row, so the task that carries it reads as changed and its id is kept",
   () => {
@@ -611,6 +637,92 @@ check("renderTaskFile: the file STATES the one-sub-agent contract and the parall
     && SAMPLE_TEXT.includes("`" + SAMPLE.writesTo + "`") && /no other task may be running against this artifact/.test(SAMPLE_TEXT)
     && /\*\*Depends on:\*\*/.test(SAMPLE_TEXT) && /Read their `## Notes` first/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
+// The writer OWNS the page's code, and the file it is handed is its brief (the task card).
+check("owner: a page task gives its writer the page's code to own; it carries no `Build ONLY what is listed` or `sequential is not permission` wording, and a deliverable outside its rows is a proposal under `## Notes`",
+  () => /you OWN this page's code/.test(SAMPLE_TEXT) && /yours to refactor/.test(SAMPLE_TEXT)
+    && /`Page code` row passes/.test(SAMPLE_TEXT) && SAMPLE_TEXT.includes("outside your rows") && SAMPLE_TEXT.includes("is not yours to change")
+    && !/Build ONLY what is listed/.test(SAMPLE_TEXT) && !/sequential is not permission/.test(SAMPLE_TEXT),
+  () => SAMPLE_TEXT.split("\n").slice(18, 32).join("\n"));
+{
+  const ob = fs.readFileSync(path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "references", "orchestrate-build.md"), "utf8");
+  check("owner: orchestrate-build.md rule 2 hands the next task to a different sub-agent that takes the page over as its OWNER, sends post-build changes for one page as one dispatch, and carries no `Sequential is not an exception` wording",
+    () => /it is not a guest: it takes the\s+page over as its \*\*owner\*\*/.test(ob) && /one task per page per round/.test(ob)
+      && !/Sequential is not an exception/.test(ob));
+}
+check("owner: the next task on the page still goes to a DIFFERENT sub-agent, which takes the page over as its owner — the per-task check and the dispatch token stay",
+  () => /The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner/.test(SAMPLE_TEXT)
+    && /agentNonce/.test(SAMPLE_TEXT), () => SAMPLE_TEXT);
+{
+  const decisions = new Map([["D4", "Hide every element the Classic page did not have"], ["Adjustment 1", "Keep the Notes tab"]]);
+  const carded = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions });
+  const card = carded.slice(carded.indexOf(TASK_CARD_HEADING), carded.indexOf("## Deliverables"));
+  check("task card: a page task carries the card — its brief is this file and the spec section, NOT plan.md / decisions.md / worklog.md, and it runs the code map before and after it writes",
+    () => card.startsWith(TASK_CARD_HEADING) && /Your brief is this file/.test(card)
+      && /Do not read `plan\.md`, `decisions\.md`, `worklog\.md` or the `customizations-\*` part files/.test(card)
+      && card.includes(`node engine/codemap.mjs <file> --page ${SAMPLE.pageKey}`) && /One place per behaviour/.test(card),
+    () => card);
+  check("task card: the decisions in force are inline, verbatim, the plan's Adjustments included",
+    () => card.includes("- `D4` — Hide every element the Classic page did not have") && card.includes("- `Adjustment 1` — Keep the Notes tab"),
+    () => card);
+  check("task card: an empty decisions file says none are recorded; a render without the map sends the writer to the orchestrator, never to decisions.md",
+    () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: new Map() }).includes("**Decisions in force:** none recorded.")
+      && /\*\*Decisions in force:\*\* not available to this render — ask the orchestrator to re-run `--tasks`/.test(SAMPLE_TEXT));
+  check("task card: the cited behaviour cards travel inline with their content, and the plan's ⚠ Confirm items and boundaries are pointed at in the table — no part-file read",
+    () => {
+      const rows = [
+        { label: "Handler — `onSaved`", group: "⚠ Custom methods worklist", vk: "handler",
+          behaviour: { card: "main/C03", ac: ["AC-1 saving keeps the owner"], whatItDoes: "Re-reads the owner after save.", useCase: "The user saves; the owner field refreshes." } },
+        { label: "[mixin] CompletenessMixin", group: "⚠ Confirm worklist", vk: null, confirm: true },
+        { label: "Dashboards", group: "Pages", vk: null, na: "another section owns it" },
+      ];
+      const text = renderTaskFile({ ...SAMPLE, rows }, { ...SET, cardDecisions: decisions });
+      const c = text.slice(text.indexOf(TASK_CARD_HEADING), text.indexOf("## Deliverables"));
+      return c.includes("- `main/C03` — does: Re-reads the owner after save. · use case: The user saves; the owner field refreshes. · acceptance: AC-1 saving keeps the owner")
+        && c.includes("**⚠ Confirm — answer each on the stand before you build**") && c.includes("  - [mixin] CompletenessMixin")
+        && c.includes("**Plan boundaries — never built**") && c.includes("  - Dashboards — another section owns it")
+        && c.includes("`customizations-*`") && !/read by its id in its part file/.test(c);
+    }, () => renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions }));
+  check("task card: each decision carries its full text under its title, indented so no line of it can open a heading of the file",
+    () => {
+      const texts = new Map([["D4", "Decided by: the user\n## not a heading here\nHide Back, Close and Export too."]]);
+      const t = renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions, cardDecisionTexts: texts });
+      return t.includes("  - `D4` — Hide every element the Classic page did not have\n    Decided by: the user\n    \\## not a heading here\n    Hide Back, Close and Export too.")
+        && !t.split("\n").some((l) => l.trim() === "## not a heading here");
+    });
+  check("task card: a decision text that carries the file's own markers (an indented `## Notes`, `## Deliverables`, a `| 1 |` row) is inert — the file parses back to no notes and its own rows, and a re-render from the parse is byte-identical",
+    () => {
+      const texts = new Map([["D4", "Use this shape:\n\n    ## Notes\n    - what was built\n  ## Deliverables\n  | 1 | Fake row | built |\n| # | Deliverable | Outcome |"]]);
+      const cardSet = { ...SET, cardDecisions: decisions, cardDecisionTexts: texts };
+      const first = renderTaskFile(SAMPLE, cardSet);
+      const parsed = parseTaskFile(first);
+      const again = renderTaskFile({ ...SAMPLE, notes: parsed.notes }, cardSet);
+      const plain = parseTaskFile(renderTaskFile(SAMPLE, SET));
+      return parsed.notes === "" && parsed.rowCount === plain.rowCount
+        && JSON.stringify(parsed.outcomes) === JSON.stringify(plain.outcomes) && again === first
+        && first.includes(String.raw`    \## Notes`) && first.includes(String.raw`  \| 1 | Fake row | built |`);
+    }, () => JSON.stringify(parseTaskFile(renderTaskFile(SAMPLE, { ...SET, cardDecisions: decisions,
+      cardDecisionTexts: new Map([["D4", "    ## Notes\n    - x"]]) })).notes));
+  check("decision texts: the lines under a `D<N>` heading and the text of a plan Adjustment are read in full; a decision with no body has no entry",
+    () => {
+      const base = tmp("decision-texts");
+      fs.writeFileSync(path.join(base, "decisions.md"), "# Decisions\n\n## D4 — Hide Freedom-only elements\nDecided by: the user\nKeep Back, Close and Export.\n\n## D5 — Bare\n## Plan approval\nApproved by: someone\n");
+      fs.writeFileSync(path.join(base, "plan.md"), "# Plan\n\n### Adjustments\n\n1. **Keep the Notes tab** — the user asked for it.\n   It stays on the main page.\n2. **Drop History**\n");
+      const t = readDecisionTexts(base);
+      fs.rmSync(base, { recursive: true, force: true });
+      return t.get("D4") === "Decided by: the user\nKeep Back, Close and Export." && !t.has("D5")
+        && t.get("Adjustment 1") === "the user asked for it.\nIt stays on the main page." && !t.has("Adjustment 2");
+    });
+  check("task card: a collapsed whole-run task carries the card with the decisions in force",
+    () => {
+      const whole = buildTaskSet(RUN, { ...OPTS, decisions, taskBudget: { run: 100000 } }).tasks.find((t) => t.writesTo === ARTIFACT_WHOLE);
+      const t = whole && renderTaskFile(whole, { ...SET, cardDecisions: decisions });
+      return !!t && t.includes(TASK_CARD_HEADING) && t.includes("- `D4` — Hide every element the Classic page did not have");
+    });
+  check("task card: a read-only review task has no card — it owns no page code",
+    () => !renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), { ...SET, cardDecisions: decisions }).includes(TASK_CARD_HEADING));
+  check("task card: the decisions ride on the task set itself, so every path that renders the set — sync, start, decide, revoke — writes the same card",
+    () => buildTaskSet(RUN, { ...OPTS, decisions }).cardDecisions === decisions && mergeTaskSet(buildTaskSet(RUN, { ...OPTS, decisions }), []).cardDecisions === decisions);
+}
 check("renderTaskFile: a read-only task says so instead of naming an artifact — a review that claimed a `writesTo` would block every task that shares its page for no reason",
   () => {
     const review = taskAt(SET, "child:C1", "Quality gates");
@@ -1716,6 +1828,29 @@ check("repair: an adopted repair file joins the WRITE CHAIN of the page it repai
     const lastBuild = m.tasks.findLast((x) => x.writesTo === t.writesTo && x.id !== t.id);
     return got.dependsOn.includes(lastBuild.id);
   }, () => "see the merged queue");
+check("repair: a repair task that writes a page carries the task card with the decisions in force, and no `Build ONLY what is listed` wording",
+  () => {
+    const dir = tmp("repair-card");
+    const opts = { ...OPTS, decisions: new Map([["D2", "Keep the Notes tab"]]) };
+    syncTaskDir(dir, RUN, opts);
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, opts);
+    const texts = res.written.filter((t) => String(t.writesTo).startsWith("page:")).map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+    fs.rmSync(dir, { recursive: true, force: true });
+    return texts.length > 0 && texts.every((x) => x.includes(TASK_CARD_HEADING) && x.includes("- `D2` — Keep the Notes tab")
+      && /Do not read `plan\.md`/.test(x) && !/Build ONLY what is listed/.test(x));
+  });
+// A run on the collapse line stays ONE build task (plus its review) with the `Page code` row in it: the row checks
+// code the other rows produce and weighs nothing.
+check("budget: a run at exactly `TASK_BUDGET.run` weight still collapses to one build task with the `Page code` row inside it",
+  () => {
+    const rows = checklistGroups(RUN, OPTS).flatMap((g) => g.rows);
+    const pc = rows.some((r) => r.vk?.type === "pagecode");
+    const base = buildTaskSet(RUN, OPTS);
+    const weight = base.tasks.filter((t) => t.writesTo).reduce((a, t) => a + (t.weight || 0), 0);
+    const atLine = buildTaskSet(RUN, { ...OPTS, taskBudget: { run: weight } });
+    const builds = atLine.tasks.filter((t) => t.writesTo);
+    return pc && weight > 0 && builds.length === 1 && builds[0].rows.some((r) => r.vk === "pagecode");
+  }, () => buildTaskSet(RUN, OPTS).tasks.map((t) => `${t.group}:${t.weight}:${t.writesTo}`));
 check("repair: syncRepairDir ADDS to the folder and never overwrites — the plan tasks are untouched, and re-verifying an UNCHANGED page opens no second round, because a round is an ATTEMPT and counting verify runs would burn the cap with nobody having run",
   () => {
     const dir = tmp("repair");
@@ -2760,6 +2895,7 @@ console.log("\n===== migrate.mjs --tasks / --start (CLI): the plan approval gate
         && JSON.stringify(snapOf(copy)) === JSON.stringify(before),
       () => ({ id, status: start.status, stdout: start.stdout }));
     fs.writeFileSync(path.join(copy, "decisions.md"), `## Plan approved\n- Approved by: user\n- Plan version: ${V}\n`);
+    recordBrowserAnswer(cdir);
     const started = cliUnapproved(["--tasks", cdir, "--start", id], MANIFEST);
     check("approval gate T4 (R3, anti-vacuity): the same `--start` with the approval restored starts the task — the refusal above is the gate, not a task that could not start",
       () => started.status === 0 && /DISPATCH TOKEN/.test(started.stdout || ""),
@@ -3578,6 +3714,25 @@ const minted = (over = {}, dirName = "mint") => {
   syncTaskDir(d, RUN, OPTS);
   return { d, res: addTasks(d, RUN, { ...DECL, ...over }, OPTS) };
 };
+
+// A declared task that writes a page carries the task card with the decisions in force — at minting, and again
+// after a later sync, which re-renders only the card block of an adopted file and leaves its cells and notes alone.
+check("minted: a declared page-writing task carries the decisions in force, and a later sync refreshes ONLY its card when a decision is added",
+  () => {
+    const d = tmp("mint-card");
+    const opts = { ...OPTS, decisions: new Map([["D2", "Keep the Notes tab"]]) };
+    syncTaskDir(d, RUN, opts);
+    const res = addTasks(d, RUN, DECL, opts);
+    const f = path.join(d, res.written[0].file);
+    const first = fs.readFileSync(f, "utf8");
+    fs.writeFileSync(f, first + "\nnoted by the writer\n");
+    syncTaskDir(d, RUN, { ...opts, decisions: new Map([["D2", "Keep the Notes tab"], ["D3", "Drop the History tab"]]) });
+    const second = fs.readFileSync(f, "utf8");
+    const cardOut = (t) => t.replace(/\n## Task card\n[\s\S]*?(?=\n\n## Deliverables)/, "");
+    fs.rmSync(d, { recursive: true, force: true });
+    return first.includes("- `D2` — Keep the Notes tab") && second.includes("- `D3` — Drop the History tab")
+      && cardOut(second) === cardOut(first + "\nnoted by the writer\n");
+  });
 
 // A LINE BREAK IN A DECLARED STRING FORGES FRONT MATTER: the value is interpolated into a line of its own, so an
 // embedded newline adds a line, and a `status:` there is read ahead of the engine's. Refused before anything is
@@ -5671,6 +5826,193 @@ console.log("\n===== the migration result report — one artifact, computed from
     () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
+  // BUILT IS NOT EXERCISED. A page whose build tasks never opened it after a save is reported as such: the verdict
+  // counts what a browser check exercised, not only what the read-back found. The count is the `Browser checks: N`
+  // line each page-writing task writes under `## Notes`; a missing line counts as 0.
+  check("browserChecksOf: reads N off the plain, listed or bold `Browser checks: N — …` line, and null when there is none",
+    () => browserChecksOf("Browser checks: 2 — 1: loads clean; 2: confirms the fix") === 2
+      && browserChecksOf("- **Browser checks:** 0 — the user chose no browser") === 0
+      && browserChecksOf("## Notes\nsome prose\n") === null && browserChecksOf("") === null,
+    () => [browserChecksOf("Browser checks: 2 — x"), browserChecksOf("- **Browser checks:** 0 — y")]);
+  {
+    // Only a field line sets the count: prose ABOUT the line — a quoted example, a fenced one, a mention mid-sentence
+    // or in inline code — never flips the number a verdict rests on, and a later field line corrects an earlier one.
+    const real = "Browser checks: 2 — loads clean; fix confirmed";
+    const cases = {
+      quoted: [`${real}`, "> Browser checks: 0 — <why>"].join("\n"),
+      fenced: [`${real}`, "```text", "Browser checks: 0 — <why>", "```"].join("\n"),
+      tildeFence: ["~~~", "Browser checks: 3 — example", "~~~", "Browser checks: 0 — the user chose no browser"].join("\n"),
+      inline: [`${real}`, "The brief's shape is `Browser checks: 0 — <why>`; mine is above."].join("\n"),
+      corrected: ["Browser checks: 0 — not yet", "- Browser checks: 1 — loads clean after the fix"].join("\n"),
+    };
+    const got = Object.fromEntries(Object.entries(cases).map(([k, v]) => [k, browserChecksOf(v)]));
+    check("browserChecksOf: a quoted, fenced or inline example never sets the count; the last FIELD line wins, so a builder corrects its count by writing it again",
+      () => JSON.stringify(got) === JSON.stringify({ quoted: 2, fenced: 2, tildeFence: 0, inline: 2, corrected: 1 }),
+      () => got);
+  }
+  const pageTask = (id, pageKey, notes, writesTo = `page:${pageKey}`) => ({ id, file: `${id}.md`, group: "Page build", pageKey,
+    writesTo, status: "done", notes, rows: [{ label: `Form page ${id}`, outcomeKind: "built", outcome: "built" }] });
+  const exercisedRep = (tasks, dir) => renderFinalReport({ result: RUN, verifyRes: greenVerify,
+    set: { planVersion: RUN.planVersion, tasks }, dir });
+  const allChecked = exercisedRep([pageTask("e-b", "main", "Browser checks: 0 — read-back only"),
+    pageTask("e-a", "main", "Browser checks: 1 — loads clean"), pageTask("e-c", "child:C1", "Browser checks: 2 — loads; fix confirmed")],
+  tmp("result-report-exercised"));
+  check("exercised: every page whose last built task reports `Browser checks: ≥1` keeps 🟢 COMPLETE, no not-exercised section and no stderr note",
+    () => allChecked.complete === true && /🟢 \*\*COMPLETE\*\*/.test(allChecked.markdown) && allChecked.verdictColour === "green"
+      && !/Not exercised in a browser/.test(allChecked.markdown) && unexercisedNote(allChecked) === "",
+    () => allChecked.markdown.split("\n")[2]);
+  {
+    // The exercised section, byte for byte: each page beside its last built task, the count, and the builder's own
+    // words after the dash, so the number a 🟢 verdict rests on is read next to what each check answered.
+    const md = allChecked.markdown;
+    const from = md.indexOf("## Exercised in a browser");
+    const got = from < 0 ? [] : md.slice(from).split("\n\n## ")[0].split("\n").filter((l) => l.startsWith("- ") || l.startsWith("## "));
+    const want = [
+      "## Exercised in a browser (2)",
+      "- **Main page** (`page:main`) — [Page build](e-a.md), 1 check: loads clean",
+      "- **C1 page** (`page:child:C1`) — [Page build](e-c.md), 2 checks: loads; fix confirmed",
+    ];
+    const pageNames = got.slice(1).map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    const wantNames = want.slice(1).map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    check("exercised: a 🟢 run quotes each exercised page's `Browser checks` prose beside its count, from the page's last built task",
+      () => got[0] === want[0] && JSON.stringify(pageNames) === JSON.stringify(wantNames),
+      () => ({ got, want }));
+    const bare = exercisedRep([pageTask("b-a", "main", "Browser checks: 1")], tmp("result-report-exercised-bare"));
+    check("exercised: a `Browser checks: N` line with no prose is named as such beside the page, not left blank",
+      () => bare.verdictColour === "green" && /, 1 check: no account of what the checks answered$/m.test(bare.markdown),
+      () => bare.markdown.slice(bare.markdown.indexOf("## Exercised")));
+  }
+  const lastChunkUnchecked = exercisedRep([pageTask("k-a", "main", "Browser checks: 1 — loads clean"),
+    pageTask("k-b", "main", "Browser checks: 0 — saved the handlers")], tmp("result-report-last-chunk"));
+  check("exercised: a page whose LAST built chunk reports no check is unexercised even though an earlier chunk checked it — the page is opened as it finally stands",
+    () => lastChunkUnchecked.verdictColour === "orange" && lastChunkUnchecked.counts.unexercised === 1,
+    () => lastChunkUnchecked.markdown.split("\n")[2]);
+  {
+    // A whole-run build is ONE artifact in the browser verdict, whatever pages it saved: its single
+    // `Browser checks: N` line decides all of them at once, as one check line decides one page's last chunk.
+    const wholeTask = (notes) => ({ ...pageTask("wh-a", "run", notes, ARTIFACT_WHOLE), group: "Whole run",
+      rows: [{ label: "Form page main", pageKey: "main", outcomeKind: "built", outcome: "built" },
+        { label: "List page list", pageKey: "list", outcomeKind: "built", outcome: "built" }] });
+    const wholeChecked = exercisedRep([wholeTask("Browser checks: 1 — form loads clean")], tmp("result-report-whole-checked"));
+    const wholeUnchecked = exercisedRep([wholeTask("Browser checks: 0 — read-back only")], tmp("result-report-whole-unchecked"));
+    check("exercised: a whole-run build is one artifact in the browser verdict — one reported check marks the run exercised, none leaves the whole run as the one unexercised entry",
+      () => wholeChecked.verdictColour === "green" && wholeChecked.counts.unexercised === 0
+        && (wholeChecked.markdown.match(/^- \*\*.*\(`whole`\)/gm) || []).length === 1
+        && wholeUnchecked.verdictColour === "orange" && wholeUnchecked.counts.unexercised === 1
+        && wholeUnchecked.unexercisedPages.length === 1,
+      () => ({ checked: wholeChecked.verdictColour, unchecked: wholeUnchecked.unexercisedPages }));
+  }
+  const oneUnchecked = exercisedRep([pageTask("u-a", "main", "Browser checks: 1 — loads clean"),
+    { ...pageTask("u-b", "child:C1", "Check on stand (row 1): open a C1 record → the Owner field is filled"), status: "done" }],
+  tmp("result-report-unexercised"));
+  check("not exercised: one page with no task reporting a browser check turns the green verdict into 🟠 BUILT, NOT EXERCISED, keeps the run complete, and lists that page with its `Check on stand` lines",
+    () => oneUnchecked.complete === true && oneUnchecked.verdictColour === "orange"
+      && /🟠 \*\*BUILT, NOT EXERCISED\*\*/.test(oneUnchecked.markdown) && !/🟢/.test(oneUnchecked.markdown)
+      && /## Not exercised in a browser/.test(oneUnchecked.markdown)
+      && /the Owner field is filled/.test(oneUnchecked.markdown.slice(oneUnchecked.markdown.indexOf("## Not exercised")))
+      && oneUnchecked.counts.unexercised === 1,
+    () => oneUnchecked.markdown.slice(0, 1600));
+  {
+    // Each unexercised page's bullet, byte for byte: its last built task and why that task reports no check, in the
+    // builder's words — a refused check, a check never attempted and a missing line are different jobs on the stand.
+    const reasons = exercisedRep([pageTask("r-a", "main", "Browser checks: 0 — page-smoke cannot open a list page; no surface available"),
+      pageTask("r-b", "child:C1", "Browser checks: 0"), pageTask("r-c", "child:C2", "")], tmp("result-report-unexercised-reasons"));
+    const md = reasons.markdown;
+    const got = md.slice(md.indexOf("## Not exercised")).split("\n").filter((l) => l.startsWith("- **"))
+      .map((l) => l.replace(/^- \*\*[^*]+\*\* /, "- **<page>** "));
+    const want = [
+      "- **<page>** (`page:main`) — [Page build](r-a.md), `Browser checks: 0`: page-smoke cannot open a list page; no surface available",
+      "- **<page>** (`page:child:C1`) — [Page build](r-b.md), `Browser checks: 0`: no account of why",
+      "- **<page>** (`page:child:C2`) — [Page build](r-c.md) wrote no `Browser checks` line",
+    ];
+    check("not exercised: each unexercised page quotes its last built task's `Browser checks` reason, says when there is none, and says when the line is missing",
+      () => JSON.stringify(got) === JSON.stringify(want),
+      () => ({ got, want }));
+  }
+  check("not exercised: the 🟠 run keeps `complete` (exit code untouched) and says the unchecked pages on stderr, by name",
+    () => /^migrate\.mjs: 🟠 BUILT, NOT EXERCISED — .*Check them on the stand/.test(unexercisedNote(oneUnchecked))
+      && unexercisedNote(oneUnchecked).includes(oneUnchecked.unexercisedPages[0]) && oneUnchecked.unexercisedPages.length === 1
+      && unexercisedNote({ ...oneUnchecked, complete: false }) === "",
+    () => ({ note: unexercisedNote(oneUnchecked), pages: oneUnchecked.unexercisedPages }));
+  {
+    const nbase = tmp("result-report-browser-none");
+    const ndir = path.join(nbase, "build-tasks");
+    fs.mkdirSync(ndir, { recursive: true });
+    fs.writeFileSync(path.join(nbase, "worklog.md"), "# Worklog\n\nBrowser: none (user: \"I will check the pages myself\")\n");
+    const noneRep = exercisedRep([pageTask("n-a", "main", "Browser checks: 0 — the user chose no browser")], ndir);
+    check("not exercised: `Browser: none` is honoured — the run ends 🟠 BUILT, NOT EXERCISED and the browser section quotes the recorded answer",
+      () => noneRep.verdictColour === "orange" && /🟠 \*\*BUILT, NOT EXERCISED\*\*/.test(noneRep.markdown)
+        && /Browser: none \(user: "I will check the pages myself"\)/.test(noneRep.markdown),
+      () => noneRep.markdown.slice(noneRep.markdown.indexOf("## Not exercised")));
+    const checkedRep = exercisedRep([pageTask("n-b", "main", "Browser checks: 2 — loads clean; fix confirmed")], ndir);
+    const sec = checkedRep.markdown.slice(checkedRep.markdown.indexOf("## Not exercised"));
+    check("not exercised: under `Browser: none` the section says the user declined the check, so a page whose task reported one is listed without the section claiming nobody opened it",
+      () => checkedRep.verdictColour === "orange" && /The user declined the browser check for this run/.test(sec)
+        && /including any a build task did report a check for/.test(sec) && !/no build task opened them/.test(sec)
+        && /`Browser checks: 2`: loads clean; fix confirmed/.test(sec) && checkedRep.browserAnswerUnread === null,
+      () => sec.slice(0, 900));
+  }
+  {
+    // An answer the report could not read is said, not taken for "no answer": without it a recorded `Browser: none`
+    // cannot be applied, so the verdict may be greener than the answer earns.
+    const lost = path.join(tmp("result-report-browser-unread"), "build-tasks");
+    fs.mkdirSync(lost, { recursive: true });
+    const lostRep = exercisedRep([pageTask("l-a", "main", "Browser checks: 1 — loads clean")], lost);
+    const md = lostRep.markdown;
+    const browserAt = md.indexOf("## Browser answer not read");
+    check("browser answer unread: a task folder with no `worklog.md` beside it puts `Browser answer not read` first in the browser section, names the missing file, and raises the stderr note",
+      () => browserAt > 0 && browserAt < md.indexOf("## Exercised in a browser")
+        && /no `worklog\.md` beside the task folder/.test(lostRep.browserAnswerUnread || "")
+        && /A recorded `Browser: none` is therefore not applied/.test(md)
+        && /^migrate\.mjs: ⚠ BROWSER ANSWER NOT READ — no `worklog\.md` beside the task folder/.test(browserAnswerUnreadNote(lostRep)),
+      () => ({ unread: lostRep.browserAnswerUnread, note: browserAnswerUnreadNote(lostRep), at: browserAt }));
+    const dirBase = tmp("result-report-browser-unreadable");
+    const blocked = path.join(dirBase, "build-tasks");
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.mkdirSync(path.join(dirBase, "worklog.md"));
+    const blockedRep = exercisedRep([pageTask("l-b", "main", "")], blocked);
+    check("browser answer unread: a `worklog.md` that exists but cannot be read says so, and the not-exercised section reads `could not be read`, not `has no Browser: line`",
+      () => /could not be read \(E/.test(blockedRep.browserAnswerUnread || "")
+        && /Browser answer recorded for this run: none — `worklog\.md` could not be read\./.test(blockedRep.markdown),
+      () => ({ unread: blockedRep.browserAnswerUnread }));
+    const quiet = exercisedRep([], lost);
+    check("browser answer unread: with no page built the answer decides nothing, so there is no finding and no stderr note",
+      () => quiet.browserAnswerUnread === null && !/Browser answer not read/.test(quiet.markdown) && browserAnswerUnreadNote(quiet) === "",
+      () => ({ unread: quiet.browserAnswerUnread }));
+    const ok = path.join(tmp("result-report-browser-read"), "build-tasks");
+    fs.mkdirSync(ok, { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(ok), "worklog.md"), "# Worklog\n\nRoute: agent\n");
+    const okRep = exercisedRep([pageTask("l-c", "main", "Browser checks: 1 — loads clean")], ok);
+    check("browser answer unread: a readable `worklog.md` with no `Browser:` line is no read failure — no unread section, no note",
+      () => okRep.browserAnswerUnread === null && !/Browser answer not read/.test(okRep.markdown) && browserAnswerUnreadNote(okRep) === "",
+      () => ({ unread: okRep.browserAnswerUnread }));
+  }
+  const nothingBuilt = exercisedRep([pageTask("w-a", "main", "Browser checks: 1 — loads clean"),
+    { ...pageTask("w-b", "child:C1", ""), status: "wont-do" }, { ...pageTask("w-c", "child:C2", ""), status: "not-applicable" },
+    { ...pageTask("w-d", "child:C3", ""), status: "postponed" }], tmp("result-report-nothing-built"));
+  check("exercised: a page whose only task closed wont-do, not-applicable or postponed built nothing, so it never turns the run 🟠",
+    () => nothingBuilt.counts.unexercised === 0 && !/🟠/.test(nothingBuilt.markdown) && !/Not exercised in a browser/.test(nothingBuilt.markdown),
+    () => nothingBuilt.markdown.split("\n")[2]);
+  {
+    const dbase = tmp("result-report-browser-declined");
+    const ddir = path.join(dbase, "build-tasks");
+    fs.mkdirSync(ddir, { recursive: true });
+    fs.writeFileSync(path.join(dbase, "worklog.md"), "Browser:none (user: \"no browser\")\n");
+    const declinedRep = exercisedRep([pageTask("d-a", "main", "Browser checks: 1 — opened it anyway")], ddir);
+    check("not exercised: under `Browser: none` a built page counts as unexercised even when its task reports a check — the user declined the check for the run",
+      () => declinedRep.verdictColour === "orange" && declinedRep.counts.unexercised === 1,
+      () => declinedRep.markdown.split("\n")[2]);
+  }
+  const overCap = exercisedRep([pageTask("o-a", "main", "Browser checks: 4 — loads; fix; fix again; fix again")], tmp("result-report-cap"));
+  check("cap: a task reporting more than two browser checks is listed as a cap breach — a warning, so the verdict stays 🟢",
+    () => overCap.verdictColour === "green" && /Browser checks over the cap of 2/.test(overCap.markdown) && /o-a/.test(overCap.markdown)
+      && overCap.counts.capBreaches === 1,
+    () => overCap.markdown);
+  const redStaysRed = exercisedRep([{ ...pageTask("r-a", "main", ""), status: "todo", rows: [{ label: "Form page r-a" }] }], tmp("result-report-red-unexercised"));
+  check("not exercised: an incomplete run stays ⛔ NOT COMPLETE — the browser tier never replaces a red verdict",
+    () => redStaysRed.verdictColour === "red" && /⛔ \*\*NOT COMPLETE\*\*/.test(redStaysRed.markdown) && !/🟠/.test(redStaysRed.markdown.split("\n")[2]),
+    () => redStaysRed.markdown.split("\n")[2]);
+
   // TWO WAYS A CLOSED TASK CAN CARRY A WORD NOTHING STANDS BEHIND, neither of which the machine leg can see. The
   // set they are measured against is `closedSet` above, which the check before this one proves reads 🟢 COMPLETE.
   // `DRIFT` is the real thing, merged out of a folder recorded against SET's rows and re-read against SET3's.
@@ -5739,6 +6081,29 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /\*\*D7\*\* — dash title/.test(repG.markdown) && /\*\*D8\*\* — colon title/.test(repG.markdown)
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
+  }
+  // A filter the user did not want object-wide is closed `wont-do` under its decision: section 2 lists it with
+  // the decision, so the reader learns it was not migrated and has to be added by hand. A `wont-do` citing no
+  // recorded decision is not listed there.
+  {
+    const baseW = tmp("result-report-declined"); fs.mkdirSync(baseW, { recursive: true });
+    fs.writeFileSync(path.join(baseW, "decisions.md"), "# Decisions\n\n## D4 — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter\n");
+    const dW = path.join(baseW, "build-tasks");
+    const wnt = (id, reason) => ({ id, file: `${id}.md`, group: "Logic", pageKey: "main", status: "done", kind: "build", notes: "",
+      rows: [{ label: `Filter · ${id}`, outcomeKind: "wont-do", outcome: `wont-do — ${reason}`, outcomeReason: reason, na: null }] });
+    const repW = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [wnt("Lk", "declined object-wide scope (D4)"), wnt("St", "not wanted")] }, dir: dW });
+    const s2 = repW.markdown.slice(repW.markdown.indexOf("## 2."), repW.markdown.indexOf("## 3.") > 0 ? repW.markdown.indexOf("## 3.") : undefined);
+    check("report section 2 lists a `wont-do` row that cites a recorded decision, with the decision's title — a declined filter is visible as not migrated",
+      () => /Closed by a recorded decision/.test(s2) && /Filter · Lk/.test(s2)
+        && /\*\*D4\*\* — Lookup filters not migrated — add manually: Freedom page rules have no lookup filter/.test(s2),
+      () => s2);
+    check("report section 2 does not list a `wont-do` row that cites no recorded decision",
+      () => !/Filter · St/.test(s2), () => s2);
+    const summaryN = /\| Boundaries the agent closed \| (\d+)/.exec(repW.markdown)?.[1];
+    const headingN = /## 2\. Boundaries the agent closed \((\d+)\)/.exec(repW.markdown)?.[1];
+    check("report summary counts the declined row as a boundary closed by a recorded decision, the same number section 2's heading gives",
+      () => summaryN === "1" && headingN === "1" && /Boundaries the agent closed \| 1 — with a recorded decision 1 · without 0/.test(repW.markdown),
+      () => ({ summaryN, headingN }));
   }
   // decisions.md written as a TABLE (`| D1 | **title** | … |`), per references/migration-documentation.md — the
   // second cell is the title (bold lead lifted). Structured shapes (heading / table) take precedence, so a plain
@@ -6446,10 +6811,102 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
     () => DISPATCH_ROUTES.every((r) => worklogRoute(`Route: ${r}`) === `Route: ${r}`)
       && worklogRoute("- **Route:** `inline` (the host has no sub-agents)") === "Route: inline (the host has no sub-agents)",
     () => DISPATCH_ROUTES.map((r) => worklogRoute(`Route: ${r}`)));
+  check("browserAnswerOf: the value of a `Browser:` line, read by the rule the gate reads it — with or without the space, a trailing quote ignored — and null for no line",
+    () => browserAnswerOf("Browser: none (user: \"no\")") === "none" && browserAnswerOf(worklogBrowser("Browser:none")) === "none"
+      && browserAnswerOf(worklogBrowser("- **Browser:** `page-smoke`")) === "page-smoke" && browserAnswerOf(null) === null,
+    () => [browserAnswerOf("Browser: none"), browserAnswerOf(worklogBrowser("Browser:none")), worklogBrowser("- **Browser:** `page-smoke`")]);
+  check("worklogBrowser: each of page-smoke · surface · none is an answer, a plain, bold or listed line is read, a trailing quote is kept, and the LAST one wins",
+    () => BROWSER_ANSWERS.every((a) => worklogBrowser(`Browser: ${a}`) === `Browser: ${a}`)
+      && worklogBrowser("- **Browser:** `page-smoke` (user: \"yes, use Chrome\")") === "Browser: page-smoke (user: \"yes, use Chrome\")"
+      && worklogBrowser("Browser: none\n## later\nBrowser: page-smoke\n") === "Browser: page-smoke",
+    () => BROWSER_ANSWERS.map((a) => worklogBrowser(`Browser: ${a}`)));
+  check("worklogBrowser: no line, an empty line, a mention in prose or an answer outside the three is NO answer — and a later such line is not saved by an earlier valid one",
+    () => worklogBrowser("") === null && worklogBrowser("Browser:") === null
+      && worklogBrowser("- the Browser: line is written in 7.0b") === null && worklogBrowser("Browser: manual") === null
+      && worklogBrowser("Browser: Page-smoke") === null && worklogBrowser("Browser: page-smoke\nBrowser: TBD\n") === null,
+    () => [worklogBrowser("Browser: manual"), worklogBrowser("Browser: page-smoke\nBrowser: TBD")]);
+  check("writesPage: a page body (`page:<id>`) and the whole-run build write a page; the reference cache, the scaffold, child wiring and a review do not",
+    () => writesPage("page:main") && writesPage(ARTIFACT_WHOLE) && !writesPage(ARTIFACT_REFS) && !writesPage(ARTIFACT_SCAFFOLD)
+      && !writesPage("wiring:main") && !writesPage("") && !writesPage(undefined));
   check("worklogRoute: `Route: TBD`, a misspelt or a re-cased route is NO route — and a later such line is not saved by an earlier valid one",
     () => worklogRoute("Route: TBD") === null && worklogRoute("Route: agents") === null && worklogRoute("Route: Agent") === null
       && worklogRoute("Route: agent\n## later\nRoute: TBD\n") === null,
     () => [worklogRoute("Route: TBD"), worklogRoute("Route: agents"), worklogRoute("Route: agent\nRoute: TBD")]);
+  {
+    // THE BROWSER GATE ON `--start`. A builder cannot reach the user, so the post-save check it owes a page runs only
+    // if the orchestrator asked the browser question first. `startTask` refuses a page-writing task under a gate with
+    // no answer and opens no clock; a task that writes no page is not held by it.
+    const d = path.join(tmp("browser-gate"), "build-tasks");
+    syncTaskDir(d, RUN, OPTS);
+    const tasks = readTaskDir(d);
+    const page = tasks.find((t) => writesPage(t.writesTo));
+    const cache = tasks.find((t) => !writesPage(t.writesTo) && !(t.dependsOn || []).length);
+    const noAnswer = startTask(d, page.id, RUN, { ...OPTS, browserGate: { answer: null } }, null, AT(1));
+    check("browser gate: `startTask` with a gate and no answer REFUSES a page-writing task, names its artifact and opens NO clock",
+      () => noAnswer.started === null && noAnswer.blockedByBrowser === page.writesTo && !readTimingsFile(d).running[page.id],
+      () => ({ started: noAnswer.started, blockedByBrowser: noAnswer.blockedByBrowser, running: readTimingsFile(d).running }));
+    const cacheStart = startTask(d, cache.id, RUN, { ...OPTS, browserGate: { answer: null } }, null, AT(3));
+    check("browser gate: a task that writes no page (the reference cache) starts with no answer recorded",
+      () => !cacheStart.blockedByBrowser && cacheStart.started?.id === cache.id,
+      () => ({ blockedByBrowser: cacheStart.blockedByBrowser, started: cacheStart.started?.id }));
+    // A folder of its own for the answered start, with the page task's dependencies closed the way a run closes them.
+    const da = path.join(tmp("browser-gate-answered"), "build-tasks");
+    syncTaskDir(da, RUN, OPTS);
+    clearDepsOf(da, page.id, RUN, OPTS, 2);
+    const answered = startTask(da, page.id, RUN, { ...OPTS, browserGate: { answer: "Browser: none" } }, null, AT(40));
+    check("browser gate: with an answer recorded — `none` included — the same task starts and opens its clock",
+      () => !answered.blockedByBrowser && answered.started?.id === page.id && !!readTimingsFile(da).running[page.id],
+      () => ({ blockedByBrowser: answered.blockedByBrowser, started: answered.started?.id, running: readTimingsFile(da).running }));
+    // A folder whose page work began before it had a `Browser:` line: the gate has nothing left to hold.
+    const inFlight = readTaskDir(da);
+    const otherPage = inFlight.find((t) => writesPage(t.writesTo) && t.writesTo !== page.writesTo && t.status === "todo");
+    check("browser gate: once a page task is in progress or built, a missing `Browser:` line holds no task of ANOTHER page either — the lift is folder-wide, so a folder mid-build keeps building",
+      () => pageWorkBegun(inFlight) && !browserAnswerOwed(inFlight) && !!otherPage
+        && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } })?.cause !== HOLD_BROWSER,
+      () => ({ begun: pageWorkBegun(inFlight), other: otherPage?.id, blocker: otherPage && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } }) }));
+    check("browserAnswerUngated: true once page work has begun with a page task still open, false on a fresh folder and on one whose page tasks are all closed",
+      () => browserAnswerUngated(inFlight) && !browserAnswerUngated(readTaskDir(d))
+        && !browserAnswerUngated(inFlight.map((t) => (writesPage(t.writesTo) && ["todo", "in-progress"].includes(t.status) ? { ...t, status: "done" } : t))),
+      () => ({ inFlight: browserAnswerUngated(inFlight), fresh: browserAnswerUngated(readTaskDir(d)) }));
+    const fresh = readTaskDir(d);
+    const closedPages = fresh.map((t) => (writesPage(t.writesTo) ? { ...t, status: "wont-do" } : t));
+    check("browserAnswerOwed: a fresh folder with page tasks owes the answer; one whose page tasks are all closed without building, or that has no page task, does not",
+      () => browserAnswerOwed(fresh) && !pageWorkBegun(fresh) && !browserAnswerOwed(closedPages)
+        && !browserAnswerOwed(fresh.filter((t) => !writesPage(t.writesTo))),
+      () => ({ fresh: browserAnswerOwed(fresh), closed: browserAnswerOwed(closedPages) }));
+
+    // The same gate through the CLI: `worklog.md` of the migration folder is what the engine reads.
+    const cd = path.join(tmp("browser-gate-cli"), "build-tasks");
+    cliApproved(["--tasks", cd], MANIFEST);
+    const pageId = readTaskDir(cd).find((t) => writesPage(t.writesTo)).id;
+    approve(cd);
+    const refused = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
+    const said = `${refused.stdout || ""}${refused.stderr || ""}`;
+    check("browser gate (CLI): `--start` of a page-writing task with no `Browser:` line in worklog.md exits 2, names the line and step 7.0b, and opens no clock",
+      () => refused.status === 2 && /NOTHING WAS STARTED/.test(said) && /`Browser:`/.test(said) && /7\.0b/.test(said)
+        && !readTimingsFile(cd).running[pageId],
+      () => ({ status: refused.status, said: said.slice(0, 600) }));
+    const nextHeld = cliUnapproved(["--tasks", cd, "--next"], MANIFEST);
+    check("browser gate (CLI): `--next` withholds that task for the same reason `--start` refuses it — one predicate behind both",
+      () => new RegExp(`\\[${pageId}\\] — writes .*no \`Browser:\` line yet`).test(nextHeld.stdout || "")
+        && !new RegExp(`--start "?${pageId}`).test(nextHeld.stdout || ""),
+      () => (nextHeld.stdout || "").slice(0, 1200));
+    fs.writeFileSync(path.join(path.dirname(cd), "worklog.md"), "# Worklog\n\nRoute: agent\n");
+    const hoManifest = path.join(path.dirname(cd), "manifest.json");
+    fs.writeFileSync(hoManifest, JSON.stringify(MANIFEST));
+    const handoffHeld = cliFileApproved(hoManifest, "--tasks", cd, "--handoff");
+    check("browser gate (CLI): `--handoff` of a folder with a page-writing task refuses by name while worklog.md has no `Browser:` line — exit 2, step 7.0b, nothing written",
+      () => handoffHeld.status === 2 && /NOTHING WRITTEN/.test(handoffHeld.stdout || "")
+        && /no `Browser:` line naming one of page-smoke · surface · none/.test(handoffHeld.stdout || "")
+        && /7\.0b/.test(handoffHeld.stdout || "") && !fs.existsSync(path.join(path.dirname(cd), "resume.md")),
+      () => ({ status: handoffHeld.status, out: (handoffHeld.stdout || "").slice(0, 1200) }));
+    recordBrowserAnswer(cd, "page-smoke");
+    clearDepsOf(cd, pageId, RUN, OPTS, 50);
+    const passed = cliUnapproved(["--tasks", cd, "--start", pageId], MANIFEST);
+    check("browser gate (CLI): with `Browser: page-smoke` recorded in worklog.md and its dependencies closed, `--start` exits 0 and opens the task's clock",
+      () => passed.status === 0 && /DISPATCH TOKEN/.test(passed.stdout || "") && !!readTimingsFile(cd).running[pageId],
+      () => `${passed.stdout || ""}${passed.stderr || ""}`.slice(0, 600));
+  }
   {
     // The decisions.md TEMPLATE in migration-documentation.md, filled in the obvious way, must pass the gate the
     // hand-off applies — a template whose value line carries its own explanation fails the exact version match.
@@ -6493,7 +6950,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
   const cliFile = (m, ...args) => spawnSync(process.execPath, [MIGRATE, m, ...args], { encoding: "utf8" });
   const APPROVAL = `- Plan version: \`${RUN.planVersion}\``;
   const decisionsOk = `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Decision: build the plan\n- Approved by: user\n${APPROVAL}\n`;
-  const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n";
+  const worklogOk = "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\nBrowser: page-smoke\n";
   // Recorded BEFORE the cut: `--tasks` slices only a plan whose version decisions.md approves.
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "decisions.md"), decisionsOk);
@@ -6527,6 +6984,8 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     () => resume);
   check("--handoff (R1): resume.md records the `Route:` line from worklog.md verbatim",
     () => /\*\*Route:\*\* `Route: agent`/.test(resume), () => resume);
+  check("--handoff (R1): resume.md records the `Browser:` line from worklog.md verbatim, so the resuming session never asks the question again",
+    () => /\*\*Browser:\*\* `Browser: page-smoke`.*never ask it again/.test(resume), () => resume);
   check("--handoff (R1): resume.md carries the engine's `--- progress ---` block, as `--tasks` prints it",
     () => resume.includes("--- progress ---") && /done \d+ · running \d+ · todo \d+/.test(resume) && /dispatched \d+ of \d+/.test(resume),
     () => resume);
@@ -6586,6 +7045,35 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     /manifest .*does not exist/, /reruns step 4.*hands off/);
   refusalCase("no-route", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent\n", "")), {},
     /no `Route:` line/, /7\.0/);
+  refusalCase("no-browser", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", "")), {},
+    /no `Browser:` line naming one of page-smoke · surface · none/, /7\.0b/);
+  {
+    // A folder sliced before it had a `Browser:` line, whose page work has already begun: the hand-off goes through.
+    const copy = path.join(tmp("cli-handoff-in-flight"), "mig folder");
+    fs.cpSync(folder, copy, { recursive: true });
+    fs.rmSync(path.join(copy, "resume.md"), { force: true });
+    fs.writeFileSync(path.join(copy, "worklog.md"), worklogOk.replace("Browser: page-smoke\n", ""));
+    const cdir = path.join(copy, "build-tasks");
+    const begun = readTaskDir(cdir).find((t) => writesPage(t.writesTo));
+    // Its page task's clock is running, recorded in the plain shape a folder from an earlier engine carries.
+    fs.writeFileSync(path.join(cdir, TIMINGS_FILE), JSON.stringify({ samples: [], running: { [begun.id]: AT(90) } }));
+    const res = cliFile(manifestPath, "--tasks", cdir, "--handoff");
+    check("--handoff: a folder whose page work began before it had a `Browser:` line is not refused for it — resume.md is written",
+      () => res.status === 0 && !/`Browser:`/.test(res.stdout || "") && fs.existsSync(path.join(copy, "resume.md")),
+      () => ({ running: readTimingsFile(cdir).running, status: res.status, out: (res.stdout || "").slice(0, 600) }));
+    // The lift refuses nothing, so the answer still owed is said where a fresh context reads its next command.
+    const resume = fs.readFileSync(path.join(copy, "resume.md"), "utf8");
+    const owedNext = cliFile(manifestPath, "--tasks", cdir, "--next");
+    check("--handoff / --next: in that folder resume.md and `--next` say the browser answer is still owed and name step 7.0b",
+      () => /^- \*\*Browser:\*\* not answered — .*7\.0b/m.test(resume)
+        && /BROWSER ANSWER STILL OWED — .*7\.0b/.test(owedNext.stdout || ""),
+      () => ({ resume: resume.split("\n").find((l) => l.includes("Browser")), next: (owedNext.stdout || "").slice(-600) }));
+    fs.appendFileSync(path.join(copy, "worklog.md"), "Browser: page-smoke\n");
+    const answeredNext = cliFile(manifestPath, "--tasks", cdir, "--next");
+    check("--next: once worklog.md records a `Browser:` line, the still-owed reminder is gone",
+      () => !/BROWSER ANSWER STILL OWED/.test(answeredNext.stdout || ""),
+      () => (answeredNext.stdout || "").slice(-600));
+  }
   refusalCase("route-tbd", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent", "Route: TBD")), {},
     /no `Route:` line naming one of agent · codex · copilot · inline/, /7\.0/);
   {
@@ -6713,7 +7201,7 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "decisions.md"),
     `# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n- Approved by: user\n- Plan version: ${RUN.planVersion}\n`);
-  fs.writeFileSync(path.join(folder, "worklog.md"), "# Worklog\n\nRoute: agent\n");
+  fs.writeFileSync(path.join(folder, "worklog.md"), "# Worklog\n\nRoute: agent\nBrowser: page-smoke\n");
   cliFile(manifestPath, "--tasks", dir);
   for (let moved = true; moved;) {
     moved = false;
@@ -7750,11 +8238,11 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
     () => ({ written: round1.written.map((t) => `${t.cause}:${t.rows.length}`) }));
   if (handlers) {
     const fp = path.join(dir, handlers.file);
-    const before = fs.readFileSync(fp, "utf8").split("\n");
+    let before = fs.readFileSync(fp, "utf8").split("\n");
 
     const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
       destination: "ENG-1", taskId: handlers.id, decisions });
-    const after = fs.readFileSync(fp, "utf8").split("\n");
+    let after = fs.readFileSync(fp, "utf8").split("\n");
     const rr = readTaskDir(dir).find((x) => x.id === handlers.id);
     check("AC 11: a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
       () => !res.refused && (res.unplaced || []).length === 0
@@ -7765,9 +8253,11 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
       () => ({ refused: res.refused, unplaced: res.unplaced?.length, touched: res.touched?.length,
         status: rr?.status, cell0: rr?.rows?.[0]?.outcome }));
 
-    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells and the three
-    // front-matter fields the engine owns may differ. Anything else means the writer rewrote a file it was
-    // supposed to edit in place.
+    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells, the three
+    // front-matter fields the engine owns and the engine-derived task card may differ. Anything else means the
+    // writer rewrote a file it was supposed to edit in place.
+    const cardFree = (lines) => lines.join("\n").replace(/\n## Task card\n[\s\S]*?(?=\n\n## Deliverables)/, "").split("\n");
+    [before, after] = [cardFree(before), cardFree(after)];
     const strayEdits = [];
     for (let i = 0; i < Math.max(before.length, after.length); i++) {
       if (before[i] === after[i]) continue;
@@ -8750,6 +9240,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
+  // `3ea0cd8a` also carries the page's `Page code` row, which no digest reads.
   const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "ce526a7f" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
@@ -8774,6 +9265,26 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER] },
     { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
   ]);
+  check("split: a split that never names the `Page code` row still resolves — the row rides with the last item writing its page, the split's cards carry the decisions, and the row moves no digest",
+    () => {
+      const good = buildTaskSetFromSplit(wRun, goodSplit, { ...wOpts, decisions: new Map([["D1", "Keep the layout"]]) });
+      const logic = good.tasks?.find((t) => t.id === "main-logic");
+      const card = logic && renderTaskFile(logic, good);
+      const digestWithout = TASKS_MODULE.rowsDigest(checklistGroups(wRun, wOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type !== "pagecode" && r.pageKey === "main"));
+      const digestWith = TASKS_MODULE.rowsDigest(checklistGroups(wRun, wOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "main"));
+      return !good.refused && logic.rows.some((r) => r.vk === "pagecode") && good.cardDecisions instanceof Map
+        && card.includes("- `D1` — Keep the layout") && digestWith === digestWithout;
+    }, () => buildTaskSetFromSplit(wRun, goodSplit, wOpts).problems);
+  check("split: a split that NAMES the `Page code` row keeps the item it chose",
+    () => {
+      const named = planSplit([
+        { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER, "@Page code"] },
+        { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
+      ]);
+      const set = buildTaskSetFromSplit(wRun, named, wOpts);
+      return !set.refused && set.tasks.find((t) => t.id === "main-layout").rows.some((r) => r.vk === "pagecode")
+        && !set.tasks.find((t) => t.id === "main-logic").rows.some((r) => r.vk === "pagecode");
+    }, () => buildTaskSetFromSplit(wRun, planSplit([]), wOpts).problems);
   check("split (real plan): the attribute placed after the handler that sets it is refused; the same plan split with only an unrelated handler earlier is cut",
     () => {
       const bad = buildTaskSetFromSplit(wRun, badSplit, wOpts);
@@ -9099,6 +9610,35 @@ check("identity digest guard: rendering the identity condition does NOT move any
   },
   () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
 
+// The RelatedPage add-on is per object, so every wiring row says so and that an existing entry moves only on the
+// user's answer — the builder reads the row, not the reference, at the moment it writes the add-on.
+check("child page wiring: every binding row states that the add-on is object-wide and moves an existing entry only on the user's answer",
+  () => {
+    const rows = SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).filter((r) => !r.na);
+    return rows.length > 0 && rows.every((r) => /The add-on is object-wide/.test(r.label) && /only on the user's answer/.test(r.label));
+  },
+  () => SET.tasks.filter((t) => t.title === "Child page wiring").flatMap((t) => t.rows).map((r) => r.label));
+// The wiring step reads the edit cards through a named call and the fields it acts on, so a builder can run it as
+// written instead of inventing a lookup into a system table.
+check("child page wiring: build-page.md names the call, argument and fields of the SysModuleEdit read",
+  () => {
+    const doc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/references/build-page.md"), "utf8");
+    const step = doc.slice(doc.indexOf("read the entity's `SysModuleEdit` cards"), doc.indexOf("one line\n     per Classic entry"));
+    return step.length > 0 && /`list-entity-client-schemas` with `entity-name`/.test(step)
+      && /`editPages\[\]`/.test(step) && /`cardSchema`/.test(step) && /`kind: classic`/.test(step)
+      && /never write `SysModuleEdit`/.test(step);
+  });
+// The field the wiring step reads must be the one the skill's canonical description of the tool response names, so
+// a rename in one place fails here instead of leaving the builder reading an undefined property.
+check("child page wiring: the `editPages[]` page field the wiring step reads is the one SKILL.md's Arg-facts names",
+  () => {
+    const skill = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+      "../../skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+    const argFacts = skill.split("\n").find((l) => l.startsWith("> Arg-facts:") && l.includes("list-entity-client-schemas")) || "";
+    return /`editPages` \(each with the page it opens in `cardSchema`/.test(argFacts);
+  });
+
 // Child page wiring: a page's binding rows are a task of their own that writes the child entities' RelatedPage
 // add-ons (`wiring:<page>`), not the page body. It waits on the LAST task writing each child page it binds and on the
 // LAST task writing the page that holds the list, and nothing that writes the page body waits on it.
@@ -9221,8 +9761,10 @@ check("identity digest guard: rendering the identity condition does NOT move any
 // ============================================================================================================
 console.log("\n===== --decide --build and the decision-waiting --route report =====");
 {
-  const BO = checklistOpts(MANIFEST);
   const BUILD_DECISIONS = new Map([["D5", "build the typed forms"]]);
+  // The decisions are part of the options, as the CLI passes them on every mode: the task card lists them, so a
+  // sync and a decide that read different decisions would rewrite every card between them.
+  const BO = { ...checklistOpts(MANIFEST), decisions: BUILD_DECISIONS };
   const NEEDS_DECISION = "not-built — needs-decision";
   const MANIFEST_FILE = (base) => { const f = path.join(base, "m.json"); fs.writeFileSync(f, JSON.stringify(MANIFEST)); return f; };
   const cliB = (base, ...args) => cliFileApproved(MANIFEST_FILE(base), ...args);
@@ -9678,7 +10220,7 @@ console.log("\n===== --decide --build and the decision-waiting --route report ==
       const f = taskFilePath(dir, x.id);
       fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, NEEDS_DECISION));
     }
-    syncTaskDir(dir, RUN5, { ...OPTS5, now: AT(903) });
+    syncTaskDir(dir, RUN5, { ...OPTS5, decisions: BUILD_DECISIONS, now: AT(903) });
     const otherPath = taskFilePath(dir, other.id);
     const otherBefore = fs.readFileSync(otherPath, "utf8");
     const res = applyDecision(dir, RUN5, { ...OPTS5, decision: "D5", mode: "build", decisions: BUILD_DECISIONS, pages: ["main"] });
@@ -10573,6 +11115,10 @@ console.log("\n===== a folder cut with one aggregate Fields / Related lists row 
         && closedLists.every(([, n]) => closed.rows[n - 1].outcome === "wont-do — not carried over (D3)" && closedMap.get(n) === "D3=")
         && JSON.stringify(snapOf(dir)) === JSON.stringify(closedSnap),
       () => ({ status: remedied.status, out: remedied.stdout.slice(0, 400), rows: closedLists.map(([, n]) => [closed?.rows[n - 1]?.outcome, closedMap.get(n)]) }));
+    const written = fs.readFileSync(path.join(dir, FILE), "utf8");
+    check("task card: a folder synced by the CLI with decisions.md in place writes the decisions in force into the task file — the writer does not re-read decisions.md",
+      () => written.includes(TASK_CARD_HEADING) && written.includes("- `D3` — not carried over"),
+      () => written.slice(written.indexOf(TASK_CARD_HEADING), written.indexOf("## Deliverables")));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
@@ -10724,7 +11270,7 @@ console.log("\n===== the record files exist from slicing on, and a re-slice merg
   fs.mkdirSync(hoFolder, { recursive: true });
   fs.writeFileSync(path.join(hoFolder, "decisions.md"), "# Decisions And Approvals\n\n## 2026-09-30 — Plan approved\n"
     + `- Decision: build the plan\n- Approved by: user\n- Plan version: \`${RUN.planVersion}\`\n`);
-  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\n");
+  fs.writeFileSync(path.join(hoFolder, "worklog.md"), "# Worklog\n\n## 2026-09-30 — plan approved, build sliced\n- Scope: slicing\nRoute: agent\nBrowser: page-smoke\n");
   cliHo("--tasks", hoDir);
   for (const f of RECORD_FILES) fs.rmSync(path.join(hoFolder, f), { force: true });
   const handedOff = cliHo("--tasks", hoDir, "--handoff");
@@ -11628,6 +12174,396 @@ console.log("\n===== ledger durability: atomic writes and the clock lock =====")
       () => ({ error: next.error?.message }));
     fs.rmSync(path.dirname(d), { recursive: true, force: true });
   }
+}
+
+console.log("\n===== project conventions: every writer of a task file carries the block =====");
+
+// The plan cut, the split cut, a repair round and a minted task are four different writers; each must hand the
+// run's conventions to `renderTaskFile`, or a builder that reads only its own task never sees the namespace.
+{
+  const CONV = { requestPrefix: "ab", validatorPrefix: "ab", converterPrefix: "ab", helperModules: ["AbClientHelperModule"],
+    constantsModules: ["AbConstants"], source: "freedom-pages", evidence: "ab. on 7 requests", confirmedBy: "plan", conflict: null, previous: null };
+  const RUN_C = { ...RUN, projectConventions: CONV };
+  const carries = (text) => /## Project conventions/.test(text) && /the `ab\.` namespace/.test(text) && /`ab\.<Element>Clicked`/.test(text) && /`AbConstants`/.test(text)
+    && text.indexOf("## Project conventions") < text.indexOf("## Deliverables");
+  const taskFiles = (dir) => fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+  check("conventions: the split cut carries the run's conventions into every task file it renders",
+    () => { const set = buildTaskSetFromSplit(RUN_C, FULL_SPLIT, OPTS); return set.projectConventions === CONV && set.tasks.every((t) => carries(renderTaskFile(t, set))); });
+  check("conventions: a repair round's task files carry the block (syncRepairDir)",
+    () => {
+      const dir = tmp("conv-repair");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, OPTS);
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8"));
+        return repairs.length > 0 && repairs.every(carries) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: a minted (orchestrator-declared) task file carries the block (addTasks)",
+    () => {
+      const dir = tmp("conv-mint");
+      try {
+        syncTaskDir(dir, RUN_C, OPTS);
+        const res = addTasks(dir, RUN_C, DECL, OPTS);
+        return !(res.problems || []).length && taskFiles(dir).some((t) => /orch-render-blocker/.test(t)) && taskFiles(dir).every(carries);
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  check("conventions: the block sits above the task card, so a sync that re-renders a repair file's card (from its heading to the deliverables) keeps the conventions",
+    () => {
+      const dir = tmp("conv-card");
+      try {
+        const d1 = { ...OPTS, decisions: new Map([["D1", "First decision"]]) };
+        syncTaskDir(dir, RUN_C, d1);
+        const res = syncRepairDir(dir, RUN_C, VERIFY_PAGES, d1);
+        syncTaskDir(dir, RUN_C, { ...OPTS, decisions: new Map([["D1", "First decision"], ["D2", "Later decision"]]) });
+        const repairs = res.written.map((t) => fs.readFileSync(path.join(dir, t.file), "utf8")).filter((t) => t.includes(TASK_CARD_HEADING));
+        const ordered = (t) => t.indexOf("## Project conventions") < t.indexOf(TASK_CARD_HEADING) && t.indexOf(TASK_CARD_HEADING) < t.indexOf("## Deliverables");
+        return repairs.length > 0 && repairs.every((t) => carries(t) && ordered(t) && t.includes("`D2` — Later decision"));
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+}
+
+/* ================================================================================================
+   USER DIRECTIVES AND DECISION PROVENANCE. A `## D<N>` entry in decisions.md may carry `Kind:`,
+   `Decided by:`, `Quote:`, `Asked:`, `Scope:` and `Expectation:` lines. A directive becomes a filed +
+   judged evidence pair on every page it names, reaches every builder of those pages through the task
+   file, counts as cited for the unaccounted-decisions gate, and closes only on a filed record AND a
+   convincing verdict. Entries decided by the orchestrator are listed in the final report.
+   ================================================================================================ */
+{
+  console.log("\n[user directives and decision provenance]");
+  const SUMMARIES = [
+    "# Decisions And Approvals",
+    "",
+    "## D1 — Product summaries use the Summaries component",
+    "- Kind: directive",
+    "- Decided by: user",
+    "- Quote: \"use the Summaries component\"",
+    "- Scope: main",
+    "- Expectation: the page shows its totals in a crt.Summaries component, not in labels",
+    "",
+    "## D2 — Amount stays a decimal",
+    "- **Kind:** answer",
+    "- **Decided by:** User",
+    "- **Quote:** «zostaw to pole jako liczbę dziesiętną»",
+    "- **Asked:** How should the multi-currency amount look?",
+    "",
+    "## D3 — No PrimaryAmount recalculation",
+    "- Decided by: orchestrator",
+    "- Rationale: follows from D2",
+    "",
+    "## D4 — Plan approved",
+    "- Approved by: test",
+    "",
+  ].join("\n");
+  const records = parseDecisionRecords(SUMMARIES);
+  const byId = new Map(records.map((r) => [r.id, r]));
+
+  check("directives (parse): heading entries are read in order with their provenance fields; quote marks and bold labels are formatting",
+    () => records.map((r) => r.id).join() === "D1,D2,D3,D4"
+      && byId.get("D1").fields.kind === "directive" && byId.get("D1").fields.quote === "use the Summaries component"
+      && byId.get("D2").fields.decidedBy === "user" && byId.get("D2").fields.quote === "zostaw to pole jako liczbę dziesiętną"
+      && byId.get("D2").fields.asked === "How should the multi-currency amount look?"
+      && byId.get("D3").fields.decidedBy === "orchestrator" && !("quote" in byId.get("D3").fields),
+    () => records);
+  check("directives (parse): an entry with no provenance lines is a plain decision, and a later non-D heading ends the entry",
+    () => {
+      const r = parseDecisionRecords("## D9 — Legacy\n- Decision: keep it\n## Notes\n- Quote: not D9's");
+      return r.length === 1 && Object.keys(r[0].fields).length === 0;
+    });
+  check("directives (parse): only ONE wrapping pair of quote marks is removed, so a quotation ending in a quoted word stays verbatim",
+    () => {
+      const [r] = parseDecisionRecords("## D1 — t\n- Quote: \"label it 'Total'\"\n");
+      const [s] = parseDecisionRecords("## D2 — t\n- Quote: 'Total' stays\n");
+      return r.fields.quote === "label it 'Total'" && s.fields.quote === "'Total' stays";
+    });
+  check("directives (parse): a long field line with no colon is read in linear time and yields no field",
+    () => {
+      const t0 = Date.now();
+      const [r] = parseDecisionRecords("## D1 — t\n- " + "a ".repeat(50000) + "\n");
+      return Object.keys(r.fields).length === 0 && Date.now() - t0 < 2000;
+    });
+  check("directives (parse): `Scope:` takes comma-separated page keys, backticks stripped",
+    () => scopeKeys("`main`, typed:Product ,list").join("|") === "main|typed:Product|list");
+  check("directives (provenance): a complete directive, a quoted answer, an orchestrator decision and a legacy entry raise no issue",
+    () => provenanceIssues(records, ["main", "list"]).length === 0,
+    () => provenanceIssues(records, ["main", "list"]));
+  {
+    const bad = parseDecisionRecords([
+      "## D1 — directive with nothing", "- Kind: directive", "- Decided by: user",
+      "## D2 — directive the orchestrator owns", "- Kind: directive", "- Decided by: orchestrator",
+      "- Quote: x", "- Scope: main", "- Expectation: y",
+      "## D3 — answer with no question", "- Kind: answer", "- Decided by: user", "- Quote: yes",
+      "## D4 — a user decision with no words", "- Decided by: user",
+      "## D5 — a directive for a page the plan does not have", "- Kind: directive", "- Decided by: user",
+      "- Quote: x", "- Scope: typed:Nope", "- Expectation: y",
+      "## D6 — typo in the values", "- Kind: directiv", "- Decided by: agent",
+    ].join("\n"));
+    const issues = provenanceIssues(bad, ["main", "list"]);
+    const of = (id) => issues.filter((i) => i.key === id).map((i) => i.problem).join(" / ");
+    check("directives (provenance): a directive needs a quote, an expectation and a scope",
+      () => /Quote/.test(of("D1")) && /Expectation/.test(of("D1")) && /Scope/.test(of("D1")), () => of("D1"));
+    check("directives (provenance): a directive or an answer recorded as the orchestrator's is refused — they are the user's own words",
+      () => /Decided by: user/.test(of("D2")), () => of("D2"));
+    check("directives (provenance): an answer needs the question it replies to",
+      () => /Asked/.test(of("D3")) && !/Quote/.test(of("D3")), () => of("D3"));
+    check("directives (provenance): `Decided by: user` with no quote is refused — a decision the user did not state is the orchestrator's",
+      () => /Quote/.test(of("D4")), () => of("D4"));
+    check("directives (provenance): a scope naming a page the plan does not publish is named, with the published keys",
+      () => /typed:Nope/.test(of("D5")) && /`main`/.test(of("D5")), () => of("D5"));
+    check("directives (provenance): an unknown `Kind:` or `Decided by:` value is named rather than read as a plain decision",
+      () => /directiv/.test(of("D6")) && /agent/.test(of("D6")), () => of("D6"));
+  }
+  check("directives (provenance): orchestratorDecisions lists only the entries the orchestrator decided",
+    () => orchestratorDecisions(records).map((d) => d.id).join() === "D3");
+
+  // A first message that named one component for the main page: one directive scoped to `main`.
+  const runD = runMigration(MANIFEST, { decisionRecords: records });
+  const groupsD = checklistGroups(runD, OPTS);
+  const dRows = groupsD.flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, group: g.baseTitle || g.title })))
+    .filter((r) => r.directive?.id === "D1");
+  check("directives (plan): a directive scoped to `main` publishes ONE evidence id with a filed and a judged row, in main's `Quality gates`, and on no other page",
+    () => dRows.length === 2 && dRows.every((r) => r.pageKey === "main" && r.group === "Quality gates" && r.id === "main#directive:D1")
+      && dRows.filter((r) => r.vk.part === "filed").length === 1 && dRows.filter((r) => r.vk.part === "judged").length === 1
+      && dRows.every((r) => r.vk.requires.join() === "howFollowed,components")
+      && dRows.filter(isFiledGateRow).length === 1,
+    () => dRows.map((r) => ({ id: r.id, page: r.pageKey, group: r.group, part: r.vk?.part })));
+  {
+    const gate = groupsD.find((g) => g.pageKey === "main" && (g.baseTitle || g.title) === "Quality gates");
+    const parts = gate.rows.map((r) => r.deliverableId);
+    check("directives (plan): main's `Quality gates` lists every filed row before every judged row, so `@Quality gates[2]` claims exactly the two filed rows",
+      () => parts.join() === "quality:ran,directive:D1:filed,quality:judged,directive:D1:judged", () => parts);
+  }
+  check("directives (plan): the plan shows the user's words, the expectation and the pages in a `### User directives` table",
+    () => /### User directives/.test(runD.plan) && runD.plan.includes("“use the Summaries component”")
+      && runD.plan.includes("crt.Summaries component") && planGaps(runD).length === 0,
+    () => planGaps(runD));
+  check("directives (plan): a run without directives renders no section and no directive row",
+    () => !/### User directives/.test(RUN.plan) && !GROUPS.some((g) => g.rows.some((r) => r.directive)));
+  {
+    const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
+    const g = checklistGroups(runMigration(MANIFEST, { decisionRecords: everyPage }), OPTS);
+    const ids = new Set(g.flatMap((x) => x.rows.filter((r) => r.directive).map((r) => r.id)));
+    const keys = new Set(g.map((x) => x.pageKey));
+    check("directives (plan): `Scope: run` puts the pair on every page the plan publishes",
+      () => ids.size === keys.size && [...keys].every((k) => ids.has(`${k}#directive:D1`)), () => ({ ids: [...ids], keys: [...keys] }));
+  }
+  {
+    const lost = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: typed:Missing\n- Expectation: e");
+    const r = runMigration(MANIFEST, { decisionRecords: lost });
+    check("directives (plan): a directive whose scope names no published page is a plan gap — the plan says so and `--tasks` refuses",
+      () => planGaps(r).some((x) => /provenance INVALID/.test(x) && /typed:Missing/.test(x)) && /PLAN INCOMPLETE/.test(r.plan),
+      () => planGaps(r));
+  }
+
+  {
+    const versionOf = (text) => runMigration(MANIFEST, { decisionRecords: parseDecisionRecords(text) }).planVersion;
+    const D1 = "## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: main\n- Expectation: e\n";
+    check("directives (plan version): a plan with no directive keeps the manifest's version; adding one, or rewriting its expectation or scope, moves it",
+      () => versionOf("## D9 — Legacy\n- Decision: keep it\n") === RUN.planVersion
+        && versionOf(D1) !== RUN.planVersion
+        && versionOf(D1.replace("Expectation: e", "Expectation: e, widened")) !== versionOf(D1)
+        && versionOf(D1.replace("Scope: main", "Scope: run")) !== versionOf(D1));
+    check("directives (plan version): who recorded an entry, an orchestrator entry and the approval entry do not move it",
+      () => versionOf(D1 + "## D2 — mine\n- Decided by: orchestrator\n## Plan approved\n- Approved by: test\n") === versionOf(D1));
+    check("directives (provenance): an older entry with a free-text `Decided by:` and no other provenance line is a plain decision, not a refusal",
+      () => provenanceIssues(parseDecisionRecords("## D3 — Old\n- Decided by: Jane Doe\n- Rationale: x\n"), ["main"]).length === 0
+        && provenanceIssues(parseDecisionRecords("## D3 — New\n- Kind: answer\n- Decided by: Jane Doe\n- Quote: x\n- Asked: y\n"), ["main"]).length > 0);
+    check("directives (plan): a sub-scope run carries no directive — the root owns them",
+      () => runMigration(MANIFEST, { decisionRecords: parseDecisionRecords(D1), scopeSchema: "MPage" }).directives.length === 0);
+  }
+
+  // Delivery: the builder of every task on `main` reads the directive; the filed row goes to a build task and the
+  // judged row to the review.
+  const setD = buildTaskSet(runD, OPTS);
+  const withRow = (id) => setD.tasks.filter((t) => t.rows.some((r) => r.deliverableId === id));
+  const filedIn = withRow("directive:D1:filed");
+  const judgedIn = withRow("directive:D1:judged");
+  check("directives (cut): the filed row lands in a build task of `main`, the judged row in the read-only review",
+    () => filedIn.length === 1 && filedIn[0].writesTo && !filedIn[0].writesTo.startsWith("review:")
+      && judgedIn.length === 1 && !judgedIn[0].writesTo,
+    () => ({ filed: filedIn.map((t) => [t.id, t.writesTo]), judged: judgedIn.map((t) => [t.id, t.writesTo]) }));
+  const mainTasks = setD.tasks.filter((t) => t.pageKey === "main" || t.rows.some((r) => r.pageKey === "main"));
+  const otherTasks = setD.tasks.filter((t) => !mainTasks.includes(t));
+  check("directives (cut): every task on `main` carries the directive in its file — the user's words and the expectation — and no task of another page does",
+    () => mainTasks.length > 0 && mainTasks.every((t) => {
+      const text = renderTaskFile(t, setD);
+      return text.includes("User directives") && text.includes("“use the Summaries component”") && text.includes("crt.Summaries component");
+    }) && otherTasks.every((t) => !renderTaskFile(t, setD).includes("User directives")),
+    () => ({ main: mainTasks.map((t) => t.id), other: otherTasks.map((t) => t.id) }));
+  check("directives (cut): a directive delivered to a task is cited — the unaccounted-decisions gate does not hold it",
+    () => {
+      const decisions = new Map([["D1", "Product summaries use the Summaries component"]]);
+      const delivered = TASKS_MODULE.unaccountedDecisions(decisions, { tasks: setD.tasks });
+      const notDelivered = TASKS_MODULE.unaccountedDecisions(decisions, { tasks: SET.tasks });
+      return delivered.length === 0 && notDelivered.map((d) => d.id).join() === "D1";
+    });
+
+  // A split cuts a directive page with group claims: the page's last writer claims the filed rows, which open the
+  // `Quality gates` group, and the review claims the rest.
+  {
+    const keys = bodyOrder(setD);
+    const rowsOf = (k) => groupsD.filter((g) => g.pageKey === k && (g.baseTitle || g.title) !== "Quality gates")
+      .flatMap((g) => g.rows.map((r) => r.label));
+    const filedOf = (k) => groupsD.filter((g) => g.pageKey === k && (g.baseTitle || g.title) === "Quality gates")
+      .flatMap((g) => g.rows).filter(isFiledGateRow).length;
+    const splitWith = (mainClaim) => ({ planVersion: runD.planVersion, items: [
+      ...keys.map((k) => splitItem(`build-${slugKey(k)}`, k, k, [...rowsOf(k), k === "main" ? mainClaim : `@Quality gates[${filedOf(k)}]`])),
+      splitItem("review", "main", "", keys.map((k) => (k === "main" ? "@Quality gates" : `${k}::@Quality gates`))),
+    ] });
+    const good = buildTaskSetFromSplit(runD, splitWith("@Quality gates[2]"), OPTS);
+    const bad = buildTaskSetFromSplit(runD, splitWith("@Quality gates[1]"), OPTS);
+    const holder = (set, id) => set.tasks?.find((t) => t.rows.some((r) => r.deliverableId === id))?.id;
+    check("directives (split): `@Quality gates[2]` in main's writer and `@Quality gates` in the review cut a directive page — the filed row to the writer, the judged row to the review",
+      () => !good.refused && holder(good, "directive:D1:filed") === "build-main" && holder(good, "directive:D1:judged") === "review",
+      () => ({ problems: good.problems, filed: holder(good, "directive:D1:filed"), judged: holder(good, "directive:D1:judged") }));
+    check("directives (split): a split that leaves the directive's filed row to the review is refused, and the refusal names the claim that cuts it",
+      () => bad.refused && bad.problems.some((p) => p.includes("directive:D1:filed") && p.includes("`@Quality gates[2]`")),
+      () => bad.problems);
+    check("directives (split): both the writer and the review cut from a split carry the directive in their files",
+      () => ["build-main", "review"].every((id) => renderTaskFile(good.tasks.find((t) => t.id === id), good).includes("“use the Summaries component”")));
+  }
+
+  // Repair rounds and declared tasks are task files of the page too, so they carry the directive.
+  {
+    const dir = tmp("directives-repair");
+    syncTaskDir(dir, runD, OPTS);
+    const repair = syncRepairDir(dir, runD, VERIFY_PAGES, OPTS);
+    const repairTexts = (repair.written || []).map((w) => fs.readFileSync(path.join(dir, w.file || w), "utf8"));
+    check("directives (repair): a repair task of `main` carries the directive",
+      () => repairTexts.length > 0 && repairTexts.every((t) => t.includes("“use the Summaries component”")),
+      () => ({ written: repair.written }));
+    const declared = addTasks(dir, runD, { ...DECL, id: "orch-main-extra", pageKey: "main", writesTo: "page:main" }, OPTS);
+    const declaredText = declared.refused ? "" : fs.readFileSync(path.join(dir, declared.written[0].file), "utf8");
+    check("directives (declared): a task the orchestrator declares on `main` carries the directive",
+      () => declaredText.includes("“use the Summaries component”"), () => declared.problems || declaredText.slice(0, 600));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // The CLI reads decisions.md from the migration folder: no orchestrator pastes the directive anywhere.
+  {
+    const folder = tmp("directives-cli");
+    const dir = path.join(folder, "build-tasks");
+    const D1_ONLY = SUMMARIES.split("\n## D2")[0] + "\n";
+    fs.writeFileSync(path.join(folder, "decisions.md"), D1_ONLY);
+    const plan = cliUnapproved(["--plan", "--out", path.join(folder, "plan.md")], MANIFEST);
+    // The approval names the version that covers the directive, which is not the manifest-only version.
+    const withD1 = runMigration(MANIFEST, { baseDir: DIR, decisionRecords: parseDecisionRecords(D1_ONLY) });
+    approvePlan(dir, withD1.planVersion);
+    const cut = cliUnapproved(["--tasks", dir], MANIFEST);
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE) : [];
+    const withBlock = files.filter((f) => fs.readFileSync(path.join(dir, f), "utf8").includes("“use the Summaries component”"));
+    const touchesMain = buildTaskSet(withD1, checklistOpts(MANIFEST)).tasks
+      .filter((t) => t.pageKey === "main" || t.rows.some((r) => r.pageKey === "main")).length;
+    check("directives (CLI): every task file that touches `main` carries the directive",
+      () => touchesMain > 0 && withBlock.length === touchesMain, () => ({ touchesMain, withBlock, files }));
+    // The fixture's plan carries unrelated planning gaps (exit 2); the file it writes is what is checked here.
+    const planText = fs.existsSync(path.join(folder, "plan.md")) ? fs.readFileSync(path.join(folder, "plan.md"), "utf8") : "";
+    check("directives (CLI): `--plan --out` reads decisions.md beside the plan and writes the `### User directives` table",
+      () => planText.includes("### User directives") && planText.includes("“use the Summaries component”") && !/provenance problem/.test(planText),
+      () => ({ status: plan.status, stderr: (plan.stderr || "").slice(0, 600) }));
+    check("directives (CLI): `--tasks` writes the directive into main's task files from decisions.md alone",
+      () => cut.status === 0 && withBlock.length > 0,
+      () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 800), files, withBlock }));
+    const builtPath = path.join(folder, "built.json");
+    fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: false } }));
+    const verified = cliUnapproved(["--verify", "--built", builtPath], MANIFEST);
+    const elsewhere = tmp("directives-cli-built-alone");
+    fs.writeFileSync(path.join(elsewhere, "built.json"), JSON.stringify({ pages: { main: false } }));
+    const alone = cliUnapproved(["--verify", "--built", path.join(elsewhere, "built.json")], MANIFEST);
+    check("directives (CLI): a per-page `--verify --built` reads the decisions.md beside the built file, so the directive's rows are checked; a built file with none beside it carries no directive row",
+      () => (verified.stdout || "").includes("main#directive:D1") && !(alone.stdout || "").includes("#directive:"),
+      () => ({ status: verified.status, stdout: (verified.stdout || "").slice(0, 400), stderr: (verified.stderr || "").slice(0, 400) }));
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+    // `--reads <migration-folder>` reads that folder's decisions.md and seeds each directive id with the fields its
+    // record needs, not the design pass's.
+    const readsRun = cliUnapproved(["--reads", folder], MANIFEST);
+    const evidence = (() => { try { return JSON.parse(fs.readFileSync(path.join(folder, "evidence.json"), "utf8")); } catch { return {}; } })();
+    check("directives (CLI): `--reads <folder>` reads its decisions.md and seeds `main#directive:D1` in evidence.json as { howFollowed, components }",
+      () => Object.keys(evidence["main#directive:D1"] || {}).sort((a, b) => a.localeCompare(b)).join() === "components,howFollowed"
+        && "referencePage" in (evidence["main#quality-gates"] || {}),
+      () => ({ status: readsRun.status, stderr: (readsRun.stderr || "").slice(0, 400), keys: Object.keys(evidence) }));
+    // An approval of the manifest-only version does not authorise a plan that carries a directive.
+    const stale = tmp("directives-cli-stale");
+    const dir3 = path.join(stale, "build-tasks");
+    fs.writeFileSync(path.join(stale, "decisions.md"), D1_ONLY);
+    approvePlan(dir3, RUN.planVersion);
+    const staleCut = cliUnapproved(["--tasks", dir3], MANIFEST);
+    check("directives (CLI): an approval recorded before a directive was added does not authorise the cut — the directive moved the plan version",
+      () => staleCut.status === 2 && !fs.existsSync(path.join(dir3, TASK_INDEX_FILE)),
+      () => ({ status: staleCut.status, stdout: (staleCut.stdout || "").slice(0, 500) }));
+    fs.rmSync(stale, { recursive: true, force: true });
+    // A decisions.md that exists but cannot be read stops the run with a message naming it, not a stack trace.
+    const broken = tmp("directives-cli-unreadable");
+    fs.mkdirSync(path.join(broken, "decisions.md"));
+    const unreadable = cliUnapproved(["--plan", "--out", path.join(broken, "plan.md")], MANIFEST);
+    check("directives (CLI): an unreadable decisions.md (a directory here) exits with a message naming decisions.md, not an uncaught exception",
+      () => unreadable.status !== 0 && (unreadable.stderr || "").includes("decisions.md")
+        && !(unreadable.stderr || "").includes("    at "),
+      () => ({ status: unreadable.status, stderr: (unreadable.stderr || "").slice(0, 500) }));
+    const repBroken = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: path.join(broken, "build-tasks") }).markdown;
+    check("directives (report): an unreadable decisions.md leaves the report standing and says the section could not be listed",
+      () => /## Decided without you/.test(repBroken) && /could not be read/.test(repBroken));
+    fs.rmSync(broken, { recursive: true, force: true });
+    fs.rmSync(folder, { recursive: true, force: true });
+
+    const refused = tmp("directives-cli-refused");
+    const dir2 = path.join(refused, "build-tasks");
+    fs.writeFileSync(path.join(refused, "decisions.md"), "## D1 — Hide the Add button\n- Decided by: user\n");
+    const run = cliTasks(["--tasks", dir2], MANIFEST);
+    check("directives (CLI): a `Decided by: user` entry with no quote makes `--tasks` exit 2 and write nothing",
+      () => run.status === 2 && !fs.existsSync(dir2) && /provenance INVALID/.test(run.stdout || ""),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 800), wrote: fs.existsSync(dir2) }));
+    fs.rmSync(refused, { recursive: true, force: true });
+  }
+
+  // Verification: the pair closes on a filed record AND a convincing verdict, and a rejected record stays open.
+  {
+    const id = "main#directive:D1";
+    const rowsFor = (built) => renderVerify(runD, OPTS, built).rows.filter((r) => r.id === id);
+    const rec = { howFollowed: "the products detail totals are a crt.Summaries with two items", components: ["ProductSummaries"] };
+    const none = rowsFor({});
+    const filedOnly = rowsFor({ evidence: { [id]: rec } });
+    const judged = rowsFor({ evidence: { [id]: rec }, judge: { [id]: { convincing: true, why: "crt.Summaries ProductSummaries is on the page" } } });
+    const rejected = rowsFor({ evidence: { [id]: rec }, judge: { [id]: { convincing: false, why: "the totals are eight labels" } } });
+    const labelsOnly = rowsFor({ evidence: { [id]: { components: ["Label1"] } } });
+    check("directives (verify): with no record both rows are open",
+      () => none.length === 2 && none.every((r) => r.outcome !== "ok"), () => none);
+    const filedRow = (rows) => rows.find((r) => r.deliverable.includes("the builder FOLLOWED it"));
+    const judgedRow = (rows) => rows.find((r) => r.deliverable.includes("INDEPENDENTLY JUDGED"));
+    check("directives (verify): a filed record closes the filed row; the judged row waits for a verdict",
+      () => filedRow(filedOnly)?.outcome === "ok" && judgedRow(filedOnly)?.outcome === "unverified", () => filedOnly);
+    check("directives (verify): a convincing verdict on a complete record closes both rows",
+      () => judged.length === 2 && judged.every((r) => r.outcome === "ok"), () => judged);
+    check("directives (verify): a rejected record keeps the filed row closed and leaves the judged row MISSING with the judge's reason",
+      () => filedRow(rejected)?.outcome === "ok" && judgedRow(rejected)?.outcome === "missing"
+        && /eight labels/.test(judgedRow(rejected).evidence), () => rejected);
+    check("directives (verify): a record that does not say how the directive was followed is incomplete",
+      () => labelsOnly.every((r) => r.outcome !== "ok"), () => labelsOnly);
+  }
+
+  // The final report names every choice the orchestrator made on its own.
+  {
+    const folder = tmp("directives-report");
+    const dir = path.join(folder, "build-tasks");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(folder, "decisions.md"), SUMMARIES);
+    const rep = renderFinalReport({ result: runD, verifyRes: renderVerify(runD, OPTS, {}), set: { tasks: [], planVersion: runD.planVersion }, dir }).markdown;
+    check("directives (report): `## Decided without you` lists each `Decided by: orchestrator` entry and nothing the user decided",
+      () => /## Decided without you \(1\)/.test(rep) && rep.includes("**D3** — No PrimaryAmount recalculation") && !rep.includes("**D1**"),
+      () => rep.split("\n").filter((l) => /Decided without|\*\*D\d/.test(l)));
+    const plain = tmp("directives-report-plain");
+    const dir2 = path.join(plain, "build-tasks");
+    fs.mkdirSync(dir2, { recursive: true });
+    fs.writeFileSync(path.join(plain, "decisions.md"), "## D1 — Legacy\n- Decision: keep it\n");
+    const rep2 = renderFinalReport({ result: RUN, verifyRes: renderVerify(RUN, OPTS, {}), set: { tasks: [], planVersion: RUN.planVersion }, dir: dir2 }).markdown;
+    check("directives (report): a decisions.md with no orchestrator entries adds no section",
+      () => !/Decided without you/.test(rep2));
+    fs.rmSync(folder, { recursive: true, force: true });
+    fs.rmSync(plain, { recursive: true, force: true });
+  }
+  check("directives (directivesOf): only `Kind: directive` entries are directives",
+    () => directivesOf(records).map((d) => d.id).join() === "D1");
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

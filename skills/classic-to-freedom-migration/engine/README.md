@@ -107,7 +107,10 @@ writes a folder rather than printing, so silent precedence would report a plan w
 deterministic short hash over EVERY key the manifest carries — `entity`, `schemas` (package + body CONTENT, in
 order), `planMeta`, and equally `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`,
 `signals` and `behaviourIndex` — except `runDiagnostics`, which describes the machine the plan was made on, so a
-plugin or clio update does not force re-approval. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
+plugin or clio update does not force re-approval. It also covers the user directives read from `decisions.md` (each
+one's id, quote, expectation and scope): a directive added or rewritten after approval is a new version to approve.
+Who recorded an entry and the approval entry itself stay out of it, and a plan with no directive hashes as the
+manifest alone does. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
 contributes its CONTENT wherever it sits), so the same manifest always yields the same version and re-planning is
 not a new version to approve. An earlier version hashed an ALLOWLIST of three keys, and that is what this replaced:
 the unit set could change materially (a detail marked `editPage:false` drops a whole child page) while the version
@@ -293,7 +296,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
      non-empty `Approved by:` field, or the last `Route:` line of `worklog.md` names none of `agent` · `codex` ·
      `copilot` · `inline` (`Route: TBD` is no route);
   4. the folder refresh `--next` would refuse — before the first dispatch, a `D<N>` in `decisions.md` that no
-     deliverable status, task `decisions:` entry or `decisionsWithoutDeliverable` cites;
+     deliverable status, task `decisions:` entry, `decisionsWithoutDeliverable` item or directive row cites;
   5. `--next` would answer `ledger` or `stuck` (it exits 2 on both): the same answer follows the header, and the
      same stderr gate is raised.
 
@@ -304,6 +307,10 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   makes rather than rules the caller is asked to honour. The second one matters most: with
   several tokens open on one artifact, a single sub-agent can hold them all and close each with a valid
   signature, and every other check passes. The check compares `writesTo`, so a read-only task never conflicts.
+  It also holds every task that writes a page (`page:<id>`, `whole`) until `worklog.md` of the migration folder
+  records the browser answer as `Browser: page-smoke | surface | none` (`worklogBrowser`, the last line wins):
+  a builder cannot ask the user, so the question its post-save check depends on is asked before its dispatch.
+  `--next` and `--handoff` withhold those tasks through the same predicate (`browser`).
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
@@ -519,8 +526,9 @@ value that is not a list, an item not shaped `D<N>`, an item decisions.md does n
 under the same rule as `deliverableStatus`), and an item a `wont-do` status also cites. Before the first dispatch —
 no task with an `agentNonce` or a sub-agent outcome (`built`, `not-built`, or `not-applicable` on a row the plan did
 not mark `na`), and no `timings.json` record (one that does not parse counts as a dispatch) — `--tasks` (the cut, a re-sync, `--start`, `--next`) refuses (`unaccounted-decisions`, exit 2, nothing
-written) while a `D<N>` in decisions.md is cited by no `deliverableStatus` entry, no task `decisions:` entry and no
-item of this list. The refusal names each `D<N>` with its title, the entry shape for each remedy and the open
+written) while a `D<N>` in decisions.md is cited by no `deliverableStatus` entry, no task `decisions:` entry, no
+item of this list and no directive row (`directive:D<N>:…`, which a `Kind: directive` entry puts on every page in
+its scope). The refusal names each `D<N>` with its title, the entry shape for each remedy and the open
 deliverable ids per page. `Adjustment N` keys are not checked. `--decide` and `--revoke` never run the check.
 
 **Two cards, when the body lives elsewhere.** Any row whose behaviour is defined outside the scope that owns it is
@@ -614,10 +622,14 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `registry/component-index.json` — the **generated** component index (205 components × 7 platform versions; version membership as a bitmask). Regenerate with `node scripts/build-registry-index.mjs --src <static-files checkout>`; it is data, never hand-edited, and excluded from Sonar for that reason.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec / checklist / verify table as Markdown.
+- `conventions.mjs` — the project conventions (`manifest.projectConventions`): the `--plan` gate, the constants-module GUID index (`Module.Path` per record id, read from the bodies in `manifest.constantsModules` without executing them), the plan section and the block every task file carries, and the readers `--verify` uses on a built page's `deps` / `handlers` / `validators` / `converters`.
+- `quality.mjs` — the code-quality lint of each built page's `handlers` / `validators` / `converters` (vendored acorn, nothing evaluated): long functions, functions nested in a handler, helpers declared twice on a page or copied from another page, catch blocks that only log, bare numeric `comparisonType`, independent model loads awaited one after another, plan codes in comments, unused resource strings and record ids a declared constants module holds. Function length and helpers declared twice on a page close the `Page code` row (through `codemap.mjs`); the rest are the `--verify` **Code quality** rows. Thresholds (60 lines / 3 functions / 2 loads) come from `DEFAULT_QUALITY_THRESHOLDS`, overridden by `manifest.qualityThresholds`. The per-page rules share their ids and thresholds with clio's page lint (`PageBodyAstLinter.Quality.cs`), which gives the same findings as save-time warnings; change both together.
 - `reads.mjs` — `--reads`: which stand reads the verify gate needs and the file each raw response goes into, derived from the checklist walk. Writes `reads/index.json`; composes nothing.
 - `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
 - `fsatomic.mjs` — `writeFileAtomic` (temp file + rename, retried while Windows reports the target busy: about 1.6 s for a ledger write, about 150 ms for the `reads.mjs` merge; a ledger file still refused throws `FileBusyError`, carrying the last rename error's own code), shared by `reads.mjs` and `tasks.mjs`.
-- `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
+- `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files. A task that writes a page carries a `## Task card` (its brief, the code-map step, the decisions in force from `decisions.md`).
+- `codemap.mjs` — `node codemap.mjs <saved get-page response | built.json> [--page <key>]`: the page code map a page writer reads before it writes (handlers and their length, the helpers each defines, functions over the length limit and helpers declared twice — both measured by `quality.mjs` — and requests declared but never sent; exit 2 on findings). The same analysis closes the `Page code` row of `--verify`.
+- `directives.mjs` — the provenance lines of a `decisions.md` entry (`Kind:`, `Decided by:`, `Quote:`, `Asked:`, `Scope:`, `Expectation:`): the user's directives the plan turns into a filed + judged `<pageKey>#directive:D<N>` pair on each page in scope, and the provenance problems that make a plan incomplete (`decisions.md provenance INVALID`, exit 2, `--tasks` writes nothing). Read from the same `decisions.md` as the decision titles.
 - `migrate.mjs` — CLI driver.
 - `diagnostics.mjs` — `node diagnostics.mjs --environment <name> [--json]`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus branch/commit: from git when the install is a checkout, else from the Claude Code registry — `installed_plugins.json` for the commit, the marketplace's `source.ref` for the branch), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account. `--json` prints the same values as one object — `manifest.runDiagnostics`, which `--plan` renders as the plan's own `### Run diagnostics` block and leaves out of the plan version.
 

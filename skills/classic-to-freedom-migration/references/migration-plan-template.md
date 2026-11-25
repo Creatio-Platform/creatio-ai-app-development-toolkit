@@ -63,6 +63,12 @@ Decide whether the migration can be done in the same package before planning pag
 
 If the same package is not safe, name the target new/replacing package and explain why.
 
+### Project conventions
+
+The team's request namespace, helper modules and constants modules, with the evidence that decided them and
+a table mapping every record id the plan uses to its constants path. Detected and recorded per
+`./references/project-conventions.md`; approved with the plan.
+
 ## 5. Classic Template Structure And Freedom Analog
 
 Analyze page structure before individual controls.

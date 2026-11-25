@@ -1080,7 +1080,7 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
     [`${ENGINE_REL}/verify-vendor.mjs`, "engine-tests/classic-to-freedom/run.mjs", "engine-tests/classic-to-freedom/run-mapper.mjs",
       "engine-tests/classic-to-freedom/run-infra.mjs", "scripts/build-workflows.mjs --check", "engine-tests/classic-to-freedom/run-workflow-core.mjs",
       "engine-tests/classic-to-freedom/run-workflow-parity.mjs", "engine-tests/classic-to-freedom/run-tasks.mjs",
-      "engine-tests/classic-to-freedom/run-benchmark-package.mjs"]
+      "engine-tests/classic-to-freedom/run-codemap.mjs", "engine-tests/classic-to-freedom/run-benchmark-package.mjs"]
       .every((r) => real.scriptsTest.includes(r)),
     () => real.scriptsTest);
 

@@ -1,5 +1,7 @@
 // Golden test for the mapper: merge -> map -> assert Freedom ChangeSet.
 import { runMachineRowChecks } from "./run-mapper-machine-rows.mjs";
+import { runConventionsChecks } from "./run-mapper-conventions.mjs";
+import { runQualityChecks } from "./run-mapper-quality.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -582,6 +584,70 @@ check("entity-filter: dynamic filter → incomplete + folded into ONE concrete e
 }
 check("entity-filter: static filter marked complete + NOT in the folded line",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && /\bSt by\b/.test(n.reason)));
+
+/* ---- object-wide scope: a Classic FILTRATION is page-scoped, its Freedom entity rule is object-wide ---- */
+// Freedom page rules carry no lookup filter, so every FILTRATION becomes an entity rule that reaches every page and
+// list of the object. The plan states that on the rule and asks the user once per page before anything is built.
+{
+  const scope = efcs.needsDecision.filter((n) => n.kind === "object-wide-scope");
+  check("object-wide scope: every entity rule names the object it reaches and says it applies on all its pages",
+    () => efcs.entityBusinessRules.length === 2
+      && efcs.entityBusinessRules.every((r) => r.entity === "X" && /applies on ALL pages and lists of the object/.test(r.note)),
+    () => efcs.entityBusinessRules.map((r) => [r.entity, r.note]));
+  check("object-wide scope: ONE folded decision per page, fixed item, naming every filtered lookup",
+    () => scope.length === 1 && scope[0].item === "entity business rules"
+      && /\bLk\b/.test(scope[0].reason) && /\bSt\b/.test(scope[0].reason),
+    () => scope);
+  check("object-wide scope: the decision tells the agent to name the other pages and what a refusal means",
+    () => /list-pages/.test(scope[0]?.reason) && /ALL pages and lists of X/.test(scope[0]?.reason)
+      && /not migrated — add manually: Freedom page rules have no lookup filter/.test(scope[0]?.reason)
+      && /`wont-do`/.test(scope[0]?.reason) && /--decide D<N> --wont-do/.test(scope[0]?.reason),
+    () => scope[0]?.reason);
+  const spec = renderDesignSpec({ entity: "X", changeSet: efcs });
+  check("object-wide scope: the plan's rule row carries the label and ⚠ Confirm carries the folded row",
+    () => /entity business rule — applies on ALL pages of `X`/.test(spec)
+      && /- \*\*\[object-wide-scope\]\*\* entity business rules — /.test(spec),
+    () => spec.split("\n").filter((l) => /entity business rule|object-wide/.test(l)).join("\n"));
+  const groups = checklistGroups({ entity: "X", changeSet: efcs }, {})
+    .filter((g) => g.baseTitle === "⚠ Confirm worklist").flatMap((g) => g.rows);
+  check("object-wide scope: the decision reaches the checklist, not only plan.md",
+    () => groups.filter((r) => r.confirm?.kind === "object-wide-scope").length === 1,
+    () => groups.map((r) => r.label));
+  // The decline path names a deliverable id; it must be a row of this plan that holds the entity rules and nothing
+  // else, so closing it `wont-do` leaves the page rules to be built.
+  const named = /`<pageKey>#([\w-]+)`/.exec(scope[0]?.reason || "")?.[1];
+  const mixed = { ...efcs, pageBusinessRules: [{ action: "show", element: "Shown", inverseAction: "hide" }] };
+  const rows = checklistGroups({ entity: "X", changeSet: mixed }, {}).flatMap((g) => g.rows);
+  const declined = rows.find((r) => r.deliverableId === named);
+  const pageRules = rows.find((r) => r.deliverableId === "business-rules");
+  check("object-wide scope: the id the decline path names is a checklist row holding exactly the entity rules",
+    () => named === "entity-rules" && declined?.vk?.type === "rule"
+      && [...declined.vk.names].sort().join() === "Lk,St"
+      && pageRules?.vk?.names.join() === "Shown" && !pageRules.vk.names.some((n) => declined.vk.names.includes(n)),
+    () => ({ named, declined, pageRules }));
+  const closed = checklistGroups({ entity: "X", changeSet: mixed },
+    { deliverableStatus: { "main#entity-rules": { status: "wont-do", decision: "D1" } } }).flatMap((g) => g.rows);
+  check("object-wide scope: closing `main#entity-rules` wont-do closes only that row; the page rules stay open",
+    () => closed.find((r) => r.deliverableId === "entity-rules")?.status?.kind === "wont-do"
+      && closed.find((r) => r.deliverableId === "business-rules")?.status?.kind !== "wont-do",
+    () => closed.filter((r) => /rules/.test(r.deliverableId || "")).map((r) => [r.deliverableId, r.status]));
+}
+// With no entity on the page, the row and the decision still read as instructions the agent can follow.
+{
+  const noEnt = mapToFreedom(mergeHierarchy([L("Client", {
+    diff: [di({ name: "Lk", parentName: "Header", propertyName: "items", bindTo: "Lk" })],
+    businessRules: { Lk: { r: { ruleType: 1, baseAttributePatch: "OtherCol" } } } })]));
+  const d = (noEnt.needsDecision || []).find((n) => n.kind === "object-wide-scope");
+  const spec = renderDesignSpec({ entity: null, changeSet: noEnt });
+  check("object-wide scope (no entity): the decision asks for the entity first instead of `list-pages` by a placeholder, and the rule row names the object generically",
+    () => noEnt.entity === "?" && /read this page's entity on-stand/.test(d?.reason) && !/by entity (the object|\?)/.test(d?.reason)
+      && !/ALL pages and lists of \?/.test(d?.reason) && !/ALL pages of `\?`/.test(spec)
+      && /entity business rule — applies on ALL pages of the object/.test(spec),
+    () => ({ entity: noEnt.entity, reason: d?.reason }));
+}
+check("object-wide scope (negative): a page with no FILTRATION raises no object-wide decision",
+  () => !dcs.needsDecision.some((n) => n.kind === "object-wide-scope") && (dcs.entityBusinessRules || []).length === 0,
+  () => dcs.needsDecision.map((n) => n.kind));
 
 /* ---- image component + tooltip carry (Product gaps) ---- */
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
@@ -2738,15 +2804,19 @@ const FULL_PLACEMENT = {
   targetPackageInApplication: { resolved: true, value: true },
   sectionHost: { resolved: true, mode: "existing-app" },
 };
+// settled PROJECT CONVENTIONS — the verified fallback (no custom requests, SchemaNamePrefix = Usr). A `--plan` run
+// is not approvable without a resolved block (conventions.mjs), exactly like placement.
+const FULL_CONVENTIONS = { resolved: true, requestPrefix: "usr", helperModules: [], constantsModules: [],
+  source: "fallback", evidence: "no custom requests in the target packages; SchemaNamePrefix = Usr", confirmedBy: "plan" };
 const planRun = runMigrate(["-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, projectConventions: FULL_CONVENTIONS }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || "") && !/PLAN INCOMPLETE/.test(planRun.stdout || ""));
 // ⛔ PLACEMENT GATE — the app-hosting facts. A run once cleared every other gate, built five pages, and only then
 // found that `create-app-section` could not run at all: the owning app was an install-time wrapper with no primary
 // package, its one package was locked, and the editable target package was not in the app's composition. Each leg
 // below is one of those three, plus the "never checked" case the whole gate exists for.
-const placementBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS };
+const placementBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, projectConventions: FULL_CONVENTIONS };
 const runWithPlacement = (placement, mode) => runMigrate(["-", mode], {
   input: JSON.stringify(placement === undefined ? placementBase : { ...placementBase, placement }), encoding: "utf8" });
 const planWithPlacement = (placement) => runWithPlacement(placement, "--plan");
@@ -2934,7 +3004,7 @@ const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
 try {
   fs.rmSync(outPath, { force: true });
   const outRun = runMigrate(["-", "--plan", "--out", outPath], {
-    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, projectConventions: FULL_CONVENTIONS, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
   const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
   check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
     outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
@@ -6236,6 +6306,7 @@ const dashMani = (dashboards) => ({
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
   signals: dashboards === undefined ? OTHER_SIGNALS : { ...OTHER_SIGNALS, dashboards },
   placement: { ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "P", editable: true } },
+  projectConventions: FULL_CONVENTIONS,
 });
 const dashCliRun = (mani, args = ["--plan"]) => runMigrate(["-", ...args], { input: JSON.stringify(mani), encoding: "utf8" });
 const dashRow = (md, needle) => md.split("\n").find((l) => l.includes(needle)) || "";
@@ -10565,6 +10636,8 @@ check("renderVerify: `rows` carries every table row with its page, kind (machine
       && v.rows.some((r) => r.kind === "machine" && r.outcome === "ok") && v.rows.every((r) => ["machine", "confirm", "na", "info"].includes(r.kind));
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
 runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
+runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX, ENGINE_DIR });
+runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
@@ -13522,10 +13595,15 @@ const n2TreeManifest = (titleA, titleB) => ({
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
-    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => r.label.startsWith("Business rules ×"));
-    check("T4 (R3): the Business rules checklist row carries a `rule` vk (never a vk-less skip) with the expected identities",
-      ruleRow?.vk?.type === "rule" && ruleRow.vk.names.includes("Contact") && ruleRow.vk.names.includes("Owner"),
-      () => ruleRow);
+    const rrRows = checklistGroups(rr, {}).flatMap((g) => g.rows);
+    const ruleRow = rrRows.find((r) => r.label.startsWith("Business rules ×"));
+    const entityRow = rrRows.find((r) => r.label.startsWith("Entity business rules ×"));
+    check("T4 (R3): the page and entity business-rule rows each carry a `rule` vk (never a vk-less skip) with their own identities",
+      ruleRow?.vk?.type === "rule" && ruleRow.deliverableId === "business-rules"
+        && ruleRow.vk.names.join() === "Contact" && ruleRow.vk.n === 1
+        && entityRow?.vk?.type === "rule" && entityRow.deliverableId === "entity-rules"
+        && entityRow.vk.names.join() === "Owner" && entityRow.vk.n === 1,
+      () => ({ ruleRow, entityRow }));
   }
   // Applicant-case contract fixture — a built payload mirroring the real Applicant page: 11 business rules read off
   // the slot and the native crt.CommunicationOptions. The whole point of N1: NONE of this reads ❌ MISSING now.

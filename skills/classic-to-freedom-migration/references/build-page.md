@@ -21,6 +21,12 @@ clio-safety rules apply to every write.
    write. Build the page YOUR task names and no other, even when its spec mentions a child: reaching
    into another page's task is how two sub-agents write the same schema. Your page's own spec is the
    one under `### Child page mappings` when your page key is a child.
+   **Your task file's `## Project conventions` block is the project's namespace and modules**: name custom
+   requests, validators and converters in its prefix (over any guide that says `usr.`), reuse its helper
+   modules, and reference record ids through its constants modules in SCHEMA_DEPS, never as pasted GUIDs.
+   `--verify` checks both, on the form page and on the list page: a foreign name keeps the page open, and so
+   does a declared module the CLASSIC page imported, or the plan maps your page's record ids to, that yours
+   does not import (the other declared modules are informational rows).
 2. Subtask order INSIDE your task, in the order the platform requires: template creation or
    existing-page selection → entity/data-source adjustments → layout → business rules →
    details/related lists/standard features → handlers/converters/validators → backend/service →
@@ -116,6 +122,20 @@ clio-safety rules apply to every write.
      and waits on the last build task of each child page and of the page holding the lists, so both
      exist when you start. Read the add-on first: `get-related-page-addon` with
      `entity-schema-name` = the child entity and `package-name` = the target package.
+     **The add-on is per object, not per page:** whatever it names as default or add page opens the
+     records of that entity from EVERY related list, section and lookup, not only from the page you
+     built. When the add-on you read already has a general default or add entry naming ANOTHER page
+     (Freedom or Classic), stop and ask the user before moving it, naming that page; record the answer
+     as its own `D<N>` in `decisions.md`. An add-on with no such entry is written without asking.
+     Then read the entity's `SysModuleEdit` cards: `list-entity-client-schemas` with `entity-name` =
+     the child entity. Each `editPages[]` entry is one card: `cardSchema` is the page it opens,
+     `kind` is `classic` or `freedom`, and `typeColumnValue` names the Type a per-type card serves.
+     The read is all you do there — **never write `SysModuleEdit`**, a system table. When any entry
+     has `kind: classic`, the binding leaves navigation mixed: the related list opens the Freedom
+     page while other entry points open Classic. Ask the user whether to keep that state (they switch
+     it themselves if not), record the answer as its own `D<N>` and write
+     `mixed navigation — <entity>: SysModuleEdit → <cardSchema>` under the row's `## Notes`, one line
+     per Classic entry.
      `create-related-page-addon` REPLACES the whole configuration, so send back every entry you read
      plus your change: the BUILT child page as the general default entry (`is-default`, no
      `type-column-value`, the `All employees` role or none), a separate `is-add` entry only when a
@@ -315,10 +335,10 @@ publishes as a key and never changes or drops a value already filed, so the key 
 there when your task starts. Fill the value under that key — never type a key from a row's label,
 which is escaped for display, and never shorten or rename one.
 
-The ids come in five shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
+The ids come in six shapes, for telling which id is yours: `<pageKey>#quality-gates` (the
 page-design pass), `<pageKey>#confirm:<kind>:<item>` (one per ⚠ Confirm item), `<pageKey>#childpage`,
-`list#listpage:<kind>:<item>` and
-`<pageKey>#datasource:<name>`, where `<pageKey>` is `main`, `list`, `child:<Entity>`,
+`list#listpage:<kind>:<item>`, `<pageKey>#datasource:<name>` and
+`<pageKey>#directive:D<N>` (one per user directive on that page), where `<pageKey>` is `main`, `list`, `child:<Entity>`,
 `typed:<Schema>` or `mini:<Schema>` (with an `@…` or `#n` suffix where two pages would otherwise
 share a key). A record is complete only when its fields have the right shape:
 
@@ -332,6 +352,13 @@ share a key). A record is complete only when its fields have the right shape:
   (prose here raises nothing). On a `#quality-gates` record, a raised finding keeps the judged row
   open until `decisions.md` or `findings.md` names the record's exact id as a whole token — a
   verdict alone does not close it.
+
+A `#directive:D<N>` record takes two fields instead of `referencePage`: `howFollowed` (a non-blank
+string: how the page does what the user asked) and `components` (the elements that carry it). Your
+task file lists the user directives for its pages, with the user's words and the expected result: build
+to them in every task, not only the one holding the directive's rows. When the page cannot do what the
+user asked, do not build something else in its place — leave the directive's filed row `not-built —
+needs-decision` and write `Decision needed` under `## Notes`.
 
 A wrong shape — a blank page, a list that is empty or holds a non-string — is an incomplete record,
 and the row reads unverified whatever the judge rules.
@@ -409,9 +436,14 @@ rules.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
-  bypass-permissions session. Establish the surface BEFORE the first stand write and say so when
-  there is none. A stored preference that later proves unachievable is RE-ASKED, never silently
-  downgraded while still reporting itself as automatic.
+  bypass-permissions session. The orchestrator settles it with the user before the first build
+  task and your prompt quotes the outcome as the `Browser:` line; with
+  `page-smoke` the check needs no surface at all. A stored preference that later proves
+  unachievable is RE-ASKED, never silently downgraded while still reporting itself as automatic.
+- **One answer widened into a policy.** "I'll check it myself" about one page became "Browser
+  checks: 0" for every task of a four-day build, and nothing was ever opened. Only the `Browser:`
+  line decides whether you check; a remark about one page in your prompt or in `decisions.md` does
+  not switch the check off for yours.
 - **Registry filter bar / section actions dropped.** The Classic section body carries **quick
   filters** (`initFixedFiltersConfig`) and **custom section actions** (`getSectionActions`) — the
   engine now surfaces both in the plan's `### List page` block. They are page-CENTRIC blind spots

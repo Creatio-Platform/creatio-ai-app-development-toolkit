@@ -6,6 +6,7 @@ import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForIte
   widgetsByMatch, profileCardsByEntity, knownCardActions, FEATURE_CONNECTIONS,
   LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
 import { resolveRowTarget, runCarries } from "./mapping-registry.mjs";
+import { DEFAULT_REQUEST_PREFIX, normalizePrefix } from "./conventions.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -549,7 +550,9 @@ export function mapToFreedom(eff, opts = {}) {
     registryUnindexedVersion: opts.registryUnindexedVersion || null, featureStatus: opts.featureStatus || (() => null),
     // the run's component registry `{ index, version, source }` (migrate.mjs `runRegistryFor`), or null: decides
     // whether a row's version-gated `upgrade` target is emitted (crt.RadioGroup) or its fallback `target`.
-    registry: opts.registry || null };
+    registry: opts.registry || null,
+    // the namespace every custom request this page emits is named in (see `freedomRequest`)
+    requestPrefix: normalizePrefix(opts.requestPrefix) || DEFAULT_REQUEST_PREFIX };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -558,7 +561,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- rules ---- (pass ALL known element names so a rule targeting a tab/group/container — not just a field —
   // is recognised as a valid target, not mis-flagged as "no field for it")
-  const _r = mapRules(payloadRules, payloadFields, new Set((eff.items || []).map(i => i.name)));
+  const _r = mapRules(payloadRules, payloadFields, new Set((eff.items || []).map(i => i.name)), eff.entity);
   const { pageBusinessRules, entityBusinessRules } = _r;
   _r.needsDecision.forEach(d => needsDecision.push(d));
 
@@ -785,10 +788,11 @@ function createContainers(ctx) {
 // container by climbing the classic ancestry, converting the classic 24-col grid into the target grid.
 // Returns viewConfigDiff/attributes/pdsColumns + its needsDecision[]/accountedFor[] + the profileRegion
 // resolver the details phase reuses.
-// The Freedom request name for a classic control's click. `usr.` prefixed and derived from the ELEMENT name, so
-// two controls bound to the same classic method still get their own request (the classic method is a shared
-// handler; the request is the element's own entry point).
-const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
+// The Freedom request name for a classic control's click, in the PROJECT's namespace (`manifest.projectConventions
+// .requestPrefix`, threaded in as `opts.requestPrefix`; the engine default only when a caller gives none) and
+// derived from the ELEMENT name, so two controls bound to the same classic method still get their own request (the
+// classic method is a shared handler; the request is the element's own entry point).
+const freedomRequest = (elementName, prefix) => `${prefix}.${elementName}Clicked`;
 
 // Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
 // too) and surface the dynamic-visibility / ancestor-visibility decisions.
@@ -1320,7 +1324,7 @@ function mapFields(ctx, containers) {
       // the `request` — the classic method behind it is engine knowledge and goes on the worklist, exactly like a
       // button's; emitting it inside `menuItems` would put a key no component contract declares on the built page.
       if (child.handlers?.click) {
-        const request = freedomRequest(child.name);
+        const request = freedomRequest(child.name, ctx.requestPrefix);
         entry.clicked = { request };
         sink.handlers.push({ request, element: child.name, componentType: "crt.MenuItem",
           classicHandler: child.handlers.click, tier: rowForItem(child)?.tier ?? null });
@@ -1427,7 +1431,7 @@ function mapFields(ctx, containers) {
     // goes on the worklist — the classic method it came from is already a stub row of its own (the engine resolves
     // a control's click binding as that method's trigger), so this adds the WIRING, not a second copy of the method.
     if (row.target.events?.clicked && it.handlers?.click) {
-      const request = freedomRequest(it.name);
+      const request = freedomRequest(it.name, ctx.requestPrefix);
       values.clicked = { request };
       sink.handlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
     }
@@ -2142,7 +2146,7 @@ function mapImperativeMembers(eff, cols, pageAttributes = new Set()) {
   // what nothing else does, and listing it here as well states the same member twice.
   const ownRow = new Set([...client(eff.mixins).flatMap(mixinCovers), ...(eff.referencedModules || [])]);
   const deps = moduleDeps.filter((n) => !INERT_MODULE_RX.test(n) && !ownRow.has(n));
-  if (deps.length) needsDecision.push({ kind: "module-dep", item: deps.join(", "),
+  if (deps.length) needsDecision.push({ kind: "module-dep", item: deps.join(", "), modules: deps,
     reason: `the page declares ${deps.length} further define() dependenc(ies) with no row of their own — constants/enum modules hold the lookup GUIDs its rules compare against, and utility modules hold logic it calls. Confirm what each contributes to the page and where it goes in Freedom; a dependency whose contribution you cannot name is an unresolved thread` });
 
   return { needsDecision };
@@ -2498,7 +2502,12 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
 const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 // The `lookup-value` row's `item`: fixed, so the evidence id derived from it survives a rule being added.
 const LOOKUP_VALUE_ITEM = "business-rule conditions";
-function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
+// The `object-wide-scope` row's `item`: fixed for the same reason.
+const OBJECT_WIDE_SCOPE_ITEM = "entity business rules";
+// The checklist deliverable that holds a page's entity rules, apart from its page rules, so declining the object-wide
+// scope closes exactly the entity rules.
+export const ENTITY_RULES_DELIVERABLE = "entity-rules";
+function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, entityName) {
   if (r.ruleType === "FILTRATION") {
     const filter = r.filterColumn
       ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
@@ -2506,8 +2515,10 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
     // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
     // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
     const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
-    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-      conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+    // A Classic FILTRATION belongs to one page; Freedom has a lookup filter only in entity rules, so the rule this
+    // becomes applies on every page and list of the object. `entity` names that object for the plan's rule row.
+    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete, entity: entityName || null,
+      conditions: r.conditions, note: "entity-level — applies on ALL pages and lists of the object; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
       provenance: r.provenance });
     // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
     // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
@@ -2526,9 +2537,11 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
 }
 
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
-function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
+function mapRules(payloadRules, payloadFields, knownElements = new Set(), entity = null) {
+  // The merge marks an unread entitySchemaName as "?": that is no name to list pages by or to print as one.
+  const entityName = entity && entity !== "?" ? entity : null;
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
-  for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision);
+  for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision, entityName);
   // C4: flag a rule ONLY when its target resolves to NOTHING on the page — neither a mapped field NOR any known
   // element (tab / group / container). Business rules legitimately target more than fields: hiding a TAB or GROUP
   // hides all its fields, so a rule targeting `…TabLabel` / `…Group…` is valid, not a dangling reference. Those
@@ -2546,7 +2559,27 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
   foldLookupValueRules();
+  foldObjectWideScope();
   return { pageBusinessRules, entityBusinessRules, needsDecision };
+
+  // ONE row per page asks the user to accept the object-wide reach of every entity rule this page produces. `item`
+  // is fixed (it is the evidence id); the targets ride in `reason`.
+  function foldObjectWideScope() {
+    const targets = [...new Set(entityBusinessRules.map((r) => r.targetAttribute).filter(Boolean))];
+    if (!targets.length) return;
+    const entity = entityName || "the object";
+    const listPages = entityName ? `run \`list-pages\` by entity ${entityName}`
+      : "read this page's entity on-stand (its `entitySchemaName`), run `list-pages` by it";
+    needsDecision.push({ kind: "object-wide-scope", item: OBJECT_WIDE_SCOPE_ITEM,
+      reason: `the Classic page filters ${targets.join(", ")} for THIS page only, but Freedom page rules have no lookup `
+        + `filter, so each becomes an entity business rule that applies on ALL pages and lists of ${entity}. Before `
+        + `building, ${listPages} and name its other Freedom pages when you ask the user. `
+        + "Accepted: build the entity rules. Declined: build none of them; record the answer as its own D<N> in "
+        + "`decisions.md` (not migrated — add manually: Freedom page rules have no lookup filter) and close the "
+        + `\`Entity business rules × N\` row \`wont-do\` under it: \`manifest.deliverableStatus\` key `
+        + `\`<pageKey>#${ENTITY_RULES_DELIVERABLE}\` at plan approval, \`--decide D<N> --wont-do --row <task>:<n>\` on `
+        + "that row during the build. The page's own `Business rules × N` row is not part of the answer and is still built" });
+  }
 
   // A condition comparing against a lookup-record GUID reads as an opaque id, so the display name is resolved
   // on-stand before the rule is rebuilt. ONE row per page, and the targets ride in `reason`: `item` is the

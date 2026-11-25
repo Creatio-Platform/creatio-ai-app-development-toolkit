@@ -18,13 +18,18 @@
 //
 // So: the split file says WHERE the seams are. This module says whether that answer is admissible, and keeps it
 // answerable to a plan that moves.
+import { parseDirectiveRowId, DIRECTIVE_FILED } from "./directives.mjs";
+
 export const SPLIT_FILE = "split.json";
 export const SPLIT_SCAFFOLD = "scaffold";
 const PAGE_SEP = "::";
 // The filed half of a page's `Quality gates` pair: the row that says the design pass ran and its record was filed.
 // Filing is build work, so this row belongs to the page's last writer; the judged half belongs to the review.
 export const QUALITY_FILED_ID = "quality:ran";
-export const isFiledGateRow = (row) => row?.deliverableId === QUALITY_FILED_ID;
+// A user directive's filed row is the same kind of row: the builder records how the page follows the directive, and
+// the judged twin stays with the review.
+export const isFiledGateRow = (row) => row?.deliverableId === QUALITY_FILED_ID
+  || parseDirectiveRowId(row?.deliverableId)?.part === DIRECTIVE_FILED;
 
 // A row is matched by its STRUCTURAL KEY — the label with its digits masked — for the same reason a task id is:
 // the digits are what a growing plan moves. `Fields — 19 expected` and `Fields — 20 expected` are one row with a
@@ -263,7 +268,25 @@ export function resolveSplit(split, groups, identity = new Map()) {
   errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
     ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...filedGateOutsideLastWriter(items),
     ...attributeAfterItsWriter(items), ...wiringBeforeChildPage(items));
+  placePageCodeRows(items, index);
   return { items, errors, unplaced: unconsumed(index) };
+}
+
+// THE `Page code` ROW RIDES WITH ITS PAGE'S LAST WRITER. The engine adds it to every page and it weighs nothing: it
+// checks the code the page's other rows produce. A split written before the row existed cannot name it, and an
+// in-flight folder must not stop for a row nobody could have placed, so an unclaimed one goes to the last item that
+// writes a row of its page. A split that names it keeps the item it chose.
+function placePageCodeRows(items, index) {
+  for (const m of index.values()) {
+    const pageRows = new Set([...m.values()].flat());
+    for (const r of pageRows) {
+      if (r.claimedBy || r.vk?.type !== "pagecode") continue;
+      const owner = items.findLast((it) => it.writesTo && it.rows.some((x) => pageRows.has(x)));
+      if (!owner) continue;
+      owner.rows.push(r);
+      r.claimedBy = owner.id;
+    }
+  }
 }
 
 // ONE SEAM THE ENGINE CAN CHECK RATHER THAN TRUST. A helper the plan folded under a caller says so in its own row
@@ -339,6 +362,11 @@ function filedGateRemedy(items, page, owner) {
   }
   return `No writing item carries \`${page}\` rows: give the item that builds that page \`writesTo: ${page}\` and put the row there.`;
 }
+// How many filed rows a page's `Quality gates` group opens with: the design pass's, plus one per user directive on
+// the page. The group lists every filed row before every judged one, so that count is the claim the writer makes.
+function filedRowCount(items, pageKey) {
+  return items.reduce((n, it) => n + it.rows.filter((r) => r.pageKey === pageKey && isFiledGateRow(r)).length, 0);
+}
 function filedGateOutsideLastWriter(items) {
   const out = [];
   items.forEach((it, i) => {
@@ -346,10 +374,14 @@ function filedGateOutsideLastWriter(items) {
       if (!isFiledGateRow(r)) continue;
       const owner = lastWriterOf(items, r.pageKey);
       if (owner.at === i) continue;
-      const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${QUALITY_FILED_ID}\`, record \`${r.pageKey}#quality-gates\`) of \`${r.pageKey}\``;
+      const record = r.vk?.id || `${r.pageKey}#quality-gates`;
+      const row = `the filed \`${REVIEW_GROUP_NAME}\` row (\`${r.deliverableId}\`, record \`${record}\`) of \`${r.pageKey}\``;
       const why = filedGateMisplacement(it, r.pageKey, owner);
-      const claims = `Claim \`@${REVIEW_GROUP_NAME}[1]\` (the filed row) in that writer and keep \`@${REVIEW_GROUP_NAME}[2]\``
-        + " (the judged row) in the read-only review — claiming the whole group in the writer makes the page's builder judge its own record.";
+      const filed = filedRowCount(items, r.pageKey);
+      const what = filed === 1 ? "the filed row" : "the " + filed + " filed rows";
+      const claims = `Claim \`@${REVIEW_GROUP_NAME}[${filed}]\` (${what}) in that writer`
+        + ` and keep \`@${REVIEW_GROUP_NAME}\` (the judged rows) in the read-only review — claiming both in the writer makes the`
+        + " page's builder judge its own record.";
       out.push(`${row} is in \`${it.id}\` ${why}. ${filedGateRemedy(items, r.pageKey, owner)} ${claims}`);
     }
   });

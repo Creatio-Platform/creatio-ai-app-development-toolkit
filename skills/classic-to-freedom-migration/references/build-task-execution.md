@@ -104,7 +104,11 @@ you.
 **Recover state, then stay inside your task.**
 
 - Recover state from your own task file first — it names your deliverables and the plan rows they
-  came from. Then read only your part of the approved `plan.md`: `grep -n '^#' plan.md` finds your
+  came from. A task that writes a page also carries a `## Task card`: the card, your rows and your
+  page's spec section are your brief, so you do not read `plan.md`, `decisions.md`, `worklog.md` or
+  the `customizations-*` part files (the behaviour cards your rows cite are in the card), and you run
+  the code map the card names before your first write and after your last. A task
+  without a card reads only its part of the approved `plan.md`: `grep -n '^#' plan.md` finds your
   page's heading, and you read that section alone — never the whole plan. A `customizations-*`
   behaviour card your rows cite is read by its id the same way (`grep -n '<scope>/C03'` in the part
   file, then that card's lines), not the whole part file. For a page, read your page's `--spec`
@@ -199,7 +203,13 @@ wait for the user to ask for a UI review.
      `success` for bodies that fail at runtime. So make ONE browser check per task, after your last
      save — not after each edit — and before you close the task: open the page (or run a runtime
      render check), confirm it loads without console/render errors, and read the evidence your rows
-     need in the order *Evidence, cheapest first* below gives. Between edits the evidence is the
+     need in the order *Evidence, cheapest first* below gives. Which tool runs it is the `Browser:`
+     line your prompt quotes: `page-smoke` → clio `page-smoke` on each form page you saved
+     (read-only: no `click` unless a row needs one, and then only on a record it may change), with a
+     browser surface for a list page or a data-request check when one is available; `surface` → a
+     browser surface; `none` → no check, the user declined it for this run. With `page-smoke`, a
+     `browser-consent-required` reply is not yours to answer: write it under `## Notes` and stop the
+     check there. Between edits the evidence is the
      saved schema read back with `get-page`, which also answers while a tab is frozen; any other
      question between saves is answered by that `get-page` read-back, never by opening the page.
      At most TWO browser checks per task: the second is allowed only to confirm the fix of a defect
@@ -279,9 +289,17 @@ whole file.
 **Report the count.** Every task that saved a page writes one line under `## Notes`, verbatim in
 this shape: `Browser checks: N — <what each check answered>`, e.g. `Browser checks: 2 — 1: loads
 clean, Owner populated, Visa detail filtered by Id, <card id>·AC-2 UpdateQuery wrote Status; 2: confirms the
-Status caption fix`. Write it even when you opened nothing (`Browser checks: 0 — <the runtime render
-check used instead, or why no browser surface was available>`): N=0 is valid only when the required
-post-save check ran as a runtime render check or no browser surface was available, never because the
-`get-page` read-backs looked right — they read back the saved schema, not the running page. The
-engine cannot see your tool calls, so this line is how a reviewer and the judge see that the cap
-held; N above 2 is a defect in the task, reported as such.
+Status caption fix`. A `page-smoke` call or a runtime render check counts as a check. Write the line even when you opened
+nothing (`Browser checks: 0 — <why>`): N=0 is valid only under `Browser: none`, or when the check
+could not run (a `page-smoke` refusal, a page that would not open), and the reason says which —
+never because the `get-page` read-backs looked right, which read back the saved schema, not the
+running page. The engine cannot see your tool calls, so this line is how a reviewer and the judge
+see that the cap held, and the result report reads N from it and quotes your words after the dash
+beside each exercised page, so write what each check answered, not just that it ran. A page counts
+as exercised only when its LAST built task, in queue order, reports a check: a check an earlier task
+or chunk ran on the page does not cover your save. You cannot tell whether your task is the page's
+last one, so every task that saves a page owes its own check after its own last save. A page whose
+last built task reports no check ends the run as **BUILT, NOT EXERCISED**, with your
+`Check on stand (row N): …` lines as the list a person works through by hand. N above 2 is a defect in the task, and the report lists it.
+Write the line on its own, at the start of a line, never inside a quote or a code fence: a quoted or fenced
+line is read as an example and does not count. To correct the count, write the line again; the last one counts.

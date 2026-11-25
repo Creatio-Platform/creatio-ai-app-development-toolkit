@@ -140,6 +140,12 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-tasks.mjs
+      # The page code map a page writer reads before it writes, and the analysis behind the blocking `Page code`
+      # verify row: a helper defined in several handlers, a function over the length limit, a request nothing sends.
+      - name: Run page code-map goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-codemap.mjs
       # The benchmark package's client code (benchmark-workspace/): the Post button saves the page's edits first
       # and posts, logs and recalculates only after that save and the flag write succeed.
       - name: Run benchmark package goldens

@@ -39,7 +39,9 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
+import { conventionsTaskLines } from "./conventions.mjs";
+import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate, isFiledGateRow } from "./split.mjs";
 import { RECONCILE_MODES } from "./reconcile-modes.mjs";
@@ -266,23 +268,25 @@ const writesToOf = (artifact) =>
 // ---8<--- THE BUDGET: how much work one sub-agent is handed ---8<---
 
 // DECLARED, not hard-coded at the call site, because these are calibration and calibration changes with evidence.
-// The unit is nominal build effort, sized so a chunk is one sitting for one sub-agent: the measured runs put a
-// builder at roughly half an hour for about this much, and a task that outgrows a sitting is the task an agent
-// silently splits or silently merges. Override per run with `opts.taskBudget`.
+// The unit is nominal build effort; a chunk is about two sittings (one sitting is roughly 40, half an hour). Every
+// extra task on one page is a fresh context that reads the briefs and the page before it writes a line, and on a
+// measured run that relay cost more than a long sitting does: a big page had 11–15 writers, each starting at ~100k
+// tokens, and a page built by one builder cost 16M tokens against 118M for a relay-built neighbour. What a longer
+// sitting costs when a session is lost is not measured; a live run decides whether 80 holds. Override per run with
+// `opts.taskBudget`.
 export const TASK_BUDGET = {
-  chunk: 40,        // max weight in one task
+  chunk: 80,        // max weight in one task
   // A WHOLE RUN worth no more than this is ONE build task plus ONE review, not one task per artifact. The
   // artifact rule exists so two sub-agents never write one page body; on a run this small there is only ever one
   // builder, so the rule protects nothing and each extra task is a fresh context that re-reads everything the
   // last one just read. Measured: a 31-row section (write weight 60) came out as six tasks — reference cache,
   // scaffolding, two page builds, two reviews — whose five sub-agents cost 4.5M weighted tokens, of which the
   // cache alone was 0.78M for work no second builder read.
-  // TWO CHUNKS, NOT ONE, AND DELIBERATELY: `chunk` is sized to one sitting, so this hands a single sub-agent more
-  // than a sitting's work. It is the lesser cost. A chunk boundary buys protection only when another task writes
-  // the same artifact afterwards; a collapsed run has no such task, so an agent that runs long is re-dispatched
-  // against a folder of two files rather than against a chain of six. At 60 the smoke section sat exactly on the
-  // line, which is not a calibration; 80 is the round number above it that still leaves every measured multi-page
-  // plan (the smallest was 160) on the per-artifact cut.
+  // Equal to one chunk. A chunk boundary buys protection only when another task writes the same artifact afterwards;
+  // a collapsed run has no such task, so an agent that runs long is re-dispatched against a folder of two files
+  // rather than against a chain of six. At 60 the smoke section sat exactly on the line, which is not a
+  // calibration; 80 is the round number above it that still leaves every measured multi-page plan (the smallest
+  // was 160) on the per-artifact cut.
   run: 80,
   field: 1,         // one field inside a layout row
   relatedList: 4,   // a related list carries its own binding and its own child page
@@ -310,6 +314,9 @@ function rowWeight(row, baseTitle, B) {
   // so a page's item rows pack as the one aggregate row did and never cut a page into many small tasks.
   if (row.vk?.item) return 0;
   if (row.vk?.type === "rule") return (Number(row.vk.n) || 1) * B.rule;
+  // The `Page code` row checks the code the page's other rows produce; it adds no work of its own, so it never
+  // moves a cut (a run on the collapse line stays one task when the row appears).
+  if (row.vk?.type === "pagecode") return 0;
   // The binding is already in the related list's weight (`relatedList` carries its binding and its child page), so
   // the row that checks it adds none — like the per-item rows above.
   if (row.vk?.type === "relatedpage") return 0;
@@ -513,7 +520,9 @@ const rowDigestInput = (r) => {
   const boundary = r.na ? "|na" : "";
   return `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}${boundary}`;
 };
-export const rowsDigest = (rows) => shortHash(rows.map(rowDigestInput).join(" "));
+// The `Page code` row is left out: it checks the code the other rows produce, so a task that gains it has no new
+// deliverable, and a `done` task must not read as drifted (and be re-dispatched) because the engine added it.
+export const rowsDigest = (rows) => shortHash(rows.filter((r) => r.vk?.type !== "pagecode").map(rowDigestInput).join(" "));
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -545,6 +554,8 @@ function taskOf(chunk, order) {
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
     ...(r.subject ? { subject: r.subject } : {}),
+    ...(r.behaviour ? { behaviour: r.behaviour } : {}),
+    ...(r.confirm ? { confirm: true } : {}),
     ...statusFields(r),
   }));
   const task = {
@@ -608,6 +619,11 @@ function artifactRows(groups, B) {
 // task folder can always be matched against the plan that was approved rather than the plan that exists now.
 // `groups` is a parameter so a caller that already derived them — `taskSetFor`, which then checks the cut
 // against them — does not walk the plan twice for one answer.
+// The run-level fields every task set and every task file carries: the plan version an approval names, and the
+// project conventions approved with that plan (the block each build and fix task file shows). ONE place, so the
+// next run-level field cannot be added to some writers and missed at others.
+const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null,
+  directives: result.directives });
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -661,7 +677,11 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   const tasks = chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) }));
   return {
     entity: result.entity || null,
-    planVersion: result.planVersion || null,
+    ...runHeader(result),
+    // The decisions in force, carried on the set so every render of it — sync, start, decide, revoke — writes the
+    // same task card. `mergeTaskSet` keeps it with the rest of the fresh set.
+    cardDecisions: opts.decisions ?? null,
+    cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
     tasks: withDependencies(tasks),
   };
@@ -1043,6 +1063,92 @@ function endWithOneBlankLine(text) {
   return text.length - end >= 3 ? `${text.slice(0, end)}\n\n` : text;
 }
 
+// THE TASK CARD. A page is written by one task after another, each a fresh context. Without a card each of those
+// contexts rebuilds its picture of the run from the plan, the decisions and the worklog — a measured run read its
+// 139 KB plan 35 times — and still builds beside code it never saw. The card puts what
+// the writer needs into the file it is handed: where its brief ends, how to see the page's code before it writes,
+// and the decisions in force, verbatim from decisions.md (titles, plus the plan's Adjustments). Only on a task
+// that writes a page: a review or the reference cache has no page code to own. `set.cardDecisions` is the
+// decisions map the caller read (`readDecisions`); without it the card says none were read rather than none exist.
+export const TASK_CARD_HEADING = "## Task card";
+// A task that writes a page body: a page chunk or repair round (`page:<id>`) and the whole-run build. It owns the
+// page's code, so it gets the task card, and it owes the page a post-save browser check, so the browser answer gates it.
+export const writesPage = (writesTo) => String(writesTo || "").startsWith("page:") || writesTo === ARTIFACT_WHOLE;
+function taskCardBlock(task, set = {}) {
+  if (!writesPage(task.writesTo)) return [];
+  const pageArg = task.pageKey ? ` --page ${task.pageKey}` : "";
+  const L = ["", TASK_CARD_HEADING, "",
+    "- **Your brief is this file** and your page's section of the design spec (`refs/spec.md` when the reference"
+      + " cache exists, else `--spec`). Do not read `plan.md`, `decisions.md`, `worklog.md` or the `customizations-*`"
+      + " part files: what they hold for this task is in this file.",
+    ...worklistLines(task.rows || []),
+    "- **See the page's code before you write it.** Save the page's `get-page` response before your first write"
+      + ` and after your last, and run \`node engine/codemap.mjs <file>${pageArg}\` (beside \`migrate.mjs\`) on`
+      + " it. It lists the handlers, the helpers already defined and where, and what the `Page code` row will hold"
+      + " you to: reuse a helper it lists, never paste a second copy. Clear its findings on code you touched;"
+      + " finding none is part of done.",
+    "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
+      + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
+      + " you write. Either way, extend the handler the map lists for a request instead of adding a second one, and"
+      + " move a part two handlers share into one helper.",
+  ];
+  L.push(...behaviourLines(task.rows || []), ...decisionLines(set));
+  return L;
+}
+
+// Replacement that puts a backslash before a line's leading `#` or `|`.
+const MARKER_ESCAPE = String.raw`$1\$2`;
+// The decisions in force with their text, or why the card has none.
+function decisionLines(set) {
+  const decisions = set.cardDecisions instanceof Map ? [...set.cardDecisions] : null;
+  if (!decisions) return ["- **Decisions in force:** not available to this render — ask the orchestrator to re-run `--tasks` before you build."];
+  if (!decisions.length) return ["- **Decisions in force:** none recorded."];
+  const texts = set.cardDecisionTexts instanceof Map ? set.cardDecisionTexts : new Map();
+  const L = ["- **Decisions in force** (verbatim from `decisions.md` and the plan's Adjustments; a row's own decision is"
+    + " also in its `Outcome` cell):"];
+  for (const [id, title] of decisions) {
+    L.push(`  - \`${id}\` — ${String(title).replaceAll(/\s+/g, " ").trim()}`);
+    // The text under the decision, indented into its item. The indent is not enough on its own: this file's readers
+    // match `## Notes`, `## Deliverables` and `| N |` rows after trimming, so a line opening with `#` or `|` is
+    // escaped, otherwise a decision quoting either would move the notes boundary or add a deliverables row.
+    for (const line of String(texts.get(id) || "").split("\n")) {
+      if (line.trim()) L.push("    " + line.trimEnd().replace(/^(\s*)([#|])/, MARKER_ESCAPE));
+    }
+  }
+  return L;
+}
+// Where the plan's worklist for THIS task sits: its ⚠ Confirm items and its boundaries are rows of the table below.
+function worklistLines(rows) {
+  const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();
+  const confirms = rows.filter((r) => r.confirm && !r.na);
+  const boundaries = rows.filter((r) => r.na);
+  const L = [];
+  if (confirms.length) {
+    L.push("- **⚠ Confirm — answer each on the stand before you build** (its row is in the table below):",
+      ...confirms.map((r) => `  - ${one(r.label)}`));
+  }
+  if (boundaries.length) {
+    L.push("- **Plan boundaries — never built** (their rows are pre-filled `not-applicable` below):",
+      ...boundaries.map((r) => `  - ${one(r.label)} — ${one(r.na)}`));
+  }
+  return L;
+}
+// The behaviour cards the task's rows cite, with their content: what the item does, its use case and its acceptance
+// criteria. A handler is ported against its card's criteria, so the card travels with the row that needs it.
+function behaviourLines(rows) {
+  const seen = new Map();
+  for (const r of rows) if (r.behaviour?.card && !seen.has(r.behaviour.card)) seen.set(r.behaviour.card, r.behaviour);
+  if (!seen.size) return [];
+  const one = (s) => String(s).replaceAll(/\s+/g, " ").trim();
+  const L = ["- **Behaviour cards your rows cite** (from the step-5.1 analysis; port each against its criteria):"];
+  for (const [id, b] of seen) {
+    const parts = [b.whatItDoes && `does: ${one(b.whatItDoes)}`, b.useCase && `use case: ${one(b.useCase)}`,
+      b.ac?.length && `acceptance: ${b.ac.map(one).join("; ")}`].filter(Boolean);
+    L.push(`  - \`${id}\` — ${parts.join(" · ") || "no description recorded; the card id is all the analysis left"}`);
+  }
+  return L;
+}
+
 // THE ONE-SUB-AGENT CONTRACT, stated in the file the sub-agent is handed rather than only in the orchestrator's
 // instructions — the file is the prompt, so the rule that binds the reader has to be in it. The write ordering and
 // the nonce are both here because both are checkable afterwards: `writesTo` says what may not run beside this, and
@@ -1053,9 +1159,10 @@ function oneAgentBlock(task) {
     L.push(`- **Writes:** \`${task.writesTo}\` — no other task may be running against this artifact. A task with a`
       + " DIFFERENT `writesTo` (or an empty one) may run beside this one; one with the same must not."
       // "No other task may be RUNNING against this artifact" is satisfied by one agent taking a page's chunks one
-      // after another, so the sequential case is stated rather than left to be inferred.
-      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent — sequential is not permission to keep"
-      + " this one; finishing yours and picking up the next chunk of the same page is the violation.");
+      // after another, so the sequential case is stated rather than left to be inferred. The next agent is a fresh
+      // context, but it is not a guest: it takes the page over as its owner, from the code map (see the task card).
+      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent, which takes the page over as its owner;"
+      + " do not pick up the next chunk of the same page yourself.");
   } else {
     L.push("- **Writes:** nothing — read-only. It may run beside any task it does not depend on.");
   }
@@ -1089,6 +1196,22 @@ function markersBlock() {
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
+  ];
+}
+// THE USER'S DIRECTIVES, in every task that builds or reviews a page they apply to. The file is the sub-agent's
+// prompt, so a directive reaches the builder only by being written here: an instruction left in decisions.md, or in
+// the orchestrator's memory, is one the builder never reads. Each directive's own rows (filed and judged) sit in
+// the page's last build task and its review; this block is what keeps every EARLIER builder of the page from
+// building something the user ruled out.
+function directivesBlock(task, directives) {
+  const pages = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
+  const own = (directives || []).filter((d) => [...pages].some((k) => directiveCovers(d, k)));
+  if (!own.length) return [];
+  return [
+    "- **User directives — the user's own words. Build to them on every page they name:**",
+    ...own.map((d) => `  - \`${d.id}\` (${d.scope.map((k) => "`" + esc(k) + "`").join(", ")}): “${esc(d.quote)}” → expected: ${esc(d.expectation)}`),
+    "  - Cannot follow one here? Do not build something else in its place. Say so under `## Notes`, naming the"
+      + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
 function outcomeBlock(repair = false) {
@@ -1151,6 +1274,7 @@ function outcomeBlock(repair = false) {
 
 export function renderTaskFile(task, set = {}) {
   const naNote = task.naRows ? `, ${task.naRows} plan-boundary` : "";
+  const conventions = conventionsTaskLines(set.projectConventions, cell);
   const body = [
     ...renderFrontMatter(task, set),
     "",
@@ -1168,8 +1292,11 @@ export function renderTaskFile(task, set = {}) {
       "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
       "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
     ] : [
-      "> One task of an APPROVED migration plan. Build ONLY what is listed here — a deliverable that looks wrong is a",
-      "> proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+      "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
+      "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
+      "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
+      "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
+      "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
     ]),
     "",
     `- **Page key:** \`${task.pageKey}\``,
@@ -1178,6 +1305,11 @@ export function renderTaskFile(task, set = {}) {
     ...outcomeBlock(task.kind === REPAIR_KIND),
     ...markersBlock(),
     ...oneAgentBlock(task),
+    ...directivesBlock(task, set.directives),
+    // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
+    ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
+    // The card stays last before the deliverables: `refreshTaskCard` re-renders from its heading to them.
+    ...taskCardBlock(task, set),
     "",
     ENGINE_BODY_HEADING,
     "",
@@ -2514,7 +2646,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
       rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
-        ...(r.subject ? { subject: r.subject } : {}), ...statusFields(r) })),
+        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...(r.confirm ? { confirm: true } : {}), ...statusFields(r) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,
@@ -2533,7 +2665,9 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   }, B).map((c, i) => taskOf(c, i + 1));
   return {
     entity: result.entity || null,
-    planVersion: result.planVersion || null,
+    ...runHeader(result),
+    cardDecisions: opts.decisions ?? null,
+    cardDecisionTexts: opts.decisionTexts ?? null,
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
@@ -2847,10 +2981,13 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   const reconcileMode = effectiveFrozenMode(dir);
   const written = [];
   for (const t of tasks) {
+    // The file's task card is the exception to "never rewritten": it is derived from the decisions in force, so
+    // every sync re-renders that block alone (`refreshTaskCard`) and a later round's writer reads current decisions.
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, t.file), renderTaskFile(t, { ...runHeader(result), reconcileMode,
+      cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts }));
     written.push(t);
   }
   // Re-derived from the FILES, so the new repair files are in it with everything else.
@@ -3414,11 +3551,31 @@ export const HOLD_SEQUENCED = "sequenced";  // set-level only: an earlier member
 export const HOLD_STATUS = "status";        // open, but neither `todo` nor in flight — a decision, not a schedule
 export const HOLD_LEDGER = "ledger";        // the dispatch books are broken, so the gate refuses THIS id too
 export const HOLD_DECISION = "decision";    // every open row waits on an open decision on a subject another task shares
-export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER, HOLD_DECISION];
+export const HOLD_BROWSER = "browser";      // it writes a page and worklog.md records no answer to the browser question
+export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER, HOLD_DECISION,
+  HOLD_BROWSER];
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
-export function startBlocker(task, tasks, running = {}, decisions = decisionIndex(tasks)) {
+// PAGE WORK ALREADY BEGUN: a page-writing task has its clock running or has saved its page. The browser question belongs
+// before the first page task starts, so once page work has begun the gate has nothing left to hold — and a folder
+// whose page work began before the folder had a `Browser:` line keeps building rather than refusing mid-run. The
+// scope is the folder on purpose: being in flight is a property of the folder, so from the first page task on, the
+// orchestrator's 7.0b instruction to ask before the next page task is the whole enforcement. Scoping the lift to one
+// page would refuse the next untouched page of every folder that was mid-build when the gate arrived.
+const PAGE_WORK_BEGUN = new Set([S_IN_PROGRESS, S_DONE, S_PARTIAL]);
+// `running` is the clock map of `timings.json`: a started task is `todo` on its file until its cells move.
+export const pageWorkBegun = (tasks, running = {}) => (tasks || []).some((t) => writesPage(t.writesTo)
+  && (PAGE_WORK_BEGUN.has(t.status) || Object.hasOwn(running || {}, t.id)));
+const pageTaskOpen = (tasks) => (tasks || []).some((t) => writesPage(t.writesTo) && OPEN_LIFECYCLE.has(t.status));
+// The folder still owes the browser answer: a page-writing task is yet to run, and no page work has begun.
+export const browserAnswerOwed = (tasks, running = {}) => !pageWorkBegun(tasks, running) && pageTaskOpen(tasks);
+// The answer is still owed and no gate holds for it: page work has begun and a page-writing task is still open. Nothing
+// refuses those tasks, so `--next` and `resume.md` say the answer is owed, and a fresh context reads it where it
+// reads its next command rather than only in the 7.0b prose.
+export const browserAnswerUngated = (tasks, running = {}) => pageWorkBegun(tasks, running) && pageTaskOpen(tasks);
+
+export function startBlocker(task, tasks, running = {}, { decisions = decisionIndex(tasks), browserGate = null } = {}) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
   if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
@@ -3429,6 +3586,12 @@ export function startBlocker(task, tasks, running = {}, decisions = decisionInde
   // stamped a clock on it.
   if (task.status !== S_TODO && task.status !== S_IN_PROGRESS && !SETTLED.has(task.status)) {
     return { cause: HOLD_STATUS, tasks: [] };
+  }
+  // NO PAGE BUILD WITHOUT THE BROWSER ANSWER. A builder cannot ask the user, so the question its post-save check
+  // depends on is asked before its dispatch. `browserGate` is set by the CLI, which reads `worklog.md`; a caller
+  // that passes none is not gated.
+  if (browserGate && !browserGate.answer && writesPage(task.writesTo) && !pageWorkBegun(tasks, running)) {
+    return { cause: HOLD_BROWSER, tasks: [] };
   }
   const byId = new Map(tasks.map((x) => [x.id, x]));
   // THE QUEUE ORDER IS ENFORCED, not advised — a task built before its dependency reads answers that do not exist
@@ -3555,7 +3718,7 @@ function openClock(dir, t, merged, opts, now) {
   // answer to "which task may I start?" cannot disagree with what this call then does with that id. The four
   // refusal SHAPES are unchanged: every caller reads `unread` / `blockedByDispatch` / `blockedByDeps` /
   // `blockedByOverlap` off the returned object exactly as before, in the same precedence.
-  const blocker = startBlocker(t, merged.tasks, state.running);
+  const blocker = startBlocker(t, merged.tasks, state.running, { browserGate: opts.browserGate });
   // A file the engine REFUSED to read is not started. Re-rendering it in `--start` is exactly what
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
@@ -3586,6 +3749,7 @@ function openClock(dir, t, merged, opts, now) {
   if (merged.dispatch?.failing.length) {
     return { refusal: { blockedByDispatch: merged.dispatch } };
   }
+  if (blocker?.cause === HOLD_BROWSER) return { refusal: { blockedByBrowser: t.writesTo } };
   if (blocker?.cause === HOLD_DEPS) return { refusal: { blockedByDeps: blocker.tasks } };
   if (blocker?.cause === HOLD_DECISION) return { refusal: { blockedByDecision: blocker } };
   if (blocker?.cause === HOLD_OVERLAP) return { refusal: { blockedByOverlap: blocker.tasks } };
@@ -3912,7 +4076,7 @@ function writeIfChanged(full, next) {
 // update: the front matter carries the `decisions:` map naming exactly the cells the body now holds, and the
 // two have to land together. `null` is passed when the run touched no cells here, so `decisions:` is never
 // added to a file that never carried it.
-function persistAdoptedTask(dir, t, unplaced) {
+function persistAdoptedTask(dir, t, unplaced, set = null) {
   const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
   const wanted = new Map();
   for (const idx of dirty) {
@@ -3934,6 +4098,24 @@ function persistAdoptedTask(dir, t, unplaced) {
   // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
   // the task for ever.
   setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "", decisionsArg);
+  refreshTaskCard(dir, t, set);
+}
+// A repair or declared task file is the record of its round and is never re-rendered, but its task card is not a
+// record: it is derived from the decisions in force, and its writer is told not to read decisions.md. So the card
+// block alone is re-rendered on every sync — replaced where the file has one, inserted before the deliverables where
+// it has none — and every cell, front-matter line and note around it stays as it is on disk.
+function refreshTaskCard(dir, t, set) {
+  if (!set?.cardDecisions || !writesPage(t.writesTo)) return;
+  const full = path.join(dir, t.file);
+  let text;
+  try { text = fs.readFileSync(full, "utf8"); } catch { return; }
+  const body = `\n\n${ENGINE_BODY_HEADING}`;
+  const end = text.indexOf(body);
+  if (end < 0) return;
+  const card = taskCardBlock(t, set).slice(1).join("\n");
+  const start = text.lastIndexOf(`\n${TASK_CARD_HEADING}\n`, end);
+  const next = start >= 0 ? text.slice(0, start) + "\n" + card + text.slice(end) : text.slice(0, end) + "\n\n" + card + text.slice(end);
+  writeIfChanged(full, next);
 }
 function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
@@ -3942,7 +4124,7 @@ function persistTaskSet(dir, merged) {
     // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
-    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced);
+    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced, merged);
     else writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
@@ -4061,7 +4243,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
   try {
-    mintDeclared(dir, result, decls, written);
+    mintDeclared(dir, result, decls, written, { cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts });
   } catch (e) {
     const refusal = ledgerRefusal(e);
     if (!refusal) {
@@ -4094,7 +4276,7 @@ function unmint(dir, written) {
 
 // Writes one task file per declaration, pushing each onto `written` once it is on disk, so a write that throws
 // part-way leaves `written` naming exactly the files that exist.
-function mintDeclared(dir, result, decls, written) {
+function mintDeclared(dir, result, decls, written, card = {}) {
   const reconcileMode = effectiveFrozenMode(dir); // invariant for the whole loop — read the frozen mode once
   for (const d of decls) {
     const n = Number(d.order);
@@ -4108,7 +4290,7 @@ function mintDeclared(dir, result, decls, written) {
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
     task.file = taskFileName(task);
-    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null, reconcileMode }));
+    writeFileAtomic(path.join(dir, task.file), renderTaskFile(task, { ...runHeader(result), reconcileMode, ...card }));
     written.push(task);
   }
 }
@@ -4130,7 +4312,7 @@ export const NEXT_VERDICTS = [NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_
 // predicate, so an unfiltered set would advertise a fan-out `--start` refuses one call later. The set is
 // therefore mutually exclusive with ITSELF: the first writer of an artifact in queue order keeps it, and every
 // later writer is withheld as `sequenced`.
-export function startableTasks(set, dir) {
+export function startableTasks(set, dir, browserGate = null) {
   const tasks = set.tasks || [];
   const dispatch = set.dispatch || dispatchAudit(tasks, dir);
   const { running } = readTimingsFile(dir);
@@ -4150,7 +4332,7 @@ export function startableTasks(set, dir) {
   const claimed = new Map();   // artifact → the member of THIS answer that already writes it
   const decisions = decisionIndex(tasks);
   for (const t of candidates) {
-    const blocker = startBlocker(t, tasks, running, decisions);
+    const blocker = startBlocker(t, tasks, running, { decisions, browserGate });
     if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file, rows: blocker.rows }); continue; }
     const owner = t.writesTo ? claimed.get(t.writesTo) : null;
     if (owner) { withheld.push({ task: t, cause: HOLD_SEQUENCED, tasks: [owner] }); continue; }
@@ -4682,9 +4864,14 @@ function clearStaleStatusCells(tasks) {
   }
   return cleared;
 }
+// The `D<N>` each directive row of `rows` carries to a builder.
+function citedDirectives(rows) {
+  return (rows || []).map((r) => parseDirectiveRowId(r.deliverableId)?.id).filter(Boolean);
+}
 // The `D<N>` entries of `decisions` (the Map from readDecisions) that nothing cites: no task `decisions:` entry,
-// no `deliverableStatus` entry and no `withoutDeliverable` item. `{ id, title }` in file order; `Adjustment N`
-// keys are never returned.
+// no `deliverableStatus` entry, no `withoutDeliverable` item and no directive row. `{ id, title }` in file order;
+// `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
+// directive whose scope reached no task stays unaccounted and the first dispatch is refused.
 export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
   const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
   for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
@@ -4692,6 +4879,7 @@ export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus 
     if (t.unread) continue;
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     for (const d of map.values()) cited.add(decisionOf(d));
+    for (const id of citedDirectives(t.rows)) cited.add(id);
   }
   return [...(decisions || new Map()).entries()]
     .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
@@ -4861,15 +5049,50 @@ export function approvedPlanVersions(decisionsText) {
 // the route covers the whole run, so a later line can only be a correction of an earlier one — and a correction
 // to a value that is not one of DISPATCH_ROUTES leaves the run with no route, not with the earlier one.
 export function worklogRoute(worklogText) {
-  let route = null;
+  return worklogField(worklogText, "Route:", DISPATCH_ROUTES);
+}
+
+// The answers step 7.0b may record for the browser question, asked once before the first task that writes a page:
+// `page-smoke` (clio runs the post-save check headless), `surface` (an agent browser surface does it), `none`
+// (the user declined; every built page ends unexercised). Anything else is no answer.
+export const BROWSER_ANSWERS = Object.freeze(["page-smoke", "surface", "none"]);
+
+// The `Browser:` line step 7.0b writes into `worklog.md`, read by the rule `Route:` is: the LAST line wins, and a
+// correction to a value outside BROWSER_ANSWERS leaves the run with no answer, not with the earlier one.
+export function worklogBrowser(worklogText) {
+  return worklogField(worklogText, "Browser:", BROWSER_ANSWERS);
+}
+
+// The `Browser:` answer recorded for the task folder `tasksDir`: its `worklog.md` lives in the migration folder above
+// it. The one place the engine reads it, so the start gate and the result report cannot disagree on where it is.
+// `line` is the valid `Browser:` line or null; `unread` says why worklog.md could not be read, or is null when it was.
+// The two differ for the result report: "no answer recorded" and "the answer could not be read" are different findings.
+export function readWorklogBrowserAnswer(tasksDir) {
+  const file = path.join(path.dirname(path.resolve(tasksDir)), "worklog.md");
+  try { return { line: worklogBrowser(fs.readFileSync(file, "utf8")), unread: null }; }
+  catch (e) {
+    const why = e?.code === "ENOENT" ? `no \`worklog.md\` beside the task folder (${file})` : `\`${file}\` could not be read (${e?.code || e?.message})`;
+    return { line: null, unread: why };
+  }
+}
+// The recorded `Browser:` line alone, null for no file or no valid line: the start gate holds a page task on either.
+export const readWorklogBrowser = (tasksDir) => readWorklogBrowserAnswer(tasksDir).line;
+
+// The answer a `Browser:` line records — `page-smoke`, `surface` or `none` — or null for no line. Every reader of the
+// line asks this, so the start gate and the result report interpret it by one rule.
+export const browserAnswerOf = (browserLine) => (browserLine ? fieldValue(browserLine, "Browser:") : null);
+
+const fieldValue = (line, field) => line.slice(field.length).trim().split(/\s/)[0];
+function worklogField(worklogText, field, allowed) {
+  let found = null;
   for (const line of String(worklogText || "").split(/\r?\n/)) {
     const plain = plainLine(line);
-    if (plain.startsWith("Route:") && plain.slice("Route:".length).trim() !== "") route = plain;
+    if (plain.startsWith(field) && plain.slice(field.length).trim() !== "") found = plain;
   }
-  if (!route) return null;
-  const value = route.slice("Route:".length).trim().split(/\s/)[0];
-  return DISPATCH_ROUTES.includes(value) ? route : null;
+  if (!found) return null;
+  return allowed.includes(fieldValue(found, field)) ? found : null;
 }
+
 
 // THE RESUME FILE, rendered from values the caller computed. Pure: no file is read here, so the goldens can hold
 // it to its fields. `next` is the first task `--next` would name, or null with the verdict that answered instead.
@@ -4896,6 +5119,11 @@ export function renderResume(f) {
     `- **Environment:** \`${f.environment || "not recorded in manifest.planMeta.environment"}\``,
     `- **Approved plan version:** \`${f.planVersion}\` — the \`decisions.md\` entry: ${f.approvalLine}`,
     `- **Route:** \`${f.route}\` (from \`worklog.md\` — dispatch every task this way; never switch mid-run)`,
+    ...(f.browser ? [`- **Browser:** \`${f.browser}\` (from \`worklog.md\` — the browser question is answered; hand this line`
+      + " to every builder and never ask it again)"] : []),
+    ...(!f.browser && f.browserUngated ? ["- **Browser:** not answered — `worklog.md` has no `Browser:` line and page work"
+      + " has begun, so no page task is refused for it: ask the browser question (orchestrate-build.md 7.0b) before you"
+      + " dispatch the next page task, and record the answer there"] : []),
     `- **Next startable task:** ${nextLine}`,
     "",
     "## Progress",

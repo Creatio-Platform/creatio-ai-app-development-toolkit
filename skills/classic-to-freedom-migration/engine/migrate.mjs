@@ -26,6 +26,9 @@
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
 //     "runDiagnostics": { skillVersion, git, clioVersion, gateVersion, environment, uri, stand }, // optional; the `diagnostics.mjs --json` object — `--plan` prints it as the plan's `### Run diagnostics` block (`unknown (not supplied)` when absent). Not part of the plan version.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
+//     "projectConventions": { resolved, requestPrefix, validatorPrefix?, converterPrefix?, helperModules, constantsModules, source, evidence, confirmedBy, conflict?, previous? }, // REQUIRED for `--plan`: the team's request namespace and modules (conventions.mjs); a verified `usr` fallback is a valid answer
+//     "constantsModules": { "<Module>": { "body": "<define(...) source>" }, … }, // the bodies of projectConventions.constantsModules — the plan maps every GUID it shows to its `Module.Path`
+//     "qualityThresholds": { maxFunctionLines?, maxNestedFunctionsPerHandler?, maxSequentialIndependentAwaits? }, // optional; overrides quality.mjs's DEFAULT_QUALITY_THRESHOLDS (60 / 3 / 2) for the `--verify` Code quality rows. Root only — every fold uses the root's
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
@@ -61,19 +64,22 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop } from "./designspec.mjs";
+  freedomRowActionsToDrop, publishedPageKeys } from "./designspec.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
-  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
+  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, browserAnswerOwed, browserAnswerUngated, readTimingsFile, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
-import { renderFinalReport, readDecisions } from "./report.mjs";
+import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "./report.mjs";
+import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
+import { qualityThresholdsOf } from "./quality.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -172,7 +178,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
     // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
     // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedQualityThresholds: ctx.checklistOpts?.qualityThresholds, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -562,6 +568,7 @@ function sectionChangeSetOf(manifest, opts, sectionEff) {
     entityColumns: manifest.entityColumns || {},
     resources: strings.resources,
     resourceStrings: strings.resourceStrings,
+    requestPrefix: runConventionsOf(manifest, opts).conventions?.requestPrefix,
   });
 }
 // ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
@@ -1023,6 +1030,20 @@ export function placementIssues(manifest) {
   return issues;
 }
 const placementOf = (manifest) => manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+// The run's project-conventions facts (`conventionFacts`: the block, its blockers, the GUID index): the ROOT
+// manifest's, inherited WHOLE by every fold — a fold's child bundle carries neither the block nor the module bodies.
+const runConventionsOf = (manifest, opts = {}) => opts.inheritedConventions || conventionFacts(manifest);
+// A fold that finds a block on its own child bundle ignores it — the root's holds for the whole tree — and says so, so
+// an answer recorded in the wrong place blocks the plan instead of vanishing.
+const ownConventionsBlockers = (manifest, opts = {}) => (opts.inheritedConventions && manifest?.projectConventions != null
+  ? [`projectConventions on the child bundle of '${opts.scopeSchema || "a sub-page"}' is ignored — a sub-page uses the root manifest's block; record the answer there and remove it from the child bundle`]
+  : []);
+// The record-id lists of several runs as one, by id in first-seen order, each id with every path that holds it.
+function mergeRecordIds(lists) {
+  const byGuid = new Map();
+  for (const { guid, paths } of lists.flat()) byGuid.set(guid, [...new Set([...(byGuid.get(guid) || []), ...paths])]);
+  return [...byGuid].map(([guid, paths]) => ({ guid, paths }));
+}
 const isResolvedFact = (p, k) => !!p[k] && typeof p[k] === "object" && p[k].resolved === true;
 // `existing-section` registers nothing and creates no app, so the owning app's facts do not bear on it: only the
 // target package and the host decision are required. The ONE source for both the gate above and the keys the
@@ -1096,6 +1117,8 @@ export function checklistOpts(manifest, opts = {}) {
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
   // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
   const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  // The run's project conventions, read once: a fold inherits the root's, the root parses its constants modules.
+  const conventions = runConventionsOf(manifest, opts);
   return {
     // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
     deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
@@ -1110,6 +1133,14 @@ export function checklistOpts(manifest, opts = {}) {
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
+    // PROJECT CONVENTIONS (conventions.mjs) — gated like placement, and inherited by every fold like the signals.
+    projectConventions: conventions.conventions,
+    // the ROOT run gates on them; a fold inherits facts the root already gated
+    conventionsBlockers: opts.inheritedConventions ? [] : conventions.issues,
+    // CODE QUALITY (quality.mjs) — the run's thresholds (the root manifest's, inherited by every fold) and the record
+    // ids the project's constants modules hold, which make a hard-coded copy of one a blocking finding.
+    qualityThresholds: opts.inheritedQualityThresholds || qualityThresholdsOf(manifest),
+    constantsGuids: [...(conventions.guidIndex?.keys() || [])],
     // The placement keys this run's gate requires, so the banner asks for exactly those (see requiredPlacementKeys).
     placementKeys: requiredPlacementKeys(placementOf(manifest)),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
@@ -1228,6 +1259,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   const res = f.res;
   c.spec = res.designSpec;
   c.changeSet = pageTextsOf(res.changeSet);
+  c.recordIds = res.recordIds; c.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
   c.mappedEntity = res.entity;
   c.resolvedFrom = key;
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
@@ -1289,6 +1321,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
     t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
+    t.recordIds = res.recordIds; t.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
     t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
     t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
     t.coverage = res.coverage || null;        // aggregated into the parent's coverage gate
@@ -1329,6 +1362,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
   else {
     const res = f.res;
     miniPage.spec = res.designSpec; miniPage.changeSet = pageTextsOf(res.changeSet); miniPage.blocked = !!res.gate?.blocked;
+    miniPage.recordIds = res.recordIds; miniPage.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
@@ -2635,11 +2669,29 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // Everything the manifest carries is covered here rather than an allowlist — the allowlist is what went stale.
 // The one key left out is `runDiagnostics`: it records the machine the plan was produced on (skill build, clio,
 // stand), not what the plan says, so a plugin or clio update between plan and build does not ask for re-approval.
-const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics"]);
-function computePlanVersion(manifest, readBody) {
+// `constantsModules` is replaced by what the plan shows of it, the record-id table: re-fetching a module (reformatted,
+// or holding a constant this plan never uses) leaves the plan as it was, so the approval stands; an id the plan maps
+// differently moves the version.
+// The user's directives (decisions.md) are covered too: each one adds rows to the pages it names, so adding one, or
+// rewriting its quote, expectation or scope after approval, is a plan the user has not approved. Only those four
+// fields are hashed — who recorded it and the approval entry itself stay out, or approving would move the version it
+// approves. A plan with no record id and no directive hashes exactly as the manifest alone does.
+const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules"]);
+// Code-unit order, as the key sort above: a hash input must not depend on the locale.
+const byCodeUnit = (a, b) => (a < b ? -1 : Number(a > b));
+function computePlanVersion(manifest, readBody, recordIds = [], directives = []) {
   const h = createHash("sha256");
   const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
   feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
+  if (recordIds.length) {
+    h.update("\u0001R");
+    h.update(JSON.stringify(recordIds.map(({ guid, paths }) => [guid, [...paths].sort(byCodeUnit)]).sort((a, b) => byCodeUnit(a[0], b[0]))));
+  }
+  if (directives.length) {
+    h.update("\u0001D");
+    feedPlanVersion(h, directives.map(({ id, quote, expectation, scope }) => ({ id, quote, expectation, scope })),
+      null, readBody, { nodes: 0 }, 0);
+  }
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
@@ -2871,6 +2923,8 @@ export function runMigration(manifest, opts = {}) {
   // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  // The project's conventions, recorded once on the ROOT manifest and inherited by every fold like the signals.
+  const runConventions = runConventionsOf(manifest, opts);
   const pageStrings = pageStringsOf(manifest);
   const runRegistry = runRegistryFor(manifest, baseDir, opts.inheritedRunRegistry);
   const changeSet = mapToFreedom(eff, {
@@ -2884,6 +2938,7 @@ export function runMigration(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
+    requestPrefix: runConventions.conventions?.requestPrefix, // the project's request namespace (projectConventions); the engine default when none is recorded
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
     siblingOf: manifest.siblingOf,            // an earlier migration built this page's twin — this bundle's own fact, never inherited by a fold
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
@@ -3004,7 +3059,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, conventions: runConventions, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -3145,8 +3200,30 @@ export function runMigration(manifest, opts = {}) {
     specOpts.placementBlockers = [...specOpts.placementBlockers, `placement.sectionHost.mode is 'existing-section' but '${out.entity}' has ${out.typedPages.length} typed form pages — this mode extends one list page and one form page only. Record the case in decisions.md and plan it with the user as a reconcile of each form page outside this mode.`];
   }
   out.placementBlockers = specOpts.placementBlockers;
+  out.projectConventions = specOpts.projectConventions;
+  // The sub-pages folded into this run (child, typed, mini), each carrying its own run's ids and blockers up — a
+  // grandchild's already sit in its child's. The root's plan is the one approved, so it lists the whole tree's.
+  const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
+  out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
+    ...folded.flatMap((f) => f.conventionsBlockers || [])])];
+  // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
+  // constants module holds — this page's (its Classic page and section bodies too), and every folded sub-page's. `recordIdsUsed` touches no source when the
+  // index is empty (no constants module declared).
+  const schemaBodies = () => (Array.isArray(manifest.schemas) ? manifest.schemas : []).map(bodyOf);
+  const sectionBodies = () => sectionData.schemas.map(bodyOf);
+  out.recordIds = mergeRecordIds([recordIdsUsed(runConventions.guidIndex, [out.changeSet, out.listChangeSet, schemaBodies, sectionBodies]),
+    ...folded.map((f) => f.recordIds || [])]);
+  // The same ids split by the page that ports them: a constants module the plan maps a page's ids to is a module that
+  // page must import (its `moduledep` row is checked), whether or not the Classic page imported it.
+  out.pageRecordIds = { form: recordIdsUsed(runConventions.guidIndex, [out.changeSet, schemaBodies]),
+    list: recordIdsUsed(runConventions.guidIndex, [out.listChangeSet, sectionBodies]) };
+  // The user's directives ride on the ROOT result, which every later mode re-derives its groups from, so the plan,
+  // the cut and `--verify` all carry the same directive rows. They are read before the plan version, which covers
+  // them: a directive changes what the plan builds.
+  const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
+  out.directives = directivesOf(decisionRecords);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
-  out.planVersion = computePlanVersion(manifest, bodyOf);
+  out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds, out.directives);
   out.translationsMissing = translationsMissing(manifest);
   // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
   // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
@@ -3154,6 +3231,7 @@ export function runMigration(manifest, opts = {}) {
   if (!opts.scopeSchema) {
     out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
     out.noDeliverableIssues = noDeliverableIssues(manifest.decisionsWithoutDeliverable, specOpts);
+    out.provenanceIssues = provenanceIssues(decisionRecords, publishedPageKeys(planGroups));
   }
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
@@ -3161,7 +3239,8 @@ export function runMigration(manifest, opts = {}) {
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, { ...specOpts, planGroups, runDiagnostics: manifest.runDiagnostics });
+  out.plan = renderPlan(out, { ...specOpts, conventionsBlockers: out.conventionsBlockers, planGroups, runDiagnostics: manifest.runDiagnostics,
+    recordIds: out.recordIds });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
@@ -3501,6 +3580,13 @@ function startRefusalText(set, startId, dir) {
       + "\nOne writer per artifact: let that task close, re-run `--tasks`, then start this one. Two open tokens on"
       + " one artifact is how a single sub-agent ends up holding both.\n";
   }
+  if (set.blockedByBrowser) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByBrowser}\`, and worklog.md in`
+      + ` ${path.dirname(path.resolve(dir))} has no \`Browser:\` line naming one of ${BROWSER_ANSWERS.join(" · ")} (the last`
+      + " `Browser:` line is the one read). A builder cannot ask the user, so ask the browser question once before the"
+      + " first build task (orchestrate-build.md 7.0b), write the answer as that line, then start this task.\n";
+  }
   if (!set.started) {
     return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
   }
@@ -3522,12 +3608,16 @@ function splitDriftLines(set) {
 // one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
 // refusal are two chances for one of them to soften.
 // The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
-// migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
-// require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
-function planDecisions(outFile, tasksDir) {
-  if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
-  if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
-  return null;
+// migration folder the plan is written into (`--out`), else the first of the `--from` / `--reads` migration folder and
+// the folder of the `--built` file that holds a decisions.md. Null when the run names none of them. Only `--plan` and
+// `--tasks` require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it
+// is not. The later sources are read so a per-page `--verify` carries the user's directives, which are checklist rows:
+// without them it would report a page complete that never had its directive checked.
+function planDecisionsFolder({ outFile, tasksDir, fromDir, readsDir, builtFile }) {
+  if (tasksDir) return path.join(path.resolve(tasksDir), "..");
+  if (outFile) return path.dirname(path.resolve(outFile));
+  const candidates = [fromDir, readsDir, builtFile && path.dirname(builtFile)].filter(Boolean).map((d) => path.resolve(d));
+  return candidates.find((d) => fs.existsSync(path.join(d, "decisions.md"))) || null;
 }
 function planGapRefusal(result) {
   const gaps = planGaps(result);
@@ -3687,6 +3777,17 @@ function recordFileLines(records) {
   return lines;
 }
 
+// The browser answer step 7.0b records in `worklog.md` of the migration folder above the task folder `dir`. `--start`
+// and `--next` read it through the shared start predicate, so a page task is held until the question was asked.
+const browserGateFor = (dir) => ({ answer: readWorklogBrowser(dir) });
+// The reminder `--next` prints while the browser answer is owed and no gate holds for it (`browserAnswerUngated`); [] otherwise.
+function browserOwedLines(dir, tasks) {
+  if (readWorklogBrowser(dir) || !browserAnswerUngated(tasks, readTimingsFile(dir).running)) return [];
+  return [`migrate.mjs: ℹ BROWSER ANSWER STILL OWED — worklog.md has no \`Browser:\` line, and page tasks are still open.`
+    + " Page work has begun, so none of them is refused for it: ask the browser question (orchestrate-build.md 7.0b)"
+    + " before you dispatch the next page task, and record the answer."];
+}
+
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
@@ -3696,7 +3797,9 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
   const checked = { ...opts, refuseUnaccounted: true };
-  const set = startId ? startTask(dir, startId, result, checked, split) : syncTaskDir(dir, result, checked, split);
+  const set = startId
+    ? startTask(dir, startId, result, { ...checked, browserGate: browserGateFor(dir) }, split)
+    : syncTaskDir(dir, result, checked, split);
   if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
@@ -3766,6 +3869,10 @@ const withheldLine = (w) => {
   if (w.cause === HOLD_DECISION) {
     return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row (\`${DECIDE_FLAG} D<N> ${BUILD_FLAG}\` to build it) releases it:`,
       ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
+  }
+  if (w.cause === HOLD_BROWSER) {
+    return `   · ${taskLine(w.task)} — writes \`${w.task.writesTo}\`, and worklog.md has no \`Browser:\` line yet: ask the`
+      + " browser question once (orchestrate-build.md 7.0b) and record the answer";
   }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
   // The ledger refusal is what the GATE would answer for this id, so it is what this line says. `underlying` is
@@ -3858,10 +3965,10 @@ function runNextMode(result, dir, opts, cmdFor) {
   const set = syncTaskDir(dir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
   const records = recordFileLines(keepRecordFiles(result, dir, opts));
-  const answer = startableTasks(set, dir);
+  const answer = startableTasks(set, dir, browserGateFor(dir));
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return [...nextAnswerLines(answer, dir, cmdFor), ...records].join("\n") + "\n";
+  return [...nextAnswerLines(answer, dir, cmdFor), ...browserOwedLines(dir, set.tasks), ...records].join("\n") + "\n";
 }
 
 // `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
@@ -3895,7 +4002,17 @@ function handoffCauses(result, dir, folder) {
       + " `Route:` line is the one read). Resolve the dispatch route first (orchestrate-build.md 7.0) and write it"
       + " there, so the fresh session dispatches every task the same way.");
   }
-  return { causes, approvalLine, route };
+  // The browser answer is a folder-level precondition too, while the folder still owes it (a page task yet to run,
+  // no page work begun): without it every such task is refused, and a queue that still starts the reference cache
+  // would hand off a session whose first page `--start` is that refusal.
+  const browser = readWorklogBrowser(dir);
+  const owed = fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && browserAnswerOwed(readTaskDir(dir), readTimingsFile(dir).running);
+  if (!browser && owed) {
+    causes.push(`worklog.md in ${folder} has no \`Browser:\` line naming one of ${BROWSER_ANSWERS.join(" · ")} (the`
+      + " last `Browser:` line is the one read). Ask the browser question first (orchestrate-build.md 7.0b) and write the"
+      + " answer there, so the fresh session never asks it again and no page task is refused.");
+  }
+  return { causes, approvalLine, route, browser };
 }
 const handoffRefusalHeader = (tasksDir) =>
   `migrate.mjs: ⛔ NOTHING WRITTEN — no hand-off for ${tasksDir}, and no ${RESUME_FILE}:`;
@@ -3904,7 +4021,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   if (gapRefusal) { handoffRefusalFailure = true; return gapRefusal; }
   const tasksDir = path.resolve(dir);
   const folder = path.dirname(tasksDir);
-  const { causes, approvalLine, route } = handoffCauses(result, tasksDir, folder);
+  const { causes, approvalLine, route, browser } = handoffCauses(result, tasksDir, folder);
   if (causes.length) {
     handoffRefusalFailure = true;
     return handoffRefusalHeader(tasksDir) + "\n" + causes.map((c) => `  — ${c}`).join("\n") + "\n";
@@ -3912,7 +4029,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   const set = syncTaskDir(tasksDir, result, { ...opts, refuseUnaccounted: true });
   if (set.refused) { handoffRefusalFailure = true; return splitRefusalText(set, tasksDir); }
   const records = recordFileLines(keepRecordFiles(result, tasksDir, opts));
-  const answer = startableTasks(set, tasksDir);
+  const answer = startableTasks(set, tasksDir, browserGateFor(tasksDir));
   // A `--next` that exits 2 is not a place to resume from: the fresh session's first command would be a refusal.
   // The same answer `--next` prints follows the header, and the same stderr gates are raised, so the fix is the one
   // `--next` names.
@@ -3931,7 +4048,8 @@ function runHandoffMode(result, dir, opts, ctx) {
   const resumeFile = path.join(folder, RESUME_FILE);
   const { text, prompt } = renderResume({
     migrationDir: folder, tasksDir, manifestPath: manifestCopy, environment: ctx.environment,
-    planVersion: result.planVersion, approvalLine, route,
+    planVersion: result.planVersion, approvalLine, route, browser,
+    browserUngated: !browser && browserAnswerUngated(set.tasks, readTimingsFile(tasksDir).running),
     progress: renderProgress(set, tasksDir), next: answer.startable[0] || null, verdict: answer.verdict,
     nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
   });
@@ -4492,9 +4610,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // reconcile). A rebuild always builds fresh, so the flag on one is a mistake worth naming, not silently ignoring.
   if (reconcileModeArg && !manifest.planMeta?.freedomExists) fail(`\`${RECONCILE_MODE_FLAG}\` applies only to an existing-Freedom reconcile (planMeta.freedomExists); this plan rebuilds the page from scratch, where there is nothing to reconcile onto.`);
   let result;
-  const decisions = planDecisions(outFile, tasksDir);
-  const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionsOptional: !planMode && !tasksMode }); }
+  // The decision titles and their provenance records (the directives, who decided what) come from the same file.
+  const decisionsFolder = planDecisionsFolder({ outFile, tasksDir, fromDir, readsDir, builtFile });
+  const decisions = decisionsFolder ? readDecisions(decisionsFolder) : null;
+  const decisionTexts = decisionsFolder ? readDecisionTexts(decisionsFolder) : null;
+  let decisionRecords = [];
+  try { decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : []; }
+  catch (e) { fail(`cannot read ${path.join(decisionsFolder, "decisions.md")}: ${e.message}`); }
+  const taskOpts = () => ({ ...checklistOpts(manifest), decisions, decisionTexts });
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
@@ -4755,7 +4879,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest), decisions, decisionTexts });
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing
@@ -4787,7 +4911,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const structBad = result.structure && !result.structure.complete;
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
-  const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0));
+  const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0)
+    || (result.conventionsBlockers?.length > 0));
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
@@ -4797,7 +4922,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
   // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply, or a marker item that does not stand.
-  const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0;
+  // A decisions.md entry whose provenance does not stand (a user decision with no quote, a directive with no
+  // page to land on) is the same kind of planning input the plan cannot apply.
+  const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0
+    || (result.provenanceIssues || []).length > 0;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || statusBad || verifyIncomplete
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
@@ -4908,9 +5036,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       + `${naPart} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`
       + `${blockedPart} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
   }
+  process.stderr.write(unexercisedNote(finalReport));
+  process.stderr.write(browserAnswerUnreadNote(finalReport));
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  if (planMode && result.conventionsBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — project conventions not settled: " + result.conventionsBlockers.join(" | ") + "\n");
   // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
   // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
   // the built pages and nothing about who built them.

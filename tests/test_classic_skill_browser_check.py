@@ -151,12 +151,14 @@ class BrowserChecksNotesLineTests(unittest.TestCase):
         self.assertIn("Every task that saved a page", flat(notes))
         self.assertIn("Browser checks: 0", flat(notes))
 
-    def test_no_check_is_valid_only_without_a_browser_surface_or_with_a_render_check(self):
+    def test_no_check_is_valid_only_when_declined_or_when_it_could_not_run(self):
         # A get-page read-back reads the saved schema, not the running page, so it never
-        # stands in for the post-save check.
+        # stands in for the post-save check; neither does "no browser surface", since
+        # page-smoke needs none.
         notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
-        self.assertRegex(notes, r"N=0 is valid only when[^.]*runtime render check[^.]*no browser surface")
+        self.assertRegex(notes, r"N=0 is valid only under `Browser: none`[^.]*could not run")
         self.assertRegex(notes, r"never because the `get-page` read-backs")
+        self.assertNotIn("no browser surface was available", notes)
         self.assertNotIn("why the read-backs sufficed", notes)
 
     def test_a_count_above_the_cap_is_a_defect(self):
@@ -164,9 +166,12 @@ class BrowserChecksNotesLineTests(unittest.TestCase):
         self.assertIn("N above 2 is a defect in the task", notes)
 
     def test_the_line_names_only_readers_that_exist(self):
-        # The judge reads a task's Notes by hand; nothing parses the line automatically.
+        # The judge reads a task's Notes by hand, and the result report reads N
+        # (engine/report.mjs browserChecksOf); nothing else does.
         notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
         self.assertIn("a reviewer and the judge", notes)
+        self.assertIn("the result report reads N", notes)
+        self.assertIn("BUILT, NOT EXERCISED", notes)
         self.assertNotIn("cost counter", notes)
 
 
@@ -293,6 +298,49 @@ class CheapEvidenceReferenceTests(unittest.TestCase):
     def test_no_row_hands_the_reference_as_a_brief(self):
         briefs = [name for name, (cell, _) in dispatch_rows().items() if "freedom-ui-browser-check.md" in cell]
         self.assertFalse(briefs, f"handed as a brief to read whole: {briefs}")
+
+
+class BrowserQuestionTests(unittest.TestCase):
+    """Step 7.0b asks the browser question once; the engine reads only the line it records."""
+
+    def setUp(self):
+        self.text = flat(section(read(ORCHESTRATE), "**7.0b The browser question", "**One answer about one check"))
+
+    def test_the_warning_says_how_a_machine_wide_no_is_reversed(self):
+        self.assertIn("passes `browser=existing` or `browser=download` replaces it", self.text)
+        self.assertIn("deleting `page-smoke-browser` from clio's settings", self.text)
+
+    def test_the_line_carries_its_evidence(self):
+        self.assertIn("`Browser: page-smoke (user: \"<their words>\"; page-smoke: success)`", self.text)
+        self.assertIn("`Browser: surface (user: \"<their words>\"; surface: <what answered>)`", self.text)
+
+    def test_surface_is_established_before_it_is_recorded(self):
+        self.assertIn("Establish the surface first", self.text)
+        self.assertIn("never record `surface` on the wish alone", self.text)
+
+    def test_a_folder_mid_build_is_not_held(self):
+        self.assertIn("A folder whose page work has already begun", self.text)
+
+    def test_a_stored_no_is_announced_and_can_be_reversed(self):
+        self.assertIn("A first reply with `code: browser-declined`", self.text)
+        self.assertIn("never carry it into this run unannounced", self.text)
+        self.assertIn("call `page-smoke` with `browser=existing` and no `browser-path`", self.text)
+        self.assertIn("`code: browser-not-found`", self.text)
+
+
+class LastSaveRuleTests(unittest.TestCase):
+    """A page counts as exercised on its LAST built task's check, as the result report decides it."""
+
+    def test_the_builder_brief_states_the_last_save_rule(self):
+        notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
+        self.assertIn("only when its LAST built task, in queue order, reports a check", notes)
+        self.assertIn("every task that saves a page owes its own check after its own last save", notes)
+        self.assertNotIn("none of whose tasks", notes)
+
+    def test_the_orchestrator_report_step_states_the_same_rule(self):
+        text = flat(read(ORCHESTRATE))
+        self.assertIn("a page whose LAST built task, in queue order, does not report", text)
+        self.assertNotIn("none of whose build tasks", text)
 
 
 if __name__ == "__main__":
