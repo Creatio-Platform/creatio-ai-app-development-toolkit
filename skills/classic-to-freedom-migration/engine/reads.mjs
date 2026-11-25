@@ -282,8 +282,8 @@ export function renderReadPlan(plan, dir) {
     + " no such schema, write the literal `false` into **both** of that page's files — the metadata slot AND the"
     + " bundle slot. That reports the page ❌ MISSING and opens a repair. Leaving them unwritten instead says \"I"
     + " could not ask\", which is a re-read and never closes; writing `false` into only one of the two is read as a"
-    + " copy error, because one `get-page` call cannot answer both ways.");
-  L.push("", `**Then the client modules the built pages import.** For each project module in a page bundle's \`deps\` (and in`
+    + " copy error, because one `get-page` call cannot answer both ways.",
+  "", `**Then the client modules the built pages import.** For each project module in a page bundle's \`deps\` (and in`
     + " those modules' own `define` lists; not `@creatio-devkit/...` and not the project's declared helper or constants"
     + ` modules), \`get-page\` the module and copy its \`.clio-pages/<Module>/body.js\` whole to`
     + ` \`${path.posix.join(READS_DIR, MODULES_DIR)}/<Module>.js\`. The page's code is held to the same rules there, and the`
