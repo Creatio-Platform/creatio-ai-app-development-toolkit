@@ -301,3 +301,5 @@ or chunk ran on the page does not cover your save. You cannot tell whether your 
 last one, so every task that saves a page owes its own check after its own last save. A page whose
 last built task reports no check ends the run as **BUILT, NOT EXERCISED**, with your
 `Check on stand (row N): …` lines as the list a person works through by hand. N above 2 is a defect in the task, and the report lists it.
+Write the line on its own, at the start of a line, never inside a quote or a code fence: a quoted or fenced
+line is read as an example and does not count. To correct the count, write the line again; the last one counts.

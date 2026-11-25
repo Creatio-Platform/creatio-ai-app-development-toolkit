@@ -76,7 +76,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
-import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote } from "./report.mjs";
+import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -5029,6 +5029,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       + `${blockedPart} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
   }
   process.stderr.write(unexercisedNote(finalReport));
+  process.stderr.write(browserAnswerUnreadNote(finalReport));
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");

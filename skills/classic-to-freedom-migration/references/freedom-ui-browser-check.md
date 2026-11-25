@@ -11,7 +11,7 @@ could have returned anything. This file exists to make that loop impossible to r
 
 ## Which tool runs the check
 
-The `Browser:` line the orchestrator recorded with the user before the first build task decides it, and the
+The `Browser:` line the orchestrator recorded with the user before the first page-writing task decides it, and the
 builder's prompt quotes it:
 
 - **`page-smoke`** — clio `page-smoke` opens a Freedom **form** page headless, waits for it to be ready and

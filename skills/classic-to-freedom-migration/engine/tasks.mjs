@@ -5052,7 +5052,7 @@ export function worklogRoute(worklogText) {
   return worklogField(worklogText, "Route:", DISPATCH_ROUTES);
 }
 
-// The answers step 7.0b may record for the browser question, asked once before the first build task:
+// The answers step 7.0b may record for the browser question, asked once before the first task that writes a page:
 // `page-smoke` (clio runs the post-save check headless), `surface` (an agent browser surface does it), `none`
 // (the user declined; every built page ends unexercised). Anything else is no answer.
 export const BROWSER_ANSWERS = Object.freeze(["page-smoke", "surface", "none"]);
@@ -5064,14 +5064,19 @@ export function worklogBrowser(worklogText) {
 }
 
 // The `Browser:` answer recorded for the task folder `tasksDir`: its `worklog.md` lives in the migration folder above
-// it. null when there is no such file or no valid line. The one place the engine reads it, so the start gate and the
-// result report cannot disagree on where it is.
-export function readWorklogBrowser(tasksDir) {
-  let text = "";
-  try { text = fs.readFileSync(path.join(path.dirname(path.resolve(tasksDir)), "worklog.md"), "utf8"); }
-  catch { /* no worklog.md: no answer */ }
-  return worklogBrowser(text);
+// it. The one place the engine reads it, so the start gate and the result report cannot disagree on where it is.
+// `line` is the valid `Browser:` line or null; `unread` says why worklog.md could not be read, or is null when it was.
+// The two differ for the result report: "no answer recorded" and "the answer could not be read" are different findings.
+export function readWorklogBrowserAnswer(tasksDir) {
+  const file = path.join(path.dirname(path.resolve(tasksDir)), "worklog.md");
+  try { return { line: worklogBrowser(fs.readFileSync(file, "utf8")), unread: null }; }
+  catch (e) {
+    const why = e?.code === "ENOENT" ? `no \`worklog.md\` beside the task folder (${file})` : `\`${file}\` could not be read (${e?.code || e?.message})`;
+    return { line: null, unread: why };
+  }
 }
+// The recorded `Browser:` line alone, null for no file or no valid line: the start gate holds a page task on either.
+export const readWorklogBrowser = (tasksDir) => readWorklogBrowserAnswer(tasksDir).line;
 
 // The answer a `Browser:` line records — `page-smoke`, `surface` or `none` — or null for no line. Every reader of the
 // line asks this, so the start gate and the result report interpret it by one rule.

@@ -107,11 +107,13 @@ not carry it.
 > holds for the non-building contexts of 7.4 (the read-back and the judge): they run here too, and
 > the step-8 report says so.
 
-**7.0b The browser question — ask it ONCE, before the first build task.** Every page a builder saves
+**7.0b The browser question — ask it ONCE, before the first task that writes a page.** Every page a builder saves
 owes a post-save check in a running browser (`./references/build-task-execution.md`), and a builder
 cannot reach the user. clio `page-smoke` runs that check headless once the user has answered its
 browser question on this machine, and it remembers the answer, so every later call, a builder's
-included, runs without asking. So the question is yours, asked before the first `--start`:
+included, runs without asking. So the question is yours, asked before the first `--start` of a task that
+writes a page (the scaffolding, the reference cache and the child-page wiring start without it, since they owe no
+post-save check):
 
 1. Call `page-smoke` once on a Freedom form page that already exists on the target environment
    (`environment-name`, `page`; read-only, no `click`).

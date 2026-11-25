@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
-import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowser, browserAnswerOf,
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -51,12 +51,23 @@ export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*
 // `Browser checks: N — <what each check answered>`, the line every page-writing task writes under `## Notes`. The
 // number decides the verdict; the prose is not judged, only quoted beside each exercised page in the result report,
 // so a person reads what the builder says each check answered instead of trusting a typed number. null when the
-// task wrote no such line, which the verdict counts as 0.
-const BROWSER_CHECKS = /^[\s*>-]*Browser checks[\s:*]*(\d+)/i;
+// task wrote no such line, which the verdict counts as 0. Only a FIELD line counts: one that opens with the label,
+// as plain text or a list item. A quoted line (`>`), a line inside a code fence and a mention mid-sentence or in
+// inline code are prose about the line, such as the brief's own example, and never set the count. Of the field
+// lines the LAST wins, so a builder corrects its count by writing the line again.
+const BROWSER_CHECKS = /^[\s*-]*Browser checks[\s:*]*(\d+)/i;
+const FENCE = /^\s*(`{3,}|~{3,})/;
 function browserChecksLine(notes) {
   let found = null;
+  let fence = null;
   for (const line of String(notes || "").split(/\r?\n/)) {
-    const m = BROWSER_CHECKS.exec(line);
+    const f = FENCE.exec(line);
+    if (f) {
+      if (!fence) fence = f[1];
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const m = fence ? null : BROWSER_CHECKS.exec(line);
     if (m) found = { n: Number(m[1]), text: line.slice(m[0].length).trim().replace(/^[—–-]+/, "").trim() };
   }
   return found;
@@ -100,11 +111,26 @@ export function unexercisedNote(report) {
   return `migrate.mjs: 🟠 BUILT, NOT EXERCISED — no browser check after the last save of ${report.unexercisedPages.join(", ")}.`
     + " Check them on the stand; the migration result report lists what to check.\n";
 }
+// The browser answer could not be read on stderr, so a caller reading stderr alone learns the browser verdict was
+// reached without it; "" when the answer file was read.
+export function browserAnswerUnreadNote(report) {
+  if (!report?.browserAnswerUnread) return "";
+  return `migrate.mjs: ⚠ BROWSER ANSWER NOT READ — ${report.browserAnswerUnread}, so the browser verdict was reached`
+    + " without the recorded answer. Run --verify with the task folder inside its migration folder.\n";
+}
+// `answer` is `{ line, unread }` from `readWorklogBrowserAnswer`: the recorded `Browser:` line, and why worklog.md could
+// not be read. An unread answer is said first, whatever the pages show: without it a recorded `Browser: none` cannot
+// be applied, so a page with a reported check counts as exercised and the verdict may be greener than the answer.
 function browserSection({ exercised, unexercised, capBreaches }, pageName, answer) {
-  const blocks = [unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [],
+  const blocks = [answer.unread ? answerUnreadLines(answer.unread) : [],
+    unexercised.length ? unexercisedLines(unexercised, pageName, answer) : [],
     exercised.length ? exercisedLines(exercised, pageName) : [], capBreaches.length ? capBreachLines(capBreaches) : []];
   return blocks.filter((b) => b.length).flatMap((b, i) => (i ? ["", ...b] : b));
 }
+const answerUnreadLines = (unread) => ["## Browser answer not read", "",
+  `The browser answer for this run could not be read: ${unread}. A recorded \`Browser: none\` is therefore not`
+    + " applied, and each page below counts as exercised on its own task's notes alone. Run `--verify` with the task"
+    + " folder inside the migration folder that holds its `worklog.md`."];
 // What each exercised page's last built task says its checks answered, quoted as written: the verdict counts the
 // number, and this is the prose a person reads to see whether the number stands for a real check.
 function exercisedLines(exercised, pageName) {
@@ -115,13 +141,19 @@ function exercisedLines(exercised, pageName) {
       `- **${pageName(pageKey)}** (\`${esc(writesTo)}\`) — [${cell(t.group || t.id)}](${enc(t.file)}), ${plural(n, "check")}: `
         + (text ? cell(text) : "no account of what the checks answered"))];
 }
-function unexercisedLines(unexercised, pageName, answer) {
-  const recorded = answer ? `\`${esc(answer)}\`` : "none — `worklog.md` has no `Browser:` line";
-  const L = [`## Not exercised in a browser (${unexercised.length})`, "",
-    "These pages were built and read back, but no build task opened them after its last save, so what only the"
+// Under `Browser: none` the intro says the user declined the check, because a page whose task did report one is
+// listed here too and "no build task opened them" would be false for it.
+function unexercisedLines(unexercised, pageName, { line, unread }) {
+  const recorded = line ? `\`${esc(line)}\`` : `none — ${unread ? "`worklog.md` could not be read" : "`worklog.md` has no `Browser:` line"}`;
+  const intro = browserAnswerOf(line) === "none"
+    ? "The user declined the browser check for this run, so no built page counts as exercised, including any a build"
+      + " task did report a check for: a declined run is a conscious opt-out, and a person opens each page on the"
+      + " stand and goes through its checks below. Each page names its last build task and quotes what it reported."
+    : "These pages were built and read back, but no build task opened them after its last save, so what only the"
       + " running page shows — a render error, a rule that does not fire, a save that writes the wrong column — is"
       + " unchecked. Open each one on the stand and go through its checks below. Each page names its last build task"
-      + " and quotes why it reports no check: a refused or impossible check wants the consent or the tool fixed first.",
+      + " and quotes why it reports no check: a refused or impossible check wants the consent or the tool fixed first.";
+  const L = [`## Not exercised in a browser (${unexercised.length})`, "", intro,
     "", `Browser answer recorded for this run: ${recorded}.`, ""];
   for (const p of unexercised) {
     L.push(`- **${pageName(p.pageKey)}** (\`${esc(p.writesTo)}\`) — ${unexercisedReason(p.evidence)}`);
@@ -833,8 +865,11 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const postponedCount = postponedRows.length;
   const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
-  const browserAnswer = dir ? readWorklogBrowser(dir) : null;
-  const exercise = browserExercise(tasks, browserAnswerOf(browserAnswer) === "none");
+  const answerRead = dir ? readWorklogBrowserAnswer(dir) : { line: null, unread: null };
+  const exercise = browserExercise(tasks, browserAnswerOf(answerRead.line) === "none");
+  // An unread answer is a finding only when a built page's verdict rests on it.
+  const browserAnswer = { ...answerRead,
+    unread: exercise.exercised.length || exercise.unexercised.length ? answerRead.unread : null };
   const { unexercised } = exercise;
   const { verdict, verdictColour } = verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName });
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
@@ -861,7 +896,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
   return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
-    unexercisedPages: unexercised.map((p) => pageName(p.pageKey)),
+    unexercisedPages: unexercised.map((p) => pageName(p.pageKey)), browserAnswerUnread: browserAnswer.unread,
     counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount,
       unexercised: unexercised.length, capBreaches: exercise.capBreaches.length } };
 }

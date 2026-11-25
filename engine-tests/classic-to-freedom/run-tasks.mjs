@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport, browserChecksOf, readDecisionTexts, unexercisedNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, browserChecksOf, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
@@ -5834,6 +5834,22 @@ console.log("\n===== the migration result report — one artifact, computed from
       && browserChecksOf("- **Browser checks:** 0 — the user chose no browser") === 0
       && browserChecksOf("## Notes\nsome prose\n") === null && browserChecksOf("") === null,
     () => [browserChecksOf("Browser checks: 2 — x"), browserChecksOf("- **Browser checks:** 0 — y")]);
+  {
+    // Only a field line sets the count: prose ABOUT the line — a quoted example, a fenced one, a mention mid-sentence
+    // or in inline code — never flips the number a verdict rests on, and a later field line corrects an earlier one.
+    const real = "Browser checks: 2 — loads clean; fix confirmed";
+    const cases = {
+      quoted: [`${real}`, "> Browser checks: 0 — <why>"].join("\n"),
+      fenced: [`${real}`, "```text", "Browser checks: 0 — <why>", "```"].join("\n"),
+      tildeFence: ["~~~", "Browser checks: 3 — example", "~~~", "Browser checks: 0 — the user chose no browser"].join("\n"),
+      inline: [`${real}`, "The brief's shape is `Browser checks: 0 — <why>`; mine is above."].join("\n"),
+      corrected: ["Browser checks: 0 — not yet", "- Browser checks: 1 — loads clean after the fix"].join("\n"),
+    };
+    const got = Object.fromEntries(Object.entries(cases).map(([k, v]) => [k, browserChecksOf(v)]));
+    check("browserChecksOf: a quoted, fenced or inline example never sets the count; the last FIELD line wins, so a builder corrects its count by writing it again",
+      () => JSON.stringify(got) === JSON.stringify({ quoted: 2, fenced: 2, tildeFence: 0, inline: 2, corrected: 1 }),
+      () => got);
+  }
   const pageTask = (id, pageKey, notes, writesTo = `page:${pageKey}`) => ({ id, file: `${id}.md`, group: "Page build", pageKey,
     writesTo, status: "done", notes, rows: [{ label: `Form page ${id}`, outcomeKind: "built", outcome: "built" }] });
   const exercisedRep = (tasks, dir) => renderFinalReport({ result: RUN, verifyRes: greenVerify,
@@ -5928,6 +5944,48 @@ console.log("\n===== the migration result report — one artifact, computed from
       () => noneRep.verdictColour === "orange" && /🟠 \*\*BUILT, NOT EXERCISED\*\*/.test(noneRep.markdown)
         && /Browser: none \(user: "I will check the pages myself"\)/.test(noneRep.markdown),
       () => noneRep.markdown.slice(noneRep.markdown.indexOf("## Not exercised")));
+    const checkedRep = exercisedRep([pageTask("n-b", "main", "Browser checks: 2 — loads clean; fix confirmed")], ndir);
+    const sec = checkedRep.markdown.slice(checkedRep.markdown.indexOf("## Not exercised"));
+    check("not exercised: under `Browser: none` the section says the user declined the check, so a page whose task reported one is listed without the section claiming nobody opened it",
+      () => checkedRep.verdictColour === "orange" && /The user declined the browser check for this run/.test(sec)
+        && /including any a build task did report a check for/.test(sec) && !/no build task opened them/.test(sec)
+        && /`Browser checks: 2`: loads clean; fix confirmed/.test(sec) && checkedRep.browserAnswerUnread === null,
+      () => sec.slice(0, 900));
+  }
+  {
+    // An answer the report could not read is said, not taken for "no answer": without it a recorded `Browser: none`
+    // cannot be applied, so the verdict may be greener than the answer earns.
+    const lost = path.join(tmp("result-report-browser-unread"), "build-tasks");
+    fs.mkdirSync(lost, { recursive: true });
+    const lostRep = exercisedRep([pageTask("l-a", "main", "Browser checks: 1 — loads clean")], lost);
+    const md = lostRep.markdown;
+    const browserAt = md.indexOf("## Browser answer not read");
+    check("browser answer unread: a task folder with no `worklog.md` beside it puts `Browser answer not read` first in the browser section, names the missing file, and raises the stderr note",
+      () => browserAt > 0 && browserAt < md.indexOf("## Exercised in a browser")
+        && /no `worklog\.md` beside the task folder/.test(lostRep.browserAnswerUnread || "")
+        && /A recorded `Browser: none` is therefore not applied/.test(md)
+        && /^migrate\.mjs: ⚠ BROWSER ANSWER NOT READ — no `worklog\.md` beside the task folder/.test(browserAnswerUnreadNote(lostRep)),
+      () => ({ unread: lostRep.browserAnswerUnread, note: browserAnswerUnreadNote(lostRep), at: browserAt }));
+    const dirBase = tmp("result-report-browser-unreadable");
+    const blocked = path.join(dirBase, "build-tasks");
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.mkdirSync(path.join(dirBase, "worklog.md"));
+    const blockedRep = exercisedRep([pageTask("l-b", "main", "")], blocked);
+    check("browser answer unread: a `worklog.md` that exists but cannot be read says so, and the not-exercised section reads `could not be read`, not `has no Browser: line`",
+      () => /could not be read \(E/.test(blockedRep.browserAnswerUnread || "")
+        && /Browser answer recorded for this run: none — `worklog\.md` could not be read\./.test(blockedRep.markdown),
+      () => ({ unread: blockedRep.browserAnswerUnread }));
+    const quiet = exercisedRep([], lost);
+    check("browser answer unread: with no page built the answer decides nothing, so there is no finding and no stderr note",
+      () => quiet.browserAnswerUnread === null && !/Browser answer not read/.test(quiet.markdown) && browserAnswerUnreadNote(quiet) === "",
+      () => ({ unread: quiet.browserAnswerUnread }));
+    const ok = path.join(tmp("result-report-browser-read"), "build-tasks");
+    fs.mkdirSync(ok, { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(ok), "worklog.md"), "# Worklog\n\nRoute: agent\n");
+    const okRep = exercisedRep([pageTask("l-c", "main", "Browser checks: 1 — loads clean")], ok);
+    check("browser answer unread: a readable `worklog.md` with no `Browser:` line is no read failure — no unread section, no note",
+      () => okRep.browserAnswerUnread === null && !/Browser answer not read/.test(okRep.markdown) && browserAnswerUnreadNote(okRep) === "",
+      () => ({ unread: okRep.browserAnswerUnread }));
   }
   const nothingBuilt = exercisedRep([pageTask("w-a", "main", "Browser checks: 1 — loads clean"),
     { ...pageTask("w-b", "child:C1", ""), status: "wont-do" }, { ...pageTask("w-c", "child:C2", ""), status: "not-applicable" },
