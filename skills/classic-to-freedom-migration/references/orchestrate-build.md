@@ -338,7 +338,10 @@ may change it at any time by saying so — update the line first.
    sub-agent fetches the clio guidance articles and the design spec, and every other task depends on
    it — it does NOT cache tool contracts or component docs; each build task reads its own from the
    stand), then `Scaffolding` — the app, package, section and page shells that every other task
-   needs to exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own
+   needs to exist. When `Scaffolding` ran `create-app`, record the package it made in the manifest as
+   `"createdApp": { "primaryPackage": "<the package name create-app returned>" }`: `--verify`
+   compares every built page and RelatedPage add-on against that name, and the key stays out of the
+   plan version, so recording it needs no re-approval. Within each page its `⚠ Confirm worklist` rows come first inside that page's own
    task, so a page is never built against an unanswered question. (A question that could change
    WHICH pages exist blocks the plan at the structure gate instead, so it never reaches a task.)
 
@@ -402,6 +405,12 @@ may change it at any time by saying so — update the line first.
    `D<N>` entry carries `Decided by: user` and the `Quote:` of their words; an entry the
    orchestrator decided is a plan gap. `--verify` then stops counting that attribute as missing and
    quotes the decision on the rule row, so no repair task asks it again.
+
+   **After the approval, the same answer goes into `decisions.md`, not the manifest.** A
+   `deliverableStatus` entry changes the plan version, so recording a mid-build answer there would
+   send the whole plan back for re-approval. Give the user's `Kind: answer` entry a line
+   `` - Closes: `<pageKey>#business-rule:<Attribute>`[, …] ``, naming only attributes the page's rule
+   rows list; `--verify` reads it as the same `built-elsewhere` status, with the same quote.
 
    **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
    deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints
@@ -508,10 +517,11 @@ check the builder runs, and no other words about the browser go into its prompt.
 | Scaffolding — app, package, section, page shells | `group: Scaffolding`, `writesTo: scaffold` | `./references/build-task-execution.md`, `./references/build-scaffolding.md` | — |
 | Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Child page wiring — the RelatedPage bindings for one page's related lists | `group: Child page wiring`, `writesTo: wiring:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` | `./references/classic-to-freedom-mapping.md` |
-| Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
+| Repair round (7.5) | `kind: repair` in the front matter, any other `cause:` | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md`, `./references/page-code-architecture.md` — and `./references/build-dashboards.md` when the plan lists dashboards | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/page-code-architecture.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md`, `./references/freedom-ui-browser-check.md` |
 | Quality gates — the review that judges a page | `group: Quality gates` (read-only, `writesTo:` empty) | `./references/judge-brief.md` | — |
+| Judge round — evidence records nobody judged | `kind: repair` with `cause: unverified:unjudged` (read-only, `writesTo:` empty) — a judge, never a builder of that page | `./references/judge-brief.md` | — |
 | Read-back (7.4) — not a task file | the driver's own read-back pass over `--reads` | `./references/read-back-brief.md` | — |
 
 **A brief is read whole; a reference is looked up by heading.** Say which is which in the hand-off:

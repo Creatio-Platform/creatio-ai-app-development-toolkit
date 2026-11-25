@@ -702,8 +702,8 @@ function evidenceIdsByPage(groups) {
     for (const r of g.rows || []) {
       if (r.vk?.type !== "evidence" || !r.vk.id) continue;
       const key = r.pageKey || g.pageKey || "main";
-      if (!byPage.has(key)) byPage.set(key, []);
-      if (!byPage.get(key).includes(r.vk.id)) byPage.get(key).push(r.vk.id);
+      if (!byPage.has(key)) byPage.set(key, new Set());
+      byPage.get(key).add(r.vk.id);
     }
   }
   return byPage;
@@ -713,7 +713,7 @@ function withJudgedRecords(tasks, groups) {
   for (const t of tasks) {
     if (!String(t.artifact || "").startsWith("review:")) continue;
     const pages = t.reviewsArtifacts ? [...byPage.keys()] : [...new Set([t.pageKey, ...t.rows.map((r) => r.pageKey)])];
-    const ids = pages.flatMap((k) => byPage.get(k) || []);
+    const ids = pages.flatMap((k) => [...(byPage.get(k) || [])]);
     if (ids.length) t.judgedRecords = ids;
   }
   return tasks;
@@ -1338,7 +1338,12 @@ export function renderTaskFile(task, set = {}) {
     "",
     `# ${task.step ?? task.order}. ${task.pageKey} · ${task.group}`,
     "",
-    ...(task.kind === REPAIR_KIND ? [
+    ...(task.kind === REPAIR_KIND && task.cause === UNJUDGED_CAUSE ? [
+      `> JUDGE — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. Each row below has an evidence record a`,
+      "> builder filed and no verdict: `--verify` reads it as NOT judged. You are the independent judge, read-only:",
+      "> rule on every record listed under **Records you rule on** by the judge brief's rules, then record each row",
+      "> `built` once its verdict is filed, whichever way you ruled. Build nothing and write nothing on the stand.",
+    ] : task.kind === REPAIR_KIND ? [
       // WHERE THE ROWS CAME FROM decides the first move: a row `--verify` could not find may be built and unrecorded,
       // a row the previous agent wrote down as not built is one somebody already tried and stopped at.
       `> REPAIR — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. ${String(task.cause).startsWith("not-built:")
@@ -2778,7 +2783,12 @@ const CAUSE_KINDS = [
   [/template\s*→/i, "template"],
   [/^Card action/i, "card-actions"],
 ];
+// AN EVIDENCE RECORD NOBODY JUDGED is not build work: the record is filed and only the verdict is missing, and a
+// builder may not rule on its own record. `--verify` names such a record on its open row (`unjudgedRecord`), the
+// row gets a cause of its own, and its round is a read-only review handed to a judge.
+export const UNJUDGED_CAUSE = "unverified:unjudged";
 function causeOf(row) {
+  if (row.unjudgedRecord) return UNJUDGED_CAUSE;
   const label = String(row.deliverable || "");
   const kind = CAUSE_KINDS.find(([re]) => re.test(label))?.[1] || "other";
   const outcome = row.outcome === "unverified" || row.outcome === O_NOT_BUILT ? row.outcome : "missing";
@@ -2799,6 +2809,7 @@ const CAUSE_TEXT = {
   "unverified:template": "the template row could not be confirmed from what was filed",
   "unverified:card-actions": "the card-action rows could not be confirmed from what was filed",
   "unverified:other": "machine rows could not be confirmed from what was filed",
+  [UNJUDGED_CAUSE]: "evidence records nobody judged",
   "not-built:fields": "fields the build agent recorded as not built",
   "not-built:handlers": "handlers the build agent recorded as not built",
   "not-built:rules": "business rules the build agent recorded as not built",
@@ -2926,11 +2937,12 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
       }
       const round = next.round;
       const identityKey = identity.get(pageKey) || pageKey;
-      const artifact = `page:${identityKey}`;
+      const judging = cause === UNJUDGED_CAUSE;
+      const artifact = judging ? `review:${identityKey}` : `page:${identityKey}`;
       const srcRows = rows.map((r) => ({
         label: r.deliverable, groupTitle: `Repair — ${causeText(cause)}`,
         vk: r.outcome === "missing" ? { type: "repair" } : null, na: null,
-        weight: B.row, status: r.status, evidence: r.evidence,
+        weight: B.row, status: r.status, evidence: r.evidence, unjudgedRecord: r.unjudgedRecord,
       }));
       chunkRows(srcRows, B).forEach((chunkSrc, i) => {
         const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
@@ -2950,6 +2962,7 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
           gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
           rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
           covers: chunkSrc.map((r) => coverKey(r.label)),
+          ...(judging ? { judgedRecords: chunkSrc.map((r) => r.unjudgedRecord) } : {}),
         };
         const nameSlug = slugify(`${pageKey}-${cause}`);
         t.file = `task-repair-round${round}-${nameSlug}-${id}.md`;

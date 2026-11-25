@@ -4567,8 +4567,9 @@ const VK_ONSTAND = new Set(["onstand"]);
 // A planned value that does not open with a name in that shape is returned as written: a plan that names no
 // package still fails the comparison instead of having one guessed for it. The plan's rows keep the value as
 // approved, so a task cut before create-app ran does not read as changed once it has.
-const PACKAGE_NAME = /^[A-Za-z_]\w*$/;
-const NAMED_WITH_NOTE = /^`?([A-Za-z_]\w*)`?\s*(?:\(.*\)|[—–-]\s.*)?$/s;
+const PACKAGE_IDENT = String.raw`[A-Za-z_]\w*`;
+const PACKAGE_NAME = new RegExp(`^${PACKAGE_IDENT}$`);
+const NAMED_WITH_NOTE = new RegExp(String.raw`^` + "`?(" + PACKAGE_IDENT + ")`?" + String.raw`\s*(?:\(.*\)|[—–-]\s.*)?$`, "s");
 export function packageNameOf(planned, created = null) {
   if (typeof created === "string" && PACKAGE_NAME.test(created.trim())) return created.trim();
   if (typeof planned !== "string") return planned;
@@ -4655,7 +4656,7 @@ function resolveEvidenceCombinedVk(vk, ctx) {
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
-  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
+  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier", { unjudged: vk.id }];
 }
 // the FILED half in isolation: did the verifier file a complete record? Deliberately silent about the
 // judge (that is the other row's question) — reusing `resolveEvidenceCombinedVk`'s wording would have this row's
@@ -4706,7 +4707,7 @@ function resolveEvidenceJudgedPart(vk, ctx) {
       + " not by a verdict", "unverified", "verifier"];
   }
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
-  return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
+  return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier", { unjudged: vk.id }];
 }
 // Does the record RAISE a finding — one it did not fix, which someone therefore has to own? Only `findingsRaised`
 // answers that: `findings` is the pass's own record of what it looked at and settled, and a pass that fixed what it
@@ -5771,8 +5772,9 @@ const verifyRowOwner = (o) => (o === "verifier" ? "verifier" : "builder");
 // double loop stays under Sonar's cognitive-complexity ceiling.
 function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
   const key = r.pageKey || g.pageKey || "main";
-  const [mark, ev, outcome, owner] = resolveRowKinds(r, ctxFor, key);
-  const idPart = r.id ? { id: r.id } : {};
+  const [mark, ev, outcome, owner, reason] = resolveRowKinds(r, ctxFor, key);
+  // A filed record still waiting for its verdict names that record, so its repair goes to a judge by id.
+  const idPart = { ...(r.id ? { id: r.id } : {}), ...(reason?.unjudged ? { unjudgedRecord: reason.unjudged } : {}) };
   // The open-row record carries the SAME cells the reader sees, plus the row number and the evidence id — so a
   // caller repairing from the JSON and a human reading the table look at one text, not a paraphrase.
   tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, owner: verifyRowOwner(owner), ...idPart }, owner);

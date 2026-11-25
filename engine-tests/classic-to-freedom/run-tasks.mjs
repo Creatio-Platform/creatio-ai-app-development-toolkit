@@ -12597,5 +12597,59 @@ console.log("\n===== project conventions: every writer of a task file carries th
     () => repaired.get(verifyRowKey("main", label)).join() === "usr.RealRequest", () => [...repaired]);
 }
 
+console.log("\n===== judging: every evidence record reaches a judge =====");
+{
+  // Evidence rows sit in the page's BUILD task; only the review knows to rule on them when its file lists them.
+  const set = buildTaskSet(RUN, OPTS);
+  const reviews = set.tasks.filter((t) => String(t.artifact).startsWith("review:"));
+  const published = readPlan(RUN, OPTS).evidenceIds;
+  const pageOf = (id) => id.slice(0, id.indexOf("#"));
+  const listedOnOwnPage = (id) => reviews.some((t) => (t.judgedRecords || []).includes(id)
+    && [t.pageKey, ...t.rows.map((r) => r.pageKey)].includes(pageOf(id)));
+  check("judging (anti-vacuity): the fixture publishes evidence ids whose rows are NOT the review's own rows",
+    () => published.length > reviews.length && reviews.length > 0, () => [published.length, reviews.length]);
+  check("judging: every evidence id the plan publishes is listed on the review task of its own page",
+    () => published.every(listedOnOwnPage), () => published.filter((id) => !listedOnOwnPage(id)));
+  const file = renderTaskFile(reviews[0], set);
+  check("judging: the review's file names each record it rules on, by the id its verdict is filed under",
+    () => file.includes("**Records you rule on") && reviews[0].judgedRecords.every((id) => file.includes(`\`${id}\``)),
+    () => file.split("\n").filter((l) => l.includes("rule on")));
+  check("judging: a task that writes a page carries no record list",
+    () => set.tasks.filter((t) => t.writesTo).every((t) => !t.judgedRecords), () => set.tasks.filter((t) => t.writesTo && t.judgedRecords).map((t) => t.id));
+
+  // A record filed and left unjudged is repaired by a judge, read-only, never by a builder of that page.
+  const unjudged = (n, id) => ({ ...openRow(n, `Command-bar action — \`a${n}\``, "unverified", "⚠ verify",
+    `evidence filed under \`${id}\` but NOT judged — a record nobody reviewed is not a closed row`), owner: "verifier", unjudgedRecord: id });
+  const pages = { list: { openRows: [unjudged(1, "list#listpage:action:a1"), unjudged(2, "list#confirm:list-columns:set"),
+    openRow(3, "Command-bar action — `a3`", "unverified", "⚠ verify", "no complete evidence record under `list#listpage:action:a3`")] } };
+  const { tasks } = buildRepairTasks(RUN, pages, OPTS, []);
+  const judge = tasks.find((t) => t.cause === "unverified:unjudged");
+  check("judging: rows filed but NOT judged become one read-only judge round on the page's review artifact, listing their record ids",
+    () => judge && judge.writesTo === "" && judge.artifact.startsWith("review:") && judge.rows.length === 2
+      && JSON.stringify(judge.judgedRecords) === JSON.stringify(["list#listpage:action:a1", "list#confirm:list-columns:set"]),
+    () => tasks.map((t) => [t.cause, t.artifact, t.writesTo, t.judgedRecords]));
+  check("judging: a record that was never filed stays builder work — only a missing verdict goes to a judge",
+    () => tasks.some((t) => t.cause === "unverified:other" && t.writesTo.startsWith("page:") && t.rows.length === 1),
+    () => tasks.map((t) => [t.cause, t.writesTo, t.rows.length]));
+  const judgeFile = renderTaskFile(judge, { planVersion: "plan-x" });
+  check("judging: the judge round's file tells a judge to rule and build nothing, and names `cause: unverified:unjudged` for the brief table",
+    () => /^> JUDGE — round 1/m.test(judgeFile) && /Build nothing/.test(judgeFile) && /^cause: unverified:unjudged$/m.test(judgeFile)
+      && /^writesTo: $/m.test(judgeFile) && judgeFile.includes("`list#listpage:action:a1`"),
+    () => judgeFile.split("\n").slice(0, 30));
+}
+
+console.log("\n===== a decision closing a rule attribute is not drift =====");
+{
+  // The rule row's `decided` attributes are closed by a person's answer, so recording one after the task closed
+  // must leave the task's digest, and its settled status, as they were. A changed rule set still moves it.
+  const { rowsDigest } = TASKS_MODULE;
+  const rule = { label: "Business rules × 2", vk: { type: "rule", n: 2, names: ["Account", "EndDate"] } };
+  const decided = { ...rule, vk: { ...rule.vk, decided: { Account: { decision: "D9", quote: "fine as code" } } } };
+  const renamed = { ...rule, vk: { ...rule.vk, names: ["Account", "StartDate"] } };
+  check("decided: a rule row's `decided` attributes leave its task's rowsDigest unchanged, while a changed rule set moves it",
+    () => rowsDigest([rule]) === rowsDigest([decided]) && rowsDigest([rule]) !== rowsDigest([renamed]),
+    () => [rowsDigest([rule]), rowsDigest([decided]), rowsDigest([renamed])]);
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

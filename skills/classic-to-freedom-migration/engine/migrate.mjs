@@ -34,6 +34,7 @@
 //   }
 //     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
 //                        // `"<pageKey>#business-rule:<Attribute>": { status: "built-elsewhere", decision: "D<N>" }` closes one business-rule target attribute the user accepted as built another way; D<N> needs `Decided by: user` and a `Quote:`
+//     "createdApp": { primaryPackage }, // optional; the package create-app made, recorded after scaffolding. `--verify` compares built pages and RelatedPage add-ons against it (`packageNameOf`); outside the plan version
 //     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry or this list
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
@@ -4998,7 +4999,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let decisionRecords = [];
   try { decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : []; }
   catch (e) { fail(`cannot read ${path.join(decisionsFolder, "decisions.md")}: ${e.message}`); }
-  const taskOpts = () => ({ ...checklistOpts(manifest, { decisionRecords }), decisions, decisionTexts });
+  // Every mode re-derives the rows from the same opts: the manifest and the answers decisions.md carries, so the
+  // cut, the read plan and `--verify` close the same rule attributes the plan run did.
+  const runOpts = () => checklistOpts(manifest, { decisionRecords });
+  const taskOpts = () => ({ ...runOpts(), decisions, decisionTexts });
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
@@ -5042,7 +5046,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     let plan;
     let records;
     try {
-      plan = readPlan(result, checklistOpts(manifest, { decisionRecords }));
+      plan = readPlan(result, runOpts());
       writeReadIndex(readsDir, plan);
       // …and the record files for the halves the stand does not hold, merged the way every task-folder mode merges
       // them, so no id is ever retyped and no filed value is lost.
@@ -5139,7 +5143,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     output = res.note;
   }
   else if (tasksMode && revokeMode) {
-    const opts = { ...checklistOpts(manifest, { decisionRecords }), decision: revokeArg };
+    const opts = { ...runOpts(), decision: revokeArg };
     let res;
     try { res = runRevokeMode(result, tasksDir, opts); }
     catch (e) { fail(`cannot revoke the decision in '${tasksDir}': ${e.message}`); }
@@ -5149,7 +5153,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--route` writes into a folder that is already cut, and re-slicing it here would be a second opinion on
   // seams the folder froze.
   else if (tasksMode && routeMode) {
-    try { output = runRouteMode(result, tasksDir, checklistOpts(manifest, { decisionRecords })); }
+    try { output = runRouteMode(result, tasksDir, runOpts()); }
     catch (e) { fail(`cannot write repair tasks to '${tasksDir}': ${e.message}`); }
   }
   else if (tasksMode && !verifyMode) {
@@ -5177,7 +5181,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // payload is written beside the run so the same gate replays against it offline.
       // The plan the index is diffed against is derived HERE, from the manifest this run verifies — so a read
       // plan cut against an earlier draft cannot pass as this one's.
-      let res; try { res = assembleBuilt(fromDir, readPlan(result, checklistOpts(manifest, { decisionRecords }))); }
+      let res; try { res = assembleBuilt(fromDir, readPlan(result, runOpts())); }
       catch (e) { fail(`cannot compose the payload from '${fromDir}': ${e.message}`); }
       // Built as a statement rather than nested inside the template below (Sonar S4624).
       const why = res.problems.map((x) => x.file + " — " + x.why).join("; ");
@@ -5209,7 +5213,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     let preMergedSet = null;
     if (tasksMode) {
       try {
-        preMergedSet = readMergedTaskDir(tasksDir, result, checklistOpts(manifest, { decisionRecords }));
+        preMergedSet = readMergedTaskDir(tasksDir, result, runOpts());
         if (preMergedSet && !preMergedSet.refused) {
           decidedKeys = decidedRowKeys(preMergedSet);
           portedAs = portedRowSymbols(preMergedSet);
@@ -5240,7 +5244,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else why = "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
       process.stderr.write(`migrate.mjs: reconcile verify mode = ${why}.\n`);
     }
-    verifyRes = renderVerify(result, { ...checklistOpts(manifest, { decisionRecords }), reconcileMode: verifyMode2, portedAs }, built, decidedKeys);
+    verifyRes = renderVerify(result, { ...runOpts(), reconcileMode: verifyMode2, portedAs }, built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
@@ -5263,14 +5267,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest, { decisionRecords }), decisions, decisionTexts });
+        : runRepairMode(result, tasksDir, verifyRes, { ...runOpts(), decisions, decisionTexts });
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing
       // (`rep.set` is null), so the folder is byte-identical to what that pass already read. It cannot be
       // reused for the post-round report, because `runRepairMode`/`syncRepairDir` write repair task files
       // between the two and a reused set would render a stale folder.
-      const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, checklistOpts(manifest, { decisionRecords }));
+      const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, runOpts());
       // ONE SET, TWO DOCUMENTS. A round that ran already wrote the index from `rep.set`; a refused one wrote nothing,
       // so the index is re-derived from the same set the report is about to read, or the two disagree on every row
       // recorded since the last `--tasks` run. Not under a PLAN-level gap: that refusal must leave the index as the
