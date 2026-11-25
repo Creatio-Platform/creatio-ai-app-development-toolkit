@@ -718,7 +718,7 @@ function withJudgedRecords(tasks, groups) {
   return tasks.map((t) => {
     if (!String(t.artifact || "").startsWith("review:")) return t;
     // The collapsed run's single review judges every page; a per-page review, the pages its rows come from.
-    const pages = t.reviewsArtifacts ? [...byPage.keys()] : [t.pageKey, ...t.rows.map((r) => r.pageKey)];
+    const pages = t.reviewsArtifacts?.length ? [...byPage.keys()] : [t.pageKey, ...t.rows.map((r) => r.pageKey)];
     return { ...t, ...judgedRecordsOf(byPage, pages) };
   });
 }

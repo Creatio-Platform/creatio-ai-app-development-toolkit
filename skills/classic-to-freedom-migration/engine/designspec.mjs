@@ -4463,10 +4463,10 @@ function relatedPageRead(vk, v, ctx) {
   const readPkg = typeof v.packageName === "string" ? v.packageName : "";
   // `get-related-page-addon` always echoes the package it read, so a read with no `packageName` cannot prove the
   // add-on sits in the target package: it stays unverified instead of closing on the page match alone.
-  if (vk.package && !readPkg) {
-    return { verdict: ["⚠ verify", `the add-on read carries no \`packageName\`, so it cannot confirm the add-on is in \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
-  }
   const want = packageNameOf(vk.package, ctx?.createdPackage);
+  if (vk.package && !readPkg) {
+    return { verdict: ["⚠ verify", `the add-on read carries no \`packageName\`, so it cannot confirm the add-on is in \`${esc(want)}\`${how}`, "unverified", "verifier"] };
+  }
   if (vk.package && readPkg !== want) {
     return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(want)}\`${how}`, "unverified", "verifier"] };
   }
@@ -4526,7 +4526,7 @@ function resolveDashboardsVk(vk, ctx) {
   }
   if (vk.check === "migrated") return resolveDashboardsMigrated(expect, byId);
   if (vk.check === "partials") return resolveDashboardsPartials(expect, byId);
-  return resolveDashboardsDelivery(expect, byId);
+  return resolveDashboardsDelivery(expect, byId, ctx);
 }
 function resolveDashboardsMigrated(expect, byId) {
   const bad = expect.filter((e) => !DASH_EXISTS.has(dashStatus(byId.get(e.id))));
@@ -4547,10 +4547,13 @@ function resolveDashboardsPartials(expect, byId) {
   }
   return ["✅ Done", `${partial.length} partial outcome(s), each put to the user and accepted`, "ok"];
 }
-function resolveDashboardsDelivery(expect, byId) {
-  const wrong = expect.filter((e) => String(byId.get(e.id).package || "") !== e.pkg);
+// A packaged dashboard is compared against the package NAME (`packageNameOf`), like a built page; a stand-only one
+// (`pkg: ""`) has no package to resolve and stays as planned.
+function resolveDashboardsDelivery(expect, byId, ctx) {
+  const plannedPkg = (e) => (e.pkg ? packageNameOf(e.pkg, ctx?.createdPackage) : "");
+  const wrong = expect.filter((e) => String(byId.get(e.id).package || "") !== plannedPkg(e));
   if (wrong.length) {
-    return ["❌ MISSING", wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(e.pkg || "no package (user-level)")}`).join("; "), "missing"];
+    return ["❌ MISSING", wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(plannedPkg(e) || "no package (user-level)")}`).join("; "), "missing"];
   }
   const packaged = expect.filter((e) => e.pkg).length;
   return ["✅ Done", `${packaged} packaged and ${expect.length - packaged} user-level, each where the plan said`, "ok"];

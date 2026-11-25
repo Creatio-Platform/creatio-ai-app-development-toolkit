@@ -47,6 +47,25 @@ export function runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, 
       && /plan targets `UsrOrdersApp2`/.test(related("UsrOrdersApp", "UsrOrdersApp2")[1]),
     () => [related("UsrOrdersApp2", "UsrOrdersApp2"), related("UsrOrdersApp", "UsrOrdersApp2")]);
 
+  const noPkgRead = resolveVk({ type: "relatedpage", entity: "Item", evidence: "relatedPage:Item", package: NOTED, childKey: "child:Item" },
+    verifyCtx({ pages: { main: { viewConfig: { items: [] } }, "child:Item": { schemaName: "UsrOrdersApp_ItemPage", viewConfig: { items: [] } } },
+      reachability: { "relatedPage:Item": { success: true, pages: [{ pageSchemaName: "UsrOrdersApp_ItemPage" }] } } }, "main"));
+  check("related page: a read with no `packageName` names the package by its name, not the plan's note",
+    () => /cannot confirm the add-on is in `UsrOrdersApp`/.test(noPkgRead[1]) && !/primary package/.test(noPkgRead[1]), () => noPkgRead);
+
+  // A packaged dashboard lands in the same package as the pages; a stand-only one has none to resolve.
+  const dashExpect = [{ id: "d1", caption: "Sales", pkg: NOTED }, { id: "d2", caption: "Mine", pkg: "" }];
+  const delivered = (pkg, created = null) => resolveVk({ type: "dashboards", check: "delivery", expect: dashExpect },
+    { ...verifyCtx({ pages: { main: { viewConfig: { items: [] } } }, dashboards: [
+      { id: "d1", status: "Success", schemaName: "S1", package: pkg }, { id: "d2", status: "Success", schemaName: "S2" }] }, "main"),
+    createdPackage: created });
+  check("dashboards: a packaged dashboard delivered into the package the noted plan names is ✅, the stand-only one stays user-level",
+    () => delivered("UsrOrdersApp")[2] === "ok" && delivered("UsrOrdersApp2", "UsrOrdersApp2")[2] === "ok",
+    () => [delivered("UsrOrdersApp"), delivered("UsrOrdersApp2", "UsrOrdersApp2")]);
+  check("dashboards: one delivered elsewhere is ❌ and names the package by its name",
+    () => delivered("UsrOther")[2] === "missing" && /planned UsrOrdersApp(?!\s*\()/.test(delivered("UsrOther")[1]),
+    () => delivered("UsrOther"));
+
   // The noted value is the plan's own: the rows keep it, so a task cut before create-app ran does not drift.
   const su = JSON.parse(verifyManifest);
   const noted = { ...su, targetPackage: NOTED };
@@ -129,6 +148,15 @@ export function runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, 
   check("closes: a line naming several attributes closes each of them — the keys after the first keep no stray backtick",
     () => closedRuleAttributes(several).map((c) => c.key).join() === "main#business-rule:A,main#business-rule:B",
     () => closedRuleAttributes(several));
+
+  const unquoted = parseDecisionRecords("## D8 — No words\n- Kind: answer\n- Decided by: user\n- Closes: `main#business-rule:A`");
+  check("closes: a user answer with no `Quote:` closes nothing — the closure stands on the user's own words",
+    () => closedRuleAttributes(unquoted).length === 0, () => closedRuleAttributes(unquoted));
+  // The approved plan's own status wins over a later answer naming the same attribute.
+  const planned = { ...su, deliverableStatus: { "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D4" } } };
+  const precedence = checklistOpts(planned, { decisionRecords: parseDecisionRecords(DECISIONS_MD.replace("## D4", "## D9")) }).deliverableStatus;
+  check("closes: a manifest `deliverableStatus` entry for the same attribute wins over the answer",
+    () => precedence["main#business-rule:Calendar"]?.decision === "D4", () => precedence);
 
   // ---- the same answer and the recorded package through the CLI's own `--verify` ----
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-verify-fn-"));
