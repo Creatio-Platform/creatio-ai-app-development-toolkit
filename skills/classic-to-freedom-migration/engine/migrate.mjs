@@ -2517,25 +2517,52 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
 }
 // The order Classic loads the list in: the column whose `orderDirection` `addGridDataColumns` sets, else the
 // direction `getGridSortDirection` returns with no column. `locked` when `initDetailOptions` turns `IsSortable` off,
-// so the user cannot re-sort. Null when the detail keeps the default order.
-const ORDER_DIRECTION_SET = /orderDirection\s{0,5}=\s{0,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/;
+// so the user cannot re-sort. Null when the detail keeps the default order. The members are read raw, for the column
+// and attribute names they pass as strings, so every match inside a comment or a string is dropped.
+const ORDER_DIRECTION_SET = /orderDirection\s{0,5}=\s{0,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/g;
 const ORDER_DIRECTION_RETURNED = /return\s{1,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/;
 const SORTED_COLUMN = /(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']/g;
-const SORT_LOCKED = /set\s{0,5}\(\s{0,5}["']IsSortable["']\s{0,5},\s{0,5}false\b/;
+const SORT_LOCKED = /set\s{0,5}\(\s{0,5}["']IsSortable["']\s{0,5},\s{0,5}false\b/g;
+// The receiver just before `.orderDirection`: a column added or fetched in place, or a variable holding one.
+const SORT_RECEIVER = /(?:(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']\s{0,5}\)|\b([A-Za-z_]\w{0,80}))\s{0,5}\.\s{0,5}$/;
+const SORT_RECEIVER_WINDOW = 200;
+const SORT_ASSIGNMENT_WINDOW = 300;
+const codeMatches = (code, re) => {
+  const spans = literalSpans(code);
+  return [...code.matchAll(re)].filter((m) => !insideSpan(spans, m.index));
+};
+// The one column the variable was last assigned before `at` (`var c = esq.addColumn("X")`, or a ternary that fetches
+// or adds the same column), else null.
+function columnOfVariable(code, name, at) {
+  const assigned = codeMatches(code.slice(0, at), new RegExp(String.raw`(?<![.\w$])${name}\s{0,5}=(?!=)`, "g")).at(-1);
+  if (!assigned) return null;
+  const from = assigned.index + assigned[0].length;
+  const rhs = code.slice(from, from + SORT_ASSIGNMENT_WINDOW).split(";")[0];
+  const names = [...new Set(codeMatches(rhs, SORTED_COLUMN).map((m) => m[1]))];
+  return names.length === 1 ? names[0] : null;
+}
+// The column one `orderDirection` assignment sorts, or null when its receiver names no single column.
+function sortedColumnAt(code, at) {
+  const r = SORT_RECEIVER.exec(code.slice(Math.max(0, at - SORT_RECEIVER_WINDOW), at));
+  if (!r) return null;
+  return r[1] || columnOfVariable(code, r[2], at);
+}
 function gridSortOf(text, spans) {
   if (!text.includes("OrderDirection")) return null;
   const cols = lastMemberCode(text, "addGridDataColumns", spans, { raw: true });
-  const set = cols?.code ? ORDER_DIRECTION_SET.exec(cols.code) : null;
-  const returned = set ? null : ORDER_DIRECTION_RETURNED.exec(lastMemberCode(text, "getGridSortDirection", spans)?.code || "");
-  const direction = (set || returned)?.[1];
+  const sets = cols?.code ? codeMatches(cols.code, ORDER_DIRECTION_SET) : [];
+  const returned = sets.length ? null : ORDER_DIRECTION_RETURNED.exec(lastMemberCode(text, "getGridSortDirection", spans)?.code || "");
+  const direction = (sets[0] || returned)?.[1];
   if (!direction) return null;
-  const names = set ? [...new Set([...cols.code.matchAll(SORTED_COLUMN)].map((m) => m[1]))] : [];
+  // two assignments on different columns, or one whose column is not read, name no single column
+  const columns = new Set(sets.map((m) => sortedColumnAt(cols.code, m.index)));
+  const column = columns.size === 1 ? [...columns][0] : null;
   const options = lastMemberCode(text, "initDetailOptions", spans, { raw: true });
-  return { column: names.length === 1 ? names[0] : null, direction: direction.toLowerCase(), locked: SORT_LOCKED.test(options?.code || "") };
+  return { column, direction: direction.toLowerCase(), locked: codeMatches(options?.code || "", SORT_LOCKED).length > 0 };
 }
 // Every function of the feature scan, for the structural ReDoS golden.
 export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
-  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode, gridSortOf];
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode, gridSortOf, codeMatches, columnOfVariable, sortedColumnAt];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom

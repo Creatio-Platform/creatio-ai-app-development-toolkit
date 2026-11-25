@@ -158,9 +158,23 @@ const EDIT_AND_OPEN_BODY = `define("NoEditDetail",[],function(){return{entitySch
 const UNREAD_AND_OPEN_BODY = `define("OddDetail",[],function(){return{entitySchemaName:"Line",methods:{editRecord:Terrasoft.emptyFn,
   addRecordOperationsMenuItems:function(m){this.callParent(arguments);m.removeByKey("x");}}};});`;
 // An order with no column: only the direction is overridden. An order set on two columns: the column is not one.
+// Several columns added and one of them ordered, through a variable: that column. An order and a re-sort lock that are
+// only commented out: the default order, no lock.
 const DIRECTION_ONLY_BODY = `define("AscDetail",[],function(){return{entitySchemaName:"Line",methods:{getGridSortDirection:function(){return Terrasoft.OrderDirection.ASC;}}};});`;
 const TWO_COLUMNS_BODY = `define("TwoColDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
   esq.addColumn("A").orderDirection=Terrasoft.OrderDirection.DESC;esq.addColumn("B").orderDirection=Terrasoft.OrderDirection.DESC;}}};});`;
+const ONE_OF_MANY_BODY = `define("ManyColDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
+  esq.addColumn("Status");var c=esq.addColumn("CreatedOn");esq.addColumn("Amount");c.orderDirection=Terrasoft.OrderDirection.DESC;}}};});`;
+const CHAINED_ONE_OF_MANY_BODY = `define("ChainDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
+  esq.addColumn("Status");esq.addColumn("DueDate").orderDirection=Terrasoft.OrderDirection.ASC;}}};});`;
+const COMMENTED_SORT_BODY = `define("CommentDetail",[],function(){return{entitySchemaName:"Line",methods:{
+  initDetailOptions:function(){this.callParent(arguments);/* this.set("IsSortable",false); */},
+  addGridDataColumns:function(esq){this.callParent(arguments);/* column.orderDirection = Terrasoft.OrderDirection.DESC; */
+    // esq.addColumn("X").orderDirection = Terrasoft.OrderDirection.ASC;
+    esq.addColumn("PayDate");}}};});`;
+const COMMENTED_LOCK_BODY = `define("LockCommentDetail",[],function(){return{entitySchemaName:"Line",methods:{
+  initDetailOptions:function(){this.callParent(arguments);// this.set("IsSortable", false);
+  },getGridSortDirection:function(){return Terrasoft.OrderDirection.DESC;}}};});`;
 const NO_COPY_BODY = `define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
 // Summaries present but switched off.
 const SUMMARY_OFF_BODY = `define("SumOffDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return false;}}};});`;
@@ -584,6 +598,19 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => ({ sort: detailOf(asc, "AscDetail").features.sort, rows: settingRows(asc, "AscDetail"), vk: ascSort?.vk }));
   check("detail features: an order set on two columns names no single column",
     () => detailOf(run("TwoColDetail", "Line", TWO_COLUMNS_BODY), "TwoColDetail").features.sort?.column === null);
+  const sortOf = (name, body) => JSON.stringify(detailOf(run(name, "Line", body), name).features.sort);
+  check("detail features: several added columns with one ordered through a variable name that column",
+    () => sortOf("ManyColDetail", ONE_OF_MANY_BODY) === JSON.stringify({ column: "CreatedOn", direction: "desc", locked: false }),
+    () => sortOf("ManyColDetail", ONE_OF_MANY_BODY));
+  check("detail features: several added columns with one ordered in place name that column",
+    () => sortOf("ChainDetail", CHAINED_ONE_OF_MANY_BODY) === JSON.stringify({ column: "DueDate", direction: "asc", locked: false }),
+    () => sortOf("ChainDetail", CHAINED_ONE_OF_MANY_BODY));
+  check("detail features: an order and a re-sort lock that are only commented out read as the default order",
+    () => detailOf(run("CommentDetail", "Line", COMMENTED_SORT_BODY), "CommentDetail").features.sort === null,
+    () => sortOf("CommentDetail", COMMENTED_SORT_BODY));
+  check("detail features: a commented-out re-sort lock is not a lock",
+    () => sortOf("LockCommentDetail", COMMENTED_LOCK_BODY) === JSON.stringify({ column: null, direction: "desc", locked: false }),
+    () => sortOf("LockCommentDetail", COMMENTED_LOCK_BODY));
   check("detail features: a locked sort says the re-sort lock is neither carried nor checked",
     () => payRows.some((l) => /\| Sort \|/.test(l) && /the re-sort lock is not carried or checked/.test(l)),
     () => payRows);
