@@ -431,13 +431,11 @@ function addModuleFindings(byPage, pages, modules, external, thresholds, constan
   for (const [key, page] of byPage) {
     if (!page) continue;
     const { read, unread } = importedModulesOf(bundleDeps(pages[key]), modules, external, (name) => lintOf(name).deps);
-    for (const name of read) {
-      const lint = lintOf(name);
-      page.findings.push(...lint.findings);
-      page.unreadable.push(...lint.unreadable);
-    }
+    for (const name of read) page.findings.push(...lintOf(name).findings);
     page.modules = read;
     page.unreadModules = unread;
+    // A filed module that does not parse was not measured, and the modules it imports are not known.
+    page.unparsedModules = read.filter((name) => lintOf(name).unreadable.length);
   }
 }
 

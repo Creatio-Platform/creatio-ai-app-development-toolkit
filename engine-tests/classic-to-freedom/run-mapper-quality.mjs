@@ -250,9 +250,8 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       () => /⚠ verify/.test(rowLine(viaFile.markdown, R.catchLogOnly)), () => rowLine(viaFile.markdown, R.catchLogOnly));
   } finally { fs.rmSync(asDir, { recursive: true, force: true }); }
 
-  // CLIENT MODULES. The benchmark run of 2026-11-25 passed every Code quality row while its logic sat in client
-  // modules nothing read: log-only catches, a bare numeric comparisonType. The fixture is that run's modules, reduced
-  // and renamed; the same rules now follow a page into every module it imports.
+  // CLIENT MODULES. A page's Code quality and Page code rows cover every client module the page imports, directly or
+  // through another module, with the rules that hold outside a page section.
   const MOD = path.join(FIX, "module-lint-v2");
   const modSrc = (name) => fs.readFileSync(path.join(MOD, name + ".js"), "utf8");
   const V2 = ["UsrDemoV2App_FormPageModule", "UsrDemoV2App_ListPageModule", "UsrDemoV2DocumentTotals"];
@@ -276,6 +275,24 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       && guids.findings.filter((f) => f.rule === R.guidLiteral && f.advisory).length === 1, () => guids.findings);
   check("module lint: a module that does not parse is unreadable, not clean",
     () => lintModuleQuality("UsrBroken", "define(\"UsrBroken\", [], function() { return {").unreadable[0] === "module UsrBroken");
+  const loads = (dependent) => `define("UsrLoads", [], function() { async function read(sdk) {\n`
+    + `const a = await sdk.Model.create("A");\nconst b = await sdk.Model.create(${dependent ? "a.name" : '"B"'});\n`
+    + `const c = await sdk.Model.create(${dependent ? "b.name" : '"C"'});\nreturn [a, b, c]; } return { read }; });`;
+  const seqLoads = lintModuleQuality("UsrLoads", loads(false));
+  check("module lint: independent loads awaited one after another in a module function are reported under the module",
+    () => count(seqLoads, R.sequentialAwaits) === 1 && seqLoads.findings[0].section === "module UsrLoads"
+      && count(lintModuleQuality("UsrLoads", loads(true)), R.sequentialAwaits) === 0, () => seqLoads.findings);
+  const planCodes = lintModuleQuality("UsrPlan", "/** Built for card C04. */\ndefine(\"UsrPlan\", [], function() {\n"
+    + "// covers AC-16\nfunction f() { return 1; }\nreturn { f }; });");
+  const plainHeader = lintModuleQuality("UsrPlan", "/** Totals of a contract. */\ndefine(\"UsrPlan\", [], function() {\n"
+    + "// sums the active rows\nfunction f() { return 1; }\nreturn { f }; });");
+  check("module lint: a plan code in the module's header JSDoc or an inner comment is reported; plain comments are not",
+    () => count(planCodes, R.planCodeInComment) === 2 && planCodes.findings.every((f) => f.section === "module UsrPlan")
+      && count(plainHeader, R.planCodeInComment) === 0, () => planCodes.findings);
+  const elementIds = lintModuleQuality("UsrCols", `define("UsrCols", [], function() { return { columns: [{ id: "${held}", code: "X" }] }; });`,
+    DEFAULT_QUALITY_THRESHOLDS, new Set([held.toLowerCase()]));
+  check("module lint: an element's generated local id is not a record id, in a module as on a page",
+    () => count(elementIds, R.guidLiteral) === 0, () => elementIds.findings);
 
   const pageEntry = (deps) => ({ handlers: `[${handler("usr.A", "const x = 1;")}]`, validators: "{}", converters: "{}", deps });
   const v2Pages = { main: pageEntry('["@creatio-devkit/common", "UsrDemoV2App_FormPageModule"]'), list: pageEntry('["UsrDemoV2App_ListPageModule"]') };
@@ -290,6 +307,10 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   const external = lintRunQuality(v2Pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), { [V2[0]]: v2Modules[V2[0]] }, new Set([V2[2]]));
   check("run: a declared project module (existing code) is not followed — neither linted nor owed",
     () => external.get("main").unreadModules.length === 0 && count(external.get("main"), R.catchLogOnly) === 3);
+  const shared = lintRunQuality({ a: pageEntry('["UsrDemoV2App_ListPageModule"]'), b: pageEntry('["UsrDemoV2App_ListPageModule"]') },
+    DEFAULT_QUALITY_THRESHOLDS, new Set(), v2Modules, new Set());
+  check("run: a module two pages import counts on each of them",
+    () => count(shared.get("a"), R.catchLogOnly) === 1 && count(shared.get("b"), R.catchLogOnly) === 1);
 
   const withModules = (deps, modules) => { const b = built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`); b.pages.main.deps = deps; b.modules = modules; return b; };
   const v2Verify = renderVerify(result, opts, withModules('["AbConstants", "UsrDemoV2App_FormPageModule"]', v2Modules));
@@ -307,6 +328,20 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("verify: a module function over the limit holds the Page code row ⚠, named `Module › function`",
     () => /⚠ verify/.test(pageCodeLine(longVerify.markdown)) && /`UsrLongModule › recalculate` is \d+ lines \(limit 60\)/.test(pageCodeLine(longVerify.markdown)),
     () => pageCodeLine(longVerify.markdown));
+  const raisedModule = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 200 } })),
+    withModules('["UsrLongModule"]', { UsrLongModule: longModule }));
+  check("verify: raising manifest.qualityThresholds.maxFunctionLines clears a module function's Page code finding",
+    () => /✅ Done/.test(pageCodeLine(raisedModule.markdown)), () => pageCodeLine(raisedModule.markdown));
+  const brokenModule = renderVerify(result, opts, withModules('["UsrBroken"]', { UsrBroken: 'define("UsrBroken", [], function() { return {' }));
+  check("verify: a filed module that does not parse holds both the Page code and Code quality rows ⚠, naming its reads/modules file",
+    () => /⚠ verify/.test(pageCodeLine(brokenModule.markdown)) && pageCodeLine(brokenModule.markdown).includes("reads/modules/UsrBroken.js")
+      && /⚠ verify/.test(rowLine(brokenModule.markdown, R.catchLogOnly)) && !/bundle's/.test(rowLine(brokenModule.markdown, R.catchLogOnly)),
+    () => [pageCodeLine(brokenModule.markdown), rowLine(brokenModule.markdown, R.catchLogOnly)]);
+  const unreadAndLong = renderVerify(result, opts, (() => { const b = withModules('["UsrMissing"]', {});
+    b.pages.main.handlers = longHandler; return b; })());
+  check("verify: an unread module does not hide the page's own Page code findings",
+    () => pageCodeLine(unreadAndLong.markdown).includes("UsrMissing") && /`usr\.ApplyButtonClicked` is \d+ lines/.test(pageCodeLine(unreadAndLong.markdown)),
+    () => pageCodeLine(unreadAndLong.markdown));
   const cleanModule = renderVerify(result, opts, withModules('["UsrCleanModule"]', { UsrCleanModule: 'define("UsrCleanModule", [], function() { return { x: 1 }; });' }));
   check("verify: a page whose imported modules are filed and clean closes the Page code row and every blocking Code quality row",
     () => /✅ Done/.test(pageCodeLine(cleanModule.markdown)) && ROW_RULES.filter((r) => r !== R.unusedResourceString).every((r) => /✅ Done/.test(rowLine(cleanModule.markdown, r))),

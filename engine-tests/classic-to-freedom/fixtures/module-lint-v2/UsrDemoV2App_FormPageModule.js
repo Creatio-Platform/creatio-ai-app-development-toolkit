@@ -1,7 +1,6 @@
 /**
- * Regression fixture: the shape of a record page's client module from the Classic-to-Freedom
- * benchmark run of 2026-11-25, reduced to the code the quality rules read. Names and record ids are replaced.
- * Expected: catch-log-only x3 (refreshItemsSummary, deactivateSelectedItems, assignNextContractNumber),
+ * Fixture: a record page's client module, reduced to the code the quality rules read; names and record ids are
+ * placeholders. Expected: catch-log-only x3 (refreshItemsSummary, deactivateSelectedItems, assignNextContractNumber),
  * numeric-comparison-type x1 (setDueSoonFilter). The catches that keep a fallback value are not reported.
  */
 define("UsrDemoV2App_FormPageModule", ["@creatio-devkit/common", "UsrDemoV2DocumentTotals"],

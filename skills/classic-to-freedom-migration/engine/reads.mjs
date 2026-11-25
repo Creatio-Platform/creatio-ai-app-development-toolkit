@@ -284,8 +284,8 @@ export function renderReadPlan(plan, dir) {
     + " could not ask\", which is a re-read and never closes; writing `false` into only one of the two is read as a"
     + " copy error, because one `get-page` call cannot answer both ways.",
   "", `**Then the client modules the built pages import.** For each project module in a page bundle's \`deps\` (and in`
-    + " those modules' own `define` lists; not `@creatio-devkit/...` and not the project's declared helper or constants"
-    + ` modules), \`get-page\` the module and copy its \`.clio-pages/<Module>/body.js\` whole to`
+    + " those modules' own `define` lists; not a platform module, whose name holds `@`, `!` or `/`, and not the"
+    + ` project's declared helper or constants modules), \`get-page\` the module and copy its \`.clio-pages/<Module>/body.js\` whole to`
     + ` \`${path.posix.join(READS_DIR, MODULES_DIR)}/<Module>.js\`. The page's code is held to the same rules there, and the`
     + " `Page code` and `Code quality` rows name every module whose source is missing.");
 

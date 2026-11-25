@@ -1,6 +1,5 @@
 /**
- * Regression fixture: the list page's client module from the Classic-to-Freedom benchmark run of
- * 2026-11-25, reduced and renamed. Expected: catch-log-only x1 (closeContracts).
+ * Fixture: a list page's client module, reduced; names and record ids are placeholders. Expected: catch-log-only x1 (closeContracts).
  */
 define("UsrDemoV2App_ListPageModule", ["@creatio-devkit/common"], function(sdk) {
 	"use strict";

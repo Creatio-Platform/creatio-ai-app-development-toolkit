@@ -3166,7 +3166,17 @@ function externalModulesOf(opts) {
 // What a page's imported modules owe the code rows: a module the read-back did not file cannot be measured.
 const MODULE_READ_HINT = "`get-page` each one and copy its `.clio-pages/<Module>/body.js` to `reads/modules/<Module>.js`, then re-run"
   + " — a module that is existing project code, not written by this run, goes in `projectConventions.helperModules` instead";
-const unreadModulesText = (names) => `imports ${names.map((n) => "`" + esc(n) + "`").join(", ")}, whose source the read-back did not file — ${MODULE_READ_HINT}`;
+const moduleList = (names) => names.map((n) => "`" + esc(n) + "`").join(", ");
+// What a page's imported modules leave unmeasured: one not filed, or one filed that does not parse. Null when neither.
+function moduleGapText(run) {
+  const parts = [];
+  if (run?.unreadModules?.length) parts.push(`imports ${moduleList(run.unreadModules)}, whose source the read-back did not file — ${MODULE_READ_HINT}`);
+  if (run?.unparsedModules?.length) {
+    parts.push(`${run.unparsedModules.map((n) => "`reads/modules/" + esc(n) + ".js`").join(", ")} does not parse, so that module and the`
+      + " modules it imports were not measured — re-copy the module's `.clio-pages/<Module>/body.js` whole, then re-run");
+  }
+  return parts.length ? parts.join("; ") : null;
+}
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
 // permanently-unverified run. Own fn so `buildPageRows` gains no branch of its own (Sonar CC 15).
@@ -5105,8 +5115,10 @@ export function resolvePageCodeVk(vk, ctx) {
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   // The functions of the modules the page imports are the page's code too, held to the same length limit.
   const run = runQualityOf(ctx.root, thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
-  if (run?.unreadModules?.length) return ["⚠ verify", unreadModulesText(run.unreadModules), "unverified"];
   a.findings.push(...moduleLengthFindings(run));
+  // A module not measured holds the row; the page's own findings are still listed beside it.
+  const gap = moduleGapText(run);
+  if (gap) return ["⚠ verify", [gap, ...findingPhrases(a)].join("; "), "unverified"];
   if (!findingCount(a)) {
     const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
     return ["✅ Done", `${a.handlers.length} handler(s): none over ${a.maxFunctionLines} lines, no helper declared twice, ${sends}`, "ok"];
@@ -5305,7 +5317,8 @@ export function resolveQualityVk(vk, ctx) {
   const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
-  if (page.unreadModules?.length) return ["⚠ verify", unreadModulesText(page.unreadModules), "unverified"];
+  const gap = moduleGapText(page);
+  if (gap) return ["⚠ verify", gap, "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
   const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
     + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");

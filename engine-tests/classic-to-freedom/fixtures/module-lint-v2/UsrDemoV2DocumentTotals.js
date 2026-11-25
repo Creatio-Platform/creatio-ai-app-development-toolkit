@@ -1,6 +1,6 @@
 /**
- * Regression fixture: shared client logic imported by another client module (not by a page) in the
- * Classic-to-Freedom benchmark run of 2026-11-25, reduced and renamed. Expected: catch-log-only x1 (the catch in
+ * Fixture: shared client logic that another client module imports (no page imports it directly), reduced; names
+ * and record ids are placeholders. Expected: catch-log-only x1 (the catch in
  * postDocument that holds only a comment). The catches that return a fallback value are not reported.
  */
 define("UsrDemoV2DocumentTotals", ["@creatio-devkit/common"], function(sdk) {
