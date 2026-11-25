@@ -1604,8 +1604,10 @@ function unreadableOverrideSentences(unreadable, afterRemoved, opensNothing) {
   const lead = afterRemoved ? "It also overrides" : "overrides";
   const members = unreadable.map((m) => "`" + m + "`").join(", ");
   const subject = unreadable.length > 1 ? "they remove" : "it removes";
+  // with rows that open nothing, the sentence before this one already gave the links-off clause
+  const close = opensNothing ? "." : `, and ${openClause(false)}`;
   return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
-    `Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and ${openClause(opensNothing)}`];
+    `Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out${close}`];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds

@@ -4788,6 +4788,7 @@ function resolveListColumnsVk(vk, ctx) {
 // The machine rows of the Detail features block: each detail quick filter must be a `crt.QuickFilter` under the name
 // the plan published, each field Classic made read-only must be built read-only, and a related list whose Classic
 // row actions changed must declare its row toolbar. Every other row of the block is a decision or a build note.
+const sortedListItem = (l) => "`" + esc(l.name) + "` (" + esc(l.column || "column not read") + " " + l.direction + ")";
 function detailFeatureCheckRows(cs) {
   const rows = [];
   const toolbarLists = [], unlinked = [], sorted = [];
@@ -4805,7 +4806,7 @@ function detailFeatureCheckRows(cs) {
   const quoted = (lists) => lists.map((l) => "`" + esc(l.name) + "`").join(", ");
   if (toolbarLists.length) rows.push({ deliverableId: "detail-row-toolbar", label: `Related lists with changed row actions declare \`rowToolbarItems\` without the actions Classic did not offer: ${quoted(toolbarLists)}`, vk: { type: "rowtoolbar", n: toolbarLists.length, names: toolbarLists.map((l) => l.name), lists: toolbarLists } });
   if (unlinked.length) rows.push({ deliverableId: "detail-row-links", label: `Related lists whose rows open nothing set \`features.cells.disableLinks: true\`: ${quoted(unlinked)}`, vk: { type: "rowlinks", n: unlinked.length, lists: unlinked } });
-  if (sorted.length) rows.push({ deliverableId: "detail-sort", label: `Related lists keep Classic's row order in \`sortingConfig.default\`: ${sorted.map((l) => `\`${esc(l.name)}\` (${esc(l.column || "column not read")} ${l.direction})`).join(", ")}`, vk: { type: "listsort", n: sorted.length, lists: sorted } });
+  if (sorted.length) rows.push({ deliverableId: "detail-sort", label: `Related lists keep Classic's row order in \`sortingConfig.default\`: ${sorted.map(sortedListItem).join(", ")}`, vk: { type: "listsort", n: sorted.length, lists: sorted } });
   const readOnly = (cs.viewConfigDiff || []).filter((o) => isField(o) && o.values?.readOnlyStatic).map((o) => o.name);
   if (readOnly.length) rows.push({ deliverableId: "fields-readonly-static", label: `Fields read-only in Classic built read-only × ${readOnly.length}`, vk: { type: "readonly", n: readOnly.length, names: readOnly } });
   return rows;
@@ -4839,8 +4840,8 @@ function gridNamedAfter(ops, n) {
 }
 const ambiguousGrids = (w) => esc(String(w.n)) + " (" + w.ambiguous.map((g) => esc(g)).join(", ") + ")";
 // One check over the related lists a vk names (`lists`, or the older `names`): each list's grid is found by name
-// (`gridNamedAfter`), and `gapOf(grid, list, ctx)` returns the text of a setting the grid lacks, `{ unverified }`
-// when it cannot tell, or null. A list that is missing or ambiguous on the built page stays unverified, never Done.
+// (`gridNamedAfter`), and `gapOf(grid, list, ctx)` returns `{ missing }` for a setting the grid lacks, `{ unverified }`
+// when it cannot tell, or null when the grid matches Classic. A list that is missing or ambiguous on the built page stays unverified, never Done.
 function resolveDetailGridVk(vk, ctx, what, gapOf) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the related lists' ${what}`);
   const lists = vk.lists || (vk.names || []).map((name) => ({ name }));
@@ -4851,7 +4852,7 @@ function resolveDetailGridVk(vk, ctx, what, gapOf) {
     const gap = found.grid ? gapOf(found.grid, l, ctx) : null;
     if (found.ambiguous) unverified.push(`more than one grid is named after ${ambiguousGrids({ n: l.name, ambiguous: found.ambiguous })}`);
     else if (!found.grid) unverified.push(`no grid named after ${esc(String(l.name))} on the built page`);
-    else if (typeof gap === "string") missing.push(gap);
+    else if (gap?.missing) missing.push(gap.missing);
     else if (gap?.unverified) unverified.push(gap.unverified);
   }
   if (missing.length) return ["❌ MISSING", missing.join("; "), "missing"];
@@ -4862,15 +4863,15 @@ function resolveDetailGridVk(vk, ctx, what, gapOf) {
 // (a request among `drop`), and with no toolbar shown when no action remains (`features.rows.toolbar: false`).
 function rowToolbarGap(grid, l) {
   const n = esc(String(l.name));
-  if (!grid.rowToolbar) return `${n} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones`;
+  if (!grid.rowToolbar) return { missing: `${n} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones` };
   const offered = (l.drop || []).filter((r) => (grid.rowToolbarRequests || []).includes(r));
-  if (offered.length) return `${n} still offers ${offered.map((r) => "`" + esc(r) + "`").join(", ")} — Classic did not offer it on a row`;
-  return l.noToolbar && grid.rowToolbarOff !== true ? `${n} shows a row toolbar with no action left (\`features.rows.toolbar\` is not \`false\`)` : null;
+  if (offered.length) return { missing: `${n} still offers ${offered.map((r) => "`" + esc(r) + "`").join(", ")} — Classic did not offer it on a row` };
+  return l.noToolbar && grid.rowToolbarOff !== true ? { missing: `${n} shows a row toolbar with no action left (\`features.rows.toolbar\` is not \`false\`)` } : null;
 }
 const resolveRowToolbarVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "row toolbars", rowToolbarGap);
 // A related list whose rows open nothing does not link its primary column (`features.cells.disableLinks: true`).
 const resolveRowLinksVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "row links", (grid, l) => (grid.linksDisabled === true ? null
-  : `${esc(String(l.name))} built with row links — Classic rows open nothing; set \`features.cells.disableLinks: true\``));
+  : { missing: `${esc(String(l.name))} built with row links — Classic rows open nothing; set \`features.cells.disableLinks: true\`` }));
 // A related list keeps Classic's row order: the attribute its grid binds (`items: "$X"`) carries
 // `modelConfig.sortingConfig.default` with the same column first, in the same direction.
 function listSortGap(grid, l, ctx) {
@@ -4881,7 +4882,7 @@ function listSortGap(grid, l, ctx) {
   const first = ctx.vmAttributes[attr]?.modelConfig?.sortingConfig?.default?.[0];
   if (first && first.columnName === l.column && String(first.direction || "").toLowerCase() === l.direction) return null;
   const actual = first ? `by \`${esc(String(first.columnName))}\` ${esc(String(first.direction))}` : "in the default order";
-  return `${n} loads ${actual}, not \`${esc(l.column)}\` ${l.direction} — set the list's \`sortingConfig.default\``;
+  return { missing: `${n} loads ${actual}, not \`${esc(l.column)}\` ${l.direction} — set the list's \`sortingConfig.default\`` };
 }
 const resolveListSortVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "sort order", listSortGap);
 // A filter row needs BOTH halves: the element name AND `crt.QuickFilter`. Name alone closed on any component that

@@ -550,7 +550,8 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => resolveVk(byType("rowtoolbar").vk, builtWith(kept))[0] === "✅ Done"
       && resolveVk(byType("rowlinks").vk, builtWith(kept))[0] === "✅ Done"
       && resolveVk(byType("listsort").vk, builtWith(kept, sortAttrs("desc")))[0] === "✅ Done"
-      && resolveVk(byType("listsort").vk, builtWith(kept))[0] === "⚠ verify",
+      && resolveVk(byType("listsort").vk, builtWith(kept))[0] === "⚠ verify"
+      && /keep Classic's row order in `sortingConfig\.default`: `D` \(PayDate desc\)$/.test(byType("listsort").label),
     () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
   const decisionOf = (r) => r.changeSet.needsDecision.find((n) => n.kind === "detail-row-actions");
   const settingRows = (r, schema) => r.plan.split("\n").filter((l) => new RegExp(String.raw`^\| ${schema} \| (Row actions|Row links|Sort) \|`).test(l));
@@ -570,9 +571,9 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && !/Nothing to remove/.test(editAndOpen.reason) && !/still open on click/.test(editAndOpen.reason),
     () => editAndOpen);
   const unreadAndOpen = decisionOf(run("OddDetail", "Line", UNREAD_AND_OPEN_BODY));
-  check("detail features: an unreadable row-action override beside rows that open nothing reads 'It also overrides', with the links-off clause",
+  check("detail features: an unreadable row-action override beside rows that open nothing reads 'It also overrides', and the links-off clause appears once",
     () => /It also overrides `addRecordOperationsMenuItems`/.test(unreadAndOpen?.reason || "") && !/\. overrides /.test(unreadAndOpen.reason)
-      && /it leaves out, and set `features\.cells\.disableLinks: true`/.test(unreadAndOpen.reason),
+      && (unreadAndOpen.reason.match(/disableLinks: true/g) || []).length === 1 && !/open-on-click/.test(unreadAndOpen.reason),
     () => unreadAndOpen);
   const asc = run("AscDetail", "Line", DIRECTION_ONLY_BODY);
   const ascSort = checklistGroups(asc, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "listsort");
