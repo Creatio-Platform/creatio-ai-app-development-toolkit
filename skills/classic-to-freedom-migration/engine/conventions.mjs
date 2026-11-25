@@ -330,6 +330,37 @@ export function bundleDeps(entry) {
   return [...text.slice(open + 1, close).matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
 }
 const isStringLiteral = (n) => n?.type === "Literal" && typeof n.value === "string";
+// get-page's `bundle.args`: the page's `define()` factory parameters in deps order, as source (`(contractPage)`,
+// `(sdk, mbDocumentTotals)`) or an array. A slot that is not an identifier stays null, so the positions still line up
+// with the deps. null when the bundle did not carry them.
+const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+export function bundleArgs(entry) {
+  const v = entry?.args;
+  if (v == null) return null;
+  const list = Array.isArray(v) ? v : String(v).trim().replace(/^\(/, "").replace(/\)$/, "").split(",");
+  return list.map((a) => String(a).trim()).map((a) => (IDENT_RE.test(a) ? a : null));
+}
+// The local name each `define()` dependency goes by on the page: `deps[i]` -> `args[i]`, null where the page gave it
+// none (or the bundle carried no `args`). null when the bundle carried no `deps`.
+export function moduleAliases(entry) {
+  const deps = bundleDeps(entry);
+  if (!deps) return null;
+  const args = bundleArgs(entry) || [];
+  return new Map(deps.map((d, i) => [d, args[i] ?? null]));
+}
+// The source of every top-level handler entry that answers `request`, in order. null when the handlers are not
+// source that parses as an array: a text over-read here would credit a request some other handler sends.
+export function handlerEntrySources(src, request) {
+  if (typeof src !== "string") return null;
+  const node = parseJsExpression(src);
+  if (node?.type !== "ArrayExpression") return null;
+  const answers = (el) => {
+    const req = el?.type === "ObjectExpression" ? el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value : null;
+    return isStringLiteral(req) && req.value === request;
+  };
+  // `parseJsExpression` reads the text wrapped in `(`, so every node offset is one past the source's own.
+  return node.elements.filter(answers).map((el) => src.slice(el.start - 1, el.end - 1));
+}
 // The custom names a built page DECLARES, per kind: the request of each handler entry, validator and converter
 // registrations. A request a handler body only dispatches (`next?.handle({ request: "pkg.X" })`) or a button only
 // fires belongs to whoever declares its handler, so it is not read. The whole result is null when the bundle carries

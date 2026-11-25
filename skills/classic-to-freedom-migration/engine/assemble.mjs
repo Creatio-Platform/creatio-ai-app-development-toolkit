@@ -35,6 +35,11 @@ export const RECORDED_FILE = "recorded.json";
 // A process page's process side (process-page.mjs): `processSteps` (describe-business-process of each re-pointed
 // step) and `processStandCheck` (the buttons pressed from the process step). Neither is a page read.
 export const PROCESS_FILE = "process.json";
+// The custom client modules the built pages import: `get-page` of each module, its `.clio-pages/<schema>/body.js`
+// copied whole to `modules/<schema>.js`. Optional and not a read of the plan, because the modules are the build's
+// choice: `--verify` reads one only to follow a request a page handler hands to it (`built.modules`).
+export const MODULES_DIR = "modules";
+const MODULE_FILE = /^([A-Za-z_]\w*)\.js$/;
 // The provenance field's shape (defined once, in conventions.mjs): the drop-sweep here applies the same test the
 // payload guard will. migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export { GUID_RE };
@@ -51,7 +56,8 @@ const metaPage = (j) => (j && typeof j === "object" && j.page && typeof j.page =
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 const META_FIELDS = ["schemaName", "schemaUId", "packageName", "packageUId", "parentSchemaName"];
-const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources", "deps", "validators", "converters"];
+// `args` beside `deps`: the local name each dependency goes by, which a handler's `contractPage.fn(…)` call is read through.
+const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources", "deps", "args", "validators", "converters"];
 
 // The entity the page's PRIMARY data source is bound to, for `--verify`'s entity row. `modelConfig` names the
 // primary source; that source's config names the entity. Derived rather than asked of the agent — "read two
@@ -354,6 +360,20 @@ function mergeSideFiles(dir, built, acc, problems) {
   }
   const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
   for (const key of ["processSteps", "processStandCheck"]) if (proc?.[key] != null) built[key] = proc[key];
+  const modules = readModules(dir, problems);
+  if (modules) built.modules = modules;
+}
+function readModules(dir, problems) {
+  const full = path.join(dir, MODULES_DIR);
+  if (!fs.existsSync(full)) return null;
+  const out = {};
+  for (const f of fs.readdirSync(full).sort()) {
+    const m = MODULE_FILE.exec(f);
+    if (!m || UNSAFE_KEYS.has(m[1])) continue;
+    try { out[m[1]] = fs.readFileSync(path.join(full, f), "utf8"); }
+    catch (e) { problems.push({ file: `${MODULES_DIR}/${f}`, what: `module \`${m[1]}\``, why: `not readable (${e.message})` }); }
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload

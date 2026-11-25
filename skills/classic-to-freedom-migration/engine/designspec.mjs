@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
-import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS } from "./conventions.mjs";
+import { conventionsPlanLines, bundleDeps, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntrySources } from "./conventions.mjs";
 import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
@@ -4169,8 +4169,47 @@ function resolveRequestCardActionVk(vk, ctx) {
   if (!vk.request) return ["⚠ verify", "the row names neither the action nor its request — confirm the action is built", "unverified"];
   const carrier = ctx.ops.find((o) => !isRemove(o) && opRequest(o) === vk.request);
   if (carrier) return ["✅ Done", `\`${esc(carrier.name)}\` fires \`${esc(vk.request)}\``, "ok"];
-  return ["⚠ verify", `no built element fires \`${esc(vk.request)}\` — wire the action to that request, or confirm it is built`, "unverified"];
+  const relay = relayedRequest(vk.request, ctx);
+  if (relay.ok) return ["✅ Done", relay.text, "ok"];
+  const why = relay.text ? ` (${relay.text})` : "";
+  return ["⚠ verify", `no built element fires \`${esc(vk.request)}\`${why} — wire the action to that request, or confirm it is built`, "unverified"];
 }
+// A request fired one step removed: a built element fires a page request, and that request's handler sends the
+// platform request — itself, or through a module the page imports in its `define()` deps whose source the payload
+// carries (`--built.modules`). The module is read whole: the handler calling into it and the module sending the
+// request is the evidence; which of its functions sends it is not traced. `text` on a miss names a module the
+// handler calls whose source is not in the payload, so the reader knows what to add.
+function relayedRequest(request, ctx) {
+  let missing = "";
+  for (const o of ctx.ops) {
+    const fired = isRemove(o) ? null : opRequest(o);
+    if (!fired || fired === request) continue;
+    for (const body of handlerEntrySources(ctx.handlersSrc, fired) || []) {
+      const hit = relayFromHandler(body, request, ctx);
+      if (hit.ok) return { ok: true, text: `\`${esc(o.name)}\` fires \`${esc(fired)}\`, whose handler ${hit.text}` };
+      missing ||= hit.text;
+    }
+  }
+  return { ok: false, text: missing };
+}
+function relayFromHandler(body, request, ctx) {
+  if (requestSent(withoutComments(body), "null", request)) return { ok: true, text: `sends \`${esc(request)}\`` };
+  const code = codeOnly(body);
+  let missing = "";
+  for (const [module, alias] of ctx.aliases || []) {
+    const via = [alias, module].filter(Boolean).find((name) => calledMemberOf(code, name));
+    if (!via) continue;
+    const src = ctx.modules.get(module);
+    if (src == null) {
+      missing ||= `a handler calls module \`${esc(module)}\`, whose source the payload does not carry — add it as \`modules/${esc(module)}.js\``;
+    } else if (requestSent(withoutComments(src), "null", request)) {
+      return { ok: true, text: `calls module \`${esc(module)}\` (\`${esc(via)}.…\`), which sends \`${esc(request)}\`` };
+    }
+  }
+  return { ok: false, text: missing };
+}
+// Whether `code` calls a member of `name` (`name.fn(…)`), `name` not itself a member of something else.
+const calledMemberOf = (code, name) => new RegExp(String.raw`${NOT_IN_WORD}${NOT_A_MEMBER}${reEsc(name)}\s*\.\s*${IDENT}\s*\(`).test(code);
 // A custom `getActions` item is Done only when a built element identifies the action: its name, its caption (the
 // raw binding or the resolved text) or its `clicked.request` contains the action name, compared as lowercase letters
 // and digits (`CalculateSaasMetricsMenuItem`, caption "Calculate SaaS metrics", `usr.CalculateSaaSMetricsRequest`
@@ -4977,9 +5016,6 @@ const IDENT = String.raw`[A-Za-z_$][\w$]*`;
 const PAGE_FUNCTION = new RegExp(`^${IDENT}$`);
 const PLATFORM_REQUEST_PREFIX = "crt.";
 const DOTTED_SYMBOL = new RegExp(String.raw`^(${IDENT})\.(${IDENT})$`);
-// Whether a handler calls `sym`, as a verdict; `from` names where the function lives when it is not on the page.
-const callVerdict = (code, sym, from = "") => (calledIn(code, sym)
-  ? { ok: true, text: `a handler calls \`${esc(sym)}\`${from}` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` });
 // A page function: one the page defines, called bare. A platform name (`handle`, `save`) is Freedom scaffolding —
 // every handler ends in `next?.handle(request)` — so it names no port.
 function pageFunctionVerdict(code, sym) {
@@ -4987,19 +5023,20 @@ function pageFunctionVerdict(code, sym) {
   if (!definedIn(code, sym)) return { ok: false, text: `the page defines no function \`${esc(sym)}\`` };
   return calledIn(code, sym, true) ? { ok: true, text: `a handler calls \`${esc(sym)}\`` } : { ok: false, text: `no handler calls \`${esc(sym)}\`` };
 }
-// The page's declared `define()` dependencies, when the page entry carries them (`--built.pages[<key>].deps`, read
-// off the page's `body.js`). Null when absent: a module function's port cannot be checked without them.
-function pageDepsOf(page) {
-  const deps = entryObject(page)?.deps;
-  return Array.isArray(deps) ? new Set(deps.filter((d) => typeof d === "string")) : null;
-}
 // A dotted symbol that is not a request: a module function, reached when the page declares the module in its
-// `define()` deps and a handler calls `Module.fn(…)`. The module's own source is not read.
-function moduleFunctionVerdict(sym, module, ctx, code) {
-  const deps = pageDepsOf(ctx.page);
-  if (!deps) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
-  if (!deps.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
-  return callVerdict(code, sym, ` from module \`${esc(module)}\``);
+// `define()` deps (`--built.pages[<key>].deps`, get-page's `bundle.deps`, source or array) and a handler calls it —
+// as `Module.fn(…)`, or through the name the page's factory gives the module (`bundle.args`: `contractPage.fn(…)`
+// for `define(…, ["Module"], function(contractPage) …)`). The module's own source is not read.
+function moduleFunctionVerdict(sym, [, module, fn], ctx, code) {
+  if (!ctx.aliases) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
+  if (!ctx.aliases.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
+  if (calledIn(code, sym)) return { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` };
+  const alias = ctx.aliases.get(module);
+  if (!alias) {
+    return { ok: false, text: `no handler calls \`${esc(sym)}\`, and the page entry carries no \`args\` (its \`define()\` parameters) naming the module's local name — pass get-page's bundle whole` };
+  }
+  if (calledIn(code, `${alias}.${fn}`)) return { ok: true, text: `a handler calls \`${esc(alias)}.${esc(fn)}\` (\`${esc(alias)}\` is module \`${esc(module)}\` in the page's \`define()\`)` };
+  return { ok: false, text: `no handler calls \`${esc(sym)}\` or \`${esc(alias)}.${esc(fn)}\`` };
 }
 // One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
 // the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
@@ -5018,7 +5055,7 @@ function portedSymbolVerdict(sym, ctx, code) {
     return sym.startsWith(PLATFORM_REQUEST_PREFIX) ? { ok: true, text: `a handler answers platform request \`${esc(sym)}\`` }
       : { ok: false, text: `a handler answers \`${esc(sym)}\`, but nothing on the page sends it` };
   }
-  return moduleFunctionVerdict(sym, dotted[1], ctx, code);
+  return moduleFunctionVerdict(sym, dotted, ctx, code);
 }
 // The build agent's `Ported as (row N): <symbol>` lines for this row, checked against the built page: `{ verdict }`
 // when every named symbol holds (a claim naming one real port and one invented symbol is not a port), `{ failed }`
@@ -5583,6 +5620,11 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
     // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
     // read for the project-conventions rows; null when the bundle did not carry them.
     deps: bundleDeps(entry),
+    // Each `define()` dependency and the local name the page's factory gives it (`bundle.args`); null without deps.
+    aliases: moduleAliases(entry),
+    // `--built.modules`: the source of each custom module the pages import, keyed by schema name (get-page of the
+    // module, its `body.js`). Read only to follow a request a page handler hands to the module.
+    modules: moduleSourcesOf(root),
     customNames: bundleCustomNames(entry, handlersSrc),
     containers: pageContainersOf(page),
     // the frozen reconcile mode (from the task folder, or null). Only `classic-layout` turns on the EXTRA-field
@@ -5600,6 +5642,11 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
     FIELD_RE: VERIFY_FIELD_RE,
     parentTpl: entryObject(page)?.parentSchemaName || "",
   };
+}
+function moduleSourcesOf(root) {
+  const m = root?.modules;
+  if (!m || typeof m !== "object" || Array.isArray(m)) return new Map();
+  return new Map(Object.entries(m).map(([k, v]) => [k, typeof v === "string" ? v : v?.body]).filter(([, v]) => typeof v === "string"));
 }
 function verifyCtxFactory(root, reconcileMode = null) {
   const cache = new Map();

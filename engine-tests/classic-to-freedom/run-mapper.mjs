@@ -4,6 +4,7 @@ import { runConventionsChecks } from "./run-mapper-conventions.mjs";
 import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
+import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -10756,6 +10757,7 @@ runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistO
 runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta });
 runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
+runModuleDepChecks({ check, verifyCtx, resolveVk, FIX });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
