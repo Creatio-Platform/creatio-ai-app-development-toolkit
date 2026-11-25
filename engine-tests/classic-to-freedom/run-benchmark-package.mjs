@@ -3,10 +3,8 @@
 // the stand click-through is manual, so the order of the Post button is pinned here against stubbed Classic APIs:
 // the page's pending edits are saved first, and the flag, the History line and the contract amount follow only
 // after that save and the flag write succeed. Zero dependencies (node built-ins). Exits 1 on any failed check.
-import { readFileSync } from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MIXIN = path.join(HERE, "benchmark-workspace", "packages", "MbMigrationBench", "Schemas",
@@ -15,51 +13,52 @@ const MIXIN = path.join(HERE, "benchmark-workspace", "packages", "MbMigrationBen
 let failed = 0;
 function check(name, actual, expected) {
   const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  if (!ok) {
+  if (ok) {
+    console.log(`PASS ${name}`);
+  } else {
     failed++;
+    console.log(`FAIL ${name}: got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
   }
-  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : `: got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`}`);
 }
 
-// A one-row store for the document table and the Classic query classes the mixin creates.
-function loadMixin(db) {
-  let proto;
-  const updateQuery = (cfg) => {
-    const query = { filters: [], params: {} };
-    query.filters.add = (key, filter) => query.filters.push(filter);
-    query.setParameterValue = (column, value) => { query.params[column] = value; };
-    query.execute = (callback, scope) => {
-      const row = db[cfg.rootSchemaName];
-      const match = query.filters.every((f) => row[f.column] === f.value);
-      if (match) {
-        Object.assign(row, query.params);
-      }
-      callback.call(scope, { success: true, rowsAffected: match ? 1 : 0 });
-    };
-    return query;
+// The store the current case runs against: one document row, replaced by each case.
+let db = {};
+
+function updateQuery(cfg) {
+  const query = { filters: [], params: {} };
+  query.filters.add = (key, filter) => query.filters.push(filter);
+  query.setParameterValue = (column, value) => { query.params[column] = value; };
+  query.execute = (callback, scope) => {
+    const row = db[cfg.rootSchemaName];
+    const match = query.filters.every((f) => row[f.column] === f.value);
+    if (match) {
+      Object.assign(row, query.params);
+    }
+    callback.call(scope, { success: true, rowsAffected: match ? 1 : 0 });
   };
-  const sandbox = {
-    Ext: {
-      define: (name, cfg) => { proto = cfg; },
-      create: (className, cfg) => (className === "Terrasoft.UpdateQuery" ? updateQuery(cfg) : {})
-    },
-    Terrasoft: {
-      ComparisonType: { EQUAL: 3 },
-      AggregationType: { SUM: 1 },
-      DataValueType: { MONEY: 6, BOOLEAN: 12 },
-      createColumnFilterWithParameter: (type, column, value) => ({ column, value })
-    },
-    define: (name, deps, factory) => factory()
-  };
-  vm.runInNewContext(readFileSync(MIXIN, "utf8"), sandbox, { filename: MIXIN });
-  return proto;
+  return query;
 }
+
+// The Classic globals the mixin's AMD module uses, then the module itself, loaded as a plain import (it is a
+// CommonJS script to node: its top-level `define(...)` call resolves to the stub below).
+let mixin;
+globalThis.Ext = {
+  define: (name, cfg) => { mixin = cfg; },
+  create: (className, cfg) => (className === "Terrasoft.UpdateQuery" ? updateQuery(cfg) : {})
+};
+globalThis.Terrasoft = {
+  ComparisonType: { EQUAL: 3 },
+  AggregationType: { SUM: 1 },
+  DataValueType: { MONEY: 6, BOOLEAN: 12 },
+  createColumnFilterWithParameter: (type, column, value) => ({ column, value })
+};
+globalThis.define = (name, deps, factory) => factory();
+await import(pathToFileURL(MIXIN).href);
 
 // A delivery note page whose user changed the amount from 100 (stored) to 300 (on screen) and clicks Post.
 // A rejected save (validation, rights, server) never calls back in Classic, which is what `saveSucceeds` models.
 function post(saveSucceeds) {
-  const db = { MbDeliveryNote: { Id: "d1", MbIsPosted: false, MbAmount: 100 } };
-  const mixin = loadMixin(db);
+  db = { MbDeliveryNote: { Id: "d1", MbIsPosted: false, MbAmount: 100 } };
   const page = Object.assign(Object.create(mixin), {
     entitySchemaName: "MbDeliveryNote",
     values: { Id: "d1", MbIsPosted: false, MbAmount: 300, MbNumber: "D-0002", MbContract: { value: "c1" } },
