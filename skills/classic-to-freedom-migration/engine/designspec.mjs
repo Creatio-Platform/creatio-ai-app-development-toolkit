@@ -5308,6 +5308,10 @@ function codeQualityRows(opts) {
   }));
 }
 const QUALITY_LISTED = 5;
+// The Code quality rules a client module's code can break. A module not measured holds these rows only: the rules about
+// a page's handlers and resources (nested functions, helpers copied between pages, unused strings) read no module.
+const MODULE_QUALITY_RULES = new Set([QUALITY_RULES.catchLogOnly, QUALITY_RULES.numericComparisonType,
+  QUALITY_RULES.sequentialAwaits, QUALITY_RULES.guidLiteral, QUALITY_RULES.planCodeInComment]);
 // A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
 // `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
 // not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
@@ -5317,14 +5321,20 @@ export function resolveQualityVk(vk, ctx) {
   const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
-  const gap = moduleGapText(page);
-  if (gap) return ["⚠ verify", gap, "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
   const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
     + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
   const blocking = found.filter((f) => !f.advisory);
   const noted = found.filter((f) => f.advisory);
   const note = vk.note ? vk.note + " " : "";
+  // A module not measured holds the row, and what the measured code already shows is listed beside it.
+  const gap = MODULE_QUALITY_RULES.has(vk.rule) ? moduleGapText(page) : null;
+  if (gap) {
+    const parts = [gap, note.trim(),
+      blocking.length ? `${blocking.length} finding(s) in the code measured so far: ${listed(blocking)}` : "",
+      noted.length ? `${noted.length} noted, not blocking: ${listed(noted)}` : ""];
+    return ["⚠ verify", parts.filter(Boolean).join("; "), "unverified"];
+  }
   if (blocking.length) {
     return ["⚠ verify", `${blocking.length} finding(s): ${listed(blocking)} — fix the code, or record a decision (\`--decide D<N>\`) that accepts it${blocking.some((f) => f.limit != null) ? ", or raise the limit in `manifest.qualityThresholds`" : ""}`, "unverified"];
   }

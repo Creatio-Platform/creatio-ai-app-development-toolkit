@@ -337,6 +337,21 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => /⚠ verify/.test(pageCodeLine(brokenModule.markdown)) && pageCodeLine(brokenModule.markdown).includes("reads/modules/UsrBroken.js")
       && /⚠ verify/.test(rowLine(brokenModule.markdown, R.catchLogOnly)) && !/bundle's/.test(rowLine(brokenModule.markdown, R.catchLogOnly)),
     () => [pageCodeLine(brokenModule.markdown), rowLine(brokenModule.markdown, R.catchLogOnly)]);
+  // A module not filed holds only the rows its code can break, and keeps each row's own findings and note.
+  const unfiledWithCatch = renderVerify(result, opts, (() => { const b = withModules('["UsrMissing"]', {});
+    b.pages.main.handlers = `[${handler("usr.ApplyButtonClicked", "try { await request.$context.save(); } catch (e) { console.error(e); }")}]`; return b; })());
+  check("verify: an unfiled module holds the catch-log-only row and the page's own log-only catch is still listed",
+    () => /⚠ verify/.test(rowLine(unfiledWithCatch.markdown, R.catchLogOnly)) && rowLine(unfiledWithCatch.markdown, R.catchLogOnly).includes("UsrMissing")
+      && rowLine(unfiledWithCatch.markdown, R.catchLogOnly).includes("the catch block only logs the error"),
+    () => rowLine(unfiledWithCatch.markdown, R.catchLogOnly));
+  check("verify: an unfiled module leaves the rows no module can break on their own path (nested functions ✅, unused strings not ⚠)",
+    () => /✅ Done/.test(rowLine(unfiledWithCatch.markdown, R.nestedFunctions)) && !/⚠ verify/.test(rowLine(unfiledWithCatch.markdown, R.unusedResourceString)),
+    () => [rowLine(unfiledWithCatch.markdown, R.nestedFunctions), rowLine(unfiledWithCatch.markdown, R.unusedResourceString)]);
+  const noConventionsUnfiled = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] }, built(usesHeld));
+  check("verify: without projectConventions an unfiled import holds the GUID row, which keeps the 'check was skipped' note and the page's own record id",
+    () => /⚠ verify/.test(rowLine(noConventionsUnfiled.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventionsUnfiled.markdown, R.guidLiteral))
+      && rowLine(noConventionsUnfiled.markdown, R.guidLiteral).includes("AbConstants") && rowLine(noConventionsUnfiled.markdown, R.guidLiteral).includes(held),
+    () => rowLine(noConventionsUnfiled.markdown, R.guidLiteral));
   const unreadAndLong = renderVerify(result, opts, (() => { const b = withModules('["UsrMissing"]', {});
     b.pages.main.handlers = longHandler; return b; })());
   check("verify: an unread module does not hide the page's own Page code findings",
