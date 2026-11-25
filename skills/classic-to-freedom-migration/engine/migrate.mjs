@@ -1499,7 +1499,8 @@ export function attachDetailFeatureDecisions(changeSet) {
     const label = detailLabel(d);
     for (const q of f.quickFilters.filter((x) => x.persisted)) {
       changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
-        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. No guidance confirms that \`crt.QuickFilter\` keeps its state between visits. Decide: accept that the filter resets on every visit, or keep it with a custom profile read and write` });
+        recommended: "keep",
+        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. \`crt.QuickFilter\` does the same: the platform saves its value per user in the page's schema profile (\`get-component-info crt.QuickFilter\`), so the built filter keeps it with no code. Recommended: keep (platform default) — nothing to build. Only "reset on every visit" needs code, which clears the value the platform saved` });
     }
     if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
   }
@@ -2500,6 +2501,9 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
   const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index))
     && !switchedOff(text, "getSummaryVisible", spans);
   return {
+    // `editRecord` switched off: a click on a row opens nothing
+    rowsOpen: !switchedOff(text, "editRecord", spans),
+    sort: gridSortOf(text, spans),
     toolsMenu: toolsMenuDeviations(text, spans),
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
     multiSelect: multiSelectMode(text, spans),
@@ -2507,9 +2511,26 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
     summaries,
   };
 }
+// The order Classic loads the list in: the column whose `orderDirection` `addGridDataColumns` sets, else the
+// direction `getGridSortDirection` returns with no column. `locked` when `initDetailOptions` turns `IsSortable` off,
+// so the user cannot re-sort. Null when the detail keeps the default order.
+const ORDER_DIRECTION_SET = /orderDirection\s{0,5}=\s{0,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/;
+const ORDER_DIRECTION_RETURNED = /return\s{1,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/;
+const SORTED_COLUMN = /(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']/g;
+const SORT_LOCKED = /set\s{0,5}\(\s{0,5}["']IsSortable["']\s{0,5},\s{0,5}false\b/;
+function gridSortOf(text, spans) {
+  const cols = lastMemberCode(text, "addGridDataColumns", spans, { raw: true });
+  const set = cols?.code ? ORDER_DIRECTION_SET.exec(cols.code) : null;
+  const returned = set ? null : ORDER_DIRECTION_RETURNED.exec(lastMemberCode(text, "getGridSortDirection", spans)?.code || "");
+  const direction = (set || returned)?.[1];
+  if (!direction) return null;
+  const names = set ? [...new Set([...cols.code.matchAll(SORTED_COLUMN)].map((m) => m[1]))] : [];
+  const options = lastMemberCode(text, "initDetailOptions", spans, { raw: true });
+  return { column: names.length === 1 ? names[0] : null, direction: direction.toLowerCase(), locked: SORT_LOCKED.test(options?.code || "") };
+}
 // Every function of the feature scan, for the structural ReDoS golden.
 export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
-  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode];
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode, gridSortOf];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom

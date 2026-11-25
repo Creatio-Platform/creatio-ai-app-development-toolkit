@@ -139,7 +139,19 @@ const VENDOR_LAYER = `define("LayeredDetail",[],function(){return{entitySchemaNa
 const CUSTOMER_LAYER = `define("LayeredDetail",[],function(){return{methods:{getFilters:function(){var f=this.callParent(arguments);
     f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));return f;}}};});`;
 // Row actions taken away: the list must declare its own row toolbar.
-const NO_COPY_BODY = `define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
+// A read-only payments list: no add, no row actions, rows open nothing, newest payment first and the user cannot
+// re-sort.
+const PAYMENTS_BODY = `define("PaymentDetail",[],function(){return{entitySchemaName:"Payment",
+  methods:{getAddRecordButtonVisible:function(){return false;},
+    getEditRecordMenuItem:Terrasoft.emptyFn,getCopyRecordMenuItem:Terrasoft.emptyFn,getDeleteRecordMenuItem:Terrasoft.emptyFn,
+    editRecord:Terrasoft.emptyFn,
+    initDetailOptions:function(){this.callParent(arguments);this.set("IsSortable",false);},
+    getGridSortDirection:function(){return Terrasoft.OrderDirection.DESC;},
+    addGridDataColumns:function(esq){this.callParent(arguments);
+      const column=esq.columns.contains("PayDate")?esq.columns.get("PayDate"):esq.addColumn("PayDate");
+      column.orderPosition=0;column.orderDirection=Terrasoft.OrderDirection.DESC;}},
+  diff:[]};});`;
+const NO_COPY_BODY =`define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
 // Summaries present but switched off.
 const SUMMARY_OFF_BODY = `define("SumOffDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return false;}}};});`;
 const PLAIN_BODY = `define("PlainDetail",[],function(){return{entitySchemaName:"Note",methods:{}};});`;
@@ -249,9 +261,17 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => dq.length === 1 && dq[0].attribute === "OnDate" && dq[0].kind === "date" && dq[0].columns.join(",") === "EndDate,StartDate" && dq[0].persisted === false,
     () => dq);
   check("detail features: only the filter Classic kept in the profile raises `detail-filter-persistence`",
-    () => toggle.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence" && /IsActiveOnly/.test(n.item) && /resets on every visit/.test(n.reason))
+    () => toggle.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence" && /IsActiveOnly/.test(n.item))
       && !date.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence"),
     () => toggle.changeSet.needsDecision.filter((n) => n.kind === "detail-filter-persistence"));
+  const persistence = toggle.changeSet.needsDecision.find((n) => n.kind === "detail-filter-persistence");
+  check("detail features: the persistence question states that `crt.QuickFilter` keeps its value per user, and recommends keeping it (the platform default)",
+    () => persistence?.recommended === "keep"
+      && /`crt\.QuickFilter` does the same: the platform saves its value per user/.test(persistence.reason)
+      && /Recommended: keep \(platform default\) — nothing to build/.test(persistence.reason)
+      && /"reset on every visit" needs code/.test(persistence.reason) && !/No guidance confirms/.test(persistence.reason)
+      && features(toggle).some((l) => /kept in the user's profile, as `crt\.QuickFilter` keeps it by default/.test(l)),
+    () => persistence);
 
   // AC 3 — summaries are a decision, unless a user directive already asked for them.
   const sum = run("SumDetail", "Line", SUMMARY_BODY);
@@ -476,6 +496,46 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "D", values: { rowToolbarItems: [] } }]))[0] === "✅ Done"
       && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "OtherGrid", rowToolbarItems: [] }]))[0] !== "✅ Done",
     () => tbRow);
+  check("detail features: a list that only removes Copy keeps Open and Delete — a toolbar that still offers Copy fails, one without it passes",
+    () => tbRow.vk.lists?.[0]?.drop.join(",") === "crt.CopyRecordRequest" && tbRow.vk.lists[0].noToolbar === false
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.CopyRecordRequest" } }] }]))[0] === "❌ MISSING"
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.UpdateRecordRequest" } }] }]))[0] === "✅ Done",
+    () => tbRow);
+
+  // A detail's row settings — row actions, row links, sort — are plan rows and verify rows.
+  const payments = run("PaymentDetail", "Payment", PAYMENTS_BODY);
+  const payDetail = detailOf(payments, "PaymentDetail");
+  check("detail features: the scan reads a list whose rows open nothing and its Classic order (column, direction, re-sort locked)",
+    () => payDetail.features.rowsOpen === false && payDetail.features.sort?.column === "PayDate"
+      && payDetail.features.sort.direction === "desc" && payDetail.features.sort.locked === true
+      && detailOf(toggle, "LimitDetail").features.rowsOpen === true && detailOf(toggle, "LimitDetail").features.sort === null,
+    () => payDetail.features);
+  const payRows = payments.plan.split("\n").filter((l) => /^\| PaymentDetail \| (Row actions|Row links|Sort) \|/.test(l));
+  check("detail features: the plan carries Row actions, Row links and Sort rows that say what to set on the Freedom list",
+    () => payRows.some((l) => /Row actions/.test(l) && /Open, Copy, Delete not offered on a row/.test(l) && /`rowToolbarItems: \[\]` and `features\.rows\.toolbar: false`/.test(l))
+      && payRows.some((l) => /Row links/.test(l) && /`features\.cells\.disableLinks: true`/.test(l))
+      && payRows.some((l) => /\| Sort \|/.test(l) && /`PayDate` descending; the user cannot re-sort/.test(l) && /sortingConfig\.default/.test(l) && /columnName: "PayDate", direction: "desc"/.test(l)),
+    () => payRows);
+  const payChecks = checklistGroups(payments, {}).flatMap((g) => g.rows);
+  const byType = (t) => payChecks.find((r) => r.vk?.type === t);
+  const sortAttrs = (dir) => ({ DList: { modelConfig: { path: "DListDS", sortingConfig: { default: [{ columnName: "PayDate", direction: dir }] } } } });
+  const builtWith = (grid, attributes) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", viewConfig: { items: [grid] },
+    ...(attributes ? { viewModelConfig: { attributes } } : {}) } } }, "main");
+  // the grid a builder starts from: no row actions declared as empty, no row settings, no sort
+  const standard = { type: "crt.DataGrid", name: "DList", items: "$DList", rowToolbarItems: [] };
+  const kept = { ...standard, features: { rows: { toolbar: false }, cells: { disableLinks: true } } };
+  check("detail features: --verify fails a read-only list built from the standard grid — a row toolbar still shown, row links on, the default order",
+    () => resolveVk(byType("rowtoolbar").vk, builtWith(standard))[0] === "❌ MISSING"
+      && resolveVk(byType("rowlinks").vk, builtWith(standard))[0] === "❌ MISSING"
+      && resolveVk(byType("listsort").vk, builtWith(standard, { DList: { modelConfig: { path: "DListDS" } } }))[0] === "❌ MISSING"
+      && resolveVk(byType("listsort").vk, builtWith(standard, sortAttrs("asc")))[0] === "❌ MISSING",
+    () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
+  check("detail features: --verify passes the list built with no row toolbar, links off and Classic's order",
+    () => resolveVk(byType("rowtoolbar").vk, builtWith(kept))[0] === "✅ Done"
+      && resolveVk(byType("rowlinks").vk, builtWith(kept))[0] === "✅ Done"
+      && resolveVk(byType("listsort").vk, builtWith(kept, sortAttrs("desc")))[0] === "✅ Done"
+      && resolveVk(byType("listsort").vk, builtWith(kept))[0] === "⚠ verify",
+    () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
   const prefixVk = { type: "rowtoolbar", n: 1, names: ["Activity"] };
   check("detail features: --verify never takes a grid whose name merely starts with the detail's — the exact name wins, a longer name is not the list",
     () => resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityTypeGrid", rowToolbarItems: [] }, { type: "crt.DataGrid", name: "Activity" }]))[0] === "❌ MISSING"
