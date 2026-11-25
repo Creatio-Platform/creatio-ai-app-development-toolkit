@@ -76,7 +76,8 @@ the page. clio cannot search processes by page, so:
 ## Consent and re-pointing
 
 The plan lists every step under *Process steps to re-point*. The user approves them with ONE answer and may untick
-single steps; record each as `"consent": "approved"` or `"declined"` and re-run `--plan`.
+single steps; record each as `"consent": "approved"` or `"declined"` and re-run `--plan`. The consent is
+not part of the plan version, so the approval in `decisions.md` still matches the re-run plan.
 
 Re-pointing changes the user's process, so it is the orchestrator's job, never a builder's, and runs after the page
 is built and only for approved steps:

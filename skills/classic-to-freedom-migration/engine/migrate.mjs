@@ -2680,11 +2680,21 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // fields are hashed — who recorded it and the approval entry itself stay out, or approving would move the version it
 // approves. A plan with no record id and no directive hashes exactly as the manifest alone does.
 const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules"]);
+// A process step's `consent` is the user's answer to the plan, given in the same answer as the approval and recorded
+// after it, so it stays out like the approval entry: recording it must not move the version it answers.
+function withoutStepConsent(processPage) {
+  if (!processPage || typeof processPage !== "object" || !Array.isArray(processPage.steps)) return processPage;
+  return { ...processPage, steps: processPage.steps.map((st) => {
+    if (!st || typeof st !== "object") return st;
+    return Object.fromEntries(Object.entries(st).filter(([k]) => k !== "consent"));
+  }) };
+}
 // Code-unit order, as the key sort above: a hash input must not depend on the locale.
 const byCodeUnit = (a, b) => (a < b ? -1 : Number(a > b));
 function computePlanVersion(manifest, readBody, recordIds = [], directives = []) {
   const h = createHash("sha256");
-  const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k)));
+  const planned = Object.fromEntries(Object.entries(manifest).filter(([k]) => !PLAN_VERSION_EXCLUDED_KEYS.has(k))
+    .map(([k, v]) => [k, k === "processPage" ? withoutStepConsent(v) : v]));
   feedPlanVersion(h, planned, null, readBody, { nodes: 0 }, 0);
   if (recordIds.length) {
     h.update("\u0001R");

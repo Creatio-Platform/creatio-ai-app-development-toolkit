@@ -233,6 +233,13 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
     () => ["declined", "pending"].every((c) => /❌ MISSING.*without the user's consent/.test(unconsentedRow(c))), () => [unconsentedRow("declined"), unconsentedRow("pending")]);
   check("process page: an approved step with no built record names the refusal route — manual steps and a decision",
     () => /⚠ verify.*if the re-point was refused, hand over the manual steps/.test(rowOf(verify(built({ processSteps: [] })), "[process step]")));
+  // The step consent is recorded after the user approves the plan, in the same answer: it must not move the version.
+  const versionWith = (steps, handlers) => runMigration(manifest({ processPage: { ...manifest().processPage, steps, ...(handlers ? { handlers } : {}) } })).planVersion;
+  check("process page: recording a step's consent leaves the plan version the approval names; any other step field moves it",
+    () => versionWith([{ ...STEP, consent: "pending" }]) === versionWith([{ ...STEP, consent: "approved" }])
+      && versionWith([{ ...STEP, consent: "pending" }]) === versionWith([{ ...STEP, consent: "declined" }])
+      && versionWith([STEP]) !== versionWith([{ ...STEP, element: "CheckReturn" }])
+      && versionWith([STEP]) !== versionWith([STEP], { [CANCEL]: PROCESS_BEHAVIOUR.COMPLETE_SAVE }));
   const apiCaller = PAGE.replace('"parentName": "ProcessActionButtons"', '"parentName": "Header"')
     .replace('"bindTo": "onCancelProcessElementClick"', '"bindTo": "onUsrCancelClick"')
     .replace('methods: {},', 'methods: { onUsrCancelClick: function() { this.cancelProcessElement(this.get("Tag")); } },');
