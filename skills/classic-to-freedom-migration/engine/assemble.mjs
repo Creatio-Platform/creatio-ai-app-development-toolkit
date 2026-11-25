@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { READS_DIR, READS_INDEX_FILE } from "./reads.mjs";
-import { GUID_RE } from "./conventions.mjs";
+import { GUID_RE, bundleDeps, MODULE_SCHEMA_NAME } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
@@ -39,7 +39,7 @@ export const PROCESS_FILE = "process.json";
 // copied whole to `modules/<schema>.js`. Optional and not a read of the plan, because the modules are the build's
 // choice: `--verify` reads one only to follow a request a page handler hands to it (`built.modules`).
 export const MODULES_DIR = "modules";
-const MODULE_FILE = /^([A-Za-z_]\w*)\.js$/;
+const MODULE_FILE = new RegExp(`^(${MODULE_SCHEMA_NAME.source.slice(1, -1)})\\.js$`);
 // The provenance field's shape (defined once, in conventions.mjs): the drop-sweep here applies the same test the
 // payload guard will. migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export { GUID_RE };
@@ -366,8 +366,11 @@ function mergeSideFiles(dir, built, acc, problems) {
 function readModules(dir, problems) {
   const full = path.join(dir, MODULES_DIR);
   if (!fs.existsSync(full)) return null;
+  let files;
+  try { files = fs.readdirSync(full).sort(); }
+  catch (e) { problems.push({ file: MODULES_DIR, what: "the client module sources", why: `not readable as a folder (${e.message})` }); return null; }
   const out = {};
-  for (const f of fs.readdirSync(full).sort()) {
+  for (const f of files) {
     const m = MODULE_FILE.exec(f);
     if (!m || UNSAFE_KEYS.has(m[1])) continue;
     try { out[m[1]] = fs.readFileSync(path.join(full, f), "utf8"); }
@@ -438,7 +441,28 @@ export function assembleBuilt(dir, expect = null) {
   mergeSideFiles(dir, built, acc, problems);
   const claims = decisionClaims(dir, index.evidenceIds, problems);
   if (claims) built.decisionClaims = claims;
-  return { built, problems };
+  return { built, problems, notes: unreadModuleNotes(pages, built.modules) };
+}
+
+// THE MODULE BODIES NOBODY COPIED. A built page that imports a client module (a schema-named `define()` dependency)
+// whose `modules/<schema>.js` is not beside the run. A NOTE, not a problem: no row is unread because of it, and most
+// rows never need a module's source, so it neither fails the gate nor stops repair tasks. It says, once and by name,
+// which file to add before a row that follows a request into the module can close.
+function unreadModuleNotes(pages, modules) {
+  const notes = [];
+  for (const [pageKey, entry] of Object.entries(pages)) {
+    for (const module of (entry && bundleDeps(entry)) || []) {
+      if (MODULE_SCHEMA_NAME.test(module) && !modules?.[module]) notes.push({ pageKey, module });
+    }
+  }
+  return notes;
+}
+// The notes as lines: stderr and the top of the verify artifact both carry them.
+export function moduleNoteLines(notes) {
+  if (!notes?.length) return [];
+  const list = [...new Set(notes.map((n) => n.module))].map((m) => `\`${MODULES_DIR}/${m}.js\``).join(", ");
+  return [`> ⚠ **Client module sources not copied:** ${list}. A built page imports each (${notes.map((n) => `\`${n.pageKey}\` → \`${n.module}\``).join(", ")}),`
+    + " so a row that follows a request into it stays open. `get-page` each module and copy its `body.js` there whole.", ""];
 }
 
 // Writes the composed payload beside the run — never a temp dir, which cannot be re-checked once the session

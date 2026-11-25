@@ -633,9 +633,11 @@ what `describe-business-process` returns for each re-pointed step and the outcom
 `UsrX_FormPageModule`): `get-page` the module once its last builder closed and copy its `.clio-pages/<module>/body.js`
 whole to `<migration-folder>/modules/<module>.js`. `--verify --from` reads that folder as `built.modules`. It needs
 the module's source only to follow a request a page handler hands to the module (a Run-process card action whose
-button's handler calls `contractPage.startApproval(…)`, which sends `crt.RunBusinessProcessRequest`). Without the
-file, that row stays open and names the file to add. A `Ported as` record that names a module function needs no
-module file: the page's `deps` and `args` are enough.
+button's handler calls `contractPage.startApproval(…)`, which sends `crt.RunBusinessProcessRequest`): only the
+module functions the handler calls, and the module's own functions they call, count. Without the file, that row
+stays open and names the file to add, and `--verify --from` notes every imported module whose body is not there (a
+note: it fails nothing). A `Ported as` record that names a module function needs no module file: the page's `deps`
+and `args` are enough.
 
 **A folder of `done` task files is not a completion report — and neither is the machine table
 alone.** The task statuses are how the step-7 orchestrator schedules work and how a killed session

@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
-import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest } from "./conventions.mjs";
+import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest, moduleFunctions, MODULE_SCHEMA_NAME } from "./conventions.mjs";
 import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
@@ -4176,9 +4176,10 @@ function resolveRequestCardActionVk(vk, ctx) {
 }
 // A request fired one step removed: a built element fires a page request, and that request's handler sends the
 // platform request — itself, or through a module the page imports in its `define()` deps whose source the payload
-// carries (`--built.modules`). The module is read whole: the handler calling into it and the module sending the
-// request is the evidence; which of its functions sends it is not traced. `text` on a miss names a module the
-// handler calls whose source is not in the payload, so the reader knows what to add.
+// carries (`--built.modules`). In the module only the functions the handler calls count, and the module's own
+// functions they call in turn: a module that sends the request from some other function does not close the row.
+// `text` on a miss names a module the handler calls whose source is not in the payload, so the reader knows what to
+// add.
 function relayedRequest(request, ctx) {
   // One parse of the page's handlers, shared by every card-action row of the page.
   if (ctx._handlerEntries === undefined) ctx._handlerEntries = handlerEntriesByRequest(ctx.handlersSrc);
@@ -4190,20 +4191,44 @@ function relayedRequest(request, ctx) {
   const hit = hits.find((h) => h.ok);
   return hit ? { ok: true, text: hit.via + hit.text } : { ok: false, text: hits.find((h) => h.text)?.text || "" };
 }
-// What one handler entry does with `request`: sends it, or calls a module that sends it. A miss names a module the
-// handler calls whose source the payload does not carry.
+// What one handler entry does with `request`: sends it, or calls a module function that sends it. Only a
+// dependency a `modules/<schema>.js` file can exist for is followed (never `@creatio-devkit/common`), so a miss can
+// only name a file that can be added.
 function relayFromHandler(body, request, ctx) {
   if (typeSent(withoutComments(body), request)) return { ok: true, text: `sends \`${esc(request)}\`` };
   const code = codeOnly(body);
-  const called = [...(ctx.aliases || [])].map(([module, alias]) => ({ module, via: [alias, module].filter(Boolean).find((name) => calledMemberOf(code, name)) }))
-    .filter((m) => m.via);
-  const sender = called.find((m) => typeSent(ctx.modules.get(m.module) ?? "", request));
-  if (sender) return { ok: true, text: `calls module \`${esc(sender.module)}\` (\`${esc(sender.via)}.…\`), which sends \`${esc(request)}\`` };
+  const called = [...(ctx.aliases || [])].filter(([module]) => MODULE_SCHEMA_NAME.test(module)).map(([module, alias]) => {
+    const via = [alias, module].find((name) => name && calledMembers(code, name).length);
+    return { module, via, fns: via ? calledMembers(code, via) : [] };
+  }).filter((m) => m.via);
+  for (const m of called) {
+    const fn = ctx.modules.has(m.module) ? m.fns.find((f) => moduleFunctionSends(ctx, m.module, f, request)) : null;
+    if (fn) return { ok: true, text: `calls \`${esc(m.via)}.${esc(fn)}\` in module \`${esc(m.module)}\`, which sends \`${esc(request)}\`` };
+  }
   const unread = called.find((m) => !ctx.modules.has(m.module));
   return { ok: false, text: unread ? `a handler calls module \`${esc(unread.module)}\`, whose source the payload does not carry — add it as \`modules/${esc(unread.module)}.js\`` : "" };
 }
-// Whether `code` calls a member of `name` (`name.fn(…)`), `name` not itself a member of something else.
-const calledMemberOf = (code, name) => new RegExp(String.raw`${NOT_IN_WORD}${NOT_A_MEMBER}${reEsc(name)}\s*\.\s*${IDENT}\s*\(`).test(code);
+// The members of `name` that `code` calls (`name.fn(…)`), `name` not itself a member of something else.
+const calledMembers = (code, name) => [...code.matchAll(new RegExp(String.raw`${NOT_IN_WORD}${NOT_A_MEMBER}${reEsc(name)}\s*\.\s*(${IDENT})\s*\(`, "g"))].map((m) => m[1]);
+// Whether module function `fn` sends `request`, itself or through the module's own functions it calls. Each module's
+// functions are parsed once per payload; a module that does not parse, or a name it does not define, sends nothing.
+const MODULE_FUNCTIONS = new WeakMap();
+function moduleFunctionSends(ctx, module, fn, request) {
+  if (!MODULE_FUNCTIONS.has(ctx.modules)) MODULE_FUNCTIONS.set(ctx.modules, new Map());
+  const cache = MODULE_FUNCTIONS.get(ctx.modules);
+  if (!cache.has(module)) cache.set(module, moduleFunctions(ctx.modules.get(module)));
+  const fns = cache.get(module);
+  if (!fns) return false;
+  const seen = new Set([fn]);
+  for (const name of seen) {
+    for (const body of fns.get(name) || []) {
+      if (typeSent(body, request)) return true;
+      const code = codeOnly(body);
+      for (const other of fns.keys()) if (!seen.has(other) && calledIn(code, other)) seen.add(other);
+    }
+  }
+  return false;
+}
 // A custom `getActions` item is Done only when a built element identifies the action: its name, its caption (the
 // raw binding or the resolved text) or its `clicked.request` contains the action name, compared as lowercase letters
 // and digits (`CalculateSaasMetricsMenuItem`, caption "Calculate SaaS metrics", `usr.CalculateSaaSMetricsRequest`

@@ -77,7 +77,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, ensureRecordFiles, recordFilesWarning, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
-import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
+import { assembleBuilt, writeBuilt, problemLines, problemBanner, moduleNoteLines, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 import { processTemplateOf, processTemplateOfManifest, recordProcessTemplate, processPageInfo, processButtonMap } from "./process-page.mjs";
@@ -4804,6 +4804,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
   let repairNote = "";                        // set when `--verify --tasks` wrote a repair round into that folder
   let readProblems = [];                      // `--verify --from`: the reads that could not be opened
+  let readNotes = [];                         // …and the client module bodies nobody copied (a note, never a gate)
   let builtWritten = null;                    // …and where the composed payload was written
   let finalReport = null;                     // `--verify --tasks`: the migration result report
   let ledgerIncomplete = false;               // …and whether its verdict is NOT COMPLETE (exit 2 like the other gates)
@@ -5174,6 +5175,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (!res.built) fail(`cannot compose the payload from '${fromDir}': ${why}.`
         + ` Run \`${READS_FLAG} ${fromDir}\` first, then do the reads it names.`);
       readProblems = res.problems;
+      readNotes = res.notes || [];
       built = res.built;
       try { builtWritten = writeBuilt(fromDir, built); }
       catch (e) { fail(`cannot write ${BUILT_FILE} to '${fromDir}': ${e.message}`); }
@@ -5233,7 +5235,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2, portedAs }, built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
-    output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
+    output = [...problemBanner(readProblems), ...moduleNoteLines(readNotes), verifyRes.markdown].join("\n") + "\n";
     verifyIncomplete = verifyRes.missing > 0 || verifyRes.unverified > 0; // rows short on the page ⇒ the BUILD leg
     // Its own leg: a record filed under an id the run does not publish is a FILING fault, and telling a builder to
     // "build the missing pieces" over one sends it to repair a page that is not short.
@@ -5273,7 +5275,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         source: fromDir ? "--from <migration-folder>" : "--built <file>" });
       // The report REPLACES the table as the artifact, so the unread-file banner has to be carried onto it too —
       // prepending it to the table alone loses it on exactly the command an orchestrated run is told to use.
-      output = [...problemBanner(readProblems), finalReport.markdown].join("\n") + "\n";
+      output = [...problemBanner(readProblems), ...moduleNoteLines(readNotes), finalReport.markdown].join("\n") + "\n";
       ledgerIncomplete = !finalReport.complete;
     }
   }
@@ -5397,6 +5399,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // nobody could read it, and those are different jobs — a repair versus a re-read. The table cannot tell them
   // apart (an omitted key reads ⚠ like any other unconfirmed row), so this is where the difference is said.
   if (readProblems.length) process.stderr.write(problemLines(readProblems, fromDir).join("\n") + "\n");
+  if (readNotes.length) process.stderr.write("migrate.mjs: " + moduleNoteLines(readNotes)[0].replace(/^> /, "").replaceAll("**", "") + "\n");
   // the LEDGER leg of exit 2, stated apart from the verify leg: the built pages may all check out
   // while the task folder still holds open work. The dispatch and not-built lines above already name their own
   // rows; this line fires for what they do not cover (tasks still todo / in-progress / partial) and names the

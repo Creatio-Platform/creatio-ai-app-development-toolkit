@@ -82,7 +82,9 @@ value, read off the primary data source rather than retyped. `evidence.json` / `
 present, and `recorded.json` carries the on-stand keys the BUILD agent records rather than reads (a card widget
 the converter placed) — a key still `null` there is left unset, so its row stays unconfirmed. `modules/<schema>.js`
 files (each custom client module a built page imports, its get-page `body.js` copied whole) become `built.modules`,
-read only to follow a request a page handler hands to the module. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
+read only to follow a request a page handler hands to the module — through the module functions the handler calls
+and the module's own functions they call. A page importing a module whose file is missing is a NOTE on stderr and
+atop the artifact, not a read problem: it fails nothing. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
 `migration-result.md` under `--tasks`, where the report replaces the table. Either way the run replays offline
 with `--verify --built <that file>`.
 

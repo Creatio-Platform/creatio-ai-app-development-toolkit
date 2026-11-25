@@ -26,7 +26,7 @@
 //
 // Pure: no I/O. migrate.mjs resolves the facts once per run (`conventionFacts`) and gates `--plan` on their issues;
 // designspec.mjs renders and verifies; tasks.mjs copies the block into every task file.
-import { parseDefineModule, parseJsExpression, staticPropKey } from "./engine.mjs";
+import { parseDefineModule, parseJsExpression, staticPropKey, walkAstBounded } from "./engine.mjs";
 
 // The namespace every Creatio page defaulted to before a project said otherwise.
 export const DEFAULT_REQUEST_PREFIX = "usr";
@@ -331,18 +331,26 @@ export function bundleDeps(entry) {
 }
 const isStringLiteral = (n) => n?.type === "Literal" && typeof n.value === "string";
 // get-page's `bundle.args`: the page's `define()` factory parameters in deps order, as source (`(contractPage)`,
-// `(sdk, mbDocumentTotals)`) or an array. A slot that is not an identifier stays null, so the positions still line up
-// with the deps. null when the bundle did not carry them.
+// `(sdk, mbDocumentTotals)`) or an array. Source is PARSED as a parameter list, so a destructured or defaulted
+// parameter (`({ sdk, http }, xPage)`, `(sdk = { a: 1, b: 2 }, xPage)`) is still one slot. A slot that names no
+// plain identifier stays null, so the positions still line up with the deps. null when the bundle did not carry them
+// or the source is not a parameter list.
 const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+const paramName = (p) => {
+  if (p?.type === "Identifier") return p.name;
+  return p?.type === "AssignmentPattern" && p.left?.type === "Identifier" ? p.left.name : null;
+};
 export function bundleArgs(entry) {
   const v = entry?.args;
   if (v == null) return null;
-  const list = Array.isArray(v) ? v : String(v).trim().replace(/^\(/, "").replace(/\)$/, "").split(",");
-  return list.map((a) => {
-    const name = String(a).trim();
-    return IDENT_RE.test(name) ? name : null;
-  });
+  if (Array.isArray(v)) return v.map((a) => (IDENT_RE.test(String(a).trim()) ? String(a).trim() : null));
+  const text = String(v).trim();
+  const fn = parseJsExpression(`function ${text.startsWith("(") ? text : `(${text})`} {}`);
+  return fn?.type === "FunctionExpression" ? fn.params.map(paramName) : null;
 }
+// A dependency a `modules/<schema>.js` file can exist for: a schema name. An npm-scoped package
+// (`@creatio-devkit/common`) is the platform's, never a module the build wrote.
+export const MODULE_SCHEMA_NAME = /^[A-Za-z_]\w*$/;
 // The local name each `define()` dependency goes by on the page: `deps[i]` -> `args[i]`, null where the page gave it
 // none (or the bundle carried no `args`). null when the bundle carried no `deps`.
 export function moduleAliases(entry) {
@@ -350,6 +358,25 @@ export function moduleAliases(entry) {
   if (!deps) return null;
   const args = bundleArgs(entry) || [];
   return new Map(deps.map((d, i) => [d, args[i] ?? null]));
+}
+// THE FUNCTIONS A CLIENT MODULE DEFINES, by name: each `function name(…)`, `const name = function / arrow`, and
+// `name: function / arrow` property, with its source and its code (strings and comments blanked) for call matching.
+// A property whose value is another name (`startApproval: start`, or the shorthand `{ startApproval }`) is kept as a
+// call of that name, so an export reaches the function behind it. null when the source is not a `define()` module.
+const isFunctionNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+export function moduleFunctions(src) {
+  const text = String(src ?? "");
+  const mod = parseDefineModule(text);
+  if (mod.error) return null;
+  const fns = new Map();
+  const add = (name, body) => { if (name) fns.set(name, [...(fns.get(name) || []), body]); };
+  walkAstBounded(mod.factory, (n) => {
+    if (n.type === "FunctionDeclaration") add(n.id?.name, text.slice(n.start, n.end));
+    else if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isFunctionNode(n.init)) add(n.id.name, text.slice(n.init.start, n.init.end));
+    else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) add(staticPropKey(n), text.slice(n.value.start, n.value.end));
+    else if (n.type === "Property" && !n.computed && n.value?.type === "Identifier") add(staticPropKey(n), `${n.value.name}()`);
+  });
+  return fns;
 }
 // The request a parsed handler entry answers (`{ request: "<name>", handler: … }`), or null.
 function entryRequest(el) {
