@@ -152,6 +152,15 @@ clio-safety rules apply to every write.
      details, features or their edit pages is NOT done; recording the drop against its row is what
      carries it to the user, and leaving the cell blank is the same as claiming it.
 
+## A process page
+
+When the plan has a `### Process page` section, build each process button exactly as its table row says: a
+completing button declares no `clicked` request (the template's `SaveButton` stays for the Classic save), an exit
+that keeps the step open uses `crt.ClosePageRequest`, and no process button gets a custom request handler. Keep the
+template's `BackButton` / `CloseButton` visible — a hide rule never removes the page's only way out. Bind fields to
+the page parameters under their Classic names. Re-pointing the process element is not a builder's task: the
+orchestrator does it after consent (`./process-page.md`).
+
 ## Porting a step-5.1 behaviour card
 
 - **Port every condition the card states — a "stronger equivalent" is a DEVIATION you propose, never
