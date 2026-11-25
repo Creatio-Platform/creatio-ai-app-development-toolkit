@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { lintPageQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS }
+import { lintPageQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
@@ -201,11 +201,16 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     new Set([verifyRowKey("main", failingLabel)]));
   check("verify: a decision recorded on the Page code row still holds after the threshold changes (the label names no value)",
     () => !/⚠ verify/.test(pageCodeLine(decidedRaised.markdown)), () => pageCodeLine(decidedRaised.markdown));
-  const clean = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`));
+  // `modules: {}` is the read-back's answer for a run whose pages import no module of the run: the module rows close.
+  const clean = renderVerify(result, opts, Object.assign(built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`), { modules: {} }));
   check("verify: a clean page closes every Code quality row ✅ (the advisory one never reads ⚠)",
     () => ROW_RULES.every((rule) => rule === R.unusedResourceString
       ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
+  const unread = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`));
+  check("verify: without the module bodies the four module rows say they were NOT checked — never a ✅ nobody earned",
+    () => MODULE_BODY_RULES.every((rule) => /confirm on-stand/.test(rowLine(unread.markdown, rule)) && /reads\/modules/.test(rowLine(unread.markdown, rule))),
+    () => unread.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
   const usesHeld = `[${handler("usr.ApplyButtonClicked", 'if (s === "' + held + '") { return; }')}]`;
   const heldId = renderVerify(result, opts, built(usesHeld));
   check("verify: a record id the declared constants module holds blocks the GUID row",

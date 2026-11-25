@@ -194,6 +194,7 @@ const READ_LABEL = {
   businessRules: (r) => `\`${r.pageKey}\` business rules`,
   reachability: (r) => `\`${r.reachabilityKey}\``,
   dashboards: () => "the dashboard migration log",
+  modules: () => "the run's client modules",
 };
 
 // `false` on one page file is PART of a denial; both files have to say it (see `resolveDenials`). The other
@@ -208,6 +209,8 @@ const COMPOSE = {
   businessRules: (r, j, acc) => { acc.pageOf(r.pageKey).businessRules = j; },
   reachability: (r, j, acc) => { acc.reachability[r.reachabilityKey] = j; },
   dashboards: composeDashboards,
+  // A folder, not one JSON file: `composeOneRead` hands it over before any JSON is read.
+  modules: () => {},
 };
 
 // Which of a page's files answered `false`. A set, not a flag: the denial is complete only when both did.
@@ -235,6 +238,7 @@ function composeOneRead(dir, r, acc) {
       why: `names \`${key}\` as a key, which is no page or on-stand key a plan publishes — re-run \`--reads <dir>\`` });
     return;
   }
+  if (r.kind === "modules") { composeModules(dir, r, acc); return; }
   if (r.kind === "pageMeta") acc.metaFile.set(r.pageKey, r.file);
   else if (r.kind === "pageBundle") acc.bundleFile.set(r.pageKey, r.file);
   const j = readJson(dir, r.file, acc.problems, label(r));
@@ -244,6 +248,29 @@ function composeOneRead(dir, r, acc) {
   }
   if (j === false && PAGE_KINDS.has(r.kind)) { noteDenial(acc, r); return; }
   compose(r, j, acc);
+}
+
+// THE RUN'S CLIENT MODULES: every `<Module>.js` in the folder, as source text under `built.modules`. The bodies are
+// read, never run. A missing folder is "not read", and the module checks then say they did not run; an empty one is
+// "the pages import no module of the run".
+const MODULE_FILE = /^([A-Za-z_$][\w$]*)\.js$/;
+function composeModules(dir, r, acc) {
+  const full = resolvedReadPath(dir, r.file);
+  if (!full) { acc.problems.push({ file: r.file, what: "the run's client modules", why: `resolves outside \`${READS_DIR}/\` — re-run \`--reads <dir>\`` }); return; }
+  if (!fs.existsSync(full) || !fs.statSync(full).isDirectory()) {
+    acc.problems.push({ file: r.file, what: "the run's client modules", why: "not written — create the folder (empty when no page imports a module of the run) and copy each module's `body.js` into it" });
+    return;
+  }
+  const modules = Object.create(null);
+  for (const name of fs.readdirSync(full).sort((a, b) => a.localeCompare(b))) {
+    const m = MODULE_FILE.exec(name);
+    if (!m || UNSAFE_KEYS.has(m[1])) {
+      acc.problems.push({ file: path.posix.join(r.file, name), what: "a client module file", why: "is not named `<Module>.js` — name it after the module's schema" });
+      continue;
+    }
+    modules[m[1]] = fs.readFileSync(path.join(full, name), "utf8");
+  }
+  acc.modules = modules;
 }
 
 // A denied page survives the drop sweep, but only when BOTH its page files answered `false`. Two ways they do
@@ -306,7 +333,7 @@ function namePageShapeProblem(acc, k, noView, noUid) {
 function newAccumulator(problems) {
   const pages = Object.create(null);
   return {
-    problems, pages, reachability: Object.create(null), dashboards: null,
+    problems, pages, reachability: Object.create(null), dashboards: null, modules: null,
     absent: new Map(),   // page key -> the page files that answered `false`; a full pair is genuinely not built
     // Recorded as the files are read, NOT derived from `pages` afterwards: the drop sweep removes a page whose
     // other file never arrived, so by then a contradiction is indistinguishable from a half-read entry.
@@ -413,6 +440,7 @@ export function assembleBuilt(dir, expect = null) {
   resolveDenials(acc, pages);
   const built = { pages, reachability: acc.reachability };
   if (acc.dashboards) built.dashboards = acc.dashboards;
+  if (acc.modules) built.modules = acc.modules;
   // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
   // costs is already visible — every evidence row names the id nothing was filed under.
   mergeSideFiles(dir, built, acc, problems);

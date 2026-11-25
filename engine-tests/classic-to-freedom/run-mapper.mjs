@@ -15761,10 +15761,13 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
         businessRules: () => ({ count: 0, rules: [] }),
         reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
         dashboards: () => [],
+        // A folder of module bodies; an empty one answers "the pages import no module of the run".
+        modules: () => fs.mkdirSync(path.join(d, r.file), { recursive: true }),
       }[r.kind];
       check(`(seam): the read plan emits no kind the filler does not know — \`${r.kind}\` is one the composing half can answer`,
         () => typeof body === "function", () => ({ kind: r.kind, file: r.file }));
-      if (body) asWrite(d, r.file, body());
+      if (body && r.kind === "modules") body();
+      else if (body) asWrite(d, r.file, body());
     });
     const composed = assembleBuilt(d, readPlan(lpRun, checklistOpts(LP_MANIFEST)));
     check("`--reads` → fill every file it names → compose reports ZERO problems — the vocabulary the two modules share is pinned by a real index, not a hand-written one",
@@ -15872,6 +15875,37 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   }
 }
 {
+  // THE RUN'S CLIENT MODULES. The module checks read the bodies the read-back copies into `reads/modules/`; which
+  // modules exist is only known after the pages are read, so the plan names the folder, never a file per module.
+  const plan = readPlan(lpRun, checklistOpts(LP_MANIFEST));
+  const modRead = plan.reads.filter((r) => r.kind === "modules");
+  check("read plan: ONE `modules` read naming the folder and how to fill it (get-page, copy body.js as <Module>.js)",
+    () => modRead.length === 1 && modRead[0].file === "reads/modules" && /body\.js/.test(modRead[0].what) && /<Module>\.js/.test(modRead[0].what),
+    () => modRead);
+  const compose = (files) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_mod_"));
+    fs.mkdirSync(path.join(d, "reads"), { recursive: true });
+    fs.writeFileSync(path.join(d, "reads", "index.json"), JSON.stringify({ version: 1, reads: [{ kind: "modules", file: "reads/modules" }] }));
+    if (files) {
+      fs.mkdirSync(path.join(d, "reads", "modules"));
+      for (const [n, body] of Object.entries(files)) fs.writeFileSync(path.join(d, "reads", "modules", n), body);
+    }
+    try { return assembleBuilt(d); } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  };
+  const filled = compose({ "UsrApp_FormPageModule.js": "define(\"UsrApp_FormPageModule\", [], function() { return {}; });", "notes.txt": "x" });
+  check("compose: every `<Module>.js` in the folder lands in `built.modules` as source text; a file named otherwise is a problem",
+    () => Object.keys(filled.built.modules).join() === "UsrApp_FormPageModule" && /define/.test(filled.built.modules.UsrApp_FormPageModule)
+      && filled.problems.some((p) => /notes\.txt/.test(p.file)),
+    () => filled);
+  const empty = compose({});
+  check("compose: an EMPTY folder means the pages import no module of the run — no problem, and `built.modules` is an empty map",
+    () => empty.problems.length === 0 && Object.keys(empty.built.modules).length === 0, () => empty);
+  const missing = compose(null);
+  check("compose: a MISSING folder is a problem (not read), never read as 'no modules'",
+    () => missing.problems.some((p) => p.file === "reads/modules" && /not written/.test(p.why)) && !missing.built?.modules,
+    () => missing);
+}
+{
   // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what step 7.5
   // (`references/orchestrate-build.md`) and SKILL.md step 8 tell the orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
   // report replaces the table as the artifact, and the repair round reads the same open rows. An unread page
@@ -15897,7 +15931,8 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
         reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
         dashboards: () => [],
       }[r.kind];
-      if (body) asWrite(d, r.file, body());
+      if (r.kind === "modules") fs.mkdirSync(path.join(d, r.file), { recursive: true });
+      else if (body) asWrite(d, r.file, body());
     });
     const before = fs.existsSync(tasks) ? fs.readdirSync(tasks).length : 0;
     const run = runMigrate([mf, "--verify", "--from", d, "--tasks", tasks], { encoding: "utf8" });

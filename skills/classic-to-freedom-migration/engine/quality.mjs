@@ -63,6 +63,10 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
 
+// The rules that read the run's module bodies (`built.modules`); without them these rows say nothing was checked.
+export const MODULE_BODY_RULES = Object.freeze([QUALITY_RULES.duplicateAcrossModules, QUALITY_RULES.sharedValueInTwoModules,
+  QUALITY_RULES.unusedModuleExport, QUALITY_RULES.wrappedCallInlined]);
+
 // A named helper smaller than this many AST nodes (`v => v`) is not worth moving to a module, so copies of it are
 // not reported.
 const MIN_DUPLICATE_FUNCTION_NODES = 8;
