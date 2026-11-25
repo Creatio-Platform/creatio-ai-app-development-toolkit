@@ -747,10 +747,11 @@ const ARG_SINKS = [
 const CLASS_FACTORY_RX = /(?:^|\.)Ext\.create$|(?:^|\.)Terrasoft\.create$/;
 
 // record ONE call/new expression into the fact sinks
-function recordCall(node, sinks) {
+function recordCall(node, sinks, guarded = false) {
   const p = calleePath(node.callee);
   if (!p) return;
   sinks.calls.add(p);
+  (guarded ? sinks.addModeCalls : sinks.openCalls).add(p);
   const own = classifyCall(p);
   for (const k of own) sinks.kinds.add(k);
   const arg = firstStringArg(node);
@@ -761,7 +762,10 @@ function recordCall(node, sinks) {
   const save = own.includes("save");
   if (save || own.includes("data-write") || built.includes("data-write")) {
     const write = { call: factory ? arg : p, target: save ? null : dataWriteTarget(node, factory ? null : arg) };
-    sinks.dataWrites.set(`${write.call}\u0000${write.target}`, write);
+    const key = `${write.call}\u0000${write.target}`;
+    // add-mode only while EVERY occurrence of the write sits inside an add-mode branch: one unguarded copy makes it
+    // a write on every open, the label that keeps a check from opening the page at all
+    sinks.dataWrites.set(key, { ...write, addModeOnly: guarded && (sinks.dataWrites.get(key)?.addModeOnly ?? true) });
   }
   if (!arg) return;
   const hit = ARG_SINKS.find(([rx]) => rx.test(p));
@@ -797,15 +801,39 @@ export function walkAstBounded(root, visit) {
 
 // Walk one method body, collecting the facts above, on the bounded walker (iterative, so a deeply nested body cannot
 // blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH).
+// THE ADD-MODE BRANCH of a body: every call that runs only when the card is new — inside the consequent of
+// `if (this.isAddMode())` (or `isNewMode` / `isCopyMode`, alone or as one operand of `&&`), the `? :` consequent, or
+// the right side of `this.isAddMode() && …`. A negated or `||` test is not one: a call reads as add-mode only when
+// the code proves it, so a doubtful case is a write on every open, the safe label.
+const ADD_MODE_TEST_RX = /^this\.(?:isAddMode|isNewMode|isCopyMode)$/;
+function isAddModeTest(t) {
+  if (t?.type === "CallExpression") return ADD_MODE_TEST_RX.test(calleePath(t.callee) || "");
+  return t?.type === "LogicalExpression" && t.operator === "&&" && (isAddModeTest(t.left) || isAddModeTest(t.right));
+}
+function addModeBranch(node) {
+  if ((node.type === "IfStatement" || node.type === "ConditionalExpression") && isAddModeTest(node.test)) return node.consequent;
+  return node.type === "LogicalExpression" && node.operator === "&&" && isAddModeTest(node.left) ? node.right : null;
+}
+function addModeCallNodes(body) {
+  const guarded = new Set();
+  walkAstBounded(body, (node) => {
+    const branch = addModeBranch(node);
+    if (branch) walkAstBounded(branch, (n) => { if (n.type === "CallExpression" || n.type === "NewExpression") guarded.add(n); });
+  });
+  return guarded;
+}
+
 function walkMethodBody(fnNode) {
   const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
   const publishes = new Set(), subscribes = new Set(), dataWrites = new Map();
+  const addModeCalls = new Set(), openCalls = new Set();
+  const guarded = addModeCallNodes(fnNode.body);
   // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
   // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
   // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
   const { truncated } = walkAstBounded(fnNode.body, (node) => {
     if (node.type === "CallExpression" || node.type === "NewExpression")
-      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes, dataWrites });
+      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes, dataWrites, addModeCalls, openCalls }, guarded.has(node));
   });
   const sorted = (s) => [...s].sort(byLocale);
   // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
@@ -816,8 +844,11 @@ function walkMethodBody(fnNode) {
     readsAttrs: sorted(reads).filter((n) => !isRes(n)), readsResources: sorted(reads).filter(isRes),
     writesAttrs: sorted(writes),
     publishes: sorted(publishes), subscribes: sorted(subscribes),
-    // `{ call, target }` per distinct data-writing call (CALL_KIND_RX `data-write`), so a plan can name WHAT it writes
-    dataWrites: [...dataWrites.keys()].sort(byLocale).map((k) => dataWrites.get(k)), truncated };
+    // `{ call, target, addModeOnly }` per distinct data-writing call (CALL_KIND_RX `data-write`, and saves), so a
+    // plan can name WHAT it writes and whether only a new card runs it
+    dataWrites: [...dataWrites.keys()].sort(byLocale).map((k) => dataWrites.get(k)),
+    // the callee paths this body makes ONLY inside an add-mode branch (see `addModeCallNodes`)
+    addModeOnlyCalls: sorted(addModeCalls).filter((c) => !openCalls.has(c)), truncated };
 }
 
 // A pure passthrough override (`f: function(){ this.callParent(arguments); }`) declares NO behaviour of its own.
@@ -870,7 +901,7 @@ export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "
 function externalMethodFact(name, fn) {
   const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
   return { name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
-    writesAttrs: [], publishes: [], subscribes: [], dataWrites: [], truncated: false,
+    writesAttrs: [], publishes: [], subscribes: [], dataWrites: [], addModeOnlyCalls: [], truncated: false,
     externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false };
 }
 

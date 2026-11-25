@@ -72,6 +72,37 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   check("writes-on-open: mutually recursive helpers end the walk, and a save reached on open is a write",
     () => { const w = opened(cycle); return w.length === 1 && w[0].method === "usrB" && w[0].writes[0].call === "this.save"; },
     () => opened(cycle));
+  // The add-mode label is earned by the branch the write sits in, not by an isAddMode call somewhere on the path.
+  const stamp = 'usrStamp: function() { Terrasoft.SysSettings.postSysSettingsValue("UsrOpenCount", 1); }';
+  const afterIf = page("UsrAfterIfPage", [
+    'onEntityInitialized: function() { this.callParent(arguments); if (this.isAddMode()) { this.set("UsrA", 1); } this.usrStamp(); }', stamp,
+  ].join(", "));
+  const inElse = page("UsrElsePage", [
+    'onEntityInitialized: function() { if (this.isAddMode()) { this.set("UsrA", 1); } else { this.usrStamp(); } }', stamp,
+  ].join(", "));
+  const twoPaths = page("UsrTwoPathsPage", [
+    'init: function() { this.callParent(arguments); this.usrStamp(); }',
+    'onEntityInitialized: function() { if (this.isAddMode()) { this.usrStamp(); } }', stamp,
+  ].join(", "));
+  const guardedFirst = page("UsrGuardedFirstPage", [
+    'init: function() { if (this.isNewMode() && this.get("UsrA")) { this.usrStamp(); } }',
+    'onRender: function() { this.usrStamp(); }', stamp,
+  ].join(", "));
+  const inline = page("UsrInlinePage", [
+    'onEntityInitialized: function() { if (this.isAddMode()) { Terrasoft.SysSettings.postSysSettingsValue("UsrLastNumber", 2); } }',
+  ].join(", "));
+  check("writes-on-open: a write after an add-mode if-block, or in its else branch, writes on every open",
+    () => [afterIf, inElse].every((b) => { const w = opened(b); return w.length === 1 && w[0].addModeOnly === false; }),
+    () => [opened(afterIf), opened(inElse)]);
+  check("writes-on-open: one helper reached from init with no mode test and from onEntityInitialized under isAddMode writes on every open",
+    () => { const w = opened(twoPaths); return w.length === 1 && w[0].addModeOnly === false && w[0].path.join(">") === "init>usrStamp"; },
+    () => opened(twoPaths));
+  check("writes-on-open: a later path with no mode test replaces an earlier add-mode path (isNewMode && …), never the reverse",
+    () => { const w = opened(guardedFirst); return w.length === 1 && w[0].addModeOnly === false && w[0].hook === "onRender"; },
+    () => opened(guardedFirst));
+  check("writes-on-open: a write inside the add-mode branch of the hook itself is add-mode only",
+    () => { const w = opened(inline); return w.length === 1 && w[0].addModeOnly === true && w[0].method === "onEntityInitialized"; },
+    () => opened(inline));
 
   // AC-1, the plan names the page; a page that writes nothing gets no section at all.
   const manifest = (body) => ({ entity: "MbContract", seed: CLEAN_SEED, schemas: [{ pkg: "MbMigrationBench", body }],
@@ -87,6 +118,20 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   check("writes-on-open: a plan without such a page has no such section",
     () => !/Pages that write data when opened/.test(plain.plan) && dataWritingPages(plain).length === 0,
     () => dataWritingPages(plain));
+  // A sub-page is a page of the tree too: a mini page whose own open hook writes is named by its schema and key.
+  const miniBody = 'define("MbContractMiniPage",[],function(){return{entitySchemaName:"MbContract",diff:[{operation:"insert",name:"QF",'
+    + 'parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MbName"}}],methods:{onEntityInitialized:function(){'
+    + 'this.callParent(arguments);this.mbTake();},mbTake:function(){Terrasoft.SysSettings.postSysSettingsValue("MbMiniCounter",1);}}};});';
+  const withMini = runMigration({ ...manifest(onClick), addRecordMiniPage: { schema: "MbContractMiniPage" },
+    miniPageSchemas: { MbContractMiniPage: { schemas: [{ pkg: "MbMigrationBench", body: miniBody }], seed: CLEAN_SEED } } });
+  const miniPages = dataWritingPages(withMini);
+  check("writes-on-open: a mini page that writes on open is carried up from its fold and named in the plan by schema and key",
+    () => miniPages.length === 1 && miniPages[0].label === "MbContractMiniPage" && miniPages[0].pageKey.startsWith("mini")
+      && withMini.plan.split("\n").some((l) => /MbContractMiniPage/.test(l) && /MbMiniCounter/.test(l) && /every time it opens/.test(l)),
+    () => ({ miniPages, lines: withMini.plan.split("\n").filter((l) => /MbMiniCounter/.test(l)) }));
+  check("writes-on-open: the mini page's rule reaches its own task, not the root form page's",
+    () => dataWritingBlock({ pageKey: miniPages[0].pageKey, rows: [] }, miniPages).length > 0
+      && dataWritingBlock({ pageKey: "main", rows: [{ pageKey: "main" }] }, miniPages).length === 0);
 
   // AC-2, the builder's prompt: the task file of the page carries the edit-mode rule and the consent line it waits for.
   const set = buildTaskSet(run, checklistOpts(manifest(golden)));
@@ -102,6 +147,10 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
 
   // AC-3 / AC-4, the result report lists what the run changed, from worklog.md and the task notes.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-writes-on-open-"));
+  try { reportChecks({ check, run, plain, dir }); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+function reportChecks({ check, run, plain, dir }) {
   const tasksDir = path.join(dir, "build-tasks");
   fs.mkdirSync(tasksDir);
   fs.writeFileSync(path.join(dir, "worklog.md"), [
@@ -132,5 +181,13 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
   check("writes-on-open: fieldLines reads field lines and list items, never a fenced or quoted one",
     () => fieldLines("- Stand data changed: a\n  Stand data changed: b\n> Stand data changed: c\n~~~\nStand data changed: d\n~~~",
       /^[\s*-]*Stand data changed\s*:\s*(.+)$/i).join() === "a,b");
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(path.join(dir, "worklog.md"));
+  const unread = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [], planVersion: run.planVersion }, dir: tasksDir });
+  const unreadSection = unread.markdown.split("\n## ").find((s) => s.startsWith("Stand data")) || "";
+  check("writes-on-open: with no worklog.md the result says it could not be read instead of claiming nothing changed",
+    () => /could not be read/.test(unreadSection) && !/No change to stand data was recorded/.test(unreadSection)
+      && /no .worklog\.md. beside the task folder/.test(unreadSection),
+    () => unreadSection);
+  check("writes-on-open: the stand-data sentence states the edit-mode rule, not that checks obeyed it, with one page as 'it'",
+    () => /so it was to be opened only in edit mode/.test(unreadSection), () => unreadSection);
 }

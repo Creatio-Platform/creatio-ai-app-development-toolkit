@@ -203,7 +203,7 @@ export function fieldLines(text, re) {
 }
 // Nothing for a run with no data-writing page and no recorded change, so an ordinary report reads as before.
 // `worklog` is the text `readWorklogBrowserAnswer` already read, so the file is read once per report.
-function standDataSection(result, tasks, worklog, pageName) {
+function standDataSection(result, tasks, { text: worklog = "", unread = null }, pageName) {
   const changes = [...fieldLines(worklog, STAND_DATA).map((text) => ({ text, where: "`worklog.md`" })),
     ...tasks.flatMap((t) => fieldLines(t.notes, STAND_DATA).map((text) => ({ text, where: `[${cell(t.group || t.id)}](${enc(t.file)})` })))];
   const agreed = fieldLines(worklog, ADD_MODE_CHECK);
@@ -211,10 +211,12 @@ function standDataSection(result, tasks, worklog, pageName) {
   if (!changes.length && !pages.length) return [];
   const L = [`## Stand data this run changed (${changes.length})`, ""];
   if (changes.length) L.push(...changes.map((c) => `- ${cell(c.text)} — ${c.where}`));
+  else if (unread) L.push(`\`worklog.md\` could not be read (${cell(unread)}), so the changes recorded there are not listed; only the task notes were read.`);
   else L.push("No change to stand data was recorded by this run.");
   if (pages.length) {
-    L.push("", `The plan named ${plural(pages.length, "page")} that write${pages.length === 1 ? "s" : ""} data when opened, so its browser checks`
-      + " opened them in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".");
+    const one = pages.length === 1;
+    L.push("", `The plan named ${plural(pages.length, "page")} that write${one ? "s" : ""} data when opened, so ${one ? "it was" : "they were"}`
+      + " to be opened only in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".");
     L.push(agreed.length ? `Add-mode checks the user agreed to: ${agreed.map(cell).join("; ")}.`
       : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule.");
   }
@@ -931,7 +933,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
   const browser = browserSection(exercise, pageName, browserAnswer);
-  const standData = standDataSection(result, tasks, answerRead.text || "", pageName);
+  const standData = standDataSection(result, tasks, dir ? answerRead : {}, pageName);
   let sec = 3;
   const declined = declinedRows(tasks, decisions);
   const md = [

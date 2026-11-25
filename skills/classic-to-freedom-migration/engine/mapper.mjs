@@ -2348,36 +2348,42 @@ function buildCallerIndex(methods) {
 // hop away (`onEntityInitialized → mbAssignNumber`) is found where it writes.
 // ---------------------------------------------------------------------------
 const OPEN_HOOKS = ["init", "onEntityInitialized", "onRender"];
-// a method on the path asks which mode the card is in: the writes below it then belong to that mode, not to every open
-const ADD_MODE_CALL = /^this\.(?:isAddMode|isNewMode|isCopyMode)$/;
-const asksAddMode = (m) => m.facts.calls.some((c) => ADD_MODE_CALL.test(c));
 
 // One entry per method that writes and is reached from an open hook: `{ hook, path, method, writes, addModeOnly }`,
-// `path` the call chain from the hook to the method. The FIRST path to a method wins (breadth-first, hooks in
-// OPEN_HOOKS order) and a method is listed once, so the plan names each write once.
+// `path` the call chain from the hook to the method. A write is add-mode only when the code proves it: the write, or a
+// call on its path, sits inside an add-mode branch (`addModeOnlyCalls` / `addModeOnly` of the facts). A method is
+// listed once, and a path that reaches it OUTSIDE add mode wins over one inside it: "every open" is the label that
+// keeps a check from opening the page, so it is never lost to the path the walk happened to take first.
 export function writesOnOpen(methods) {
   const byName = new Map((methods || []).filter((m) => m?.facts).map((m) => [m.name, m]));
-  const out = [];
-  const seen = new Set();
+  const found = new Map();
+  const visited = new Set();
   for (const hook of OPEN_HOOKS) {
-    const start = byName.get(hook);
-    if (!start) continue;
+    if (!byName.has(hook)) continue;
     const queue = [{ pathTo: [hook], addMode: false }];
     for (let i = 0; i < queue.length; i++) {
       const { pathTo, addMode } = queue[i];
       const name = pathTo.at(-1);
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const m = byName.get(name);
-      const addModeOnly = addMode || asksAddMode(m);
-      if (m.facts.dataWrites?.length) out.push({ hook, path: pathTo, method: name, writes: m.facts.dataWrites, addModeOnly });
-      for (const c of m.facts.calls) {
+      if (visited.has(`${name}|false`) || visited.has(`${name}|${addMode}`)) continue;
+      visited.add(`${name}|${addMode}`);
+      const f = byName.get(name).facts;
+      keepWrites(found, { hook, path: pathTo, method: name, addMode, writes: f.dataWrites || [] });
+      const guarded = new Set(f.addModeOnlyCalls || []);
+      for (const c of f.calls) {
         const next = internalCallTarget(c);
-        if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addModeOnly });
+        if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addMode || guarded.has(c) });
       }
     }
   }
-  return out;
+  return [...found.values()];
+}
+// Keep one entry per method: the first one found, replaced only by a path that makes it write on every open.
+function keepWrites(found, { hook, path, method, addMode, writes }) {
+  if (!writes.length) return;
+  const ws = writes.map((w) => ({ call: w.call, target: w.target, addModeOnly: addMode || w.addModeOnly === true }));
+  const entry = { hook, path, method, writes: ws, addModeOnly: ws.every((w) => w.addModeOnly) };
+  const prev = found.get(method);
+  if (!prev || (prev.addModeOnly && !entry.addModeOnly)) found.set(method, entry);
 }
 
 // Walk callers upward until something ANSWERS what starts the chain: a caller
