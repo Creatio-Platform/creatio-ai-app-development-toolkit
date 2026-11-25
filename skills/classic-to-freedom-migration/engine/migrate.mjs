@@ -1326,7 +1326,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
   c.treeCyclic = !!res.treeCyclic;
   c.stubScope = stubScope("child page", key, res.changeSet, res.changeSet?.standardMethodsFiltered);
-  c.writesOnOpen = res.changeSet?.writesOnOpen || [];   // the plan names a page that writes data when opened (ENG-107721)
+  c.writesOnOpen = res.changeSet?.writesOnOpen;   // the plan names a page that writes data when opened (ENG-107721)
   // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
   // above as `c.stubScope` — so carrying the whole array would list every child page twice.
   c.childStubScopes = (res.stubIndex || []).slice(1);
@@ -1365,7 +1365,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     // A typed page is a FIRST-CLASS scope of the surface (step 5.1: "every record page including typed variants"): it
     // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
     t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
-    t.writesOnOpen = res.changeSet?.writesOnOpen || [];
+    t.writesOnOpen = res.changeSet?.writesOnOpen;
     t.childStubScopes = (res.stubIndex || []).slice(1); // drop the nested run's own main-page scope (captured above)
     // …and its own page-scoped checklist rows. The expected template is whatever the manifest declared for THIS
     // typed page (there is no per-type template rule to derive one from); with none declared the page emits no
@@ -1401,7 +1401,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
     miniPage.stubScope = stubScope("mini page", mkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
-    miniPage.writesOnOpen = res.changeSet?.writesOnOpen || [];
+    miniPage.writesOnOpen = res.changeSet?.writesOnOpen;
     // The mini page's own rows. Its template is not a choice — a quick-add shell IS the mini-page template — so it
     // comes from the same shared mapping the child rule uses, and its layout stops being a single boolean row.
     publishPage(miniPage, `mini:${miniPage.schema}`, mkey, `mini::${mkey}`,

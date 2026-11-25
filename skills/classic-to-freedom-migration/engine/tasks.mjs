@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteText } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -1242,7 +1242,7 @@ export function dataWritingBlock(task, pages) {
   if (!own.length) return [];
   return [
     "- **⚠ This task's page writes data when it opens — keep every browser check from consuming it:**",
-    ...own.flatMap((p) => p.writes.map((w) => `  - **${esc(p.label)}** (\`${esc(p.pageKey)}\`) — ${dataWriteText(w)}`)),
+    ...dataWriteBullets(own, "  "),
     "  - Open it only in EDIT mode on an existing record: `page-smoke` with `record-id` (read one record's Id first),"
       + " a browser surface on the record's own URL. Never omit `record-id`: `page-smoke` without it opens add mode.",
     "  - An add-mode check (or, for a page that writes on every open, any check) only when the prompt quotes an"
@@ -5150,13 +5150,20 @@ export function worklogBrowser(worklogText) {
 // it. The one place the engine reads it, so the start gate and the result report cannot disagree on where it is.
 // `line` is the valid `Browser:` line or null; `unread` says why worklog.md could not be read, or is null when it was.
 // The two differ for the result report: "no answer recorded" and "the answer could not be read" are different findings.
-export function readWorklogBrowserAnswer(tasksDir) {
+// The text of the `worklog.md` that belongs to the task folder `tasksDir` — the one place its location is decided —
+// with `unread` saying why it could not be read (`text` is then "").
+export function readWorklogText(tasksDir) {
   const file = path.join(path.dirname(path.resolve(tasksDir)), "worklog.md");
-  try { return { line: worklogBrowser(fs.readFileSync(file, "utf8")), unread: null }; }
+  try { return { text: fs.readFileSync(file, "utf8"), unread: null }; }
   catch (e) {
     const why = e?.code === "ENOENT" ? `no \`worklog.md\` beside the task folder (${file})` : `\`${file}\` could not be read (${e?.code || e?.message})`;
-    return { line: null, unread: why };
+    return { text: "", unread: why };
   }
+}
+// `text` rides along so a reader of another worklog line (the result report's stand-data section) reads the file once.
+export function readWorklogBrowserAnswer(tasksDir) {
+  const { text, unread } = readWorklogText(tasksDir);
+  return { line: unread ? null : worklogBrowser(text), unread, text };
 }
 // The recorded `Browser:` line alone, null for no file or no valid line: the start gate holds a page task on either.
 export const readWorklogBrowser = (tasksDir) => readWorklogBrowserAnswer(tasksDir).line;

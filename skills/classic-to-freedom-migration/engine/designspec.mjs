@@ -3325,11 +3325,15 @@ export function subPageNodes(result, seen = new Set(), out = []) {
 // THE PAGES THAT WRITE DATA WHEN THEY OPEN (ENG-107721), over the whole page tree: the root form page (`main`) and
 // every sub-page node, each with the writes `writesOnOpen` in mapper.mjs found from its open hooks. One walk, so the
 // plan, the task files and the result report name the same pages. `{ pageKey, label, writes }`, empty for none.
+const dataWritingMemo = new WeakMap();   // one walk per result: every task file of a run asks for the same list
 export function dataWritingPages(result) {
+  if (result && dataWritingMemo.has(result)) return dataWritingMemo.get(result);
   const root = { pageKey: "main", label: `${result?.entity || "?"} form page`, writes: result?.changeSet?.writesOnOpen || [] };
   const subs = subPageNodes(result || {}).map((n) => ({ pageKey: n.pageKey, label: n.schema || n.entity || n.pageKey,
     writes: n.writesOnOpen || [] }));
-  return [root, ...subs].filter((p) => p.writes.length);
+  const pages = [root, ...subs].filter((p) => p.writes.length);
+  if (result && typeof result === "object") dataWritingMemo.set(result, pages);
+  return pages;
 }
 // One write as a plan reads it: when it runs, the call chain from the open hook, and what it writes.
 export function dataWriteText(w) {
@@ -3337,6 +3341,9 @@ export function dataWriteText(w) {
   const when = w.addModeOnly ? "in add mode (a new record)" : "every time it opens, in edit mode too";
   return `${when}: \`${esc(w.path.join(" → "))}\` writes ${what}`;
 }
+// One bullet per write of each page: the plan and the task files list them the same way.
+export const dataWriteBullets = (pages, indent = "") =>
+  pages.flatMap((p) => p.writes.map((w) => `${indent}- **${esc(p.label)}** (\`${esc(p.pageKey)}\`) — ${dataWriteText(w)}`));
 // The plan section. Nothing for a run without such a page, so an ordinary plan reads exactly as before.
 function dataWritingPlanLines(pages) {
   if (!pages.length) return [];
@@ -3346,7 +3353,7 @@ function dataWritingPlanLines(pages) {
       + " An add-mode check needs the user's consent for that page, the values below recorded before it, and what"
       + " changed written as a `Stand data changed:` line in `worklog.md`; the migration result lists it."
       + " A page that writes every time it opens is not opened at all without that consent.", "",
-    ...pages.flatMap((p) => p.writes.map((w) => `- **${esc(p.label)}** (\`${esc(p.pageKey)}\`) — ${dataWriteText(w)}`)), ""];
+    ...dataWriteBullets(pages), ""];
 }
 // Dedupe on the FINAL `pageKey` (D1), not on `pageDedupeId`. The two agree only because `assignPageKeys` has
 // already guaranteed one key per physical page; keying the splice on the KEY is what makes that guarantee load-

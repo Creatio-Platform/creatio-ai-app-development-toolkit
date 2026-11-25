@@ -2348,11 +2348,9 @@ function buildCallerIndex(methods) {
 // hop away (`onEntityInitialized → mbAssignNumber`) is found where it writes.
 // ---------------------------------------------------------------------------
 const OPEN_HOOKS = ["init", "onEntityInitialized", "onRender"];
-// the hook's body asks which mode the card is in: its writes then belong to that mode, not to every open
+// a method on the path asks which mode the card is in: the writes below it then belong to that mode, not to every open
 const ADD_MODE_CALL = /^this\.(?:isAddMode|isNewMode|isCopyMode)$/;
-const SAVE_CALL = /(?:^|\.)save(?:Entity)?$/;
-const methodWrites = (f) => [...(f?.dataWrites || []),
-  ...(f?.calls || []).filter((c) => SAVE_CALL.test(c)).map((call) => ({ call, target: null }))];
+const asksAddMode = (m) => m.facts.calls.some((c) => ADD_MODE_CALL.test(c));
 
 // One entry per method that writes and is reached from an open hook: `{ hook, path, method, writes, addModeOnly }`,
 // `path` the call chain from the hook to the method. The FIRST path to a method wins (breadth-first, hooks in
@@ -2364,19 +2362,18 @@ export function writesOnOpen(methods) {
   for (const hook of OPEN_HOOKS) {
     const start = byName.get(hook);
     if (!start) continue;
-    const addModeOnly = start.facts.calls.some((c) => ADD_MODE_CALL.test(c));
-    const queue = [[hook]];
-    while (queue.length) {
-      const pathTo = queue.shift();
+    const queue = [{ pathTo: [hook], addMode: false }];
+    for (let i = 0; i < queue.length; i++) {
+      const { pathTo, addMode } = queue[i];
       const name = pathTo.at(-1);
       if (seen.has(name)) continue;
       seen.add(name);
       const m = byName.get(name);
-      const writes = methodWrites(m.facts);
-      if (writes.length) out.push({ hook, path: pathTo, method: name, writes, addModeOnly });
+      const addModeOnly = addMode || asksAddMode(m);
+      if (m.facts.dataWrites?.length) out.push({ hook, path: pathTo, method: name, writes: m.facts.dataWrites, addModeOnly });
       for (const c of m.facts.calls) {
         const next = internalCallTarget(c);
-        if (next && byName.has(next) && !seen.has(next)) queue.push([...pathTo, next]);
+        if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addModeOnly });
       }
     }
   }

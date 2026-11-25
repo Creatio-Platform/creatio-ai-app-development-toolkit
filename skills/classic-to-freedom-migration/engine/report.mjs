@@ -201,13 +201,9 @@ export function fieldLines(text, re) {
   }
   return out;
 }
-const readWorklog = (dir) => {
-  try { return fs.readFileSync(path.join(path.dirname(path.resolve(dir)), "worklog.md"), "utf8"); }
-  catch { return ""; }
-};
 // Nothing for a run with no data-writing page and no recorded change, so an ordinary report reads as before.
-function standDataSection(result, tasks, dir, pageName) {
-  const worklog = dir ? readWorklog(dir) : "";
+// `worklog` is the text `readWorklogBrowserAnswer` already read, so the file is read once per report.
+function standDataSection(result, tasks, worklog, pageName) {
   const changes = [...fieldLines(worklog, STAND_DATA).map((text) => ({ text, where: "`worklog.md`" })),
     ...tasks.flatMap((t) => fieldLines(t.notes, STAND_DATA).map((text) => ({ text, where: `[${cell(t.group || t.id)}](${enc(t.file)})` })))];
   const agreed = fieldLines(worklog, ADD_MODE_CHECK);
@@ -935,7 +931,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
   const browser = browserSection(exercise, pageName, browserAnswer);
-  const standData = standDataSection(result, tasks, dir, pageName);
+  const standData = standDataSection(result, tasks, answerRead.text || "", pageName);
   let sec = 3;
   const declined = declinedRows(tasks, decisions);
   const md = [
