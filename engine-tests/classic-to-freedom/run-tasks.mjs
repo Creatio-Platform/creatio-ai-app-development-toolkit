@@ -6746,8 +6746,8 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
       () => ({ blockedByBrowser: answered.blockedByBrowser, started: answered.started?.id, running: readTimingsFile(da).running }));
     // A folder whose page work began before it had a `Browser:` line: the gate has nothing left to hold.
     const inFlight = readTaskDir(da);
-    const otherPage = inFlight.find((t) => writesPage(t.writesTo) && t.id !== page.id && t.status === "todo");
-    check("browser gate: once a page task is in progress or built, a missing `Browser:` line holds no other page task — a folder mid-build keeps building",
+    const otherPage = inFlight.find((t) => writesPage(t.writesTo) && t.writesTo !== page.writesTo && t.status === "todo");
+    check("browser gate: once a page task is in progress or built, a missing `Browser:` line holds no task of ANOTHER page either — the lift is folder-wide, so a folder mid-build keeps building",
       () => pageWorkBegun(inFlight) && !browserAnswerOwed(inFlight) && !!otherPage
         && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } })?.cause !== HOLD_BROWSER,
       () => ({ begun: pageWorkBegun(inFlight), other: otherPage?.id, blocker: otherPage && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } }) }));
