@@ -31,16 +31,12 @@ behaviour. A handler that skips `next` silently skips every handler after it.
 - **Never in the page factory body** (between `function(...) {` and `return {`): a Designer save deletes it.
 - **What the run's pages share lives in one module.** A record id, a status, a helper or a wrapper that two
   pages need goes into one shared module (or the project's constants and helper modules, the task file's
-  `## Project conventions`) and is imported, never declared again in a second module.
-- Before writing a function, look for one that does it in the run's modules and in the project's helper
-  modules. One function, called from every place that needs it; a call a module function already wraps is
-  made through that function.
+  `## Project conventions`) and is imported, never declared again. Look there before writing a function; a call a
+  module function already wraps is made through it.
 - **Export only what a page or another module calls.** An export nobody imports is removed.
 - The module keeps no page context in module-level variables: the handler passes `request.$context` (and
   `request.scopes` when the function fires requests) on each call.
-- `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules hold and what the
-  `Code quality` rows of `--verify` will hold you to (a module declared twice, an unused export, a page with
-  no module of its own).
+- `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules already hold.
 
 ## 4. Custom requests only for what the page fires
 

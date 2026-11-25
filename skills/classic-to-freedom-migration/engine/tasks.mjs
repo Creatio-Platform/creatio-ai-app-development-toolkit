@@ -1092,8 +1092,9 @@ function taskCardBlock(task, set = {}) {
       + " finding none is part of done.",
     "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
       + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
-      + " you write. Either way, extend the handler the map lists for a request instead of adding a second one, and"
-      + " move a part two handlers share into one helper.",
+      + " you write. Either way, extend the handler the map lists for the SAME feature instead of adding a second one;"
+      + " a different feature gets its own handler on the same request (each one calls `next`). Move a part two handlers"
+      + " share into one module function.",
   ];
   L.push(...behaviourLines(task.rows || []), ...decisionLines(set));
   return L;

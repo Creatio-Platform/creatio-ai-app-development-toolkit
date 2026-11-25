@@ -198,12 +198,12 @@ export function codeMapRoot(raw) {
 // The module bodies in a folder: `<Module>.js` files, or `<Module>/body.js` as get-page writes them under
 // `.clio-pages`. A body with a `SCHEMA_HANDLERS` section is a page, not a module, and is left out.
 export function readModuleDir(dir) {
-  const out = {};
+  const out = Object.create(null);
   for (const name of fs.readdirSync(dir).sort((x, y) => x.localeCompare(y))) {
     const full = path.join(dir, name);
     const file = fs.statSync(full).isDirectory() ? path.join(full, "body.js") : full;
     const m = /^([A-Za-z_$][\w$]*?)(?:\.js)?$/.exec(name);
-    if (!m || !fs.existsSync(file) || !file.endsWith(".js")) continue;
+    if (!m || ["__proto__", "constructor", "prototype"].includes(m[1]) || !fs.existsSync(file) || !file.endsWith(".js")) continue;
     const src = fs.readFileSync(file, "utf8");
     if (!src.includes("/**SCHEMA_HANDLERS*/")) out[m[1]] = src;
   }

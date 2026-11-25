@@ -194,7 +194,6 @@ const READ_LABEL = {
   businessRules: (r) => `\`${r.pageKey}\` business rules`,
   reachability: (r) => `\`${r.reachabilityKey}\``,
   dashboards: () => "the dashboard migration log",
-  modules: () => "the run's client modules",
 };
 
 // `false` on one page file is PART of a denial; both files have to say it (see `resolveDenials`). The other
@@ -209,8 +208,6 @@ const COMPOSE = {
   businessRules: (r, j, acc) => { acc.pageOf(r.pageKey).businessRules = j; },
   reachability: (r, j, acc) => { acc.reachability[r.reachabilityKey] = j; },
   dashboards: composeDashboards,
-  // A folder, not one JSON file: `composeOneRead` hands it over before any JSON is read.
-  modules: () => {},
 };
 
 // Which of a page's files answered `false`. A set, not a flag: the denial is complete only when both did.
@@ -224,6 +221,8 @@ function noteDenial(acc, r) {
 }
 
 function composeOneRead(dir, r, acc) {
+  // A folder of module bodies, not one JSON file: composed on its own, before any JSON is read.
+  if (r.kind === "modules") { composeModules(dir, r, acc); return; }
   const compose = COMPOSE[r.kind], label = READ_LABEL[r.kind];
   // An unknown kind is drift between the read plan and this half. Report it; never return silently.
   if (!compose || !label) {
@@ -238,7 +237,6 @@ function composeOneRead(dir, r, acc) {
       why: `names \`${key}\` as a key, which is no page or on-stand key a plan publishes — re-run \`--reads <dir>\`` });
     return;
   }
-  if (r.kind === "modules") { composeModules(dir, r, acc); return; }
   if (r.kind === "pageMeta") acc.metaFile.set(r.pageKey, r.file);
   else if (r.kind === "pageBundle") acc.bundleFile.set(r.pageKey, r.file);
   const j = readJson(dir, r.file, acc.problems, label(r));
