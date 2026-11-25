@@ -12566,5 +12566,36 @@ console.log("\n===== project conventions: every writer of a task file carries th
     () => directivesOf(records).map((d) => d.id).join() === "D1");
 }
 
+// `Ported as (row N): <symbol>` lines reach `--verify` keyed by the plan row they were cut from.
+{
+  const { portedRowSymbols, portedSymbols, PORTED_MARKER } = TASKS_MODULE;
+  check("ported as (parse): code spans are the symbols; without them the first word is, so prose after it is never a claim",
+    () => portedSymbols("`usr.SetCanEditRequest`, `Helpers.format` — sends it on save").join() === "usr.SetCanEditRequest,Helpers.format"
+      && portedSymbols("applyRights — called from the init handler").join() === "applyRights"
+      && portedSymbols("`applyRights()`; and `Helpers.format();`").join() === "applyRights,Helpers.format"
+      && portedSymbols("`a( )`, `b.`, `c(x)`, `d();:`").join() === "a,b,c(x),d"
+      && portedSymbols("`not a symbol`").join() === "not a symbol",
+    () => [portedSymbols("`usr.SetCanEditRequest`, `Helpers.format` — sends it on save"), portedSymbols("applyRights — called from the init handler")]);
+  check("ported as (marker): the line shape matches `Check on stand` — a list bullet and bold are allowed", () =>
+    PORTED_MARKER.test("- **Ported as (row 2):** `usr.X`") && !PORTED_MARKER.test("Ported as row 2: usr.X"));
+  const set = { tasks: [
+    { pageKey: "main", rows: [{ label: "Handler — `setCanEditFieldsRaw`" }, { label: "Handler — `onSaved`", pageKey: "child:Visa" }],
+      notes: "## Notes\nPorted as (row 1): `usr.SetCanEditFieldsRequest`\n- Ported as (row 2): onVisaSaved — after save\nPorted as (row 1): `applyRights`\nPorted as (row 9): `ghost`" },
+    { unread: true, pageKey: "main", rows: [{ label: "x" }], notes: "Ported as (row 1): `nope`" },
+  ] };
+  const m = portedRowSymbols(set);
+  check("ported as (rows): each record lands on its row's verify key (the row's own page, else the task's), a later line for a row replaces an earlier one, and a row number outside the task or an unread task adds nothing",
+    () => m.size === 2 && m.get(verifyRowKey("main", "Handler — `setCanEditFieldsRaw`")).join() === "applyRights"
+      && m.get(verifyRowKey("child:Visa", "Handler — `onSaved`")).join() === "onVisaSaved",
+    () => [...m]);
+  const label = "Handler — `setCanEditFieldsRaw`";
+  const repaired = portedRowSymbols({ tasks: [
+    { pageKey: "main", repairRound: "1", rows: [{ label }], notes: "Ported as (row 1): `usr.RealRequest`" },
+    { pageKey: "main", rows: [{ label }], notes: "Ported as (row 1): `usr.WrongRequest`" },
+  ] });
+  check("ported as (rows): a repair round's record replaces the plan task's, whichever task the folder lists first",
+    () => repaired.get(verifyRowKey("main", label)).join() === "usr.RealRequest", () => [...repaired]);
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -17,7 +17,9 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes, carriesComponent } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, ROW_ACTION_SCAN_FNS, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, posCell, boundAttributeOf, nativeTabFieldNames, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS, processActionNote, printActionNote, engineStatusReason, DORMANT_REASON } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { parseDecisionRecords } from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
+import { portedRowSymbols } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, ensureRecordFiles, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -7170,6 +7172,69 @@ check("category precedence: save + lookup is lookup",
 check("category precedence: a body whose ONLY kind is save still categorises as save",
   comboCat("saveOnly") === "save", () => comboCat("saveOnly"));
 
+/* ---- DORMANT methods: nothing in Classic starts them, so the plan does not port them ---- */
+{
+  const DORMANT_BODY = `define("DormPage", [], function() { return {
+  entitySchemaName: "Deal",
+  attributes: { Stage: { dependencies: [{ columns: ["Stage"], methodName: "onStageChanged" }] } },
+  methods: {
+    onStageChanged: function() { this.set("Amount", 1); this.recalcTotals(); },
+    recalcTotals: function() { this.set("Total", 2); },
+    setCanEditFieldsRaw: function() { this.set("CanEdit", true); },
+    onCallbackDone: function() { this.set("Done", true); },
+    loadThing: function() { var esq = Ext.create("Terrasoft.EntitySchemaQuery", { rootSchemaName: "Deal" }); esq.getEntityCollection(function() {}, { callback: this.onCallbackDone, scope: this }); },
+    onBound: function() { this.set("B", 1); },
+    onNamedInString: function() { this.set("C", 1); }
+  },
+  messages: { "Ping": { mode: "ptp", direction: "subscribe" } },
+  diff: [{ operation: "insert", name: "Btn", parentName: "Header", propertyName: "items", values: { itemType: 5, click: { bindTo: "onBound" } } }],
+  rules: { X: { tip: "onNamedInString" } }
+}; });`;
+  const BASE_BODY = `define("DormPageBase", [], function() { return { entitySchemaName: "Deal", methods: {
+    setCanEditFieldsRaw: function() { return true; } }, diff: [] }; });`;
+  // A COMPLETE base chain (150+ methods): with an absent or possibly partial one a base override would look like
+  // the page's own method, so no row is dormant.
+  const FULL_SEED = [{ pkg: "BaseModulePageV2", body: `define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{${Array.from({ length: 150 }, (_, i) => `base${i}:function(){return ${i};}`).join(",")}}};});` }];
+  const dorm = runMigration({ entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
+  const stub = (m) => dorm.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
+  const rows = checklistGroups(dorm, {}).flatMap((g) => g.rows);
+  const row = (m) => rows.find((r) => r.deliverableId === `method:${m}`);
+  const plan = renderPlan(dorm, {});
+  const planLine = (m) => plan.split("\n").find((l) => l.startsWith(`| ${m} |`)) || "";
+  check("dormant: a method with no trigger, no caller and no reference anywhere in the Classic source is closed `not-applicable — dormant` in the checklist and shown `Won't do — dormant` in the plan",
+    () => stub("setCanEditFieldsRaw").dormant === true && row("setCanEditFieldsRaw").na === DORMANT_REASON
+      && /\*\*Won't do\*\* — dormant: no trigger, no caller and no reference in this page's Classic schemas/.test(planLine("setCanEditFieldsRaw")),
+    () => [stub("setCanEditFieldsRaw"), row("setCanEditFieldsRaw"), planLine("setCanEditFieldsRaw")]);
+  check("dormant (guard): a method passed as a callback (`callback: this.onCallbackDone`), one bound by a diff element and one named in a string are normal rows — the call index alone sees only `this.X(…)` calls",
+    () => ["onCallbackDone", "onBound", "onNamedInString"].every((m) => !stub(m)?.dormant && !row(m)?.na),
+    () => ["onCallbackDone", "onBound", "onNamedInString"].map((m) => [m, stub(m)?.dormant, row(m)?.na, stub(m)?.triggers]));
+  check("dormant (guard): a method with a declared trigger and a helper it calls are normal rows",
+    () => !stub("onStageChanged").dormant && !stub("recalcTotals").dormant && !row("recalcTotals").na,
+    () => [stub("onStageChanged"), stub("recalcTotals")]);
+  const over = runMigration({ entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "B", body: BASE_BODY }, { pkg: "P", body: DORMANT_BODY }] }, { baseDir: FIX });
+  check("dormant (guard): a method that overrides a lower layer's method is a normal row — the base may call it",
+    () => !over.changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw")?.dormant,
+    () => over.changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw"));
+  const doubt = (manifest) => runMigration(manifest, { baseDir: FIX }).changeSet.handlerStubs.find((h) => h.sourceMethod === "setCanEditFieldsRaw");
+  const MIXIN_BODY = DORMANT_BODY.replace('entitySchemaName: "Deal",', 'entitySchemaName: "Deal", mixins: { UsrRightsMixin: "Terrasoft.UsrRightsMixin" },');
+  check("dormant (guard): no base chain, a possibly partial one (under 150 methods) and a page mixing in another schema each keep the method a normal row",
+    () => [doubt({ entity: "Deal", schemas: [{ pkg: "P", body: DORMANT_BODY }] }),
+      doubt({ entity: "Deal", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }] }),
+      doubt({ entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "P", body: MIXIN_BODY }] })].every((s) => s && !s.dormant),
+    () => [doubt({ entity: "Deal", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }] })]);
+  const decided = { entity: "Deal", seed: FULL_SEED, schemas: [{ pkg: "P", body: DORMANT_BODY }], deliverableStatus: { "main#method:setCanEditFieldsRaw": { status: "build" } } };
+  const decidedRun = runMigration(decided, { baseDir: FIX });
+  const decidedRow = checklistGroups(decidedRun, checklistOpts(decided)).flatMap((g) => g.rows).find((r) => r.deliverableId === "method:setCanEditFieldsRaw");
+  check("dormant: a `deliverableStatus` `build` entry turns a dormant row into a normal deliverable row, and the entry is valid (no status issue)",
+    () => decidedRow && !decidedRow.na && decidedRow.status?.kind === "build" && !(decidedRun.statusIssues || []).length
+      && !/dormant/.test(decidedRun.plan.split("\n").find((l) => l.startsWith("| setCanEditFieldsRaw |")) || ""),
+    () => ({ row: decidedRow, issues: decidedRun.statusIssues }));
+  const hard = engineStatusReason({ fieldType: "Hashed text (not migrated)" }, {});
+  check("dormant: a hard engine conclusion (a hashed column) stays non-overridable — only the soft dormant reason yields to a `build` entry",
+    () => typeof hard === "string" && /hashed or encrypted/.test(hard) && engineStatusReason({ dormant: true }, {}) == null,
+    () => hard);
+}
+
 /* ---- the category is EVIDENCE ONLY, and the Body-does cell says what it actually read ---- */
 // A category derived from the METHOD'S NAME picks a Freedom target nothing in the body supports and reads exactly
 // like a derived one. These pin the evidence-only rule and each state the Body-does cell can take.
@@ -9324,6 +9389,44 @@ const PG_MANIFEST = {
   signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
+// `Ported as` end to end through `--verify`: the task records -> `portedRowSymbols` -> `renderVerify`'s `portedAs`
+// -> the handler row's `vk`. One task carries a main-page handler row and a child-page handler row whose own
+// `pageKey` differs from the task's, so the lookup key is the row's page, not the task's.
+{
+  const PA_MANIFEST = {
+    entity: "M", seed: PG_SEED,
+    schemas: [{ pkg: "P", body: `define("MPage",[],function(){return{entitySchemaName:"M",details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}}},methods:{setCanEditFieldsRaw:function(){return 1;}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}]};});` }],
+    detailSchemas: { R1D: { entity: "C1", columns: ["Number"], editPage: "C1Page" } },
+    childPageSchemas: { C1Page: { entity: "C1", seed: PG_SEED, schemas: [{ pkg: "P", body: `define("C1Page",[],function(){return{entitySchemaName:"C1",methods:{onVisaSaved:function(){return 2;}},diff:[{operation:"insert",name:"C1F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"C1F"}}]};});` }] } },
+    planMeta: PG_MANIFEST.planMeta, signals: PG_MANIFEST.signals,
+  };
+  const paRun = runMigration(PA_MANIFEST, { baseDir: FIX });
+  const handlerRows = checklistGroups(paRun, checklistOpts(PA_MANIFEST)).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })))
+    .filter((r) => r.vk?.type === "handler");
+  const mainRow = handlerRows.find((r) => r.vk.method === "setCanEditFieldsRaw");
+  const childRow = handlerRows.find((r) => r.vk.method === "onVisaSaved");
+  const portedAs = portedRowSymbols({ tasks: [{ pageKey: "main",
+    rows: [{ label: mainRow?.label }, { label: childRow?.label, pageKey: childRow?.pageKey }],
+    notes: "## Notes\nPorted as (row 1): `usr.XRequest`\nPorted as (row 2): `applyVisa`" }] });
+  const built = { pages: {
+    main: { viewConfig: { items: [{ name: "MainF", type: "crt.Input" }] }, handlers: `[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => {
+        await request.$context.executeRequest({ type: "usr.XRequest", $context: request.$context }); return next?.handle(request); } }]` },
+    "child:C1": { viewConfig: { items: [{ name: "C1F", type: "crt.Input" }] }, handlers: `[{ request: "crt.SaveRecordRequest", handler: async (request, next) => {
+        async function applyVisa(r) { return r; }
+        const res = await next?.handle(request); await applyVisa(request); return res; } }]` },
+  } };
+  const lineOf = (md, method) => md.split("\n").find((l) => l.includes(`Handler — \`${method}\``)) || "";
+  const withRecords = renderVerify(paRun, { ...checklistOpts(PA_MANIFEST), portedAs }, built).markdown;
+  const withoutRecords = renderVerify(paRun, checklistOpts(PA_MANIFEST), built).markdown;
+  check("Ported as (--verify end to end): the records reach their handler rows through `portedRowSymbols` and `renderVerify`'s `portedAs` — the main-page row reads ✅ ported as `usr.XRequest`, the child-page row (its own pageKey `child:C1`, not the task's `main`) reads ✅ ported as `applyVisa` — and the same run without the records closes neither",
+    () => mainRow?.pageKey === "main" && childRow?.pageKey === "child:C1"
+      && /✅ Done \| ported as ˋusr\.XRequestˋ/.test(lineOf(withRecords, "setCanEditFieldsRaw"))
+      && /✅ Done \| ported as ˋapplyVisaˋ/.test(lineOf(withRecords, "onVisaSaved"))
+      && !/✅ Done/.test(lineOf(withoutRecords, "setCanEditFieldsRaw")) && !/✅ Done/.test(lineOf(withoutRecords, "onVisaSaved")),
+    () => ({ rows: handlerRows.map((r) => [r.pageKey, r.label]), keys: [...portedAs.keys()],
+      with: [lineOf(withRecords, "setCanEditFieldsRaw"), lineOf(withRecords, "onVisaSaved")],
+      without: [lineOf(withoutRecords, "setCanEditFieldsRaw"), lineOf(withoutRecords, "onVisaSaved")] }));
+}
 const pgOpts = checklistOpts(PG_MANIFEST);
 // Two related lists on `main` open the SAME physical child page: one add-on, one page, so there is no conflict to
 // report, while each list keeps its own wiring row and the stand is read once.
@@ -16020,6 +16123,69 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   () => ["PDS_Job", "PDS_Owner"].map((c) => resolveVk({ type: "listcolumns", n: 1, columns: [{ name: "Job", code: "PDS_Job" }] },
     recCtxOf({ viewConfig: { items: [{ name: "JobField", type: "crt.ComboBox", control: "$PDS_Job" },
       { name: LIST_GRID, type: "crt.DataGrid", columns: [{ id: c, code: c }] }] } })).slice(0, 2)));
+
+// A business-rule attribute the USER accepted as built another way (`built-elsewhere` on their own decision) is
+// not reported missing; the same status on an orchestrator's decision closes nothing and is a plan-level issue.
+{
+  const DECISIONS_MD = [
+    "## D4 — Keep the support-unit filter in code",
+    "- Kind: answer", "- Decided by: user", "- Quote: \"leave that filter in the handler, it is fine\"", "- Asked: Rebuild the ParentSupportUnit filter as a business rule?",
+    "## D5 — Calendar rule as an entity rule",
+    "- Decided by: orchestrator",
+    "## D6 — Legacy note", "- Decision: nothing",
+  ].join("\n");
+  const records = parseDecisionRecords(DECISIONS_MD);
+  const decisions = new Map(records.map((r) => [r.id, r.title]));
+  const su = JSON.parse(verifyManifest);
+  const withStatus = (status) => ({ ...su, deliverableStatus: status });
+  const run = (m) => runMigration(m, { baseDir: DIR, decisions, decisionRecords: records });
+  // Page rules and entity rules are two rows (`business-rules`, `entity-rules`): the row is the one that names the attribute.
+  const ruleRowOf = (res, m, attr) => checklistGroups(res, checklistOpts(m)).flatMap((g) => g.rows)
+    .find((r) => r.vk?.type === "rule" && r.vk.names.includes(attr));
+  const userM = withStatus({ "main#business-rule:ParentSupportUnit": { status: "built-elsewhere", decision: "D4" },
+    "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D4" } });
+  const userRun = run(userM);
+  const entityRow = ruleRowOf(userRun, userM, "ParentSupportUnit");
+  const pageRow = ruleRowOf(userRun, userM, "Calendar");
+  const decidedOn = (row, attr) => row?.vk.decided?.[attr]?.decision === "D4" && row.vk.decided[attr].quote === "leave that filter in the handler, it is fine";
+  check("rules (built-elsewhere): a `built-elsewhere` entry on the user's own decision closes that rule attribute — the row's vk carries it with the quote, on the entity-rules row and on the page-rules row alike, in the plan run and in a later mode that re-derives the groups from the manifest alone",
+    () => !(userRun.statusIssues || []).length && entityRow !== pageRow
+      && decidedOn(entityRow, "ParentSupportUnit") && decidedOn(pageRow, "Calendar"),
+    () => ({ issues: userRun.statusIssues, entity: entityRow?.vk, page: pageRow?.vk }));
+  const names = pageRow.vk.names;
+  const governs = (attr) => ({ name: `BusinessRule_${attr}`, condition: {}, actions: [{ type: "make-required", items: [`${attr}Field`] }] });
+  const built = (rules) => verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: { count: rules.length, rules } } } }, "main");
+  const others = names.filter((n) => n !== "Calendar");
+  const allBuilt = resolveRuleVk(pageRow.vk, built(others.map(governs)));
+  const oneShort = resolveRuleVk(pageRow.vk, built(others.slice(1).map(governs)));
+  check("rules (built-elsewhere): the decided attribute is not counted missing — the other rules built read ✅ and quote the decision; a shortfall names only the attributes still owed",
+    () => others.length > 0 && allBuilt[2] === "ok" && /built another way on the user's decision: Calendar \(D4: “leave that filter in the handler, it is fine”\)/.test(allBuilt[1])
+      && oneShort[2] === "unverified" && new RegExp(`missing: ${others[0]}`).test(oneShort[1]) && !/missing:[^;]*Calendar/.test(oneShort[1]),
+    () => [names, allBuilt, oneShort]);
+  const onlyPsu = { type: "rule", n: 1, names: ["ParentSupportUnit"], decided: entityRow.vk.decided };
+  const onlyDecided = resolveRuleVk(onlyPsu, built([]));
+  check("rules (built-elsewhere): a row whose every attribute was built another way on the user's decision is ✅ on the decisions alone; a page reported NOT BUILT is still ❌",
+    () => onlyDecided[2] === "ok"
+      && resolveRuleVk(onlyPsu, verifyCtx({ pages: { main: false } }, "main"))[2] === "missing",
+    () => onlyDecided);
+  const orchM = withStatus({ "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D5" } });
+  const orchRun = run(orchM);
+  const plainM = withStatus({ "main#business-rule:Calendar": { status: "built-elsewhere", decision: "D6" } });
+  const plainRun = run(plainM);
+  check("rules (built-elsewhere): the same status on an orchestrator's decision, or on an entry with no provenance, closes nothing — the attribute stays expected and the plan reports a `deliverableStatus` issue",
+    () => [[orchRun, orchM], [plainRun, plainM]].every(([r, m]) => !ruleRowOf(r, m, "Calendar").vk.decided
+        && (r.statusIssues || []).some((x) => x.key === "main#business-rule:Calendar" && x.kind === "decision" && /not the user's own decision/.test(x.problem))
+        && planGaps(r).some((g) => /deliverableStatus INVALID/.test(g))),
+    () => [orchRun.statusIssues, plainRun.statusIssues]);
+  const badAttr = run(withStatus({ "main#business-rule:Nope": { status: "built-elsewhere", decision: "D4" } }));
+  const badStatus = run(withStatus({ "main#business-rule:Calendar": { status: "wont-do", decision: "D4" } }));
+  const misplaced = run(withStatus({ "main#business-rules": { status: "built-elsewhere", decision: "D4" } }));
+  check("rules (built-elsewhere): an attribute the page's rules do not name, another status on a rule attribute, and `built-elsewhere` on a whole deliverable are each a named issue",
+    () => badAttr.statusIssues?.[0]?.kind === "unknown-id" && badAttr.statusIssues[0].valid.includes("main#business-rule:Calendar")
+      && badStatus.statusIssues?.[0]?.kind === "status" && misplaced.statusIssues?.[0]?.kind === "status"
+      && /business-rule attribute/.test(misplaced.statusIssues[0].problem),
+    () => [badAttr.statusIssues, badStatus.statusIssues, misplaced.statusIssues]);
+}
 
 // T7 — the same two legs end to end through `migrate.mjs --verify`, on the gate-clean SupportUnit manifest. Its
 // expected names are read from the plan it produces, and every built element is named so that it CANNOT match by
