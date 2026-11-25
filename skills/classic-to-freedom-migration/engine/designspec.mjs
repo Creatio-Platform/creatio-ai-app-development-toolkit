@@ -4452,7 +4452,7 @@ const sameUId = (a, b) => typeof a === "string" && typeof b === "string" && a.to
 // Whether an add-on entry opens the built child page: by UId when both sides carry one, by name otherwise.
 const opensChild = (p, child) => (child.uid && p.pageSchemaUId ? sameUId(p.pageSchemaUId, child.uid) : p.pageSchemaName === child.name);
 // The add-on as read, or a ⚠/❌ verdict when the read cannot answer. Own fn for Sonar CC 15.
-function relatedPageRead(vk, v) {
+function relatedPageRead(vk, v, ctx) {
   const how = vk.query ? ` — run ${vk.query} and copy the response verbatim` : "";
   if (v === undefined || v === null) return { verdict: ["⚠ verify", `the RelatedPage add-on for \`${esc(vk.entity)}\` was not read${how}`, "unverified", "verifier"] };
   if (v === false) return { verdict: ["❌ MISSING", `no RelatedPage add-on for \`${esc(vk.entity)}\` (built.reachability.${vk.evidence} = false) — the related list opens nothing built here`, "missing"] };
@@ -4466,8 +4466,9 @@ function relatedPageRead(vk, v) {
   if (vk.package && !readPkg) {
     return { verdict: ["⚠ verify", `the add-on read carries no \`packageName\`, so it cannot confirm the add-on is in \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
   }
-  if (vk.package && readPkg !== vk.package) {
-    return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
+  const want = packageNameOf(vk.package, ctx?.createdPackage);
+  if (vk.package && readPkg !== want) {
+    return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(want)}\`${how}`, "unverified", "verifier"] };
   }
   return { pages: generalRelatedPages(v.pages) };
 }
@@ -4481,7 +4482,7 @@ function wiredChildSchema(vk, root) {
   return { verdict: ["⚠ verify", `the built child page \`${esc(vk.childKey || "?")}\` reports no \`schemaName\` — read it with \`get-page\` so the binding can be matched against it`, "unverified", "verifier"] };
 }
 function resolveRelatedPageVk(vk, ctx) {
-  const read = relatedPageRead(vk, reachabilityValue(ctx.root, vk.evidence));
+  const read = relatedPageRead(vk, reachabilityValue(ctx.root, vk.evidence), ctx);
   if (read.verdict) return read.verdict;
   const opens = read.pages.find((p) => p.isDefault === true);
   if (!opens) {
@@ -4556,15 +4557,34 @@ function resolveDashboardsDelivery(expect, byId) {
 }
 const VK_DASHBOARDS = new Set(["dashboards"]);
 const VK_ONSTAND = new Set(["onstand"]);
+// THE TARGET PACKAGE AS A PACKAGE NAME. A built page and a RelatedPage add-on report a package NAME, but a new-app run
+// plans before its package exists, so the plan may carry a note beside the name:
+// `UsrOrdersApp (primary package of the new app; created by create-app)`. Compared literally, every page built in
+// `UsrOrdersApp` would read MISSING and every add-on read from it unconfirmed. Two sources, in order:
+//   1. `created` — the package create-app actually made (`manifest.createdApp.primaryPackage`), recorded after
+//      scaffolding and kept out of the plan version, so recording it sends no approved plan back for re-approval;
+//   2. the planned value read as a name followed by an optional note — `Name (note)` or `Name — note`.
+// A planned value that does not open with a name in that shape is returned as written: a plan that names no
+// package still fails the comparison instead of having one guessed for it. The plan's rows keep the value as
+// approved, so a task cut before create-app ran does not read as changed once it has.
+const PACKAGE_NAME = /^[A-Za-z_]\w*$/;
+const NAMED_WITH_NOTE = /^`?([A-Za-z_]\w*)`?\s*(?:\(.*\)|[—–-]\s.*)?$/s;
+export function packageNameOf(planned, created = null) {
+  if (typeof created === "string" && PACKAGE_NAME.test(created.trim())) return created.trim();
+  if (typeof planned !== "string") return planned;
+  const named = NAMED_WITH_NOTE.exec(planned.trim());
+  return named ? named[1] : planned;
+}
 // PACKAGE PLACEMENT — the built page's own package, read off THIS page's entry. A page saved into the wrong
 // package is built and invisible to the customer's app; nothing in its body shows that, so `get-page`'s page
 // metadata (`packageName`) is the source. The row only exists when the plan named a target package.
 function resolvePlacementVk(vk, ctx) {
   if (vk.type !== "placement") return unknownVk();
   const pkg = entryObject(ctx.page)?.packageName;
-  if (pkg == null || pkg === "") return ["⚠ verify", `built-page package not reported — confirm the page lives in \`${esc(vk.exp)}\``, "unverified"];
-  if (pkg === vk.exp) return ["✅ Done", `built in \`${esc(vk.exp)}\``, "ok"];
-  return ["❌ MISSING", `built in \`${esc(String(pkg))}\` but the plan targets \`${esc(vk.exp)}\``, "missing"];
+  const want = packageNameOf(vk.exp, ctx.createdPackage);
+  if (pkg == null || pkg === "") return ["⚠ verify", `built-page package not reported — confirm the page lives in \`${esc(want)}\``, "unverified"];
+  if (pkg === want) return ["✅ Done", `built in \`${esc(want)}\``, "ok"];
+  return ["❌ MISSING", `built in \`${esc(String(pkg))}\` but the plan targets \`${esc(want)}\``, "missing"];
 }
 // THE ENTITY BINDING — read off THIS page's entry, exactly like the package. The two failures it separates are
 // different facts and must read differently: a page bound to the WRONG object is a built page that migrates
@@ -5601,10 +5621,11 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
     parentTpl: entryObject(page)?.parentSchemaName || "",
   };
 }
-function verifyCtxFactory(root, reconcileMode = null) {
+// `createdPackage` is the run's, not a page's: every page and add-on is compared against the package create-app made.
+function verifyCtxFactory(root, reconcileMode = null, createdPackage = null) {
   const cache = new Map();
   return (pageKey) => {
-    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey, reconcileMode));
+    if (!cache.has(pageKey)) cache.set(pageKey, { ...verifyCtx(root, pageKey, reconcileMode), createdPackage });
     return cache.get(pageKey);
   };
 }
@@ -5703,8 +5724,14 @@ function builtStringsOf(page) {
   }
   return out;
 }
-// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is absent
-// in every culture; a payload with no `resources` is `unread`.
+// Whether any string of the built page carries `want` in `culture`. The plan names a resource key derived from the
+// Classic one, but the page may keep the text under the key its element is built with
+// (`<Element>ExpansionPanel_title` for a related list's `<Detail>_Caption`), so a text the page carries under
+// another key is the caption built, not a caption missing.
+const carriesText = (built, culture, want) => Object.values(built).some((v) => v?.[culture] === want);
+// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is matched
+// by its text under any other key, and absent only when no key carries it; a payload with no `resources` is
+// `unread`. A key the page does carry is compared by text: the same key with other words is a changed caption.
 function textMismatches(texts, ctx) {
   const built = builtStringsOf(ctx.page);
   const differ = [], absent = [];
@@ -5712,8 +5739,9 @@ function textMismatches(texts, ctx) {
   for (const t of texts || []) {
     const got = built[t.key] || {};
     for (const [culture, want] of Object.entries(t.cultures || {})) {
-      if (typeof got[culture] !== "string") absent.push(`\`${t.key}\` ${culture}`);
-      else if (got[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${got[culture]}" ≠ Classic "${want}"`);
+      if (typeof got[culture] !== "string") {
+        if (!carriesText(built, culture, want)) absent.push(`\`${t.key}\` ${culture}`);
+      } else if (got[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${got[culture]}" ≠ Classic "${want}"`);
     }
   }
   return { differ, absent };
@@ -5810,7 +5838,7 @@ function withPortedAs(r, page, portedAs) {
 }
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
-  const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null);
+  const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null, opts.createdPackage || null);
   const tally = verifyTally();
   // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
   // of the run, the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is

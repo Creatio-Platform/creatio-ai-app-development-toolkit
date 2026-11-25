@@ -511,8 +511,10 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // A layout row's field `names` are left out, so moving fields between tabs while every tab keeps its field count
 // does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
 // A row's Classic `texts` are left out too: they are checked against the built page, not built by a different task.
+// A rule row's `decided` attributes are closed by a person's answer, not built by the task, so an answer recorded
+// after the task closed must not read as drift and re-dispatch it.
 const digestVk = (vk) => {
-  const v = vk?.texts ? { ...vk, texts: undefined } : vk;
+  const v = vk?.texts || vk?.decided ? { ...vk, texts: undefined, decided: undefined } : vk;
   return v?.type === "layout" && v.names ? { ...v, names: undefined } : v;
 };
 // A PLAN BOUNDARY is digested as a marker, not by its reason text: a row flipping between "build it" and "the plan
@@ -676,7 +678,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   const chunks = small
     ? small.flatMap((b) => chunksOf(b, { ...B, chunk: Infinity }))
     : [refs, ...ordered].flatMap((b) => chunksOf(b, B));
-  const tasks = chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) }));
+  const tasks = withJudgedRecords(chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) })), groups);
   return {
     entity: result.entity || null,
     ...runHeader(result),
@@ -687,6 +689,34 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
     budget: B,
     tasks: withDependencies(tasks),
   };
+}
+
+// THE RECORDS EACH REVIEW RULES ON. An evidence row is closed by a builder's record AND a judge's verdict, and the
+// row itself sits in the page's build task, so the review task's own rows name only the design pass. A judge handed
+// that file alone rules on the design pass and leaves every other record of the page `null`, which the final
+// verify reports as NOT judged. Every review task therefore carries the evidence ids of the pages it judges — all
+// pages for the collapsed run's single review — and its file lists them.
+function evidenceIdsByPage(groups) {
+  const byPage = new Map();
+  for (const g of groups) {
+    for (const r of g.rows || []) {
+      if (r.vk?.type !== "evidence" || !r.vk.id) continue;
+      const key = r.pageKey || g.pageKey || "main";
+      if (!byPage.has(key)) byPage.set(key, []);
+      if (!byPage.get(key).includes(r.vk.id)) byPage.get(key).push(r.vk.id);
+    }
+  }
+  return byPage;
+}
+function withJudgedRecords(tasks, groups) {
+  const byPage = evidenceIdsByPage(groups);
+  for (const t of tasks) {
+    if (!String(t.artifact || "").startsWith("review:")) continue;
+    const pages = t.reviewsArtifacts ? [...byPage.keys()] : [...new Set([t.pageKey, ...t.rows.map((r) => r.pageKey)])];
+    const ids = pages.flatMap((k) => byPage.get(k) || []);
+    if (ids.length) t.judgedRecords = ids;
+  }
+  return tasks;
 }
 
 // A RUN TOO SMALL TO SPLIT. Returns the two buckets it collapses to — everything that writes, then everything
@@ -1233,6 +1263,15 @@ function directivesBlock(task, directives) {
       + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
+// The review's worklist: every record of its pages, by the id the judge files its verdict under.
+function judgedRecordsBlock(task) {
+  if (!task.judgedRecords?.length) return [];
+  return [
+    `- **Records you rule on — ${task.judgedRecords.length}, every one of them.** A verdict for each id below goes`
+      + " into `judge.json`; an id left `null` is a row the final report calls NOT judged, so the run cannot close.",
+    ...task.judgedRecords.map((id) => `  - \`${esc(id)}\``),
+  ];
+}
 function outcomeBlock(repair = false) {
   // THE RENDERED FILE IS THE SUB-AGENT'S PROMPT, so it names the field the engine actually reads. `status:`
   // is the engine's output and a word typed there is discarded and reported; `declared:` is the agent's only
@@ -1327,6 +1366,7 @@ export function renderTaskFile(task, set = {}) {
     ...directivesBlock(task, set.directives),
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
     ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
+    ...judgedRecordsBlock(task),
     // The card stays last before the deliverables: `refreshTaskCard` re-renders from its heading to them.
     ...taskCardBlock(task, set),
     "",
