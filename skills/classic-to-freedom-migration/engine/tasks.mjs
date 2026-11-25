@@ -1085,9 +1085,10 @@ function taskCardBlock(task, set = {}) {
       + " part files: what they hold for this task is in this file.",
     ...worklistLines(task.rows || []),
     "- **See the page's code before you write it.** Save the page's `get-page` response before your first write"
-      + ` and after your last, and run \`node engine/codemap.mjs <file>${pageArg}\` (beside \`migrate.mjs\`) on`
-      + " it. It lists the handlers, the helpers already defined and where, and what the `Page code` row will hold"
-      + " you to: reuse a helper it lists, never paste a second copy. Clear its findings on code you touched;"
+      + ` and after your last, and run \`node engine/codemap.mjs <file>${pageArg} --modules .clio-pages\` (beside \`migrate.mjs\`) on`
+      + " it. It lists the handlers, the helpers already defined and where, what the run's modules already hold, and"
+      + " what the `Page code` and `Code quality` rows will hold you to: reuse a helper or a module function it lists,"
+      + " never paste a second copy, and give the page its own `<PageSchema>Module`. Clear its findings on code you touched;"
       + " finding none is part of done.",
     "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
       + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
