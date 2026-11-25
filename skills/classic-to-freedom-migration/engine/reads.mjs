@@ -17,6 +17,8 @@ export { RENAME_ATTEMPTS, isRenameLockError } from "./fsatomic.mjs";
 export const READS_DIR = "reads";
 export const READS_INDEX_FILE = "index.json";
 export const READS_INDEX_VERSION = 1;
+// The client modules the built pages import, one `<Module>.js` each (see assemble.mjs).
+export const MODULES_DIR = "modules";
 
 // A page key describes itself to a reader who has to find the page on the stand. The engine cannot name the
 // Freedom SCHEMA — no plan publishes it — so this says which page of the plan the key is and the agent resolves
@@ -284,7 +286,7 @@ export function renderReadPlan(plan, dir) {
   L.push("", `**Then the client modules the built pages import.** For each project module in a page bundle's \`deps\` (and in`
     + " those modules' own `define` lists; not `@creatio-devkit/...` and not the project's declared helper or constants"
     + ` modules), \`get-page\` the module and copy its \`.clio-pages/<Module>/body.js\` whole to`
-    + ` \`${path.posix.join(READS_DIR, "modules")}/<Module>.js\`. The page's code is held to the same rules there, and the`
+    + ` \`${path.posix.join(READS_DIR, MODULES_DIR)}/<Module>.js\`. The page's code is held to the same rules there, and the`
     + " `Page code` and `Code quality` rows name every module whose source is missing.");
 
   // Named, not dropped: these keys gate rows like any other, and a reader who sees only the read list would take

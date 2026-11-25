@@ -14,14 +14,13 @@
 // A literal `null` is none of the three and is a problem of its own (see `readJson`).
 import fs from "node:fs";
 import path from "node:path";
-import { READS_DIR, READS_INDEX_FILE } from "./reads.mjs";
+import { READS_DIR, READS_INDEX_FILE, MODULES_DIR } from "./reads.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
 // The client modules the built pages import: `get-page` of a module writes its source to
-// `.clio-pages/<Module>/body.js`, copied here whole as `<Module>.js`. The code rows ask for each module a page imports
-// and name the ones not filed, so the folder needs no index of its own.
-export const MODULES_DIR = "modules";
+// `.clio-pages/<Module>/body.js`, copied whole into `reads/modules/` as `<Module>.js`. The code rows ask for each module
+// a page imports and name the ones not filed, so the folder needs no index of its own.
 const MODULE_FILE = /^([\w.-]+)\.js$/;
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
 // together or not at all.

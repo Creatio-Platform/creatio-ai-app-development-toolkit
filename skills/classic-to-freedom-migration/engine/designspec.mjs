@@ -3147,7 +3147,15 @@ function qualityGateRows(pageKey) {
 // The label names the threshold KEY, never its value, so a decision recorded on the row survives a changed limit.
 function pageCodeRows(opts) {
   return [{ deliverableId: "page-code", label: "Page code — no function longer than `maxFunctionLines`, no helper declared twice on the page, no request declared but never sent",
-    vk: { type: "pagecode", thresholds: opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS, externalModules: externalModulesOf(opts) } }];
+    vk: { type: "pagecode", ...qualityRunOf(opts) } }];
+}
+// What the Page code and Code quality rows measure the run against, and the one cache key of that measurement, so
+// both kinds of row read the same lint of the run.
+function qualityRunOf(opts) {
+  const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
+  const constantsGuids = opts.constantsGuids || [];
+  const externalModules = externalModulesOf(opts);
+  return { thresholds, constantsGuids, externalModules, runKey: qualityRunKey(thresholds, constantsGuids, externalModules) };
 }
 // The modules the code rows do not follow into: the project's declared helper and constants modules, existing code
 // the run did not write. Every other module a built page imports is read back and held to the same rules.
@@ -5096,8 +5104,7 @@ export function resolvePageCodeVk(vk, ctx) {
   const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey), thresholds, sections);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   // The functions of the modules the page imports are the page's code too, held to the same length limit.
-  const external = vk.externalModules || [];
-  const run = runQualityOf(ctx.root, thresholds, [], qualityRunKey(thresholds, [], external), external).get(ctx.pageKey);
+  const run = runQualityOf(ctx.root, thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
   if (run?.unreadModules?.length) return ["⚠ verify", unreadModulesText(run.unreadModules), "unverified"];
   a.findings.push(...moduleLengthFindings(run));
   if (!findingCount(a)) {
@@ -5108,8 +5115,8 @@ export function resolvePageCodeVk(vk, ctx) {
 }
 // The over-limit functions of a page's imported modules, as `Page code` findings named `Module › function`.
 function moduleLengthFindings(run) {
-  return (run?.findings || []).filter((f) => f.rule === QUALITY_RULES.functionTooLong && f.section.startsWith("module "))
-    .map((f) => ({ rule: f.rule, where: `${f.section.slice("module ".length)} › ${f.name || "line " + f.line}`, lines: f.value, limit: f.limit }));
+  return (run?.findings || []).filter((f) => f.rule === QUALITY_RULES.functionTooLong && f.module)
+    .map((f) => ({ rule: f.rule, where: `${f.module} › ${f.name || "line " + f.line}`, lines: f.value, limit: f.limit }));
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
@@ -5279,16 +5286,13 @@ function codeQualityGroups(planGroups, opts) {
 // The code-quality rows of one page, one per rule. The thresholds and the constants modules' record ids travel in
 // the row itself, so the resolver needs nothing but the built root.
 function codeQualityRows(opts) {
-  const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
-  const constantsGuids = opts.constantsGuids || [];
-  const externalModules = externalModulesOf(opts);
-  const runKey = qualityRunKey(thresholds, constantsGuids, externalModules);
+  const run = qualityRunOf(opts);
   // A rule whose check needs something the run did not record says so on its own row.
   const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
   return QUALITY_ROW_RULES.map(({ rule, label }) => ({
     deliverableId: `quality:${rule}`,
     label: `[code-quality] ${rule} — ${label}`,
-    vk: { type: "quality", rule, thresholds, constantsGuids, externalModules, runKey, note: notes[rule] || "" },
+    vk: { type: "quality", rule, ...run, note: notes[rule] || "" },
   }));
 }
 const QUALITY_LISTED = 5;
@@ -5298,7 +5302,7 @@ const QUALITY_LISTED = 5;
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
-  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey, vk.externalModules).get(ctx.pageKey);
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
   if (page.unreadModules?.length) return ["⚠ verify", unreadModulesText(page.unreadModules), "unverified"];

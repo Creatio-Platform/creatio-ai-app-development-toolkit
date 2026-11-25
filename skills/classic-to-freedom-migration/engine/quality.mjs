@@ -401,13 +401,14 @@ export function lintModuleQuality(name, src, thresholds = DEFAULT_QUALITY_THRESH
   walkSection(mod.factory.body, section, false, ctx);
   checkSequentialAwaits(mod.factory.body, page, thresholds, section);
   for (const c of comments) checkComment(c, section, page);
+  for (const f of page.findings) f.module = name;
   return page;
 }
 
 // The project modules a page imports, directly or through a module it imports, in import order: `read` when the
 // payload carries the module's source, `unread` when it does not. Platform modules and `external` ones (the project's
 // declared helper and constants modules: existing code the run did not write) are not followed.
-export function importedModulesOf(deps, modules, external, depsOf) {
+function importedModulesOf(deps, modules, external, depsOf) {
   const read = [], unread = [], seen = new Set();
   const queue = [...(deps || [])];
   while (queue.length) {
@@ -431,8 +432,9 @@ function addModuleFindings(byPage, pages, modules, external, thresholds, constan
     if (!page) continue;
     const { read, unread } = importedModulesOf(bundleDeps(pages[key]), modules, external, (name) => lintOf(name).deps);
     for (const name of read) {
-      page.findings.push(...lintOf(name).findings);
-      page.unreadable.push(...lintOf(name).unreadable);
+      const lint = lintOf(name);
+      page.findings.push(...lint.findings);
+      page.unreadable.push(...lint.unreadable);
     }
     page.modules = read;
     page.unreadModules = unread;
@@ -476,7 +478,7 @@ function groupBy(items, keyOf) {
 export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = {}, external = new Set()) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
-  addModuleFindings(byPage, pages || {}, modules || {}, external, thresholds, constantsGuids);
+  addModuleFindings(byPage, pages || {}, modules, external, thresholds, constantsGuids);
   const helperOwners = new Map();
   for (const [key, page] of byPage) {
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
@@ -502,13 +504,13 @@ const RUN_CACHE = new WeakMap();
 const sortedList = (xs) => [...(xs || [])].sort((a, b) => a.localeCompare(b)).join();
 export const qualityRunKey = (thresholds, constantsGuids, externalModules = []) =>
   JSON.stringify(thresholds) + "|" + sortedList(constantsGuids) + "|" + sortedList(externalModules);
-export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids), externalModules = []) {
+export function runQualityOf(root, thresholds, constantsGuids, externalModules = [], cacheKey = qualityRunKey(thresholds, constantsGuids, externalModules)) {
   const pages = root?.pages && typeof root.pages === "object" ? root.pages : { main: root };
   const modules = root?.modules && typeof root.modules === "object" ? root.modules : {};
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
   if (!perRoot.has(cacheKey)) {
-    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules || [])));
+    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules)));
   }
   return perRoot.get(cacheKey);
 }

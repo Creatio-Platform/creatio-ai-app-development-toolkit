@@ -261,9 +261,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("module lint: the benchmark form-page module reports its 3 log-only catches and its bare numeric comparisonType, each under the module's name",
     () => count(formModule, R.catchLogOnly) === 3 && count(formModule, R.numericComparisonType) === 1
       && formModule.findings.every((f) => f.section === `module ${V2[0]}`), () => formModule.findings);
-  check("module lint: catches that keep a fallback value are silent, and the module's own deps are read from its define()",
-    () => formModule.findings.filter((f) => f.rule === R.catchLogOnly).length === 3
-      && JSON.stringify(formModule.deps) === JSON.stringify(["@creatio-devkit/common", "UsrDemoV2DocumentTotals"]), () => formModule);
+  check("module lint: the module's own deps are read from its define(), and each finding names its module",
+    () => JSON.stringify(formModule.deps) === JSON.stringify(["@creatio-devkit/common", "UsrDemoV2DocumentTotals"])
+      && formModule.findings.every((f) => f.module === V2[0]), () => formModule);
   check("module lint: the list-page module's log-only catch and the shared module's comment-only catch are reported",
     () => count(lintModuleQuality(V2[1], v2Modules[V2[1]]), R.catchLogOnly) === 1 && count(lintModuleQuality(V2[2], v2Modules[V2[2]]), R.catchLogOnly) === 1);
   const factoryOnly = lintModuleQuality("UsrBig", `define("UsrBig", [], function() {\n${lines(150)}\nfunction long() {\n${lines(70)}\n}\nreturn {};\n});`);
