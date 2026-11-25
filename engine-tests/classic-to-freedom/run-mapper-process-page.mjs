@@ -11,7 +11,8 @@ import { assembleBuilt, PROCESS_FILE } from "../../skills/classic-to-freedom-mig
 import { processTemplateOfManifest, processButtonsOf, processStepsIssues, PROCESS_BEHAVIOUR, PROCESS_TEMPLATES }
   from "../../skills/classic-to-freedom-migration/engine/process-page.mjs";
 
-export function runProcessPageChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FIX }) {
+export function runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT,
+  FULL_CONVENTIONS, FIX }) {
   const dir = path.join(FIX, "process-page");
   const body = (f) => fs.readFileSync(path.join(dir, f), "utf8");
   const PAGE = body("UsrDeliveryCheckPage.js");
@@ -240,6 +241,19 @@ export function runProcessPageChecks({ check, runMigration, renderVerify, checkl
       && versionWith([{ ...STEP, consent: "pending" }]) === versionWith([{ ...STEP, consent: "declined" }])
       && versionWith([STEP]) !== versionWith([{ ...STEP, element: "CheckReturn" }])
       && versionWith([STEP]) !== versionWith([STEP], { [CANCEL]: PROCESS_BEHAVIOUR.COMPLETE_SAVE }));
+  // `--plan` from the CLI: unrecorded process steps leave the plan incomplete (exit 2, banner and stderr); a page with
+  // every other gate settled and its steps recorded plans cleanly.
+  const processPlanMeta = Object.fromEntries(Object.entries(FULL_PLANMETA).filter(([k]) => k !== "sectionSchema"));
+  const settled = (processPage) => JSON.stringify(manifest({ targetPackage: "UsrSU", planMeta: processPlanMeta, placement: FULL_PLACEMENT,
+    projectConventions: FULL_CONVENTIONS, processPage }));
+  const unrecorded = runMigrate(["-", "--plan"], { input: settled({}) });
+  check("process page (CLI): --plan with the process steps not recorded exits 2, the banner and stderr name it",
+    () => unrecorded.status === 2 && /PLAN INCOMPLETE — process steps not recorded/.test(unrecorded.stdout || "")
+      && /migrate\.mjs: ⛔ PLAN INCOMPLETE — process steps not recorded: processPage\.stepsResolved not recorded/.test(unrecorded.stderr || ""),
+    () => ({ status: unrecorded.status, stderr: (unrecorded.stderr || "").slice(0, 400) }));
+  const recorded = runMigrate(["-", "--plan"], { input: settled(manifest().processPage) });
+  check("process page (CLI): the same --plan with the steps recorded exits 0",
+    () => recorded.status === 0 && !/PLAN INCOMPLETE/.test(recorded.stdout || ""), () => ({ status: recorded.status, stderr: (recorded.stderr || "").slice(0, 400) }));
   const apiCaller = PAGE.replace('"parentName": "ProcessActionButtons"', '"parentName": "Header"')
     .replace('"bindTo": "onCancelProcessElementClick"', '"bindTo": "onUsrCancelClick"')
     .replace('methods: {},', 'methods: { onUsrCancelClick: function() { this.cancelProcessElement(this.get("Tag")); } },');
