@@ -338,7 +338,11 @@ function checkPassesOn(handler, request, page) {
 // ---- writes ----
 
 const WRITE_METHODS = new Set(["insert", "update", "delete"]);
-const memberName = (n) => (n?.type === "Identifier" ? n.name : n?.type === "MemberExpression" && !n.computed ? n.property.name : null);
+function memberName(n) {
+  if (n?.type === "Identifier") return n.name;
+  if (n?.type === "MemberExpression" && !n.computed) return n.property.name;
+  return null;
+}
 // `await sdk.Model.create(…)` / `Model.create(…)` (a data model) or `new sdk.SysSettingsService()` (system settings).
 const isDataWriter = (init) => (init?.type === "CallExpression" && init.callee.type === "MemberExpression" && !init.callee.computed
   && init.callee.property.name === "create" && isModelReference(init.callee.object))
