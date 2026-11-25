@@ -571,10 +571,12 @@ export function parseDefineModule(src, { locations = false } = {}) {
 
 // One JavaScript expression as an AST node, or null when the text is not one — a get-page bundle field (`deps`,
 // `handlers`, `validators`, `converters`) is the SOURCE of an array or object literal. Nothing is evaluated.
-export function parseJsExpression(src) {
+// `locations` adds line spans (the lines of the source as given: the wrapping parenthesis shares its line 1);
+// `onComment` receives every comment, as acorn reports it.
+export function parseJsExpression(src, { locations = false, onComment } = {}) {
   const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   try {
-    const ast = acornParse("(" + String(src ?? "") + "\n)", { ecmaVersion: "latest", sourceType: "script" });
+    const ast = acornParse("(" + String(src ?? "") + "\n)", { ecmaVersion: "latest", sourceType: "script", locations, onComment });
     return ast.body.length === 1 && ast.body[0].type === "ExpressionStatement" ? ast.body[0].expression : null;
   } catch { return null; }
 }
@@ -1010,7 +1012,7 @@ function readMenuNode(obj) {
 }
 // Ordered child nodes. Generic (every own value that is a node or array of nodes) so the walk stays complete as
 // the AST shape grows.
-function childNodesOf(node) {
+export function childNodesOf(node) {
   const out = [];
   for (const key of Object.keys(node)) {
     if (WALK_SKIP_KEYS.has(key)) continue;

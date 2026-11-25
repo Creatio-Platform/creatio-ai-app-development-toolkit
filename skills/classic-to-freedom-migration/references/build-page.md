@@ -122,6 +122,20 @@ clio-safety rules apply to every write.
      and waits on the last build task of each child page and of the page holding the lists, so both
      exist when you start. Read the add-on first: `get-related-page-addon` with
      `entity-schema-name` = the child entity and `package-name` = the target package.
+     **The add-on is per object, not per page:** whatever it names as default or add page opens the
+     records of that entity from EVERY related list, section and lookup, not only from the page you
+     built. When the add-on you read already has a general default or add entry naming ANOTHER page
+     (Freedom or Classic), stop and ask the user before moving it, naming that page; record the answer
+     as its own `D<N>` in `decisions.md`. An add-on with no such entry is written without asking.
+     Then read the entity's `SysModuleEdit` cards: `list-entity-client-schemas` with `entity-name` =
+     the child entity. Each `editPages[]` entry is one card: `cardSchema` is the page it opens,
+     `kind` is `classic` or `freedom`, and `typeColumnValue` names the Type a per-type card serves.
+     The read is all you do there — **never write `SysModuleEdit`**, a system table. When any entry
+     has `kind: classic`, the binding leaves navigation mixed: the related list opens the Freedom
+     page while other entry points open Classic. Ask the user whether to keep that state (they switch
+     it themselves if not), record the answer as its own `D<N>` and write
+     `mixed navigation — <entity>: SysModuleEdit → <cardSchema>` under the row's `## Notes`, one line
+     per Classic entry.
      `create-related-page-addon` REPLACES the whole configuration, so send back every entry you read
      plus your change: the BUILT child page as the general default entry (`is-default`, no
      `type-column-value`, the `All employees` role or none), a separate `is-add` entry only when a
@@ -431,9 +445,14 @@ rules.
 - **Browser capability assumed instead of checked.** A run that promises automatic render
   verification without ever calling `list_connected_browsers` finds out at the END that it had no
   surface — and the built-in pane is no substitute, because its per-action approval gate survives a
-  bypass-permissions session. Establish the surface BEFORE the first stand write and say so when
-  there is none. A stored preference that later proves unachievable is RE-ASKED, never silently
-  downgraded while still reporting itself as automatic.
+  bypass-permissions session. The orchestrator settles it with the user before the first build
+  task and your prompt quotes the outcome as the `Browser:` line; with
+  `page-smoke` the check needs no surface at all. A stored preference that later proves
+  unachievable is RE-ASKED, never silently downgraded while still reporting itself as automatic.
+- **One answer widened into a policy.** "I'll check it myself" about one page became "Browser
+  checks: 0" for every task of a four-day build, and nothing was ever opened. Only the `Browser:`
+  line decides whether you check; a remark about one page in your prompt or in `decisions.md` does
+  not switch the check off for yours.
 - **Registry filter bar / section actions dropped.** The Classic section body carries **quick
   filters** (`initFixedFiltersConfig`) and **custom section actions** (`getSectionActions`) — the
   engine now surfaces both in the plan's `### List page` block. They are page-CENTRIC blind spots

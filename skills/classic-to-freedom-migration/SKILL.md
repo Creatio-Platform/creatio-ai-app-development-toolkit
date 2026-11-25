@@ -158,7 +158,7 @@ Read-only operations first.
 > 1. **Every non-resident clio tool is invoked through `clio-run`** (`{ "command": "<tool>", "args": { … } }`). Do **NOT** `ToolSearch` for clio schema/entity tools — they are hidden long-tail and `ToolSearch` returns nothing, wasting turns.
 > 1b. **A `tool does not exist` / `not found` error on one of these names means you called it DIRECTLY, not that it is gone.** `list-entity-client-schemas`, `get-classic-page-sources` and `get-classic-list-columns` are hidden long-tail tools: they are not in `tools/list`, so a host-namespaced direct call (`mcp__…__list-entity-client-schemas`) fails with exactly that message, and a real run read it as a stale tool name and lost the turn. Re-issue it through `clio-run` before concluding anything about the tool. `get-guidance` is resident, but it also takes the wrapped shape — `{"args": {"name": "<guide>"}}`; a top-level `name` is rejected.
 > 2. **Resolve a tool's argument shape with `get-tool-contract` BEFORE calling it — never invent a payload.** This prevents the whole class of wasted round-trips (wrong arg names, object-vs-JSON-string, inline-body vs `body-file`, a tool on a different MCP server).
-> Arg-facts: `get-classic-page-sources` takes **`schema-name`** (+ optional `entity`, `output-file`) and writes the whole manifest to disk — the one-call path in step 4.0; `list-entity-client-schemas` takes **`entity-name`** and returns `sections` + `editPages` (each with `kind: classic|freedom`, per-type `typeColumnValue`, and `miniPageSchema`). Do **NOT** offload the fetch to a general-purpose sub-agent — it just duplicates this context.
+> Arg-facts: `get-classic-page-sources` takes **`schema-name`** (+ optional `entity`, `output-file`) and writes the whole manifest to disk — the one-call path in step 4.0; `list-entity-client-schemas` takes **`entity-name`** and returns `sections` + `editPages` (each with the page it opens in `cardSchema` / `cardSchemaUId` — a section's own page is `sectionSchema` — `kind: classic|freedom`, per-type `typeColumnValue`, and `miniPageSchema`). Do **NOT** offload the fetch to a general-purpose sub-agent — it just duplicates this context.
 
 Runtime discovery:
 
@@ -472,8 +472,8 @@ This step does **not** build the approved plan here: it cuts it into one-task fi
 in full (7.0-7.7) and step 8's driver side; below is what stays in view during the build.
 
 **7.0 Resolve the dispatch route before the first `--start`** and write it into `worklog.md` as a `Route:` line
-(`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
-`AskUserQuestion`, then stop until it is answered.
+(`agent` · `codex` · `copilot` · `inline`; `inline` only through 7.0's ROUTE GATE: one `AskUserQuestion`, then
+stop). **7.0b**: the `Browser:` line page tasks need.
 
 **7.1 Record the plan approval first** (reference 7.1 step 1): without it `--tasks`, `--start` and `--route` exit 2.
 Reconcile: **first cut** takes `--reconcile-mode overlay|classic-layout`.

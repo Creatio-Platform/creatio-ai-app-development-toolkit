@@ -9,7 +9,9 @@
 //
 // Input: the page's handler SOURCE as clio `get-page` returns it in `bundle.handlers` (a JS array literal of
 // `{ request, handler }` entries), and optionally `bundle.viewConfig`, which is where a button sends a request.
-// Parsed with the engine's integrity-checked acorn and walked with its bounded walker; never executed.
+// Parsed with the engine's integrity-checked acorn and walked with its bounded walker; never executed. Function length
+// and a helper declared twice are measured by quality.mjs — the same rules, limit (`manifest.qualityThresholds`) and
+// ids as clio's save-time page lint — so the map, this row and the save-time warning agree.
 //
 // CLI: `node engine/codemap.mjs <file> [--page <key>]` prints the map. `<file>` is a saved `get-page` response, a
 // `built.json` (the page is `--page`, default `main`), or the raw handler source. The page is read the way
@@ -17,13 +19,11 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { getAcornParse, walkAstBounded, staticPropKey, isFnNode } from "./engine.mjs";
+import { lintPageQuality, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS } from "./quality.mjs";
 // designspec.mjs imports this module for the verify row; neither module uses the other's exports while it loads,
 // so the cycle is safe, and the CLI below reads the page exactly the way `--verify` does.
 import { verifyCtx, esc } from "./designspec.mjs";
 
-// The limits the `Page code` verify row applies. A handler longer than this is several behaviours in one place —
-// the shape the relay produced — and a name defined in two handlers is a helper that should live once.
-export const MAX_FUNCTION_LINES = 150;
 // A request in this namespace is the platform's own: declaring a handler for it does not create a request that
 // something on the page has to send.
 const PLATFORM_PREFIX = "crt.";
@@ -49,22 +49,29 @@ function handlerEntryOf(el, i) {
   return { request: request ?? `#${i + 1}`, declared: request !== null, fn };
 }
 
-// One walk per handler: the helpers it defines (and their length) and every string literal it mentions — a request
-// is SENT when its name appears in a handler (`executeRequest({ type: "usr.X" })`) or in the view.
+// One walk per handler: the helpers it defines and every string literal it mentions — a request is SENT when its
+// name appears in a handler (`executeRequest({ type: "usr.X" })`) or in the view.
 function handlerFacts(entry) {
-  const helpers = new Set(), functions = [], literals = new Set();
+  const helpers = new Set(), literals = new Set();
   const walk = entry.fn ? walkAstBounded(entry.fn.body, (n) => {
     if (n.type === "Literal" && typeof n.value === "string") literals.add(n.value);
     const named = namedFunctionOf(n);
-    if (!named) return;
-    helpers.add(named.name);
-    functions.push({ name: `${entry.request} › ${named.name}`, lines: linesOf(named.fn) });
+    if (named) helpers.add(named.name);
   }) : { truncated: false };
-  const lines = linesOf(entry.fn);
   // A handler naming its OWN request (`request.type === "usr.X"`, a log line) does not send it.
   if (entry.declared) literals.delete(entry.request);
-  return { request: entry.request, lines, helpers: [...helpers].sort((x, y) => x.localeCompare(y)),
-    functions: [{ name: entry.request, lines }, ...functions], literals, truncated: walk.truncated };
+  return { request: entry.request, lines: linesOf(entry.fn), helpers: [...helpers].sort((x, y) => x.localeCompare(y)),
+    literals, truncated: walk.truncated };
+}
+
+// Where a long function sits: a handler by its request, a function inside it as `request › name`, and a validator or
+// converter function as `validators › name` (the section is a separate source, so its lines are its own).
+function whereIs(finding, entries) {
+  const own = finding.name || `line ${finding.line}`;
+  if (finding.section !== "handlers") return `${finding.section} › ${own}`;
+  const owner = entries.find((e) => e.fn && e.fn.loc.start.line <= finding.line && finding.line <= e.fn.loc.end.line)?.request;
+  if (!owner || own === owner) return own;
+  return `${owner} › ${own}`;
 }
 // The request names the view sends: `clicked: { request: "usr.X" }` and every other `request` value in the tree.
 export function viewRequests(viewConfig) {
@@ -85,11 +92,17 @@ export function viewRequests(viewConfig) {
 // the verify row report. Pure: no file system, no stand. Without a `viewConfig` nobody knows what the buttons send,
 // so the unsent-request check is skipped (`sendsChecked: false`) rather than reporting every button's request.
 // `sentElsewhere` names requests another built page sends (its mini page, a child page): a request declared here
-// and dispatched from there is sent, not dead.
-export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = new Set()) {
+// and dispatched from there is sent, not dead. `thresholds` are the run's `manifest.qualityThresholds`. `sections`
+// carries the page's `validators` / `converters` source: their functions are held to the same length limit.
+export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = new Set(), thresholds = DEFAULT_QUALITY_THRESHOLDS, sections = {}) {
   const text = String(handlersSrc ?? "").trim();
   const sendsChecked = viewConfig != null;
-  if (!text) return { handlers: [], duplicates: [], longFunctions: [], unsent: [], sendsChecked };
+  const maxFunctionLines = thresholds.maxFunctionLines;
+  const others = Object.fromEntries(["validators", "converters"].filter((k) => typeof sections[k] === "string").map((k) => [k, sections[k]]));
+  if (!text && !Object.keys(others).length) return { handlers: [], findings: [], sendsChecked, maxFunctionLines };
+  const lint = lintPageQuality({ handlers: text || "[]", ...others }, thresholds);
+  if (lint?.unreadable.length) return { error: `the page's ${lint.unreadable.map((s) => "`" + s + "`").join(", ")} does not parse` };
+  if (!text) return { handlers: [], findings: lengthFindings(lint, []), sendsChecked, maxFunctionLines };
   let expr;
   try { expr = getAcornParse()(`(${text}\n)`, { ecmaVersion: "latest", sourceType: "script", locations: true }).body[0]?.expression; }
   catch (e) { return { error: `the handler source does not parse: ${String(e?.message || e)}` }; }
@@ -97,30 +110,40 @@ export function analyzePageCode(handlersSrc, viewConfig = null, sentElsewhere = 
   const entries = expr.elements.map(handlerEntryOf).filter(Boolean);
   const handlers = entries.map(handlerFacts);
   if (handlers.some((h) => h.truncated)) return { error: "a handler is too large or too deeply nested to analyse — split it" };
-  const definedIn = new Map();
-  for (const h of handlers) for (const name of h.helpers) definedIn.set(name, [...(definedIn.get(name) || []), h.request]);
+  const of = (rule) => (lint?.findings || []).filter((f) => f.rule === rule);
   const sent = new Set([...handlers.flatMap((h) => [...h.literals]), ...viewRequests(viewConfig), ...sentElsewhere]);
+  const unsent = sendsChecked ? [...new Set(entries.filter((e) => e.declared).map((e) => e.request))]
+    .filter((r) => !r.startsWith(PLATFORM_PREFIX) && !sent.has(r)) : [];
   return {
     handlers: handlers.map(({ request, lines, helpers }) => ({ request, lines, helpers })),
-    duplicates: [...definedIn].filter(([, where]) => where.length > 1).map(([name, where]) => ({ name, handlers: where })),
-    longFunctions: handlers.flatMap((h) => h.functions).filter((f) => f.lines > MAX_FUNCTION_LINES),
-    unsent: sendsChecked ? [...new Set(entries.filter((e) => e.declared).map((e) => e.request))]
-      .filter((r) => !r.startsWith(PLATFORM_PREFIX) && !sent.has(r)) : [],
+    findings: [
+      ...lengthFindings(lint, entries),
+      ...of(QUALITY_RULES.duplicateInPage).map((f) => ({ rule: f.rule, name: f.name, original: f.original, originalLine: f.originalLine, count: f.count })),
+      ...unsent.map((request) => ({ rule: QUALITY_RULES.requestWithoutSender, request })),
+    ],
     sendsChecked,
+    maxFunctionLines,
   };
 }
 
-export const findingCount = (a) => a.duplicates.length + a.longFunctions.length + a.unsent.length;
+// Every function over the length limit, in handlers, validators and converters alike.
+function lengthFindings(lint, entries) {
+  return (lint?.findings || []).filter((f) => f.rule === QUALITY_RULES.functionTooLong)
+    .map((f) => ({ rule: f.rule, where: whereIs(f, entries), lines: f.value, limit: f.limit }));
+}
+
+export const findingCount = (a) => a.findings.length;
 
 // The findings as short phrases — the verify row's text and the map's summary say the same thing. `escape` is the
 // caller's Markdown escaping for names taken from the page body (designspec.mjs `esc`).
 export function findingPhrases(a, escape = String) {
   const code = (s) => `\`${escape(s)}\``;
-  return [
-    ...a.longFunctions.map((f) => `${code(f.name)} is ${f.lines} lines (limit ${MAX_FUNCTION_LINES})`),
-    ...a.duplicates.map((d) => `${code(d.name)} is defined in ${d.handlers.length} handlers (${d.handlers.map(code).join(", ")})`),
-    ...a.unsent.map((r) => `${code(r)} is declared but nothing sends it`),
-  ];
+  const phrase = {
+    [QUALITY_RULES.functionTooLong]: (f) => `${code(f.where)} is ${f.lines} lines (limit ${f.limit})`,
+    [QUALITY_RULES.duplicateInPage]: (f) => `${code(f.name)} repeats ${code(f.original)} (line ${f.originalLine}) — declared ${f.count} times`,
+    [QUALITY_RULES.requestWithoutSender]: (f) => `${code(f.request)} is declared but nothing sends it`,
+  };
+  return a.findings.map((f) => phrase[f.rule](f));
 }
 
 export function renderCodeMap(a, pageKey = "page", escape = String) {
@@ -132,11 +155,7 @@ export function renderCodeMap(a, pageKey = "page", escape = String) {
     ...findingPhrases(a, escape).map((p) => `- ${p}`),
     ...(a.sendsChecked ? [] : ["- Requests sent from the view were not checked: the input has no `viewConfig` — pass the saved get-page response, not the handler source alone."]),
     "", "## Handlers", "", "| # | Request | Lines | Helpers it defines |", "|---|---|---|---|"];
-  a.handlers.forEach((h, i) => L.push(`| ${i + 1} | ${code(h.request)} | ${h.lines}${h.lines > MAX_FUNCTION_LINES ? " ⚠" : ""} | ${h.helpers.map(code).join(", ") || "—"} |`));
-  if (a.duplicates.length) {
-    L.push("", "## Helpers defined in more than one handler", "", "Define each once (a shared module, or one place on the page) and call it.", "", "| Helper | Handlers |", "|---|---|");
-    for (const d of a.duplicates) L.push(`| ${code(d.name)} | ${d.handlers.map(code).join(", ")} |`);
-  }
+  a.handlers.forEach((h, i) => L.push(`| ${i + 1} | ${code(h.request)} | ${h.lines}${h.lines > a.maxFunctionLines ? " ⚠" : ""} | ${h.helpers.map(code).join(", ") || "—"} |`));
   return L.join("\n") + "\n";
 }
 
