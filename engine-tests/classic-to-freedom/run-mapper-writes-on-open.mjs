@@ -55,7 +55,7 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
     () => goldenOpen);
   check("writes-on-open: a page without an add-mode test writes on every open, and both query writes are found",
     () => { const w = opened(queries); return w.length === 2 && w.every((x) => x.addModeOnly === false)
-      && w.map((x) => x.method).sort().join() === "usrLog,usrStamp"; },
+      && w.map((x) => x.method).sort((a, b) => a.localeCompare(b)).join() === "usrLog,usrStamp"; },
     () => opened(queries));
   const onClick = page("UsrClickPage", [
     'init: function() { this.callParent(arguments); }',
@@ -179,7 +179,7 @@ function reportChecks({ check, run, plain, dir }) {
   const report = renderFinalReport({ result: run, verifyRes: { rows: [] }, set: { tasks: [task], planVersion: run.planVersion }, dir: tasksDir });
   const section = report.markdown.split("\n## ").find((s) => s.startsWith("Stand data this run changed")) || "";
   check("writes-on-open: the result lists every Stand data changed line, from worklog.md and the task notes, and the agreed add-mode check",
-    () => /^Stand data this run changed \(2\)/.test(section) && /MbContractLastNumber 2 → 3/.test(section)
+    () => section.startsWith("Stand data this run changed (2)") && /MbContractLastNumber 2 → 3/.test(section)
       && /CON-00003 created by click Save/.test(section) && /yes, check add mode once/.test(section)
       && !/inside a fence/.test(section) && !/a quoted example/.test(section),
     () => section);

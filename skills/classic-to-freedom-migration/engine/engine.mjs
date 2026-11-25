@@ -746,6 +746,17 @@ const ARG_SINKS = [
 // the constructed class name is classified too: the evidence is in the argument, not in the call.
 const CLASS_FACTORY_RX = /(?:^|\.)Ext\.create$|(?:^|\.)Terrasoft\.create$/;
 
+// One data-writing call into `dataWrites`. A save writes the record too, so it joins the data writes with no target
+// (the record is the page's own). Add-mode only while EVERY occurrence of the write sits inside an add-mode branch:
+// one unguarded copy makes it a write on every open, the label that keeps a check from opening the page at all.
+function recordDataWrite(node, dataWrites, { p, arg, factory, save, guarded }) {
+  let target = null;
+  if (!save) target = dataWriteTarget(node, factory ? null : arg);
+  const write = { call: factory ? arg : p, target };
+  const key = `${write.call}\u0000${target}`;
+  dataWrites.set(key, { ...write, addModeOnly: guarded && (dataWrites.get(key)?.addModeOnly ?? true) });
+}
+
 // record ONE call/new expression into the fact sinks
 function recordCall(node, sinks, guarded = false) {
   const p = calleePath(node.callee);
@@ -758,15 +769,8 @@ function recordCall(node, sinks, guarded = false) {
   const factory = !!arg && CLASS_FACTORY_RX.test(p);
   const built = factory ? classifyCall(arg) : [];
   for (const k of built) sinks.kinds.add(k);
-  // a save writes the record too, so it joins the data writes (with no target: the record is the page's own)
-  const save = own.includes("save");
-  if (save || own.includes("data-write") || built.includes("data-write")) {
-    const write = { call: factory ? arg : p, target: save ? null : dataWriteTarget(node, factory ? null : arg) };
-    const key = `${write.call}\u0000${write.target}`;
-    // add-mode only while EVERY occurrence of the write sits inside an add-mode branch: one unguarded copy makes it
-    // a write on every open, the label that keeps a check from opening the page at all
-    sinks.dataWrites.set(key, { ...write, addModeOnly: guarded && (sinks.dataWrites.get(key)?.addModeOnly ?? true) });
-  }
+  if (own.includes("save") || own.includes("data-write") || built.includes("data-write"))
+    recordDataWrite(node, sinks.dataWrites, { p, arg, factory, save: own.includes("save"), guarded });
   if (!arg) return;
   const hit = ARG_SINKS.find(([rx]) => rx.test(p));
   if (hit) sinks[hit[1]].add(arg);

@@ -2358,24 +2358,25 @@ export function writesOnOpen(methods) {
   const byName = new Map((methods || []).filter((m) => m?.facts).map((m) => [m.name, m]));
   const found = new Map();
   const visited = new Set();
-  for (const hook of OPEN_HOOKS) {
-    if (!byName.has(hook)) continue;
-    const queue = [{ pathTo: [hook], addMode: false }];
-    for (let i = 0; i < queue.length; i++) {
-      const { pathTo, addMode } = queue[i];
-      const name = pathTo.at(-1);
-      if (visited.has(`${name}|false`) || visited.has(`${name}|${addMode}`)) continue;
-      visited.add(`${name}|${addMode}`);
-      const f = byName.get(name).facts;
-      keepWrites(found, { hook, path: pathTo, method: name, addMode, writes: f.dataWrites || [] });
-      const guarded = new Set(f.addModeOnlyCalls || []);
-      for (const c of f.calls) {
-        const next = internalCallTarget(c);
-        if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addMode || guarded.has(c) });
-      }
+  for (const hook of OPEN_HOOKS) if (byName.has(hook)) walkFromHook(hook, byName, found, visited);
+  return [...found.values()];
+}
+// Breadth-first from one hook, each method once per mode (`visited` is shared across hooks): a method already reached
+// outside add mode has nothing left to tell. The array iterator sees the entries pushed while it runs.
+function walkFromHook(hook, byName, found, visited) {
+  const queue = [{ pathTo: [hook], addMode: false }];
+  for (const { pathTo, addMode } of queue) {
+    const name = pathTo.at(-1);
+    if (visited.has(`${name}|false`) || visited.has(`${name}|${addMode}`)) continue;
+    visited.add(`${name}|${addMode}`);
+    const f = byName.get(name).facts;
+    keepWrites(found, { hook, path: pathTo, method: name, addMode, writes: f.dataWrites || [] });
+    const guarded = new Set(f.addModeOnlyCalls || []);
+    for (const c of f.calls) {
+      const next = internalCallTarget(c);
+      if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addMode || guarded.has(c) });
     }
   }
-  return [...found.values()];
 }
 // Keep one entry per method: the first one found, replaced only by a path that makes it write on every open.
 function keepWrites(found, { hook, path, method, addMode, writes }) {

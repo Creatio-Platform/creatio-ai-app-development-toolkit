@@ -186,9 +186,24 @@ function capBreachLines(capBreaches) {
 // Only FIELD lines count, as for `Browser checks`: a quoted line or one inside a code fence is prose about the line.
 // Bold around the label is allowed on either side of the colon (`**Stand data changed:** x`, `**Stand data changed**: x`),
 // as for `Browser checks`: agents write these notes in free Markdown.
-export const STAND_DATA = /^[\s*-]*Stand data changed[\s*]*:[\s*]*(\S.*)$/i;
-export const ADD_MODE_CHECK = /^[\s*-]*Add-mode check[\s*]*:[\s*]*(\S.*)$/i;
-export function fieldLines(text, re) {
+// Read by plain string steps, not one regex: a pattern with optional decoration on both sides of the label backtracks.
+export const STAND_DATA = "Stand data changed";
+export const ADD_MODE_CHECK = "Add-mode check";
+const LEAD = new Set([" ", "\t", "*", "-"]);
+const LEAD_NO_DASH = new Set([" ", "\t", "*"]);
+const skipWhile = (s, chars) => { let i = 0; while (i < s.length && chars.has(s[i])) i++; return s.slice(i); };
+// The value of a `<label>: <value>` field line, or null: list marker and bold allowed before the label, bold around
+// the colon, and a closing bold after the value, which is not part of it.
+export function labelValue(line, label) {
+  const s = skipWhile(line, LEAD);
+  if (s.slice(0, label.length).toLowerCase() !== label.toLowerCase()) return null;
+  const rest = skipWhile(s.slice(label.length), LEAD_NO_DASH);
+  if (!rest.startsWith(":")) return null;
+  let value = skipWhile(rest.slice(1), LEAD_NO_DASH).trimEnd();
+  while (value.endsWith("*")) value = value.slice(0, -1).trimEnd();
+  return value || null;
+}
+export function fieldLines(text, label) {
   const out = [];
   let fence = null;
   for (const line of String(text || "").split(/\r?\n/)) {
@@ -198,8 +213,8 @@ export function fieldLines(text, re) {
       else if (f[1].startsWith(fence)) fence = null;
       continue;
     }
-    const m = fence ? null : re.exec(line);
-    if (m) out.push(m[1].replace(/\*+\s*$/, "").trim());
+    const value = fence ? null : labelValue(line, label);
+    if (value) out.push(value);
   }
   return out;
 }
@@ -218,8 +233,8 @@ function standDataSection(result, tasks, { text: worklog = "", unread = null }, 
   if (pages.length) {
     const one = pages.length === 1;
     L.push("", `The plan named ${plural(pages.length, "page")} that write${one ? "s" : ""} data when opened, so ${one ? "it was" : "they were"}`
-      + " to be opened only in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".");
-    L.push(agreed.length ? `Add-mode checks the user agreed to: ${agreed.map(cell).join("; ")}.`
+      + " to be opened only in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".",
+    agreed.length ? `Add-mode checks the user agreed to: ${agreed.map(cell).join("; ")}.`
       : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule.");
   }
   return L;
