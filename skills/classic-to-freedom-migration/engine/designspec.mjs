@@ -3322,7 +3322,7 @@ export function subPageNodes(result, seen = new Set(), out = []) {
   return out;
 }
 
-// THE PAGES THAT WRITE DATA WHEN THEY OPEN (ENG-107721), over the whole page tree: the root form page (`main`) and
+// THE PAGES THAT WRITE DATA WHEN THEY OPEN, over the whole page tree: the root form page (`main`) and
 // every sub-page node, each with the writes `writesOnOpen` in mapper.mjs found from its open hooks. One walk, so the
 // plan, the task files and the result report name the same pages. `{ pageKey, label, writes }`, empty for none.
 const dataWritingMemo = new WeakMap();   // one walk per result: every task file of a run asks for the same list

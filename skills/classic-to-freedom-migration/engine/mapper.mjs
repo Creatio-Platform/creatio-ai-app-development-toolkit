@@ -618,7 +618,7 @@ export function mapToFreedom(eff, opts = {}) {
   const handlerStubs = _rl.handlerStubs;
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
-  // the page writes data while it opens: the plan names it and every browser check keeps to edit mode (ENG-107721)
+  // the page writes data while it opens: the plan names it and every browser check keeps to edit mode
   const dataWritesOnOpen = writesOnOpen(payloadMethods);
 
   // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
@@ -2337,7 +2337,7 @@ function buildCallerIndex(methods) {
 }
 
 // ---------------------------------------------------------------------------
-// PAGES THAT WRITE DATA WHEN THEY OPEN (ENG-107721). A Classic page whose open
+// PAGES THAT WRITE DATA WHEN THEY OPEN. A Classic page whose open
 // hook reaches a data-writing call — the counter idiom `postSysSettingsValue
 // ("XLastNumber", next)` that assigns the next number, an insert / update
 // query, the number generator, a save — changes the stand every time anything

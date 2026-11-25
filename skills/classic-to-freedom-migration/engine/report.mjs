@@ -179,7 +179,7 @@ function capBreachLines(capBreaches) {
       + " save-check-fix loop. Read these tasks' notes for what each check answered.", "",
     ...capBreaches.map((b) => `- [${cell(b.task.group || b.task.id)}](${enc(b.task.file)}) \`${esc(b.task.id)}\`: ${b.n} checks`)];
 }
-// STAND DATA THE RUN CHANGED (ENG-107721). A browser check is not read-only on every page: a page that assigns the
+// STAND DATA THE RUN CHANGED. A browser check is not read-only on every page: a page that assigns the
 // next number when it opens consumes a counter, and a `click` that saves creates a record. Whoever changed data
 // writes one `Stand data changed: <what> <before> → <after>` line — the orchestrator in `worklog.md`, a builder under
 // its task's `## Notes` — and the orchestrator records each add-mode check the user agreed to as `Add-mode check:`.

@@ -1,4 +1,4 @@
-// PAGES THAT WRITE DATA WHEN THEY OPEN (ENG-107721). The benchmark Classic Contracts page assigns the next contract
+// PAGES THAT WRITE DATA WHEN THEY OPEN. The benchmark Classic Contracts page assigns the next contract
 // number in add mode: `onEntityInitialized` calls `mbAssignNumber`, which posts `MbContractLastNumber + 1` back to
 // the system setting. Browser checks open pages, so on the v2 benchmark run the consent probe and one builder
 // consumed 2 contract numbers and neither the plan nor the result said so. These checks hold the four places that

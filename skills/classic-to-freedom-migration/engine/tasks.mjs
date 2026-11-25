@@ -1233,7 +1233,7 @@ function directivesBlock(task, directives) {
       + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
-// THE PAGES OF THIS TASK THAT WRITE DATA WHEN THEY OPEN (ENG-107721). The task file is the builder's prompt, so the
+// THE PAGES OF THIS TASK THAT WRITE DATA WHEN THEY OPEN. The task file is the builder's prompt, so the
 // rule that keeps its browser check from consuming data sits beside the rows it builds: edit mode on an existing
 // record, and an add-mode check only on the consent the orchestrator recorded. A whole-run task covers every page.
 export function dataWritingBlock(task, pages) {

@@ -714,7 +714,7 @@ const CALL_KIND_RX = [
   // A call that CHANGES stand data by itself, wherever it runs: a system-setting write (the classic counter idiom
   // `postSysSettingsValue("XLastNumber", next)`), an insert / update / delete query, or the platform's number
   // generator. Recorded in `dataWrites` together with every `save`, and read by `writesOnOpen` in mapper.mjs: a page that reaches one of these while it opens
-  // consumes data every time a browser check opens it (ENG-107721).
+  // consumes data every time a browser check opens it.
   ["data-write", /(?:^|\.)post(?:Personal)?SysSettingsValue$|(?:^|\.)(?:InsertQuery|UpdateQuery|DeleteQuery|BatchQuery)$|(?:^|\.)getIncrement(?:Code|Number|Value)\w*$/],
 ];
 const classifyCall = (p) => CALL_KIND_RX.filter(([, rx]) => rx.test(p)).map(([kind]) => kind);

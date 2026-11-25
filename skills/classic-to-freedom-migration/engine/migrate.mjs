@@ -1326,7 +1326,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
   c.treeCyclic = !!res.treeCyclic;
   c.stubScope = stubScope("child page", key, res.changeSet, res.changeSet?.standardMethodsFiltered);
-  c.writesOnOpen = res.changeSet?.writesOnOpen;   // the plan names a page that writes data when opened (ENG-107721)
+  c.writesOnOpen = res.changeSet?.writesOnOpen;   // the plan names a page that writes data when opened
   // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
   // above as `c.stubScope` — so carrying the whole array would list every child page twice.
   c.childStubScopes = (res.stubIndex || []).slice(1);
