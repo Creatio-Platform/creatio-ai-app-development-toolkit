@@ -59,7 +59,7 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.duplicateHandlerAcrossPages, label: "no handler copied from another page of the run" },
   { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function declared in two modules of the run, or in a page and a module" },
   { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id declared in two modules — a value the pages share lives in one module" },
-  { rule: QUALITY_RULES.unusedModuleExport, label: "no module export that no page or module uses" },
+  { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a page's own module that no page or module uses" },
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
 
@@ -429,9 +429,8 @@ function groupBy(items, keyOf) {
 // Every built page of the run linted once, then the check that needs more than one page: a helper copied from another
 // page. `pages` is `{ pageKey: bundle entry }`.
 // `wholeRun` says `pages` are ALL the run's pages (the verify payload): only then is an export nobody uses known to be
-// unused — one page alone cannot see what the others import.
-// `projectModules` are the team's declared helper and constants modules (`projectConventions`): they also serve pages
-// outside the run, so an export of theirs is never reported as unused.
+// unused — one page alone cannot see what the others import. Even then only a run page's own `<PageSchema>Module` is
+// judged; `projectModules` (the team's declared helper and constants modules, `projectConventions`) never are.
 export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, wholeRun = true, projectModules = new Set()) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
@@ -461,11 +460,12 @@ export const qualityRunKey = (thresholds, constantsGuids, projectModules = []) =
   JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort((a, b) => a.localeCompare(b)).join()
   + "|" + [...projectModules].sort((a, b) => a.localeCompare(b)).join();
 export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids), projectModules = []) {
-  const pages = root?.pages && typeof root.pages === "object" ? root.pages : { main: root };
+  const wholeRun = Boolean(root?.pages && typeof root.pages === "object");
+  const pages = wholeRun ? root.pages : { main: root };
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
   const modules = root?.modules && typeof root.modules === "object" ? root.modules : null;
-  if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, true, new Set(projectModules)));
+  if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, wholeRun, new Set(projectModules)));
   return perRoot.get(cacheKey);
 }
 
@@ -518,8 +518,10 @@ function lintRunModules(byPage, pages, modules, wholeRun, projectModules = new S
   reportModuleCopies(read, byPage, report);
   reportSharedValues(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
-  // Not the project's declared modules: they also serve pages outside the run, which nothing here sees.
-  if (wholeRun) reportUnusedExports(read.filter((m) => !projectModules.has(m.name)), importers, report);
+  // Only a run page's own `<PageSchema>Module`: any other module (a shared one, a declared project module) can serve
+  // pages outside the run, whose imports nothing here sees.
+  const pageModules = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
+  if (wholeRun) reportUnusedExports(read.filter((m) => pageModules.has(m.name) && !projectModules.has(m.name)), importers, report);
   reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
 }
 

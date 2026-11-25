@@ -382,6 +382,14 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       () => { const f = withProject.get("main").findings.filter((x) => x.rule === R.unusedModuleExport).map((x) => x.text);
         return f.length === 1 && /spare/.test(f[0]); },
       () => withProject.get("main").findings);
+    // A shared module can serve pages outside the run, whose imports nothing here sees: its exports are never judged.
+    const withShared = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule", "UsrShared"], thin("formPage"), "(formPage, shared)") },
+      DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"),
+        UsrShared: mod("UsrShared", [], "", `const CLOSED = "${GUID}";
+function spare() { return 1; }`, "{ CLOSED, spare }") });
+    check("modules: an unused export of a shared module the run's pages import is not reported — only a run page's own module is judged",
+      () => [...withShared.values()].every((p) => count(p, R.unusedModuleExport) === 0),
+      () => [...withShared.values()]);
     // The binding a page names in `args` decides which module `x.export` reads from.
     const bound = (call) => lint({ main: { ...page("UsrApp_FormPage", ["UsrApp_FormPageModule"], handler("crt.HandleViewModelInitRequest", `${call}(request.$context);`)), args: "(formPage)" } },
       DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }") }).get("main");

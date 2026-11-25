@@ -195,8 +195,8 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
       && !single.findings.some((f) => f.rule === QUALITY_RULES.unusedModuleExport) && single.wholeRun === false,
     () => single);
   const whole = runModuleFindings({ pages: { main: { schemaName: "UsrA_FormPage", deps: "[\"UsrA_FormPageModule\"]", handlers: "[{ request: \"crt.HandleViewModelInitRequest\", handler: async (request, next) => { await formPage.init(request.$context); return next?.handle(request); } }]" } } }, "main", mods);
-  check("whole run (built.json): an export nobody uses is reported, in the page's own module and in a shared module alike",
-    () => whole.findings.filter((f) => f.rule === QUALITY_RULES.unusedModuleExport).map((f) => /spare|CLOSED/.exec(f.text)?.[0]).sort((a, b) => a.localeCompare(b)).join() === "CLOSED,spare",
+  check("whole run (built.json): an export nobody uses is reported in a run page's own module, never in a shared module pages outside the run may import",
+    () => whole.findings.filter((f) => f.rule === QUALITY_RULES.unusedModuleExport).map((f) => /spare|CLOSED/.exec(f.text)?.[0]).join() === "spare",
     () => whole.findings);
   // One page in hand: two modules the page neither owns nor imports are not the builder's to fix.
   fs.writeFileSync(path.join(mdir, "UsrOtherA.js"), `define("UsrOtherA", [], function() { const X = "7b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a4b"; return { X }; });`);
