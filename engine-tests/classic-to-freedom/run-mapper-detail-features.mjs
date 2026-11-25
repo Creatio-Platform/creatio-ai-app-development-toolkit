@@ -551,7 +551,7 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && resolveVk(byType("rowlinks").vk, builtWith(kept))[0] === "✅ Done"
       && resolveVk(byType("listsort").vk, builtWith(kept, sortAttrs("desc")))[0] === "✅ Done"
       && resolveVk(byType("listsort").vk, builtWith(kept))[0] === "⚠ verify"
-      && /keep Classic's row order in `sortingConfig\.default`: `D` \(PayDate desc\)$/.test(byType("listsort").label),
+      && byType("listsort").label.endsWith("keep Classic's row order in `sortingConfig.default`: `D` (PayDate desc)"),
     () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
   const decisionOf = (r) => r.changeSet.needsDecision.find((n) => n.kind === "detail-row-actions");
   const settingRows = (r, schema) => r.plan.split("\n").filter((l) => new RegExp(String.raw`^\| ${schema} \| (Row actions|Row links|Sort) \|`).test(l));
