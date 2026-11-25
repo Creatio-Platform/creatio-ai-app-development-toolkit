@@ -23,7 +23,7 @@ document pages. Each part is there because migrations get it wrong:
 | Wizard-owned business rules | `businessRules` of `MbContractPage`: End date required when status is Active; Approval comment visible when approved; Start date editable only in Draft; Contact filtered by Customer. `businessRules` of `MbReturnNotePage`: Return reason required when the amount is above 0 | Each rule is migrated as a page rule or an entity rule, or listed as not migrated |
 | Entity-level business rule | `MbContractBusinessRule`, a business-rule add-on of the `MbContract` object: Approval comment required when approved. Freedom pages apply it; Classic pages do not | The object rule is found and kept, and told apart from the page rule on the same field |
 | Code-owned rules | `rules` of `MbContractPage`: Customer and End date editable only while `MbCanEditFields` is true (false when the contract is Closed) | Read-only state driven by an attribute survives the migration |
-| Sister pages with shared logic | `MbDeliveryNotePage` and `MbReturnNotePage` both use `MbDocumentTotalsMixin` for the **Post** button. Posting writes `MbIsPosted` to the record first and changes the page, the History line and the amount only when that write succeeds; it recalculates the contract amount as active items plus posted delivery notes minus posted return notes; `MbContractPage` uses the same method when an item changes, so the amount has one definition | The shared logic stays shared, not copied into each page |
+| Sister pages with shared logic | `MbDeliveryNotePage` and `MbReturnNotePage` both use `MbDocumentTotalsMixin` for the **Post** button. Posting saves the page's pending edits first, then writes `MbIsPosted` to the record, and changes the page, the History line and the amount only when both succeed (see "Check the Post button"); it recalculates the contract amount as active items plus posted delivery notes minus posted return notes; `MbContractPage` uses the same method when an item changes, so the amount has one definition | The shared logic stays shared, not copied into each page |
 | Page that writes data when it opens | `MbContractPage.mbAssignNumber` increments the `MbContractLastNumber` system setting when a new contract card opens | A browser check of the new-record page changes data; the migration has to say so |
 | Process with a Classic process page | The **Start approval** button (declared on the contract page, and again on `MbContractSection` for a card opened from the list) runs `MbApproveContractProcess`: Start, then a pre-configured page step that opens `MbApproveContractProcessPage` (parent `BasePageProcessTemplate`), then End. The step passes the `ContractId` process parameter to the page, which declares it as an attribute; the page's **Approve** button writes the comment and the approved flag, then completes the step. On an approved contract the page's button is disabled; the section's copy cannot bind to the card's method, so it stays enabled and says the contract is already approved | The page is recognised as a process page, and the process that opens it is found and decided on |
 | Section action and selection | "Close selected contracts" in the section actions | The action is migrated or listed |
@@ -73,6 +73,18 @@ WHERE p.Name = 'MbMigrationBench';
 
 Rows the click-through added (log lines from **Post**, new contracts and documents) stay: delete them
 by hand if a run needs the exact baseline.
+
+## Check the Post button
+
+`engine-tests/classic-to-freedom/run-benchmark-package.mjs` checks the order of **Post** against stubbed
+Classic APIs on every PR. On a stand, from the baseline:
+
+1. **Edited amount, then Post.** Open delivery note D-0002, change the amount from 300 to 500 and
+   click **Post** without saving first. D-0002 is saved with 500 and posted, the History tab shows
+   "Posted document D-0002", and the contract "Annual service contract" reads 2600 (2100 + 500).
+2. **Rejected save.** Open return note R-0001 and clear **Reason** (it is required while the amount is
+   above 0), then click **Post**. The page asks for the required field, R-0001 stays unposted, the
+   History tab gets no new line, and the contract amount does not change.
 
 ## Change it
 

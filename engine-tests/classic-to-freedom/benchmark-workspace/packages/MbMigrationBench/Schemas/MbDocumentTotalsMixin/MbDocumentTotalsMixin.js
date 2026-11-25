@@ -5,15 +5,28 @@ define("MbDocumentTotalsMixin", [], function() {
 		/**
 		 * Marks the document as posted, logs it and recalculates the contract amount.
 		 * Shared by every document page of a contract.
-		 * The flag is written to the record first, and the page, the History line and the contract
-		 * amount follow only when that write succeeds: the page's save() reports no failure, so a
-		 * rejected save would leave the page showing a posted document that was never posted.
+		 * The page's pending edits are saved first, so the amount is recalculated from what the user
+		 * sees. save() calls its callback only on success and reports no failure, so a rejected save
+		 * stops here with the document unposted. The flag is then written to the record, and the
+		 * page, the History line and the contract amount follow only when that write succeeds.
 		 */
 		mbPostDocument: function() {
 			if (this.get("MbIsPosted")) {
 				this.showInformationDialog(this.get("Resources.Strings.MbAlreadyPostedMessage"));
 				return;
 			}
+			this.save({
+				isSilent: true,
+				callback: this.mbMarkPosted,
+				scope: this
+			});
+		},
+
+		/**
+		 * Writes MbIsPosted to the saved record, then updates the page, logs and recalculates.
+		 * @private
+		 */
+		mbMarkPosted: function() {
 			const update = Ext.create("Terrasoft.UpdateQuery", {rootSchemaName: this.entitySchemaName});
 			update.filters.add("Id", Terrasoft.createColumnFilterWithParameter(
 				Terrasoft.ComparisonType.EQUAL, "Id", this.get("Id")));
