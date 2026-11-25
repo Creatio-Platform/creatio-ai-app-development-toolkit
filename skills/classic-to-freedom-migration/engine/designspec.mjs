@@ -5315,6 +5315,18 @@ const MODULE_QUALITY_RULES = new Set([QUALITY_RULES.catchLogOnly, QUALITY_RULES.
 // A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
 // `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
 // not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
+// A row's findings as one cell: the first few with their place, and how many more.
+function listQualityFindings(fs) {
+  return fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
+    + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
+}
+// A module not measured holds the row, and what the measured code already shows is listed beside it, with the row's note.
+function moduleGapCell(gap, note, blocking, noted) {
+  const parts = [gap, note || "",
+    blocking.length ? `${blocking.length} finding(s) in the code measured so far: ${listQualityFindings(blocking)}` : "",
+    noted.length ? `${noted.length} noted, not blocking: ${listQualityFindings(noted)}` : ""];
+  return ["⚠ verify", parts.filter(Boolean).join("; "), "unverified"];
+}
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
@@ -5322,19 +5334,12 @@ export function resolveQualityVk(vk, ctx) {
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
-  const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
-    + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
   const blocking = found.filter((f) => !f.advisory);
   const noted = found.filter((f) => f.advisory);
   const note = vk.note ? vk.note + " " : "";
-  // A module not measured holds the row, and what the measured code already shows is listed beside it.
   const gap = MODULE_QUALITY_RULES.has(vk.rule) ? moduleGapText(page) : null;
-  if (gap) {
-    const parts = [gap, note.trim(),
-      blocking.length ? `${blocking.length} finding(s) in the code measured so far: ${listed(blocking)}` : "",
-      noted.length ? `${noted.length} noted, not blocking: ${listed(noted)}` : ""];
-    return ["⚠ verify", parts.filter(Boolean).join("; "), "unverified"];
-  }
+  if (gap) return moduleGapCell(gap, vk.note, blocking, noted);
+  const listed = listQualityFindings;
   if (blocking.length) {
     return ["⚠ verify", `${blocking.length} finding(s): ${listed(blocking)} — fix the code, or record a decision (\`--decide D<N>\`) that accepts it${blocking.some((f) => f.limit != null) ? ", or raise the limit in `manifest.qualityThresholds`" : ""}`, "unverified"];
   }
