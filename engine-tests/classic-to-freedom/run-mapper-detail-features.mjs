@@ -151,7 +151,17 @@ const PAYMENTS_BODY = `define("PaymentDetail",[],function(){return{entitySchemaN
       const column=esq.columns.contains("PayDate")?esq.columns.get("PayDate"):esq.addColumn("PayDate");
       column.orderPosition=0;column.orderDirection=Terrasoft.OrderDirection.DESC;}},
   diff:[]};});`;
-const NO_COPY_BODY =`define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
+// Rows that open nothing and nothing else changed; the same with Edit removed; the same beside an override the scan
+// cannot read.
+const OPEN_ONLY_BODY = `define("ViewOnlyDetail",[],function(){return{entitySchemaName:"Line",methods:{editRecord:Terrasoft.emptyFn}};});`;
+const EDIT_AND_OPEN_BODY = `define("NoEditDetail",[],function(){return{entitySchemaName:"Line",methods:{getEditRecordMenuItem:Terrasoft.emptyFn,editRecord:Terrasoft.emptyFn}};});`;
+const UNREAD_AND_OPEN_BODY = `define("OddDetail",[],function(){return{entitySchemaName:"Line",methods:{editRecord:Terrasoft.emptyFn,
+  addRecordOperationsMenuItems:function(m){this.callParent(arguments);m.removeByKey("x");}}};});`;
+// An order with no column: only the direction is overridden. An order set on two columns: the column is not one.
+const DIRECTION_ONLY_BODY = `define("AscDetail",[],function(){return{entitySchemaName:"Line",methods:{getGridSortDirection:function(){return Terrasoft.OrderDirection.ASC;}}};});`;
+const TWO_COLUMNS_BODY = `define("TwoColDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
+  esq.addColumn("A").orderDirection=Terrasoft.OrderDirection.DESC;esq.addColumn("B").orderDirection=Terrasoft.OrderDirection.DESC;}}};});`;
+const NO_COPY_BODY = `define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
 // Summaries present but switched off.
 const SUMMARY_OFF_BODY = `define("SumOffDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return false;}}};});`;
 const PLAIN_BODY = `define("PlainDetail",[],function(){return{entitySchemaName:"Note",methods:{}};});`;
@@ -542,6 +552,40 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && resolveVk(byType("listsort").vk, builtWith(kept, sortAttrs("desc")))[0] === "✅ Done"
       && resolveVk(byType("listsort").vk, builtWith(kept))[0] === "⚠ verify",
     () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
+  const decisionOf = (r) => r.changeSet.needsDecision.find((n) => n.kind === "detail-row-actions");
+  const settingRows = (r, schema) => r.plan.split("\n").filter((l) => new RegExp(String.raw`^\| ${schema} \| (Row actions|Row links|Sort) \|`).test(l));
+  const openOnly = run("ViewOnlyDetail", "Line", OPEN_ONLY_BODY);
+  const openOnlyTb = checklistGroups(openOnly, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "rowtoolbar");
+  check("detail features: a detail whose only change is rows that open nothing raises the row-action decision, a Row actions row without Open, a Row links row, and drops only Open in --verify",
+    () => /opens nothing on a row click in Classic/.test(decisionOf(openOnly)?.reason || "") && /disableLinks: true` and offer no Open row action/.test(decisionOf(openOnly).reason)
+      && settingRows(openOnly, "ViewOnlyDetail").some((l) => /Row actions/.test(l) && /`rowToolbarItems` without Open/.test(l))
+      && settingRows(openOnly, "ViewOnlyDetail").some((l) => /Row links/.test(l))
+      && openOnlyTb?.vk.lists[0].drop.join(",") === "crt.UpdateRecordRequest" && openOnlyTb.vk.lists[0].noToolbar === false
+      && resolveVk(openOnlyTb.vk, builtWith({ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.UpdateRecordRequest" } }] }))[0] === "❌ MISSING"
+      && resolveVk(openOnlyTb.vk, builtWith({ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.CopyRecordRequest" } }, { type: "crt.MenuItem", clicked: { request: "crt.DeleteRecordRequest" } }] }))[0] === "✅ Done",
+    () => ({ decision: decisionOf(openOnly), rows: settingRows(openOnly, "ViewOnlyDetail"), vk: openOnlyTb?.vk }));
+  const editAndOpen = decisionOf(run("NoEditDetail", "Line", EDIT_AND_OPEN_BODY));
+  check("detail features: with Edit removed and rows that open nothing, the decision drops Open — it never says there is nothing to remove",
+    () => /WITHOUT the Open row action, and set `features\.cells\.disableLinks: true`/.test(editAndOpen?.reason || "")
+      && !/Nothing to remove/.test(editAndOpen.reason) && !/still open on click/.test(editAndOpen.reason),
+    () => editAndOpen);
+  const unreadAndOpen = decisionOf(run("OddDetail", "Line", UNREAD_AND_OPEN_BODY));
+  check("detail features: an unreadable row-action override beside rows that open nothing reads 'It also overrides', with the links-off clause",
+    () => /It also overrides `addRecordOperationsMenuItems`/.test(unreadAndOpen?.reason || "") && !/\. overrides /.test(unreadAndOpen.reason)
+      && /it leaves out, and set `features\.cells\.disableLinks: true`/.test(unreadAndOpen.reason),
+    () => unreadAndOpen);
+  const asc = run("AscDetail", "Line", DIRECTION_ONLY_BODY);
+  const ascSort = checklistGroups(asc, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "listsort");
+  check("detail features: a sort with only a direction reads no column, its row says to read the column, and --verify never closes it",
+    () => JSON.stringify(detailOf(asc, "AscDetail").features.sort) === JSON.stringify({ column: null, direction: "asc", locked: false })
+      && settingRows(asc, "AscDetail").some((l) => /column not read, ascending/.test(l) && /⚠ read the sort column in the Classic body/.test(l) && !/re-sort lock/.test(l))
+      && resolveVk(ascSort.vk, builtWith({ ...kept, name: "DList" }, sortAttrs("asc")))[0] === "⚠ verify",
+    () => ({ sort: detailOf(asc, "AscDetail").features.sort, rows: settingRows(asc, "AscDetail"), vk: ascSort?.vk }));
+  check("detail features: an order set on two columns names no single column",
+    () => detailOf(run("TwoColDetail", "Line", TWO_COLUMNS_BODY), "TwoColDetail").features.sort?.column === null);
+  check("detail features: a locked sort says the re-sort lock is neither carried nor checked",
+    () => payRows.some((l) => /\| Sort \|/.test(l) && /the re-sort lock is not carried or checked/.test(l)),
+    () => payRows);
   const prefixVk = { type: "rowtoolbar", n: 1, names: ["Activity"] };
   check("detail features: --verify never takes a grid whose name merely starts with the detail's — the exact name wins, a longer name is not the list",
     () => resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityTypeGrid", rowToolbarItems: [] }, { type: "crt.DataGrid", name: "Activity" }]))[0] === "❌ MISSING"

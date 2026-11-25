@@ -1252,8 +1252,12 @@ function detailRowSettingRows(name, d) {
   if (s) {
     const order = s.direction === "desc" ? "descending" : "ascending";
     const locked = s.locked ? "; the user cannot re-sort (`IsSortable` off)" : "";
-    rows.push([name, "Sort", `${s.column ? "`" + esc(s.column) + "` " : "column not read, "}${order}${locked}`,
-      s.column ? `the list's \`sortingConfig.default\`: \`[{ columnName: "${esc(s.column)}", direction: "${s.direction}" }]\`` : "⚠ read the sort column in the Classic body, then set the list's `sortingConfig.default`"]);
+    const target = s.column
+      ? `the list's \`sortingConfig.default\`: \`[{ columnName: "${esc(s.column)}", direction: "${s.direction}" }]\``
+      : "⚠ read the sort column in the Classic body, then set the list's `sortingConfig.default`";
+    // the re-sort lock has no Freedom setting the engine knows, so the row says it is neither carried nor checked
+    const lockNote = s.locked ? " · the re-sort lock is not carried or checked — keep the default column sorting" : "";
+    rows.push([name, "Sort", `${s.column ? "`" + esc(s.column) + "` " : "column not read, "}${order}${locked}`, target + lockNote]);
   }
   return rows;
 }

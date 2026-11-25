@@ -1573,7 +1573,7 @@ function addMechanismDecision(am, label) {
 function rowActionsDecision(am, label) {
   const removed = am.rowActionsRemoved || [];
   const unreadable = am.rowActionsUnreadable || [];
-  const parts = [...removedActionsSentences(removed, !!am.rowsOpenNothing), ...unreadableOverrideSentences(unreadable, removed.length > 0, !!am.rowsOpenNothing)];
+  const parts = [...removedActionsSentences(removed, !!am.rowsOpenNothing), ...unreadableOverrideSentences(unreadable, removed.length > 0 || !!am.rowsOpenNothing, !!am.rowsOpenNothing)];
   return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
     reason: `Detail '${label}' ${parts.join(" ")}` };
 }
@@ -1588,7 +1588,7 @@ const openClause = (opensNothing) => (opensNothing
 // What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing changed.
 function removedActionsSentences(removed, opensNothing) {
   if (!removed.length) return opensNothing ? [`opens nothing on a row click in Classic. Build its list rows so they ${openClause(true)}`] : [];
-  const drop = freedomRowActionsToDrop(removed);
+  const drop = freedomRowActionsToDrop(removed, opensNothing);
   const build = drop.length
     ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and ${openClause(opensNothing)}`
     : `Nothing to remove from the Freedom list rows — ${openClause(opensNothing)}`;
