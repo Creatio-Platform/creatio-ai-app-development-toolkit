@@ -153,7 +153,8 @@ included, runs without asking. So the question is yours, asked before the first 
 The engine reads the LAST `Browser:` line: until it names one of `page-smoke` · `surface` · `none`,
 `--next` withholds and `--start` refuses every task that writes a page, and `--handoff` refuses the
 folder. A folder whose page work has already begun (a page task in progress or built) is not held:
-the question belonged before its first page task, so ask it before the next one anyway. **One answer about one check
+the question belonged before its first page task, so ask it before the next one anyway; while that folder has no
+`Browser:` line, `--next` and `resume.md` say the answer is still owed. **One answer about one check
 is not this answer.** A user who says "I'll check this one myself" about one page has answered for
 that page; never write it as `Browser: none`, and never tell builders "do not run browser checks",
 unless the user confirms it holds for the whole run. A later change of mind is a new line.

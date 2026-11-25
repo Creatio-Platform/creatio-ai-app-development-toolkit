@@ -23,7 +23,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute,
-  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf, pageWorkBegun, browserAnswerOwed,
+  BROWSER_ANSWERS, worklogBrowser, writesPage, browserAnswerOf, pageWorkBegun, browserAnswerOwed, browserAnswerUngated,
   withTimingsLock, TIMINGS_LOCK, TIMINGS_LOCK_FILE, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY,
   readFrozenMode, freezeMode, resolveFrozenMode, effectiveFrozenMode, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
   RECONCILE_MODE_DEFAULT, TASK_CARD_HEADING } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
@@ -5871,6 +5871,21 @@ console.log("\n===== the migration result report — one artifact, computed from
   check("exercised: a page whose LAST built chunk reports no check is unexercised even though an earlier chunk checked it — the page is opened as it finally stands",
     () => lastChunkUnchecked.verdictColour === "orange" && lastChunkUnchecked.counts.unexercised === 1,
     () => lastChunkUnchecked.markdown.split("\n")[2]);
+  {
+    // A whole-run build is ONE artifact in the browser verdict, whatever pages it saved: its single
+    // `Browser checks: N` line decides all of them at once, as one check line decides one page's last chunk.
+    const wholeTask = (notes) => ({ ...pageTask("wh-a", "run", notes, ARTIFACT_WHOLE), group: "Whole run",
+      rows: [{ label: "Form page main", pageKey: "main", outcomeKind: "built", outcome: "built" },
+        { label: "List page list", pageKey: "list", outcomeKind: "built", outcome: "built" }] });
+    const wholeChecked = exercisedRep([wholeTask("Browser checks: 1 — form loads clean")], tmp("result-report-whole-checked"));
+    const wholeUnchecked = exercisedRep([wholeTask("Browser checks: 0 — read-back only")], tmp("result-report-whole-unchecked"));
+    check("exercised: a whole-run build is one artifact in the browser verdict — one reported check marks the run exercised, none leaves the whole run as the one unexercised entry",
+      () => wholeChecked.verdictColour === "green" && wholeChecked.counts.unexercised === 0
+        && (wholeChecked.markdown.match(/^- \*\*.*\(`whole`\)/gm) || []).length === 1
+        && wholeUnchecked.verdictColour === "orange" && wholeUnchecked.counts.unexercised === 1
+        && wholeUnchecked.unexercisedPages.length === 1,
+      () => ({ checked: wholeChecked.verdictColour, unchecked: wholeUnchecked.unexercisedPages }));
+  }
   const oneUnchecked = exercisedRep([pageTask("u-a", "main", "Browser checks: 1 — loads clean"),
     { ...pageTask("u-b", "child:C1", "Check on stand (row 1): open a C1 record → the Owner field is filled"), status: "done" }],
   tmp("result-report-unexercised"));
@@ -6751,6 +6766,10 @@ console.log("\n===== the hand-off readers: planApprovalLine / worklogRoute =====
       () => pageWorkBegun(inFlight) && !browserAnswerOwed(inFlight) && !!otherPage
         && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } })?.cause !== HOLD_BROWSER,
       () => ({ begun: pageWorkBegun(inFlight), other: otherPage?.id, blocker: otherPage && startBlocker(otherPage, inFlight, {}, { browserGate: { answer: null } }) }));
+    check("browserAnswerUngated: true once page work has begun with a page task still open, false on a fresh folder and on one whose page tasks are all closed",
+      () => browserAnswerUngated(inFlight) && !browserAnswerUngated(readTaskDir(d))
+        && !browserAnswerUngated(inFlight.map((t) => (writesPage(t.writesTo) && ["todo", "in-progress"].includes(t.status) ? { ...t, status: "done" } : t))),
+      () => ({ inFlight: browserAnswerUngated(inFlight), fresh: browserAnswerUngated(readTaskDir(d)) }));
     const fresh = readTaskDir(d);
     const closedPages = fresh.map((t) => (writesPage(t.writesTo) ? { ...t, status: "wont-do" } : t));
     check("browserAnswerOwed: a fresh folder with page tasks owes the answer; one whose page tasks are all closed without building, or that has no page task, does not",
@@ -6944,6 +6963,18 @@ console.log("\n===== migrate.mjs --tasks <dir> --handoff (CLI) =====");
     check("--handoff: a folder whose page work began before it had a `Browser:` line is not refused for it — resume.md is written",
       () => res.status === 0 && !/`Browser:`/.test(res.stdout || "") && fs.existsSync(path.join(copy, "resume.md")),
       () => ({ running: readTimingsFile(cdir).running, status: res.status, out: (res.stdout || "").slice(0, 600) }));
+    // The lift refuses nothing, so the answer still owed is said where a fresh context reads its next command.
+    const resume = fs.readFileSync(path.join(copy, "resume.md"), "utf8");
+    const owedNext = cliFile(manifestPath, "--tasks", cdir, "--next");
+    check("--handoff / --next: in that folder resume.md and `--next` say the browser answer is still owed and name step 7.0b",
+      () => /^- \*\*Browser:\*\* not answered — .*7\.0b/m.test(resume)
+        && /BROWSER ANSWER STILL OWED — .*7\.0b/.test(owedNext.stdout || ""),
+      () => ({ resume: resume.split("\n").find((l) => l.includes("Browser")), next: (owedNext.stdout || "").slice(-600) }));
+    fs.appendFileSync(path.join(copy, "worklog.md"), "Browser: page-smoke\n");
+    const answeredNext = cliFile(manifestPath, "--tasks", cdir, "--next");
+    check("--next: once worklog.md records a `Browser:` line, the still-owed reminder is gone",
+      () => !/BROWSER ANSWER STILL OWED/.test(answeredNext.stdout || ""),
+      () => (answeredNext.stdout || "").slice(-600));
   }
   refusalCase("route-tbd", (c) => fs.writeFileSync(path.join(c, "worklog.md"), worklogOk.replace("Route: agent", "Route: TBD")), {},
     /no `Route:` line naming one of agent · codex · copilot · inline/, /7\.0/);

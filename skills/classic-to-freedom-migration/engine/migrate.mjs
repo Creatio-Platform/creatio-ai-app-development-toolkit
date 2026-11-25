@@ -70,7 +70,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
-  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, browserAnswerOwed, readTimingsFile, renderResume,
+  RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, browserAnswerOwed, browserAnswerUngated, readTimingsFile, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
@@ -3772,6 +3772,13 @@ function recordFileLines(records) {
 // The browser answer step 7.0b records in `worklog.md` of the migration folder above the task folder `dir`. `--start`
 // and `--next` read it through the shared start predicate, so a page task is held until the question was asked.
 const browserGateFor = (dir) => ({ answer: readWorklogBrowser(dir) });
+// The reminder `--next` prints while the browser answer is owed and no gate holds for it (`browserAnswerUngated`); [] otherwise.
+function browserOwedLines(dir, tasks) {
+  if (readWorklogBrowser(dir) || !browserAnswerUngated(tasks, readTimingsFile(dir).running)) return [];
+  return [`migrate.mjs: ℹ BROWSER ANSWER STILL OWED — worklog.md has no \`Browser:\` line, and page tasks are still open.`
+    + " Page work has begun, so none of them is refused for it: ask the browser question (orchestrate-build.md 7.0b)"
+    + " before you dispatch the next page task, and record the answer."];
+}
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
@@ -3953,7 +3960,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   const answer = startableTasks(set, dir, browserGateFor(dir));
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return [...nextAnswerLines(answer, dir, cmdFor), ...records].join("\n") + "\n";
+  return [...nextAnswerLines(answer, dir, cmdFor), ...browserOwedLines(dir, set.tasks), ...records].join("\n") + "\n";
 }
 
 // `--tasks <dir> --handoff` — HAND THE BUILD LOOP TO A FRESH SESSION (orchestrate-build.md 7.1b).
@@ -4034,6 +4041,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   const { text, prompt } = renderResume({
     migrationDir: folder, tasksDir, manifestPath: manifestCopy, environment: ctx.environment,
     planVersion: result.planVersion, approvalLine, route, browser,
+    browserUngated: !browser && browserAnswerUngated(set.tasks, readTimingsFile(tasksDir).running),
     progress: renderProgress(set, tasksDir), next: answer.startable[0] || null, verdict: answer.verdict,
     nextCommand: ctx.nextCommand(manifestCopy, tasksDir), now: new Date().toISOString(),
   });

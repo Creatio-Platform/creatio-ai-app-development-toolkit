@@ -3567,9 +3567,13 @@ const PAGE_WORK_BEGUN = new Set([S_IN_PROGRESS, S_DONE, S_PARTIAL]);
 // `running` is the clock map of `timings.json`: a started task is `todo` on its file until its cells move.
 export const pageWorkBegun = (tasks, running = {}) => (tasks || []).some((t) => writesPage(t.writesTo)
   && (PAGE_WORK_BEGUN.has(t.status) || Object.hasOwn(running || {}, t.id)));
+const pageTaskOpen = (tasks) => (tasks || []).some((t) => writesPage(t.writesTo) && OPEN_LIFECYCLE.has(t.status));
 // The folder still owes the browser answer: a page-writing task is yet to run, and no page work has begun.
-export const browserAnswerOwed = (tasks, running = {}) =>
-  !pageWorkBegun(tasks, running) && (tasks || []).some((t) => writesPage(t.writesTo) && OPEN_LIFECYCLE.has(t.status));
+export const browserAnswerOwed = (tasks, running = {}) => !pageWorkBegun(tasks, running) && pageTaskOpen(tasks);
+// The answer is still owed and no gate holds for it: page work has begun and a page-writing task is still open. Nothing
+// refuses those tasks, so `--next` and `resume.md` say the answer is owed, and a fresh context reads it where it
+// reads its next command rather than only in the 7.0b prose.
+export const browserAnswerUngated = (tasks, running = {}) => pageWorkBegun(tasks, running) && pageTaskOpen(tasks);
 
 export function startBlocker(task, tasks, running = {}, { decisions = decisionIndex(tasks), browserGate = null } = {}) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
@@ -5112,6 +5116,9 @@ export function renderResume(f) {
     `- **Route:** \`${f.route}\` (from \`worklog.md\` — dispatch every task this way; never switch mid-run)`,
     ...(f.browser ? [`- **Browser:** \`${f.browser}\` (from \`worklog.md\` — the browser question is answered; hand this line`
       + " to every builder and never ask it again)"] : []),
+    ...(!f.browser && f.browserUngated ? ["- **Browser:** not answered — `worklog.md` has no `Browser:` line and page work"
+      + " has begun, so no page task is refused for it: ask the browser question (orchestrate-build.md 7.0b) before you"
+      + " dispatch the next page task, and record the answer there"] : []),
     `- **Next startable task:** ${nextLine}`,
     "",
     "## Progress",
