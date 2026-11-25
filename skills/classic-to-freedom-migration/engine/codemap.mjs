@@ -159,27 +159,30 @@ export function runModuleFindings(root, pageKey, modules, thresholds = DEFAULT_Q
   const pages = wholeRun ? root.pages : { [pageKey]: root };
   // One page in hand: a finding is the builder's only when it touches a module the page owns or imports, directly
   // or through those modules. Two unrelated modules elsewhere in the folder are not this page's to fix.
-  const reach = wholeRun ? null : importClosure(root, pageKey, modules);
-  const touches = (f) => !reach || !f.section?.startsWith("module ") || [...reach].some((n) => f.section === `module ${n}` || f.text.includes(`\`${n}\``));
+  const reach = wholeRun ? null : importClosure(root, modules);
   const out = [];
-  for (const [key, lint] of lintRunQuality(pages, thresholds, new Set(), modules, wholeRun)) {
-    for (const f of lint?.findings || []) if (RUN_MODULE_RULES.includes(f.rule) && touches(f)) out.push({ page: key, ...f });
-    for (const u of lint?.unreadable || []) if (u.startsWith("module ")) out.push({ page: key, rule: "unreadable", text: `${u} could not be parsed` });
-  }
+  for (const [key, lint] of lintRunQuality(pages, thresholds, new Set(), modules, wholeRun)) out.push(...pageModuleFindings(key, lint, reach));
   return { modules: Object.keys(modules).length, findings: out, wholeRun };
 }
 
+// One page's run-module findings and unreadable modules. With `reach` (one page in hand), a module finding counts
+// only when it names a module the page reaches.
+function pageModuleFindings(key, lint, reach) {
+  const touches = (f) => !reach || !f.section?.startsWith("module ")
+    || [...reach].some((n) => f.section === `module ${n}` || f.text.includes(`\`${n}\``));
+  return [
+    ...(lint?.findings || []).filter((f) => RUN_MODULE_RULES.includes(f.rule) && touches(f)).map((f) => ({ page: key, ...f })),
+    ...(lint?.unreadable || []).filter((u) => u.startsWith("module ")).map((u) => ({ page: key, rule: "unreadable", text: `${u} could not be parsed` })),
+  ];
+}
+
 // The modules one page reaches: its own `<PageSchema>Module`, its imports, and theirs.
-function importClosure(entry, pageKey, modules) {
+// A Set visits what is added to it during the loop, so one pass follows the imports to the end.
+function importClosure(entry, modules) {
   const reach = new Set(bundleDeps(entry) || []);
   if (typeof entry?.schemaName === "string") reach.add(entry.schemaName + "Module");
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const name of [...reach]) {
-      for (const dep of (typeof modules[name] === "string" ? parseDefineModule(modules[name]).deps : [])) {
-        if (!reach.has(dep)) { reach.add(dep); grew = true; }
-      }
-    }
+  for (const name of reach) {
+    if (typeof modules[name] === "string") for (const dep of parseDefineModule(modules[name]).deps) reach.add(dep);
   }
   return reach;
 }

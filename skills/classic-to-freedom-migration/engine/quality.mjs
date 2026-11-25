@@ -703,22 +703,29 @@ function wrappedCallOf(fn) {
   return expr?.type === "CallExpression" ? calleePath(expr.callee) : null;
 }
 
-function reportInlinedWrappers(read, importers, report, ownModules, byPage) {
+// One wrapper per call, the one to reuse: an exported one first, then one in a shared module. A second wrapper of
+// the same call is that call typed again, so only the chosen one's own call is not counted.
+function chosenWrappers(read, ownModules) {
   const all = read.flatMap((m) => m.functions.filter((f) => !f.nested).map((f) => ({ m, f, path: wrappedCallOf(f.fn),
     exported: m.exports.some((ex) => ex.fn === f.fn), shared: !ownModules.has(m.name) }))).filter((w) => w.path);
-  // One wrapper per call, the one to reuse: an exported one first, then one in a shared module. A second wrapper of
-  // the same call is that call typed again, so only the chosen one's own call is not counted.
   const rank = (w) => (w.exported ? 0 : 2) + (w.shared ? 0 : 1);
-  for (const [path, group] of groupBy(all, (w) => w.path)) {
-    const w = group.slice().sort((a, b) => rank(a) - rank(b))[0];
+  return [...groupBy(all, (w) => w.path).values()].map((group) => group.slice().sort((a, b) => rank(a) - rank(b))[0]);
+}
+
+function reportInlinedWrappers(read, importers, report, ownModules, byPage) {
+  for (const w of chosenWrappers(read, ownModules)) {
     for (const s of importers) {
-      const n = (s.calls.get(path) || 0) - (s.name === w.m.name ? 1 : 0);
-      if (n < 1) continue;
-      const how = w.exported || s.name === w.m.name ? "call it" : "export it and call it";
-      const who = s.name ? `\`${s.name}\`` : "the page";
-      const text = `${who} calls \`${path.slice(1)}\` ${n} time(s) directly although \`${w.m.name}.${w.f.name}\` wraps it — ${how}`;
-      if (s.name) report(s.name, QUALITY_RULES.wrappedCallInlined, 0, text);
-      else byPage.get(s.page)?.findings.push(finding(QUALITY_RULES.wrappedCallInlined, "handlers", 0, text));
+      const n = (s.calls.get(w.path) || 0) - (s.name === w.m.name ? 1 : 0);
+      if (n >= 1) fileInlinedCall(w, s, n, report, byPage);
     }
   }
+}
+
+// A module's finding goes to the module's page; a page's to the page itself.
+function fileInlinedCall(w, s, n, report, byPage) {
+  const how = w.exported || s.name === w.m.name ? "call it" : "export it and call it";
+  const who = s.name ? `\`${s.name}\`` : "the page";
+  const text = `${who} calls \`${w.path.slice(1)}\` ${n} time(s) directly although \`${w.m.name}.${w.f.name}\` wraps it — ${how}`;
+  if (s.name) report(s.name, QUALITY_RULES.wrappedCallInlined, 0, text);
+  else byPage.get(s.page)?.findings.push(finding(QUALITY_RULES.wrappedCallInlined, "handlers", 0, text));
 }

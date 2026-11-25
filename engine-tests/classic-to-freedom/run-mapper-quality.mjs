@@ -381,7 +381,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       handler("crt.HandleViewModelInitRequest", "await sdk.HandlerChainService.instance.process({ type: \"crt.LoadDataRequest\", $context: request.$context });")) },
     DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"), UsrTotals: hiddenTotals }).get("main");
     check("modules: a page handler writing out a call a module function wraps is reported on the page, and an unexported wrapper says to export it",
-      () => pageInlines.findings.some((f) => f.rule === R.wrappedCallInlined && /^the page calls/.test(f.text) && /export it and call it/.test(f.text)),
+      () => pageInlines.findings.some((f) => f.rule === R.wrappedCallInlined && f.text.startsWith("the page calls") && /export it and call it/.test(f.text)),
       () => pageInlines.findings);
     check("modules: a body the bounded walk refuses is named unreadable before any other walk runs over it",
       () => { const deep = "define(\"UsrApp_FormPageModule\", [], function() { const x = " + "[".repeat(1200) + "]".repeat(1200) + "; return {}; });";
