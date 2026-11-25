@@ -1,6 +1,7 @@
 // Golden test for the mapper: merge -> map -> assert Freedom ChangeSet.
 import { runMachineRowChecks } from "./run-mapper-machine-rows.mjs";
 import { runConventionsChecks } from "./run-mapper-conventions.mjs";
+import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
 import fs from "node:fs";
@@ -5246,13 +5247,24 @@ const rsHostile = (() => {
 check("hostile input: a huge layout.rowSpan is clamped (no OOM/throw) and the field still maps",
   rsHostile.ok === true && rsHostile.fields >= 1 && rsHostile.ms < 5000,
   () => rsHostile);
-// detail-placement — a detail whose owning tab cannot be resolved (declared in `details`, never placed in a tab).
+// A detail declared in `details` and placed in no tab is not shown in Classic: it is an approval row, not a placement
+// question, and the mapped record says so.
 const dpCs = mapToFreedom(mergeHierarchy([L("P", { entity: "X",
   diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })],
   details: { LooseDetail: { schemaName: "LooseDetail", entitySchemaName: "LooseE" } } })]));
-check("T3: a detail with no resolvable tab → detail-placement decision",
-  dpCs.needsDecision.some((n) => n.kind === "detail-placement" && n.item === "LooseDetail"),
+check("T3: a detail declared but placed in no tab → detail-unplaced approval decision, no detail-placement question, record marked unplaced",
+  dpCs.needsDecision.some((n) => n.kind === "detail-unplaced" && n.item === "LooseDetail" && /Nothing is built for it until the user answers/.test(n.reason))
+    && !dpCs.needsDecision.some((n) => n.kind === "detail-placement" && n.item === "LooseDetail")
+    && dpCs.details.find((d) => d.detailSchema === "LooseDetail")?.unplaced === true,
   () => dpCs.needsDecision.map((n) => `${n.kind}:${n.item}`));
+// A detail whose diff item names a parent the engine cannot resolve is still a placement question.
+const dpUnresolved = mapToFreedom(mergeHierarchy([L("P", { entity: "X",
+  diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" }), di({ name: "LooseDetail", parentName: "NoSuchContainer", propertyName: "items", itemType: 2 })],
+  details: { LooseDetail: { schemaName: "LooseDetail", entitySchemaName: "LooseE" } } })]));
+check("T3: a detail placed under a container the engine cannot resolve → detail-placement decision",
+  dpUnresolved.needsDecision.some((n) => n.kind === "detail-placement" && n.item === "LooseDetail")
+    && !dpUnresolved.needsDecision.some((n) => n.kind === "detail-unplaced"),
+  () => dpUnresolved.needsDecision.map((n) => `${n.kind}:${n.item}`));
 
 /* ---- E5/T5: a schema entry with neither `body` nor a string `file` gives a CLEAR error (not a cryptic
    path.resolve(undefined) TypeError), and a `file` that escapes the manifest base dir is rejected (no traversal). ---- */
@@ -10741,6 +10753,7 @@ check("renderVerify: `rows` carries every table row with its page, kind (machine
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
 runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
 runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX, ENGINE_DIR });
+runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta });
 runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
 

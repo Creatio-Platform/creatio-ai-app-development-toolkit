@@ -152,6 +152,8 @@ export const GROUP_PHASE = new Map([
   // Applied ONTO the template's existing fields, so the fields must be laid out first and counted after.
   ["Form — Base-field overrides", 35],
   ["Form — Coverage (verified)", 40],
+  // The related lists and fields exist once the layout is built; their filters, toolbars and read-only state follow.
+  ["Form — Detail features", 45],
   ["Card actions", 50],
   ["Form — Business rules", 60],
   ["Form — Custom methods", 65],

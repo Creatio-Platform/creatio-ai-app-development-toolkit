@@ -572,6 +572,12 @@ export function mapToFreedom(eff, opts = {}) {
   const D = mapDetails(ctx, containers, F.profileRegion);
   D.needsDecision.forEach(d => needsDecision.push(d));
   D.accountedFor.forEach(a => accountedFor.add(a));
+  // details a customer or vendor template layer declares: not this page's own, yet part of what its users saw
+  const inheritedDetails = inheritedLayerDetails(eff.details);
+  const inheritanceUnchecked = uncheckedTemplateDetails(eff.details);
+  inheritanceUnchecked.forEach((name) => needsDecision.push({ kind: "detail-inheritance-unchecked", item: name,
+    reason: `detail '${name}' comes from a template layer whose \`pkg\` names no package, so whether a customer or vendor layer declares it was NOT checked — supply the layer's package, then decide it like an inherited detail` }));
+  inheritedDetails.forEach((d) => needsDecision.push(inheritedDetailDecision(d, chainIsComplete(eff))));
 
   // ---- embedded profile cards (linked-record blocks) → the Freedom side profile ----
   const _pc = mapProfileCards(ctx);
@@ -644,6 +650,10 @@ export function mapToFreedom(eff, opts = {}) {
     standardFeatures: D.standardFeatures,
     // standard features the run has no evidence to build (see `withheldFeature`): a Layout row each, nothing built.
     withheldFeatures: D.withheldFeatures,
+    // details declared by a customer or vendor template layer (not the platform base): an "inherited — decide" row each
+    inheritedDetails,
+    // template details whose layers name no package, so inheritance could not be checked for them
+    inheritanceUnchecked,
     // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
     // compact-profile component wired by `referenceColumn`, or the read-only-fields island fallback.
     profileCards,
@@ -813,6 +823,8 @@ const freedomRequest = (elementName, prefix) => `${prefix}.${elementName}Clicked
 // against its enclosing function, and this one closes over nothing in `mapFields`.
 const islandOf = (own) => (own.groups?.length ? own.groups[0].name : null);
 
+// Classic's STATIC read-only signals on a field: the diff disables it (`enabled: false`) or marks it `readonly: true`.
+const staticReadOnly = (f) => f.enabled === false || f.readonly === true;
 function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   const hiddenAncestor = (own.groups || []).find((g) => g.visible === false || g.visible === "dynamic");
   let vis = f.visible !== false;
@@ -1025,6 +1037,10 @@ function mapFields(ctx, containers) {
     }
     values.typeLabel = fieldTypeLabel(col, meta, c);
     applyFieldTypeMeta(values, col, c, meta);
+    // A field the page's own Classic diff disables (`enabled: false`) or marks `readonly` is read-only there for every
+    // record; built editable it lets users change what Classic never let them. `readOnlyStatic` is plan-only metadata
+    // that names the source, so the plan and `--verify` can hold the built field to it.
+    if (staticReadOnly(f)) { values.readOnly = true; values.readOnlyStatic = true; }
     applyHintTip(values, f, col);
     return values;
   };
@@ -1089,7 +1105,6 @@ function mapFields(ctx, containers) {
   // looks the same. Such a field stays editable and is named, with its writing methods, in one folded
   // `field-attribute-computed` decision, unless an attribute `dependencies` entry lists X in its columns (the classic
   // "the user edits X and the page reacts" wiring, which settles it as an input). The writer map is built once.
-  const staticReadOnly = (f) => f.enabled === false || f.readonly === true;
   const computedAttrFields = [];
   let attrWriters = null;
   const attributeWriters = (col) => {
@@ -1760,7 +1775,8 @@ function mapDetails(ctx, containers, profileRegion) {
     }
     standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null,
       caption: listTitle?.text ?? null, captionKey: listTitle?.key ?? null, captionSource: listTitle?.source ?? null,
-      ...(settings ? { element: d.key, connections: settings.connections } : {}) });
+      ...(settings ? { element: d.key, connections: settings.connections } : {}),
+      ...(awaitsPlacement(d) ? { unplaced: true } : {}) });
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
@@ -1778,8 +1794,8 @@ function mapDetails(ctx, containers, profileRegion) {
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
         reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     }
-    if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
-      reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
+    if (d.parent && !tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+      reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent}' unresolved) — confirm target tab` });
     // editability lives in the detail's OWN config. When bundled (dinfo), the INLINE-EDITABLE-GRID case is read
     // from the grid config (buildCustomDetail → `editable`); any other bundled detail is a standard related list
     // whose add/edit/delete happens through the child EDIT PAGE (surfaced next as `detail-editpage`), so there is
@@ -1804,6 +1820,11 @@ function mapDetails(ctx, containers, profileRegion) {
       texts: detailTexts,
       columns: dinfo?.columns?.length ? dinfo.columns : null,
       editable,
+      // the Classic element name of the detail: the plan names the list's quick filters and grid after it
+      element: d.key || null,
+      // what users can do with the list besides its columns; null when the detail's schema was not bundled
+      features: detailFeaturesOf(d, dinfo),
+      ...(awaitsPlacement(d) ? { unplaced: true } : {}),
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
@@ -1820,12 +1841,21 @@ function mapDetails(ctx, containers, profileRegion) {
     return title;
   };
   // Emit ONE deduped placement: a standard feature (A3 analog) or a rebuilt custom detail. Own fn for Sonar CC 15.
-  const emitDetail = ({ d, tab, own }) => {
+  const emitDetail = ({ d: declared, tab, own }) => {
+    // A `build` answer to the unplaced question puts the detail back: it is built like a placed one, and its tab is
+    // then the open question.
+    const answered = declared.parent ? null : featureStatus([unplacedConfirmId(declared)]);
+    const d = answered?.status === "build" ? { ...declared, placementApproved: true } : declared;
     // Ensure the OWNING tab is emitted as a container so a tab holding ONLY details is still built (+ caption).
     if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
+    // A detail Classic declares but never places is not shown there: building it, a standard feature included, adds a
+    // surface the user never had, so it waits for their approval.
+    if (!d.parent) needsDecision.push(unplacedDetailDecision(d, feat?.feature, chainIsComplete(ctx.eff), answered));
+    if (d.placementApproved) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+      reason: `the user approved building detail '${d.key}', which Classic placed in no tab — confirm target tab` });
     if (feat?.requiresRegistry && !componentAvailable(feat.componentType)) {
       const decided = featureStatus(withheldIds(feat.feature, d.schemaName || d.key));
       needsDecision.push(unavailableFeatureDecision(d, feat, registrySource, registryUnindexedVersion, decided));
@@ -1840,6 +1870,78 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   for (const entry of bySig.values()) emitDetail(entry);
   return { details, standardFeatures, withheldFeatures, needsDecision, accountedFor, carriedMethods };
+}
+
+// THE DETAIL FEATURE INVENTORY on the mapped detail: the body scan (`scanDetailFeatures`) plus the page element each
+// quick filter becomes. The element name is published so `--verify` can find the built control by name and type.
+// null when the detail's schema was not bundled: the inventory is then unknown, not empty.
+function detailFeaturesOf(d, dinfo) {
+  const f = dinfo?.features;
+  if (!f) return null;
+  const owner = d.key || d.schemaName || "Detail";
+  return { ...f, quickFilters: (f.quickFilters || []).map((q) => ({ ...q, element: `${owner}QuickFilterBy${q.attribute}` })) };
+}
+
+// A detail Classic declares but never places on the page (no diff item puts it in a tab) is not shown to its users.
+// Nothing is built or dropped on the engine's say-so, a blanket hide rule included: the user approves either way.
+// The text says no more than the input supports: the engine sees only the FETCHED layers, so a detail no fetched layer
+// places was hidden from users only when the parent chain is known to be complete. With a missing, skeletal or partial
+// seed a layer that was not fetched may place it, and the question says so instead of asserting what users saw.
+// The answer is recorded on the question's own confirm row (`confirm:detail-unplaced:<item>`): `build` builds the
+// detail and asks for its tab (`detail-placement`); any other answer, or none, builds nothing for it.
+const unplacedConfirmId = (d) => `confirm:detail-unplaced:${d.schemaName || d.key}`;
+const awaitsPlacement = (d) => !d.parent && !d.placementApproved;
+const UNPLACED_SEEN = {
+  complete: "no layer of the page's complete chain places it in a tab, so its users never saw it",
+  partial: "no FETCHED layer places it in a tab, but the parent chain is not known to be complete (no seed, or a skeletal or partial one): a layer missing from the manifest may place it. Complete the chain before answering",
+};
+function unplacedDetailDecision(d, feature, chainComplete, answered = null) {
+  const item = d.schemaName || d.key;
+  const what = feature ? `the ${feature} detail '${item}'` : `detail '${item}'`;
+  const seen = chainComplete ? UNPLACED_SEEN.complete : UNPLACED_SEEN.partial;
+  const base = { kind: "detail-unplaced", item, chainComplete, ...(feature ? { feature } : {}), ...(answered ? { decidedBy: answered.key } : {}) };
+  if (answered?.status === "build") {
+    return { ...base, reason: `${what} is declared on the Classic page; ${seen}. Answered build (${answered.decision || answered.key}): it is built, and its tab is the \`detail-placement\` question` };
+  }
+  return { ...base, reason: `${what} is declared on the Classic page; ${seen}. Answer build or Won't do on this row; a build answer builds it and then asks for its tab. Nothing is built for it until the user answers` };
+}
+// Whether the merged chain is complete enough to say what Classic users saw: a real seed that is neither skeletal nor
+// partial, or a page verified to have no parent template.
+const chainIsComplete = (eff) => {
+  const q = eff?.seedQuality;
+  return eff?.noParentTemplate === true || (!!q && q.seeded && !q.looksSkeletal && !q.possiblyPartial);
+};
+
+// The packages of the Creatio platform itself: Creatio's own `Crt…` and `Terrasoft…` packages and the base ones. A
+// template layer from any other package (a customer's or a vendor's) carries details its users saw on this page, so
+// each becomes a plan row instead of silent context. A layer whose `pkg` is blank names no package, so its details
+// are reported as not checked.
+const PLATFORM_PACKAGE = /^(?:Crt\w*|Base|NUI|UIv2|Platform\w*|Core|Terrasoft\w*)$/i;
+// A layer's `pkg` is the package name itself (what `get-classic-page-sources` writes, e.g. `Samarasoft.Logging`), or
+// `Schema/Package` (the form the module contract documents); either way the package is the part after any `/`.
+const layerPackage = (pkg) => { const s = String(pkg || "").trim(); return s.slice(s.indexOf("/") + 1).trim() || null; };
+const nonPlatformLayer = (pkg) => { const p = layerPackage(pkg); return !!p && !PLATFORM_PACKAGE.test(p); };
+function inheritedLayerDetails(details) {
+  return (details || []).filter((d) => d.fromTemplate && (d.provenance || []).some(nonPlatformLayer))
+    .map((d) => ({ key: d.key, schemaName: d.schemaName || null, entity: d.entitySchemaName || null,
+      layer: (d.provenance || []).findLast(nonPlatformLayer), parent: d.parent || null }));
+}
+// Template details whose layers name no package at all: whether they are inherited from a customer or vendor layer
+// was NOT checked, which the plan has to say rather than show an empty list that reads as "nothing inherited".
+function uncheckedTemplateDetails(details) {
+  return (details || []).filter((d) => d.fromTemplate && !(d.provenance || []).some(layerPackage)).map((d) => d.schemaName || d.key);
+}
+// No recommendation either way: whether a vendor's or a customer's inherited detail still belongs on the page is the
+// user's call, and a recommendation is the answer they would give without reading the question.
+// Like the unplaced question, it claims what Classic users saw only as far as the input supports: placed in a tab, or
+// placed by no layer of a complete chain; with an incomplete chain an unfetched layer may place it.
+function inheritedDetailDecision(d, chainComplete) {
+  const name = d.schemaName || d.key;
+  const over = d.entity ? " (over '" + d.entity + "')" : "";
+  let seen = `placed in '${d.parent}', so Classic users saw it on this page`;
+  if (!d.parent) seen = chainComplete ? UNPLACED_SEEN.complete : UNPLACED_SEEN.partial;
+  return { kind: "detail-inherited", item: name, layer: d.layer, placed: !!d.parent, chainComplete,
+    reason: `detail '${name}'${over} comes from the template layer '${d.layer}', not from the page's own schema; ${seen}. Inherited — decide: build it as a related list (name the tab) or Won't do` };
 }
 
 // A standard feature the run does not build, kept with everything a later build reads: the Classic tab, title and

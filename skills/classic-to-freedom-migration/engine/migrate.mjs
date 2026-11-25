@@ -65,8 +65,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop, publishedPageKeys } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision } from "./directives.mjs";
+  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
@@ -180,7 +180,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `inheritedRunRegistry` follows the same rule: the stand's registry (or its platform version) is supplied once
     // on the ROOT manifest, and without it a child bundle would resolve the vendored union and build no component
     // newer than the vendored index. A child bundle that names its own registry or version still resolves its own.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedQualityThresholds: ctx.checklistOpts?.qualityThresholds, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, decisionProvenance: ctx.checklistOpts?.decisionProvenance, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConventions: ctx.conventions, inheritedQualityThresholds: ctx.checklistOpts?.qualityThresholds, inheritedRunRegistry: ctx.runRegistry, inheritedDeliverableStatus: ctx.checklistOpts?.deliverableStatus, decisions: ctx.checklistOpts?.decisions, decisionProvenance: ctx.checklistOpts?.decisionProvenance, inheritedDirectives: ctx.directives, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -1476,12 +1476,76 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
+    // a detail Classic never placed owes no question until the user approves building it
+    if (d.unplaced) continue;
     const label = detailLabel(d);
     // Two independent signals, two plan lines: the add flow, and what the rows of existing records may do. A detail
     // that only removes row actions has no add mechanism, so it gets no add-mechanism row (that row would call a
     // plain add flow "NOT a plain related list" with nothing after it).
     if (hasAddMechanism(am)) changeSet.needsDecision.push(addMechanismDecision(am, label));
     if (hasRowActionSignal(am)) changeSet.needsDecision.push(rowActionsDecision(am, label));
+  }
+}
+
+// The questions a detail's feature inventory leaves for the user. A quick filter that Classic kept in the user's
+// profile may lose that memory, since no guidance states that `crt.QuickFilter` keeps it; summaries are an
+// improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
+// bar is recorded on the change set (`summaryBar`) so the plan reads it as data. Exported for the goldens.
+export function attachDetailFeatureDecisions(changeSet) {
+  for (const d of (changeSet.details || [])) {
+    const f = d.features;
+    // the rows still describe an unplaced detail so the approver can judge it; its questions wait for the approval
+    if (!f || d.unplaced) continue;
+    const label = detailLabel(d);
+    for (const q of f.quickFilters.filter((x) => x.persisted)) {
+      changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
+        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. No guidance confirms that \`crt.QuickFilter\` keeps its state between visits. Decide: accept that the filter resets on every visit, or keep it with a custom profile read and write` });
+    }
+    if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
+  }
+  const bar = pageSummaryBar(changeSet.viewConfigDiff);
+  changeSet.summaryBar = bar;
+  if (bar) changeSet.needsDecision.push(summariesDecision(`The page's summary bar '${bar.container}' (${bar.labels} label${plural(bar.labels)})`, bar.container));
+}
+// Classic shows summaries as a summary module or as labels laid out in a container; the Freedom summary components
+// aggregate and format them, which is more than Classic did, so they are the user's choice unless a directive gave it.
+function summariesDecision(what, item) {
+  return { kind: SUMMARIES_KIND, item,
+    reason: `${what} shows summaries in Classic. \`crt.Summaries\` / \`crt.SummaryItem\` is an improvement over Classic, not parity. Decide: build them as \`crt.Summaries\`, or keep plain labels as Classic had` };
+}
+// A container of the page whose name says summary and that holds labels: the custom summary bar of a Classic page.
+function pageSummaryBar(ops) {
+  const list = ops || [];
+  const isLabel = (o) => (o.values?.type || "").endsWith("Label");
+  const containers = new Set(list.filter((o) => /summar/i.test(o.name || "") && !isLabel(o)).map((o) => o.name));
+  const labels = list.filter((o) => isLabel(o) && (containers.has(o.parentName) || /summar/i.test(o.name || ""))).length;
+  return containers.size && labels ? { container: [...containers][0], labels } : null;
+}
+// A user directive that asks for the summaries COMPONENT settles the question on every page its scope covers: the
+// questions leave ⚠ Confirm and each summary surface records the directive that answered it. Only an explicit request
+// counts — `crt.Summaries` or "summaries component / panel" — and a negation on either side of the word declines it.
+// Any other mention ("keep the summary labels as Classic had", "a summary of changes") leaves the question open.
+const ASKS_FOR_SUMMARIES = /crt\.Summar|\bsummar(?:y|ies)\s{1,3}(?:component|panel)\b/i;
+const SUMMARY_WORD = /summar/gi;
+const NEGATION = /\b(?:no|not|without|instead|never|don't|do not|unwanted)\b/i;
+const NEGATION_REACH = 40;
+function asksForSummaries(directive) {
+  const text = `${directive.quote} ${directive.expectation}`;
+  if (!ASKS_FOR_SUMMARIES.test(text)) return false;
+  return ![...text.matchAll(SUMMARY_WORD)].some((m) => NEGATION.test(text.slice(Math.max(0, m.index - NEGATION_REACH), m.index + NEGATION_REACH)));
+}
+// Each of `results` is one page's `{ changeSet, pageKey }`; every run applies it to its own change set before its rows
+// and spec render, so a folded sub-page answers under its own key. Exported for the goldens.
+export function applySummariesDirective(results, directives) {
+  const asking = (directives || []).filter(asksForSummaries);
+  if (!asking.length) return;
+  for (const r of results.filter((x) => x?.changeSet)) {
+    const d = asking.find((x) => directiveCovers(x, r.pageKey || "main"));
+    if (!d) continue;
+    const cs = r.changeSet;
+    cs.needsDecision = (cs.needsDecision || []).filter((n) => n.kind !== SUMMARIES_KIND);
+    for (const det of (cs.details || []).filter((x) => x.features?.summaries)) det.features.summariesDirective = d.id;
+    if (cs.summaryBar) cs.summaryBar.directive = d.id;
   }
 }
 
@@ -2145,13 +2209,15 @@ function braceBody(text, open) {
 // yields its body with comments and literals blanked (`codeOnly`). Anything else (a reference to another function, an
 // unterminated or over-cap body) is null — UNREADABLE: the callers report it as such rather than read it as either
 // "removes all" or "removes nothing".
-function memberValue(body, start) {
+// `raw` keeps the literals, for a scan that reads the attribute and column names a body passes as strings.
+function memberValue(body, start, { raw = false } = {}) {
   const head = body.slice(start, start + 400);
   if (/^(?:this\.)?(?:Terrasoft\.)?emptyFn\b/.test(head)) return { empty: true, code: "" };
   const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(head);
   if (!fm) return null;
   const text = braceBody(body, start + fm[0].length - 1);
-  return text == null ? null : { empty: false, code: codeOnly(text) };
+  if (text == null) return null;
+  return { empty: false, code: raw ? text : codeOnly(text) };
 }
 
 const ALL_ROW_ACTIONS = ROW_ACTION_GETTERS.map(([a]) => a);
@@ -2182,13 +2248,16 @@ function menuRemovedActions(body, spans) {
 // is only `return;` / `return null;` / `return undefined;` (comments aside). An override calling `callParent` returns
 // what the layer below returns, so the next definition up the text decides. `false` with no override (or a stock
 // getter at the bottom of the chain); `null` when an override in the chain cannot be read.
-function getterReturnsNothing(body, getter, spans) {
-  const starts = memberValueStarts(body, getter, spans);
+// `orFalse` also counts a body that is only `return false;`: a tools-menu getter or a visibility member written that way
+// switches its item off as surely as one returning nothing. `starts` lets a caller that already looked the member up
+// skip the second scan.
+function getterReturnsNothing(body, getter, spans, { orFalse = false, starts = memberValueStarts(body, getter, spans) } = {}) {
+  const nothing = orFalse ? /^(?:return(?:null|undefined|false)?;?)?$/ : /^(?:return(?:null|undefined)?;?)?$/;
   for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
     const v = memberValue(body, starts[k]);
     if (!v) return null;
     const code = v.code.replace(/\s/g, "");
-    if (v.empty || /^(?:return(?:null|undefined)?;?)?$/.test(code)) return true;
+    if (v.empty || nothing.test(code)) return true;
     if (!/\bcallParent\b/.test(code)) return false;
   }
   return false;
@@ -2196,8 +2265,7 @@ function getterReturnsNothing(body, getter, spans) {
 
 // The row-action overrides of a detail body: `removed` — the standard row actions it removes, in menu order (Copy,
 // Edit, Delete); `unreadable` — the overridden members whose value the scan cannot read, so what they remove is unknown.
-export function scanRowActions(body) {
-  const spans = literalSpans(body);
+export function scanRowActions(body, spans = literalSpans(body)) {
   const menu = menuRemovedActions(body, spans);
   const removed = new Set(menu.removed);
   const unreadable = menu.unreadable ? ["addRecordOperationsMenuItems"] : [];
@@ -2213,6 +2281,236 @@ export function scanRowActions(body) {
 export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, insideSpan, skipLiteral, stringEnd, braceBody,
   memberValue, menuRemovedActions, getterReturnsNothing, scanRowActions];
 
+// ---- THE DETAIL FEATURE INVENTORY ------------------------------------------------------------------------------
+// What users can do with a detail besides reading its columns: its tools menu, quick filters, multi-select, row
+// styling and summaries. Each one is a Classic member of the detail body (the layer union, like the row-action
+// scan), and each one either reaches the plan as a row or is lost without anyone deciding it.
+// The standard tools-menu items of `BaseGridDetailV2`, by the getter that adds each one.
+export const TOOLS_MENU_ITEMS = [["Sort", "getGridSortMenuItem"], ["Column setup", "getGridSettingsMenuItem"],
+  ["Export to Excel", "getExportToExcelFileMenuItem"], ["Import", "getDataImportMenuItem"], ["Switch grid mode", "getSwitchGridModeMenuItem"],
+  ["Access rights", "getRecordRightsSetupMenuItem"], ["Change log", "getRecordChangeLogMenuItem"],
+  ["Change log settings", "getObjectChangeLogSettingsMenuItem"], ["Row colour settings", "getGridColorizeSettingsMenuItem"]];
+// The members that switch a standard tools-menu item off by returning `false`.
+const TOOLS_MENU_VISIBILITY = [["Export to Excel", "getExportToExcelMenuVisibility"], ["Export to Excel", "getExportToFileActionVisibility"],
+  ["Quick filter button", "getShowQuickFilterButton"]];
+const STANDARD_MENU_GETTERS = new Set([...TOOLS_MENU_ITEMS, ...ROW_ACTION_GETTERS].map(([, g]) => g));
+// A call that writes a value to the user's profile. A filter whose toggle reaches one keeps its state between visits.
+const PROFILE_SAVE = /\b(?:saveFiltersToProfile|saveUserProfile|saveProfile\w{0,30}|setProfile\w{0,30}|saveToProfile)\b/g;
+const PROFILE_WINDOW = 600;
+
+// The most-derived override's value: `undefined` when the member is not overridden, `null` when it cannot be read.
+function lastMemberCode(body, name, spans, opts) {
+  const starts = memberValueStarts(body, name, spans);
+  return starts.length ? memberValue(body, starts.at(-1), opts) : undefined;
+}
+// Whether the member is overridden to switch its item off (returns nothing or `false`, through any `callParent` chain).
+function switchedOff(body, name, spans, starts) {
+  return getterReturnsNothing(body, name, spans, { orFalse: true, starts }) === true;
+}
+
+// The tools-menu deviations from the standard `BaseGridDetailV2` menu: items removed (a getter switched off), items
+// hidden (a visibility member switched off), items an `addToolsButtonMenuItems` override adds, and whether that
+// override could not be read. No deviation at all is the standard menu, kept.
+function toolsMenuDeviations(body, spans) {
+  const removed = TOOLS_MENU_ITEMS.filter(([, g]) => switchedOff(body, g, spans)).map(([item]) => item);
+  const hidden = [...new Set(TOOLS_MENU_VISIBILITY.filter(([, m]) => switchedOff(body, m, spans)).map(([item]) => item))]
+    .filter((item) => !removed.includes(item));
+  const override = lastMemberCode(body, "addToolsButtonMenuItems", spans);
+  const added = override ? [...new Set([...override.code.matchAll(/\bthis\.(get\w{1,60}MenuItem)\s{0,5}\(/g)].map((m) => m[1]))]
+    .filter((g) => !STANDARD_MENU_GETTERS.has(g)) : [];
+  // Group editing ("Edit selected records") comes from a mixin, not from a getter: its presence adds the item. The
+  // mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so the raw text is read.
+  if (/\bRecordsGroupEditing\b/.test(body)) added.push("Edit selected records");
+  return { removed, hidden, added, unreadable: override === null };
+}
+
+// Multi-select as the detail declares it: `off` when `isMultiSelectVisible` is switched off, `conditional` for any
+// other override, `null` for the standard behaviour.
+function multiSelectMode(body, spans) {
+  const starts = memberValueStarts(body, "isMultiSelectVisible", spans);
+  if (!starts.length) return null;
+  return switchedOff(body, "isMultiSelectVisible", spans, starts) ? "off" : "conditional";
+}
+
+// The attribute names a filter body reads: `this.$Name` and `this.get("Name")`.
+const ATTRIBUTE_READ = /this\.\$(\w{1,80})|this\.get\(\s{0,5}["'](\w{1,80})["']\s{0,5}\)/g;
+// The attributes the USER changes: an element of the detail diff named after it or bound to it (its control), or an
+// assignment (`this.$Name = …`, `this.set("Name", …)`) outside the members that run once when the list opens. An
+// attribute set only while the list initialises (the current user's contact, today's date with no control to change
+// it) narrows the list the same way on every visit — a fixed filter. One small pattern per shape, merged.
+const ATTRIBUTE_CONTROLS = [/["']?name["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']/g, /["']?bindTo["']?\s{0,5}:\s{0,5}["'](\w{1,80})["']/g];
+const ATTRIBUTE_ASSIGNMENTS = [/this\.\$(\w{1,80})\s{0,5}=(?!=)/g, /this\.set\(\s{0,5}["'](\w{1,80})["']/g];
+// The spans of every layer's members with these names, as [open, close] offsets.
+function memberSpans(body, names, spans) {
+  const out = [];
+  for (const name of names) {
+    for (const start of memberValueStarts(body, name, spans)) {
+      const fm = /^(?:function\b[^(){}]{0,80})?\([^)]{0,200}\)\s{0,20}\{/.exec(body.slice(start, start + 400));
+      const inner = fm ? braceBody(body, start + fm[0].length - 1) : null;
+      if (inner != null) out.push([start, start + fm[0].length + inner.length]);
+    }
+  }
+  return out;
+}
+// Every layer's `diff` array, as [open, close] offsets: the controls the detail puts on its list. The tools-menu
+// override (`addToolsButtonMenuItems`) builds its items in code, so its spans are a control surface too.
+const MAX_DIFF_LEAD = 80;
+function diffSpans(body, spans) {
+  const out = [];
+  for (const start of memberValueStarts(body, "diff", spans)) {
+    const open = body.indexOf("[", start);
+    const close = open >= 0 && open - start <= MAX_DIFF_LEAD ? matchingBracket(body, open, spans) : -1;
+    if (close > open) out.push([open, close]);
+  }
+  return out;
+}
+function matchingBracket(body, open, spans) {
+  let depth = 0;
+  for (let i = open; i < body.length; i++) {
+    if (insideSpan(spans, i)) continue;
+    if (body[i] === "[") depth++;
+    else if (body[i] === "]" && --depth === 0) return i;
+  }
+  return -1;
+}
+// The attributes a user changes on the list: a control in the detail's own `diff` or tools menu binds to it or is
+// named after it, or a method such a control binds (a button's `click`, a menu item's `Click`) assigns it. A name or `bindTo` anywhere else (a config a
+// method returns, a comment, a string) is no control, and an assignment anywhere else (init, a grid-data load, a
+// sandbox message from the master list) sets the attribute for the user, so its filter is fixed.
+function changedAttributes(body, spans = literalSpans(body)) {
+  const diffs = [...diffSpans(body, spans), ...memberSpans(body, ["addToolsButtonMenuItems"], spans)];
+  const inDiff = (i) => !insideSpan(spans, i) && diffs.some(([a, b]) => i > a && i < b);
+  const controlled = (re) => [...body.matchAll(re)].filter((m) => inDiff(m.index)).map((m) => m[1]);
+  const handlers = memberSpans(body, [...new Set(controlled(ATTRIBUTE_CONTROLS[1]))], spans);
+  const inHandler = (i) => handlers.some(([a, b]) => i >= a && i <= b);
+  return new Set([...ATTRIBUTE_CONTROLS.flatMap(controlled),
+    ...ATTRIBUTE_ASSIGNMENTS.flatMap((re) => [...body.matchAll(re)].filter((m) => inHandler(m.index)).map((m) => m[1]))]);
+}
+
+// The kind of control a quick filter needs, read off the attribute's declared data type.
+function filterKind(body, attr) {
+  const m = new RegExp(String.raw`["']?${reEsc(attr)}["']?\s{0,5}:\s{0,5}\{[^{}]{0,400}?DataValueType\.(\w{1,30})`).exec(body);
+  const type = m ? m[1] : null;
+  if (/^(?:DATE|DATE_TIME|TIME)$/.test(type || "")) return "date";
+  if (type === "BOOLEAN") return "toggle";
+  return "value";
+}
+
+// The windows of text around every profile-saving call, collected once; an attribute named inside one is kept in the
+// user's profile, as in a toggle handler that flips the attribute and then saves the filters.
+function profileWindows(body) {
+  return [...body.matchAll(PROFILE_SAVE)].map((m) => body.slice(Math.max(0, m.index - PROFILE_WINDOW), m.index + PROFILE_WINDOW));
+}
+
+// The column filters a body builds, each with the column, its value expression and its offset. One pattern per call
+// shape: a comparison filter and an IN filter.
+const COMPARISON_FILTER = /ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["'](\w{1,80})["']\s{0,10}(?:,\s{0,10}([^)]{0,200}))?\)/g;
+const IN_FILTER = /createColumnInFilterWithParameters\s{0,10}\(\s{0,10}["'](\w{1,80})["']\s{0,10},\s{0,10}([^)]{0,200})\)/g;
+function columnFilterCalls(code) {
+  return [COMPARISON_FILTER, IN_FILTER].flatMap((re) => [...code.matchAll(re)].map((m) => ({ column: m[1], value: m[2] || "", index: m.index })));
+}
+// The `if (…) { … }` blocks of a body, each with its condition and its span: a filter added inside one whose
+// condition reads an attribute is switched by that attribute, the inline toggle shape.
+const IF_HEAD = /\bif\s{0,5}\(([^{};]{0,300})\)\s{0,5}\{/g;
+function guardedBlocks(code) {
+  const blocks = [];
+  for (const m of code.matchAll(IF_HEAD)) {
+    const open = m.index + m[0].length - 1;
+    const inner = braceBody(code, open);
+    if (inner != null) blocks.push({ cond: m[1], start: open, end: open + inner.length + 1 });
+  }
+  return blocks;
+}
+// Locals that hold an attribute (`var d = this.get("OnDate")`): a filter whose value is the local reads the attribute.
+const ATTRIBUTE_ALIAS = /\b(?:var|let|const)\s{1,5}(\w{1,80})\s{0,5}=\s{0,5}this\.(?:\$(\w{1,80})|get\(\s{0,5}["'](\w{1,80})["']\s{0,5}\))/g;
+// A method `getFilters` calls on the detail itself: the filters it adds belong to `getFilters` too.
+const OWN_CALL = /\bthis\.(\w{1,80})\s{0,5}\(/g;
+const MAX_FILTER_HELPERS = 20;
+const NOT_HELPERS = new Set(["callParent", "get", "set", "getFilters"]);
+
+// ONE reading of the detail's `getFilters`, split into its two halves. QUICK filters: each attribute it reads that a
+// control or a method of the detail changes, with the columns it switches — a filter whose value is the attribute (or
+// a local holding it), or one added inside an `if` on it, directly or through a helper method `getFilters` calls there.
+// FIXED columns: every other column filter of `getFilters` and its helpers. A `getFilters` with no quick filter is all
+// fixed; a mixed one keeps both halves.
+// Every layer's `getFilters` that the most-derived one reaches: each override down the chain while it calls
+// `callParent`, bounded like the row-action scan. `undefined` when no layer overrides it, `null` when one cannot be read.
+function filterChainCode(body, spans) {
+  const starts = memberValueStarts(body, "getFilters", spans);
+  if (!starts.length) return undefined;
+  const codes = [];
+  for (let k = starts.length - 1; k >= 0 && starts.length - k <= MAX_OVERRIDE_LAYERS; k--) {
+    const v = memberValue(body, starts[k], { raw: true });
+    if (!v) return codes.length ? codes.join("\n") : null;
+    codes.push(v.code);
+    if (!/\bcallParent\b/.test(v.code)) break;
+  }
+  return codes.join("\n");
+}
+export function classifyDetailFilters(body, spans = literalSpans(body)) {
+  const code = filterChainCode(body, spans);
+  if (code == null) return { present: code === null, quickFilters: [], fixedColumns: [] };
+  const changed = changedAttributes(body, spans);
+  const attrs = [...new Set([...code.matchAll(ATTRIBUTE_READ)].map((m) => m[1] || m[2]))].filter((a) => changed.has(a));
+  const named = new Map(attrs.map((a) => [a, new RegExp(String.raw`\b${reEsc(a)}\b`)]));
+  const aliases = [...code.matchAll(ATTRIBUTE_ALIAS)].map((m) => ({ local: new RegExp(String.raw`\b${reEsc(m[1])}\b`), attr: m[2] || m[3] }));
+  const reads = (text, a) => named.get(a).test(text) || aliases.some((x) => x.attr === a && x.local.test(text));
+  const blocks = guardedBlocks(code);
+  const guardsAt = (index) => attrs.filter((a) => blocks.some((b) => index > b.start && index < b.end && reads(b.cond, a)));
+  const tied = (value, index) => [...new Set([...attrs.filter((a) => reads(value, a)), ...guardsAt(index)])];
+  const calls = columnFilterCalls(code).map((c) => ({ column: c.column, attrs: tied(c.value, c.index) }));
+  const helperCalls = [...code.matchAll(OWN_CALL)].filter((m) => !NOT_HELPERS.has(m[1])).slice(0, MAX_FILTER_HELPERS);
+  for (const m of helperCalls) {
+    const helper = lastMemberCode(body, m[1], spans, { raw: true });
+    const guards = guardsAt(m.index);
+    for (const c of helper ? columnFilterCalls(helper.code) : []) {
+      calls.push({ column: c.column, attrs: [...new Set([...attrs.filter((a) => named.get(a).test(c.value)), ...guards])] });
+    }
+  }
+  const windows = attrs.length ? profileWindows(body) : [];
+  const quickFilters = attrs.map((attribute) => ({ attribute, kind: filterKind(body, attribute),
+    columns: [...new Set(calls.filter((c) => c.attrs.includes(attribute)).map((c) => c.column))],
+    persisted: windows.some((w) => named.get(attribute).test(w)) }));
+  return { present: true, quickFilters, fixedColumns: [...new Set(calls.filter((c) => !c.attrs.length).map((c) => c.column))] };
+}
+
+// The fixed half of a detail's filters: the columns `classifyDetailFilters` read as fixed. When it read none, a body
+// that still builds column filters (deeper than one helper) names them body-wide — comparison and IN filters alike —
+// less the quick filters' columns, so a fixed filter is never dropped because a quick filter sits beside it.
+const BODY_FILTER_COLUMN = /ComparisonType\.\w{1,40}\s{0,10},\s{0,10}["']([A-Za-z]\w{0,80})["']/g;
+const BODY_IN_FILTER_COLUMN = /createColumnInFilterWithParameters\s{0,10}\(\s{0,10}["']([A-Za-z]\w{0,80})["']/g;
+function fixedFilterSignal(body, filters) {
+  if (!filters.present) return { fixedFilters: false, filterCols: [] };
+  if (filters.fixedColumns.length) return { fixedFilters: true, filterCols: filters.fixedColumns };
+  if (!/createColumn(?:In)?Filter\w{0,40}/.test(body)) return { fixedFilters: false, filterCols: [] };
+  const quickCols = new Set(filters.quickFilters.flatMap((q) => q.columns));
+  const bodyCols = [BODY_FILTER_COLUMN, BODY_IN_FILTER_COLUMN].flatMap((re) => [...body.matchAll(re)].map((m) => m[1]));
+  const rest = [...new Set(bodyCols)].filter((c) => !quickCols.has(c));
+  // with no quick filter every column filter is fixed, named or not; beside one, only the columns no quick filter owns
+  if (!filters.quickFilters.length) return { fixedFilters: true, filterCols: rest };
+  return { fixedFilters: rest.length > 0, filterCols: rest };
+}
+
+// The whole inventory of one detail body. Every key is always present, so a reader never type-checks it. `filters`
+// is the `classifyDetailFilters` result when the caller already has it.
+export function scanDetailFeatures(body, spans = literalSpans(String(body || "")), filters = null) {
+  const text = String(body || "");
+  const styling = lastMemberCode(text, "prepareResponseCollectionItem", spans);
+  // a detail that overrides `getSummaryVisible` to return nothing or `false` shows no summaries
+  const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index))
+    && !switchedOff(text, "getSummaryVisible", spans);
+  return {
+    toolsMenu: toolsMenuDeviations(text, spans),
+    quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
+    multiSelect: multiSelectMode(text, spans),
+    rowStyling: !!styling && /\bcustomStyle\b/.test(styling.code),
+    summaries,
+  };
+}
+// Every function of the feature scan, for the structural ReDoS golden.
+export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode];
+
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
 // rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
@@ -2224,7 +2522,11 @@ export const ROW_ACTION_SCAN_FNS = [memberValueStarts, literalSpans, codeOnly, i
 // engine-tests/classic-to-freedom/run-mapper.mjs — a wall-clock timing bound on a ~700KB adversarial body
 // ("ReDoS (timing): detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
 // ({0,N}) ("ReDoS (structural) …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
-export function detectAddMode(body) {
+// `scan` carries what `detailSchemaRecord` already computed for the same body (its literal spans and its filter reading),
+// so the body is walked once; a caller with only the text gets both computed here.
+export function detectAddMode(body, scan = {}) {
+  const spans = scan.spans || literalSpans(body);
+  const filters = scan.filters || classifyDetailFilters(body, spans);
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
   const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b|\bopenLookupWithMultiSelect\b|\bopenProductLookupToLink\b/.test(body);
@@ -2240,18 +2542,15 @@ export function detectAddMode(body) {
   const addDisabled = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body)
     || /["']?addRecordButtonVisible["']?\s*:\s*false/.test(body)
     || /["']operation["']\s*:\s*["']remove["'][\s\S]{0,120}?AddTypedRecordButton/.test(body);
-  const rowScan = scanRowActions(body);
+  const rowScan = scanRowActions(body, spans);
   // A CUSTOM grid action (e.g. "attach existing") added via addGridOperationsMenuItems → getButtonMenuItem. Capture
   // the Click handler name — that's the custom add/attach flow the Freedom rebuild must reproduce.
   const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
   const clickM = customAction ? /getButtonMenuItem\s*\(\s*\{[\s\S]{0,200}?Click\s*:\s*\{[^}]*bindTo["']\s*:\s*["'](\w+)["']/.exec(body) : null;
-  // FIXED list filters — a getFilters override adding column filters. Capture the directly-filtered columns
-  // (ComparisonType.<X>, "Col" and createColumnInFilterWithParameters("Col", …)).
-  const fixedFilters = /\bgetFilters\s*:/.test(body) && /createColumn(?:In)?Filter\w*/.test(body);
-  const filterCols = fixedFilters ? [...new Set([
-    ...[...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
-    ...[...body.matchAll(/createColumnInFilterWithParameters\s*\(\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
-  ])] : [];
+  // FIXED list filters — the half of a getFilters override the user never changes (`fixedFilterSignal`). The half
+  // driven by an attribute the user changes is a QUICK filter on the feature inventory: reproducing it as a fixed
+  // data-source filter would take the control away from the user.
+  const { fixedFilters, filterCols } = fixedFilterSignal(body, filters);
   const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
     openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
     rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };
@@ -2289,6 +2588,8 @@ function normalizeBoundary(v) {
 function detailSchemaRecord(e, scanText, p) {
   const eObj = (e && typeof e === "object") ? e : {};
   const body = detailBodySignals(scanText, p);
+  const spans = literalSpans(scanText);
+  const filters = classifyDetailFilters(scanText, spans);
   return {
     entity: eObj.entity || body.entity,
     columns: body.columns,
@@ -2311,7 +2612,8 @@ function detailSchemaRecord(e, scanText, p) {
     // Optional, and only ever supplied: the section that child entity belongs to, for the plan's wording. Never
     // inferred — an invented section name in a sentence the user is asked to approve is worse than no name.
     ownSection: (typeof eObj.ownSection === "string" && eObj.ownSection.trim()) ? eObj.ownSection.trim() : null,
-    addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
+    addMode: detectAddMode(scanText, { spans, filters }), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
+    features: scanDetailFeatures(scanText, spans, filters), // tools menu, quick filters, multi-select, row styling, summaries — across ALL layers
     error: p.error || null,
     astDiagnostics: p.astDiagnostics || [],
   };
@@ -2933,6 +3235,8 @@ function collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSc
   ];
 }
 
+// The directives a run applies: the root reads its decision records, a folded run inherits the root's.
+const directivesForRun = (opts) => (opts.scopeSchema ? opts.inheritedDirectives || [] : directivesOf(opts.decisionRecords || []));
 // A pre-configured process page (process-page.mjs): read off the parsed seed chain, never on a nested fold, and
 // recorded on the manifest so `checklistOpts` gives the same answer. Null for any other page.
 function processPageOfRun(manifest, opts, { seedTemplate, schemas, eff }) {
@@ -3005,6 +3309,11 @@ export function runMigration(manifest, opts = {}) {
     featureStatus: (ids) => withheldFeatureStatus({ ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) }, ids, withheldPageKey(opts)),
   });
   attachDetailAddModes(changeSet, detailSchemas);
+  attachDetailFeatureDecisions(changeSet);
+  // The user's directives answer this page's questions before anything renders: the root reads them from the decision
+  // records, a folded sub-page inherits the root's, and each applies them under its own page key.
+  const runDirectives = directivesForRun(opts);
+  applySummariesDirective([{ changeSet, pageKey: withheldPageKey(opts) }], runDirectives);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
   // carries them. Hand-appending them to the plan's `Adjustments` did not survive a re-run: `--plan --out` rewrites
   // the file, so the only link from a worklist row to the behaviour that describes it was lost on every regenerate.
@@ -3116,7 +3425,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, conventions: runConventions, runRegistry }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, conventions: runConventions, runRegistry, directives: runDirectives }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
