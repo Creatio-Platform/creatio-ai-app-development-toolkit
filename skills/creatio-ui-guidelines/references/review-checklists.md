@@ -64,7 +64,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] ExpansionPanels are full width and stacked vertically — none placed side by side, in two columns, or with a partial `colSpan`.
 - [ ] Read-only details take all three steps: the add button hidden, inline editing turned off on the List (so existing rows can't be edited in place), and the row Copy and Delete actions absent — while records still open from the list on click. On a `crt.DataGrid` that means `rowToolbarItems` holds only Open (one `crt.MenuItem` with a localized caption and icon `edit-row-action`, firing `crt.UpdateRecordRequest`), not `[]` and not `features.rows.toolbar: false`, both of which drop Open too.
 - [ ] Analytic widgets are at the top (top of profile island or first in the tab; a dedicated Analytics tab if many); the profile island holds only small (XS/S) metrics, with icons, not large charts.
-- [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
+- [ ] Section (list) page: custom filters in the filter row (`LeftFilterContainerInner`) before `SearchFilter` — nothing after the search, no filters in `RightFilterContainer`; extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
 - [ ] **Style parity — verified with tools, not eyeballed.** For EVERY component you added: open a shipped reference page on the same template, run `get-component-info` on that component type, and diff the concrete props against the native one — container `color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` (never a raw `title`), `labelPosition`, widget size, column count. A screenshot/metadata glance is NOT this check. New/empty page → copy these conventions from a shipped page on the same template. (`toggleType`, `title`-instead-of-`caption`, and island card settings are the props runs most often get wrong here.)
 - [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even.
 - [ ] Reference context or tools (customer summary, connected accounts) use a closable contextual side panel, not inline in the page body or a blocking modal.
@@ -84,7 +84,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Non-obvious fields have a placeholder (example/format hint) and/or a tooltip (meaning, units, allowed values); the form is not a wall of bare inputs.
 - [ ] Tooltip/placeholder text is authored as localizable resource strings, not inline literals.
 - [ ] Inputs in a group/panel use a consistent `labelPosition` — prefer an explicit value (`above`/`left`); `"auto"` is acceptable when it already renders consistently (do not restyle a component's appearance just to force an explicit position).
-- [ ] Required fields are marked.
+- [ ] Required fields are marked and sit on the first screen (header or top island, left profile column, first tab), not on a second or later tab — or the plan names why one lives elsewhere.
 - [ ] Only the real minimum is required — fields are mandatory only when the record cannot be created without them; the rest stay optional.
 - [ ] Default values, validation, and auto-substitution are configured where helpful.
 - [ ] Checkboxes/logical fields are placed after related fields.
@@ -114,7 +114,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Operations over 30 seconds or unknown duration are asynchronous with notification.
 - [ ] Dialogs follow Creatio/mini-page styling and place instructions before controls.
 - [ ] Dialog button labels are consistent and result-oriented.
-- [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M).
+- [ ] Every field on a mini page or modal sets `labelPosition` explicitly (the default `auto` can put the label beside the input): `above` on S/M, `left` allowed only on a wide L/XL page and then on every field of the dialog; the component's default appearance kept.
 - [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin.
 - [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
 - [ ] Record-level actions acting on a profile/summary island's record sit in that island's footer (flex), not the page header.

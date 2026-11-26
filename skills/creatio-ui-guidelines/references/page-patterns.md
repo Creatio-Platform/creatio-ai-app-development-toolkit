@@ -122,7 +122,7 @@ Use this reference once the kind of page is known, to build or judge it as that 
   - **Search** finds a known record by name or code; **Filters** (the advanced filter, read as a sentence of conditions) takes the rare complex cases.
   - Placement: *List (section) page layout* in `page-layout-and-controls.md`.
 - **On a dashboard** filters are configured per widget and in its data settings; there is no filter bar to draw.
-- **Traps:** a quick filter per column; filters sharing one icon; a hand-built apply-filter mechanism beside the platform's own; an active filter that is not visible, so an empty result looks like lost records.
+- **Traps:** a quick filter per column; filters sharing one icon; a filter placed after the search field, which jumps while the user searches; a hand-built apply-filter mechanism beside the platform's own; an active filter that is not visible, so an empty result looks like lost records.
 
 ## Bulk operations and selection
 

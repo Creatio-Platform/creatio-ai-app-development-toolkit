@@ -261,7 +261,7 @@ How many records, and do people arrive knowing which one they want?
 └─ hundreds and more          → BOTH, plus sorting, folders, and a starting view that is not all records
 ```
 
-Custom filters go in the list page's filter containers, and each quick filter carries its own icon. See *List (section) page layout* and *Buttons and actions* in `page-layout-and-controls.md`. Use only the platform's own filter behaviour; do not build a separate apply-filter mechanism.
+Custom filters go in the list page's filter row before the search, never after it, and each quick filter carries its own icon. See *List (section) page layout* and *Buttons and actions* in `page-layout-and-controls.md`. Use only the platform's own filter behaviour; do not build a separate apply-filter mechanism.
 
 ## The consistency guard
 

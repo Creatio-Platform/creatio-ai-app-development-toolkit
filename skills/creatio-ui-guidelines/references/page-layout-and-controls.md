@@ -165,7 +165,7 @@ Certain fields imply a component beside them. A deadline's timer and a business 
 ## Adding and editing data
 
 - Prefer a mini page for creating or editing data when the task is focused, role-specific, or step-limited.
-- For larger forms, put required fields on the first tab and visible screen area.
+- Put required fields on the first screen: the header or top island, the left profile column, or the first tab. Do not hide a required field on a second or later tab, where the user meets it only when saving fails. This is a strong default, not a hard rule — when a required field has to live elsewhere, name the reason.
 - Use logical field order based on how users fill in data.
 - Use validation, input filtering, lookup filtering, default values, and auto-substitution.
 - Configure fields used when copying records.
@@ -278,7 +278,7 @@ Mechanics behind the layout rules in `SKILL.md` — read this when a page shows 
 
 The sections above describe the record/form page. A **section (list) page** uses its own container slots — put things in the right one instead of dropping them loose on the page:
 
-- **Additional / custom filters** go in **`LeftFilterContainer`** or **`RightFilterContainer`** (the filter zones beside the standard search/quick filter), not inline in the grid area.
+- **Additional / custom filters go into the filter row before the search, never after it.** The template's filter row is **`LeftFilterContainerInner`** (inside `LeftFilterContainer`): folder actions, the filter menu, the quick filters, and **`SearchFilter` last**. Insert a custom quick filter or filter control into that row ahead of `SearchFilter`; read the row's children in the `get-page` bundle to set the `index`. Anything placed after the search field jumps while the user works with the search. **`RightFilterContainer`** holds the list's own tools — summaries, refresh, the list/dashboard view switch — not filters; and no filter goes inline in the grid area.
 - **Additional list actions / buttons** go in **`ActionButtonsContainer`** (top-right), same as on the record page.
 - **Analytics, metrics, and dashboards** go into the **Dashboard component (`crt.Dashboards`)**. If you are not sure how to configure the Dashboard component, place them in **`DashboardsTabContainer`** (the list page's analytics/dashboards tab container) instead — do not scatter widgets into the grid or filter areas.
 
@@ -286,7 +286,7 @@ The sections above describe the record/form page. A **section (list) page** uses
 
 - Dialogs should follow the same styling as Creatio mini pages where possible: predictable title placement, button placement, and visual hierarchy.
 - **Collect a focused set of action parameters in a modal, not a full page.** When an operation needs the user to supply a small, self-contained set of inputs before it runs — configuring a test send, closing an opportunity (loss reason + details), qualifying a lead into the next stage — gather them in a modal dialog asking for exactly those fields and no more: required ones marked, the explanation/instructions above the inputs, one primary confirm action. Don't route the user to the full edit page for a handful of parameters, and don't ask for data the operation doesn't need.
-- **Field labels on modals must use `labelPosition: "above"`.** On a modal/dialog page, every field label sits above its input — the narrow modal width leaves no room for a `left` label column, which would squeeze the input and break alignment. The ONLY exception is a genuinely wide modal — page size **L or XL** — where a `left` label position may be acceptable if it reads cleanly; on S/M modals always use `above`. Keep the position consistent across the whole dialog (don't mix `above` and `left`).
+- **Field labels on mini pages and modals use `labelPosition: "above"`, set explicitly on every field.** On a mini page or a modal/dialog page every field label sits above its input — the narrow width leaves no room for a `left` label column, which would squeeze the input and break alignment. The ONLY exception is a genuinely wide page — size **L or XL** — where `left` may be set if it reads cleanly; on S/M always use `above`. Keep the position the same across the whole dialog (don't mix `above` and `left`). Write the value on each field: the default `auto` switches between `left` and `above` by the container's width, so a field without the property can render its label beside the input. Shipped mini pages (for example the contact mini page) set `above` on each field and keep the component's default appearance — do not switch the appearance to `outline` to make `above` render.
 - Put explanatory text before the fields/buttons that depend on it. Users read from top to bottom.
 - **Text-heavy modals must be structured, not a wall of text.** When a dialog carries a lot of explanatory copy, lay it out with clear typography, spacing, and hierarchy instead of dumping dense paragraphs:
   - **The modal shell is template-provided — don't hand-build or restyle it.** The dialog title, the close (`×`) icon, the actions/buttons row, and the outer dialog padding come from the modal template. Do not set their typography, spacing, or button styles by hand — configure only the **content area** (your fields, their descriptions, tooltips). Match whatever the template already renders.
@@ -317,3 +317,4 @@ Platform defaults that look fine in the designer but break the rules above at ru
 - Ordered status defaults to a combo box → use a DCM stage progress bar (`crt.EntityStageProgressBar`). [Fields]
 - New side island holds only `Name` → add the key stable fields. [Grouping and page flow]
 - Detail's add button hidden but rows still edit inline → also turn off inline editing on the List. [Grouping and page flow]
+- A field on a mini page or modal left at the default `labelPosition: "auto"` can render its label beside the input → set the position explicitly: `above`, or `left` only on a wide L/XL page. [Dialogs and modals]
