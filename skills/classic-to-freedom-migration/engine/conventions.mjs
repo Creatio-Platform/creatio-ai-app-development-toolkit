@@ -370,15 +370,18 @@ function depSlots(v) {
   const node = parseJsExpression(v);
   return node?.type === "ArrayExpression" ? node.elements.map((el) => (isStringLiteral(el) ? el.value : null)) : null;
 }
-// THE FUNCTIONS A CLIENT MODULE DEFINES, by name: each `function name(…)`, `const name = function / arrow`, and
-// `name: function / arrow` property, with its source and its code (strings and comments blanked) for call matching.
-// A property whose value is another name (`startApproval: start`, or the shorthand `{ startApproval }`) is kept as a
-// call of that name, so an export reaches the function behind it. null when the source is not a `define()` module.
+// WHAT A CLIENT MODULE DEFINES AND IMPORTS. `functions`: by name, each `function name(…)`, `const name = function /
+// arrow`, and `name: function / arrow` property, with its source. A property whose value is another name
+// (`startApproval: start`, or the shorthand `{ startApproval }`) is kept as a call of that name, so an export reaches
+// the function behind it. `imports`: each `define()` dependency -> the local name the module's factory gives it (null
+// where it gives none), paired by position like a page's. null when the source is not a `define()` module.
 const isFunctionNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
-export function moduleFunctions(src) {
+export function moduleShape(src) {
   const text = String(src ?? "");
   const mod = parseDefineModule(text);
   if (mod.error) return null;
+  const params = mod.factory.params.map(paramName);
+  const imports = new Map(mod.depSlots.map((d, i) => [d, params[i] ?? null]).filter(([d]) => d != null));
   const fns = new Map();
   const add = (name, body) => { if (name) fns.set(name, [...(fns.get(name) || []), body]); };
   walkAstBounded(mod.factory, (n) => {
@@ -387,7 +390,7 @@ export function moduleFunctions(src) {
     else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) add(staticPropKey(n), text.slice(n.value.start, n.value.end));
     else if (n.type === "Property" && !n.computed && n.value?.type === "Identifier") add(staticPropKey(n), `${n.value.name}()`);
   });
-  return fns;
+  return { functions: fns, imports };
 }
 // The request a parsed handler entry answers (`{ request: "<name>", handler: … }`), or null.
 function entryRequest(el) {

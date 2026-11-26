@@ -557,8 +557,9 @@ function findFactoryReturn(factory) {
 // A `define("Name", [deps], function (…) { … return {…}; })` body as AST nodes — the one reader of the AMD shell,
 // shared by `parseSchema` (a page) and the project-conventions GUID index (a constants module). Nothing is
 // evaluated. Returns `{ error, deps }` on a body it cannot read (`deps` is what it read before failing), else
-// `{ error: null, deps, factory, returned }` (`returned` may be null). `locations` adds line spans to the nodes;
-// `onComment` receives every comment, as acorn reports it.
+// `{ error: null, deps, depSlots, factory, returned }` (`returned` may be null; `depSlots` is the deps array by
+// position, a slot that is no string literal null, so it pairs with the factory's parameters). `locations` adds line
+// spans to the nodes; `onComment` receives every comment, as acorn reports it.
 export function parseDefineModule(src, { locations = false, onComment } = {}) {
   const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   let ast;
@@ -571,7 +572,8 @@ export function parseDefineModule(src, { locations = false, onComment } = {}) {
   const factory = call.arguments.find((a) => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
   const name = call.arguments[0]?.type === "Literal" && typeof call.arguments[0].value === "string" ? call.arguments[0].value : null;
   if (!factory) return { error: "define() has no factory function", deps, name };
-  return { error: null, deps, name, factory, returned: findFactoryReturn(factory) };
+  const depSlots = depsNode ? depsNode.elements.map((el) => (el?.type === "Literal" && typeof el.value === "string" ? el.value : null)) : [];
+  return { error: null, deps, depSlots, name, factory, returned: findFactoryReturn(factory) };
 }
 
 // One JavaScript expression as an AST node, or null when the text is not one — a get-page bundle field (`deps`,
