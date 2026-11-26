@@ -128,20 +128,6 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("quality: a computed rowsOffset in a helper that a loop calls is a paged read",
     () => count(viaHelper, R.pagedReadLoop) === 1, () => viaHelper.findings);
 
-  // The client modules the handlers call into are linted on their own, with the same rules.
-  const moduleOf = (body) => `define("UsrOrderPageModule", ["@creatio-devkit/common"], function(sdk) {\n"use strict";\n${body}\nreturn {};\n});`;
-  const longModule = lintModuleQuality("UsrOrderPageModule", moduleOf(`async function closeAll(ids) {\n${lines(70)}\n}`));
-  check("quality: a module's own function over the limit is reported, the define() factory around it is not",
-    () => longModule.findings.filter((f) => f.rule === R.functionTooLong).map((f) => f.name).join() === "closeAll" && longModule.unreadable.length === 0,
-    () => longModule.findings);
-  const moduleFindings = lintModuleQuality("UsrOrderPageModule", moduleOf("// C04: close them (D8)\nasync function closeAll(ids) { for (const id of ids) { try { await model.update({ S: 1 }, id); } catch (e) { console.error(e); } } }"));
-  check("quality: a module's findings name the section `module` with a line, and its comments are read for plan codes",
-    () => moduleFindings.findings.some((f) => f.rule === R.catchLogOnly && f.section === "module" && f.line === 4)
-      && moduleFindings.findings.some((f) => f.rule === R.planCodeInComment && f.section === "module"),
-    () => moduleFindings.findings);
-  check("quality: a module source that is not a readable define() is reported unreadable, never passed",
-    () => lintModuleQuality("Broken", "define(").unreadable.join() === "module" && lintModuleQuality("Broken", "const x = 1;").unreadable.join() === "module");
-
   // A real built page and its modules, as a migration run built them: every runtime defect the build contract
   // forbids is found at its line — a Post handler that ends the chain, totals and counts paged in the browser, bulk
   // actions and numbering that only log a failure, and a recalculation whose failure the caller drops.
@@ -336,7 +322,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   const heldId = renderVerify(result, opts, built(usesHeld));
   check("verify: a record id the declared constants module holds blocks the GUID row",
     () => /⚠ verify/.test(rowLine(heldId.markdown, R.guidLiteral)), () => rowLine(heldId.markdown, R.guidLiteral));
-  const noConventions = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] }, built(usesHeld));
+  // With no conventions recorded, AbConstants is not a declared module, so its source is filed like any other import.
+  const noConventions = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] },
+    { ...built(usesHeld), modules: { AbConstants: body("AbConstants.js") } });
   const kindOf = (v, rule) => v.rows.find((r) => r.deliverable.includes(`[code-quality] ${rule} —`))?.kind;
   check("verify: without recorded projectConventions the GUID row says the constants-module check was skipped, does not block, and is a note (not a hand-confirm item)",
     () => /ℹ noted/.test(rowLine(noConventions.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventions.markdown, R.guidLiteral))
@@ -373,6 +361,130 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     check("verify via assembleBuilt: a log-only catch block in get-page's bundle reaches the Code quality row and blocks it",
       () => /⚠ verify/.test(rowLine(viaFile.markdown, R.catchLogOnly)), () => rowLine(viaFile.markdown, R.catchLogOnly));
   } finally { fs.rmSync(asDir, { recursive: true, force: true }); }
+
+  // CLIENT MODULES. A page's Code quality and Page code rows cover every client module the page imports, directly or
+  // through another module, with the rules that hold outside a page section.
+  const MOD = path.join(FIX, "module-lint-v2");
+  const modSrc = (name) => fs.readFileSync(path.join(MOD, name + ".js"), "utf8");
+  const V2 = ["UsrDemoV2App_FormPageModule", "UsrDemoV2App_ListPageModule", "UsrDemoV2DocumentTotals"];
+  const v2Modules = Object.fromEntries(V2.map((n) => [n, modSrc(n)]));
+  const formModule = lintModuleQuality(V2[0], v2Modules[V2[0]]);
+  check("module lint: the benchmark form-page module reports its 3 log-only catches and its bare numeric comparisonType, each under the module's name",
+    () => count(formModule, R.catchLogOnly) === 3 && count(formModule, R.numericComparisonType) === 1
+      && formModule.findings.every((f) => f.section === `module ${V2[0]}`), () => formModule.findings);
+  check("module lint: the module's own deps are read from its define(), and each finding names its module",
+    () => JSON.stringify(formModule.deps) === JSON.stringify(["@creatio-devkit/common", "UsrDemoV2DocumentTotals"])
+      && formModule.findings.every((f) => f.module === V2[0]), () => formModule);
+  check("module lint: the list-page module's log-only catch and the shared module's comment-only catch are reported",
+    () => count(lintModuleQuality(V2[1], v2Modules[V2[1]]), R.catchLogOnly) === 1 && count(lintModuleQuality(V2[2], v2Modules[V2[2]]), R.catchLogOnly) === 1);
+  const factoryOnly = lintModuleQuality("UsrBig", `define("UsrBig", [], function() {\n${lines(150)}\nfunction long() {\n${lines(70)}\n}\nreturn {};\n});`);
+  check("module lint: the factory is the module itself and is not measured; a function in it over the limit is",
+    () => count(factoryOnly, R.functionTooLong) === 1 && factoryOnly.findings[0].name === "long", () => factoryOnly.findings);
+  const guidModule = `define("UsrIds", [], function() { const STATUS = { Closed: "${held}", Other: "aaaaaaaa-0000-4000-8000-000000000009" }; return STATUS; });`;
+  const guids = lintModuleQuality("UsrIds", guidModule, DEFAULT_QUALITY_THRESHOLDS, new Set([held.toLowerCase()]));
+  check("module lint: a record id the constants module holds blocks in a module too; another one is only noted",
+    () => guids.findings.filter((f) => f.rule === R.guidLiteral && !f.advisory).length === 1
+      && guids.findings.filter((f) => f.rule === R.guidLiteral && f.advisory).length === 1, () => guids.findings);
+  check("module lint: a module that does not parse is unreadable, not clean",
+    () => lintModuleQuality("UsrBroken", "define(\"UsrBroken\", [], function() { return {").unreadable[0] === "module UsrBroken");
+  const loads = (dependent) => `define("UsrLoads", [], function() { async function read(sdk) {\n`
+    + `const a = await sdk.Model.create("A");\nconst b = await sdk.Model.create(${dependent ? "a.name" : '"B"'});\n`
+    + `const c = await sdk.Model.create(${dependent ? "b.name" : '"C"'});\nreturn [a, b, c]; } return { read }; });`;
+  const seqLoads = lintModuleQuality("UsrLoads", loads(false));
+  check("module lint: independent loads awaited one after another in a module function are reported under the module",
+    () => count(seqLoads, R.sequentialAwaits) === 1 && seqLoads.findings[0].section === "module UsrLoads"
+      && count(lintModuleQuality("UsrLoads", loads(true)), R.sequentialAwaits) === 0, () => seqLoads.findings);
+  const planCodes = lintModuleQuality("UsrPlan", "/** Built for card C04. */\ndefine(\"UsrPlan\", [], function() {\n"
+    + "// covers AC-16\nfunction f() { return 1; }\nreturn { f }; });");
+  const plainHeader = lintModuleQuality("UsrPlan", "/** Totals of a contract. */\ndefine(\"UsrPlan\", [], function() {\n"
+    + "// sums the active rows\nfunction f() { return 1; }\nreturn { f }; });");
+  check("module lint: a plan code in the module's header JSDoc or an inner comment is reported; plain comments are not",
+    () => count(planCodes, R.planCodeInComment) === 2 && planCodes.findings.every((f) => f.section === "module UsrPlan")
+      && count(plainHeader, R.planCodeInComment) === 0, () => planCodes.findings);
+  const elementIds = lintModuleQuality("UsrCols", `define("UsrCols", [], function() { return { columns: [{ id: "${held}", code: "X" }] }; });`,
+    DEFAULT_QUALITY_THRESHOLDS, new Set([held.toLowerCase()]));
+  check("module lint: an element's generated local id is not a record id, in a module as on a page",
+    () => count(elementIds, R.guidLiteral) === 0, () => elementIds.findings);
+
+  const pageEntry = (deps) => ({ handlers: `[${handler("usr.A", "const x = 1;")}]`, validators: "{}", converters: "{}", deps });
+  const v2Pages = { main: pageEntry('["@creatio-devkit/common", "UsrDemoV2App_FormPageModule"]'), list: pageEntry('["UsrDemoV2App_ListPageModule"]') };
+  const v2Run = lintRunQuality(v2Pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), v2Modules, new Set());
+  check("run: a page carries the findings of the modules it imports, and of the modules those import (form page: 3 + 1 from the shared module)",
+    () => count(v2Run.get("main"), R.catchLogOnly) === 4 && count(v2Run.get("main"), R.numericComparisonType) === 1
+      && JSON.stringify(v2Run.get("main").modules) === JSON.stringify([V2[0], V2[2]]) && count(v2Run.get("list"), R.catchLogOnly) === 1,
+    () => ({ main: v2Run.get("main").findings.map((f) => f.section + ":" + f.rule), list: v2Run.get("list").modules }));
+  const partial = lintRunQuality(v2Pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), { [V2[0]]: v2Modules[V2[0]] }, new Set());
+  check("run: an imported module whose source was not filed is named as unread, also when only another module imports it",
+    () => JSON.stringify(partial.get("main").unreadModules) === JSON.stringify([V2[2]]) && JSON.stringify(partial.get("list").unreadModules) === JSON.stringify([V2[1]]));
+  const external = lintRunQuality(v2Pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), { [V2[0]]: v2Modules[V2[0]] }, new Set([V2[2]]));
+  check("run: a declared project module (existing code) is not followed — neither linted nor owed",
+    () => external.get("main").unreadModules.length === 0 && count(external.get("main"), R.catchLogOnly) === 3);
+  const shared = lintRunQuality({ a: pageEntry('["UsrDemoV2App_ListPageModule"]'), b: pageEntry('["UsrDemoV2App_ListPageModule"]') },
+    DEFAULT_QUALITY_THRESHOLDS, new Set(), v2Modules, new Set());
+  check("run: a module two pages import counts on each of them",
+    () => count(shared.get("a"), R.catchLogOnly) === 1 && count(shared.get("b"), R.catchLogOnly) === 1);
+
+  const withModules = (deps, modules) => { const b = built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`); b.pages.main.deps = deps; b.modules = modules; return b; };
+  const v2Verify = renderVerify(result, opts, withModules('["AbConstants", "UsrDemoV2App_FormPageModule"]', v2Modules));
+  check("verify: a log-only catch in an imported module blocks the page's Code quality row, named by the module",
+    () => /⚠ verify/.test(rowLine(v2Verify.markdown, R.catchLogOnly)) && rowLine(v2Verify.markdown, R.catchLogOnly).includes(`module ${V2[0]}`)
+      && /⚠ verify/.test(rowLine(v2Verify.markdown, R.numericComparisonType)) && !v2Verify.complete,
+    () => rowLine(v2Verify.markdown, R.catchLogOnly));
+  const unreadVerify = renderVerify(result, opts, withModules('["AbConstants", "UsrDemoV2App_FormPageModule"]', {}));
+  check("verify: an imported module the read-back did not file holds the Code quality and Page code rows ⚠, saying where its source goes",
+    () => /⚠ verify/.test(rowLine(unreadVerify.markdown, R.catchLogOnly)) && /reads\/modules\//.test(rowLine(unreadVerify.markdown, R.catchLogOnly).replaceAll("ˋ", "`"))
+      && /⚠ verify/.test(pageCodeLine(unreadVerify.markdown)) && pageCodeLine(unreadVerify.markdown).includes(V2[0]) && !unreadVerify.complete,
+    () => [rowLine(unreadVerify.markdown, R.catchLogOnly), pageCodeLine(unreadVerify.markdown)]);
+  const longModule = `define("UsrLongModule", [], function() {\nfunction recalculate() {\n${lines(70)}\n}\nreturn { recalculate };\n});`;
+  const longVerify = renderVerify(result, opts, withModules('["UsrLongModule"]', { UsrLongModule: longModule }));
+  check("verify: a module function over the limit holds the Page code row ⚠, named `Module › function`",
+    () => /⚠ verify/.test(pageCodeLine(longVerify.markdown)) && /`UsrLongModule › recalculate` is \d+ lines \(limit 60\)/.test(pageCodeLine(longVerify.markdown)),
+    () => pageCodeLine(longVerify.markdown));
+  const raisedModule = renderVerify(result, checklistOpts(manifest({ qualityThresholds: { maxFunctionLines: 200 } })),
+    withModules('["UsrLongModule"]', { UsrLongModule: longModule }));
+  check("verify: raising manifest.qualityThresholds.maxFunctionLines clears a module function's Page code finding",
+    () => /✅ Done/.test(pageCodeLine(raisedModule.markdown)), () => pageCodeLine(raisedModule.markdown));
+  const brokenModule = renderVerify(result, opts, withModules('["UsrBroken"]', { UsrBroken: 'define("UsrBroken", [], function() { return {' }));
+  check("verify: a filed module that does not parse holds both the Page code and Code quality rows ⚠, naming its reads/modules file",
+    () => /⚠ verify/.test(pageCodeLine(brokenModule.markdown)) && pageCodeLine(brokenModule.markdown).includes("reads/modules/UsrBroken.js")
+      && /⚠ verify/.test(rowLine(brokenModule.markdown, R.catchLogOnly)) && !/bundle's/.test(rowLine(brokenModule.markdown, R.catchLogOnly)),
+    () => [pageCodeLine(brokenModule.markdown), rowLine(brokenModule.markdown, R.catchLogOnly)]);
+  // A module not filed holds only the rows its code can break, and keeps each row's own findings and note.
+  const unfiledWithCatch = renderVerify(result, opts, (() => { const b = withModules('["UsrMissing"]', {});
+    b.pages.main.handlers = `[${handler("usr.ApplyButtonClicked", "try { await request.$context.save(); } catch (e) { console.error(e); }")}]`; return b; })());
+  check("verify: an unfiled module holds the catch-log-only row and the page's own log-only catch is still listed",
+    () => /⚠ verify/.test(rowLine(unfiledWithCatch.markdown, R.catchLogOnly)) && rowLine(unfiledWithCatch.markdown, R.catchLogOnly).includes("UsrMissing")
+      && rowLine(unfiledWithCatch.markdown, R.catchLogOnly).includes("the catch block only logs the error"),
+    () => rowLine(unfiledWithCatch.markdown, R.catchLogOnly));
+  check("verify: an unfiled module leaves the rows no module can break on their own path (nested functions ✅, unused strings not ⚠)",
+    () => /✅ Done/.test(rowLine(unfiledWithCatch.markdown, R.nestedFunctions)) && !/⚠ verify/.test(rowLine(unfiledWithCatch.markdown, R.unusedResourceString)),
+    () => [rowLine(unfiledWithCatch.markdown, R.nestedFunctions), rowLine(unfiledWithCatch.markdown, R.unusedResourceString)]);
+  const noConventionsUnfiled = renderVerify(result, { ...opts, projectConventions: null, constantsGuids: [] }, built(usesHeld));
+  check("verify: without projectConventions an unfiled import holds the GUID row, which keeps the 'check was skipped' note and the page's own record id",
+    () => /⚠ verify/.test(rowLine(noConventionsUnfiled.markdown, R.guidLiteral)) && /check was skipped/.test(rowLine(noConventionsUnfiled.markdown, R.guidLiteral))
+      && rowLine(noConventionsUnfiled.markdown, R.guidLiteral).includes("AbConstants") && rowLine(noConventionsUnfiled.markdown, R.guidLiteral).includes(held),
+    () => rowLine(noConventionsUnfiled.markdown, R.guidLiteral));
+  const unreadAndLong = renderVerify(result, opts, (() => { const b = withModules('["UsrMissing"]', {});
+    b.pages.main.handlers = longHandler; return b; })());
+  check("verify: an unread module does not hide the page's own Page code findings",
+    () => pageCodeLine(unreadAndLong.markdown).includes("UsrMissing") && /`usr\.ApplyButtonClicked` is \d+ lines/.test(pageCodeLine(unreadAndLong.markdown)),
+    () => pageCodeLine(unreadAndLong.markdown));
+  const cleanModule = renderVerify(result, opts, withModules('["UsrCleanModule"]', { UsrCleanModule: 'define("UsrCleanModule", [], function() { return { x: 1 }; });' }));
+  check("verify: a page whose imported modules are filed and clean closes the Page code row and every blocking Code quality row",
+    () => /✅ Done/.test(pageCodeLine(cleanModule.markdown)) && ROW_RULES.filter((r) => r !== R.unusedResourceString).every((r) => /✅ Done/.test(rowLine(cleanModule.markdown, r))),
+    () => cleanModule.markdown.split("\n").filter((l) => l.includes("[code-quality]") || l.includes("Page code")));
+
+  // Through the real payload path: `reads/modules/<Module>.js` → assembleBuilt → built.modules.
+  const modDir = fs.mkdtempSync(path.join(os.tmpdir(), "quality-modules-"));
+  try {
+    fs.mkdirSync(path.join(modDir, "reads", "modules"), { recursive: true });
+    fs.writeFileSync(path.join(modDir, "reads", "index.json"), JSON.stringify({ version: 1, reads: [] }));
+    fs.writeFileSync(path.join(modDir, "reads", "modules", `${V2[1]}.js`), v2Modules[V2[1]]);
+    fs.writeFileSync(path.join(modDir, "reads", "modules", "notes.txt"), "not a module");
+    const { built: fromDir } = assembleBuilt(modDir);
+    check("assembleBuilt: each reads/modules/<Module>.js becomes built.modules[<Module>], and nothing else in the folder does",
+      () => fromDir.modules?.[V2[1]] === v2Modules[V2[1]] && Object.keys(fromDir.modules).length === 1, () => Object.keys(fromDir?.modules || {}));
+  } finally { fs.rmSync(modDir, { recursive: true, force: true }); }
 
   // the engine stays zero-dependency: quality.mjs imports only its siblings.
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");

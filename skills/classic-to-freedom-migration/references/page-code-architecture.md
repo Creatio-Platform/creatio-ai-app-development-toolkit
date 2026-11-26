@@ -59,9 +59,7 @@ function call in a custom request to give it a name.
   query (ESQ aggregation, `get-guidance esq`), never a loop that pages through the rows and adds them up in
   the browser — that reads every row on every call and grows with the data. A total is recalculated when a
   record it counts really changes (an item saved, deleted or (de)activated), not on every list load,
-  paging or page open. `--verify` reports a paged loop in the page's own code as
-  `[code-quality] paged-read-loop`; it does not read the client module yet, so check the module's totals
-  yourself.
+  paging or page open. `--verify` reports a paged loop as `[code-quality] paged-read-loop`.
 
 ## 6. A write reports its outcome, and the user sees a failure
 
@@ -80,11 +78,10 @@ USER: a dialog or a notification with a localizable message, never only `console
 - **A bulk action counts its failures.** An action over selected records (close, deactivate, delete)
   goes on past a failed record, counts the records that failed and, when any did, tells the user how many
   of how many ("2 of 5 contracts were not closed"); then it reloads the list once.
-- In the page's own code, `--verify` reports a `catch` that only logs (or is empty) as
-  `[code-quality] catch-log-only`, and a write function whose failure result a caller ignores
-  (`await recalculate(…);` as a bare statement when `recalculate` returns `null` on a failure) as
-  `[code-quality] unchecked-write-result`. It does not read the client module yet: check the module's
-  writes and catches against this section yourself.
+- `--verify` reports a `catch` that only logs (or is empty) as `[code-quality] catch-log-only`, and a write
+  function whose failure result a caller ignores (`await recalculate(…);` as a bare statement when
+  `recalculate` returns `null` on a failure) as `[code-quality] unchecked-write-result`, in the page's
+  code and in the client modules it imports (the call and the function it calls in one source).
 
 ```js
 // Incorrect — the failure stays in the console; the caller ignores the result.

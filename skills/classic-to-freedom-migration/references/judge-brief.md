@@ -29,8 +29,11 @@ page. You read what the builders filed and rule on it; you write nothing on the 
 
 ## What you are handed
 
-Your task file is `group: Quality gates`, read-only, with `writesTo:` empty: you write no artifact
-and nothing on the stand. The orchestrator passes, as paths: your task file (its contract, its
+Your task file is `group: Quality gates` — or a judge round, `kind: repair` with
+`cause: unverified:unjudged` — read-only, with `writesTo:` empty: you write no artifact and nothing
+on the stand. Its **Records you rule on** list names every evidence id of the pages you judge,
+including the ones whose rows sit in a build task: rule on each of them, not only on your own rows,
+because an id left `null` keeps its row open as NOT judged. The orchestrator passes, as paths: your task file (its contract, its
 deliverables, the tasks it waits on), the migration folder, the environment name, the manifest, the
 path to `engine/migrate.mjs`, the approved `plan.md`, and the `refs/` folder when the run has a
 `Reference cache` task. This brief is the only one you are handed — no build brief and no mapping
@@ -104,11 +107,11 @@ the page and requests nobody sends. The `Code quality` rows hold nested function
 helpers copied from another page, catch blocks that only log, a numeric `comparisonType`, sequential
 independent loads, plan codes in comments, record ids a constants module holds, a handler that does
 not pass the request on (`next`), a write whose failure result the caller ignores and a read that pages
-through every row. A `#quality-gates`
+through every row. Both rows also measure every client module the page imports, directly or through
+another module (a finding there is named `module <Name>`), so logic moved out of the page body is not
+out of reach. A `#quality-gates`
 record that calls the page clean while either row reads `⚠ verify` is not convincing; quote the row
-in `why`. These rows read the page's own code sections only, not its client module: a clean row says
-nothing about the module, so read the module's handlers, writes and totals yourself before you accept
-a record that calls them compliant.
+in `why`.
 
 ## How to rule
 
