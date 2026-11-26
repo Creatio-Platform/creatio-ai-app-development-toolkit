@@ -336,6 +336,8 @@ class LastSaveRuleTests(unittest.TestCase):
         self.assertIn("only when a check was made after its LAST SAVE", notes)
         self.assertIn("every task that saves a page owes its own check after its own last save", notes)
         self.assertIn("writes `Page saved: no` under `## Notes`", notes)
+        self.assertIn("A page with no check after its last save ends the run as **BUILT, NOT EXERCISED**", notes)
+        self.assertNotIn("whose last built task reports no check", notes)
         self.assertNotIn("none of whose tasks", notes)
 
     def test_the_orchestrator_report_step_states_the_same_rule(self):

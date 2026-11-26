@@ -5915,6 +5915,29 @@ console.log("\n===== the migration result report — one artifact, computed from
       () => [savedPage("```\nPage saved: no\n```"), savedPage("> Page saved: no"), savedPage("- **Page saved:** no")]);
   }
   {
+    // A REAL RUN'S BROWSER VERDICT. Every page-writing task of a benchmark run, in queue order, with its own
+    // `Browser checks:` line and queue position (fixtures/mbcontract-v3-browser). Its no-save tasks are what the run ended on for three
+    // pages; marked `Page saved: no`, the run is exercised, and unmarked it reproduces the run's own 🟠 verdict.
+    const v3 = JSON.parse(fs.readFileSync(path.join(DIR, "fixtures", "mbcontract-v3-browser", "tasks.json"), "utf8")).tasks;
+    const v3Tasks = (mark) => v3.map((t) => ({ ...pageTask(t.id, t.pageKey, `${t.browserChecks}${mark && t.unsaved ? "\n\nPage saved: no" : ""}`, t.writesTo),
+      file: t.file, group: t.group || "Page build", status: t.status, order: t.order }));
+    const marked = exercisedRep(v3Tasks(true), tmp("result-report-v3-marked"));
+    const unmarked = exercisedRep(v3Tasks(false), tmp("result-report-v3-unmarked"));
+    // The pages the "Not exercised" section lists — that section only, up to the next heading.
+    const unexercisedOf = (rep) => rep.markdown.slice(rep.markdown.indexOf("## Not exercised")).split("\n## ")[0].split("\n")
+      .filter((l) => l.startsWith("- **")).map((l) => /\(`([^`]+)`\)/.exec(l)?.[1]).sort();
+    check("exercised (v3 run): the fixture is the run's 16 page-writing tasks over 5 pages, 6 of them no-save",
+      () => v3.length === 16 && new Set(v3.map((t) => t.writesTo)).size === 5 && v3.filter((t) => t.unsaved).length === 6,
+      () => v3.map((t) => [t.id, t.writesTo, t.unsaved]));
+    check("exercised (v3 run): with its no-save tasks marked `Page saved: no`, the run's five pages are all exercised and the verdict is 🟢 COMPLETE",
+      () => marked.verdictColour === "green" && marked.counts.unexercised === 0 && /🟢 \*\*COMPLETE\*\*/.test(marked.markdown),
+      () => marked.markdown.split("\n")[2]);
+    check("exercised (v3 run): unmarked, it ends as the run did — 🟠 on the item mini page, the form page and the list page",
+      () => unmarked.verdictColour === "orange"
+        && JSON.stringify(unexercisedOf(unmarked)) === JSON.stringify(["page:child::MbContractItemPage", "page:list", "page:main"]),
+      () => unexercisedOf(unmarked));
+  }
+  {
     // A whole-run build is ONE artifact in the browser verdict, whatever pages it saved: its single
     // `Browser checks: N` line decides all of them at once, as one check line decides one page's last chunk.
     const wholeTask = (notes) => ({ ...pageTask("wh-a", "run", notes, ARTIFACT_WHOLE), group: "Whole run",

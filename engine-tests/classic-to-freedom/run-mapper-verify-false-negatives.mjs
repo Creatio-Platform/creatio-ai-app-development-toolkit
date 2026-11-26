@@ -255,6 +255,20 @@ export function runEntityRuleChecks({ check, runMigration, checklistOpts, checkl
   const onPageOnly = resolveRuleVk(entityRow.vk, page({ businessRules: { count: 1, rules: [ruleOn(attr)] } }));
   check("entity rules: the row closes from the object's rules read ✅, and saying so names the object",
     () => fromObject[2] === "ok" && /built entity rule.*on the object/.test(fromObject[1]), () => fromObject);
+  const [firstAttr, ...restAttrs] = entityRow.vk.names;
+  const partial = resolveRuleVk(entityRow.vk, page({ entityBusinessRules: { count: 1, rules: [ruleOn(firstAttr)] } }));
+  check("entity rules: an object read holding only some expected attributes is ⚠, counted on the object and naming the attributes still owed",
+    () => restAttrs.length > 0 && partial[2] === "unverified" && /1 rule\(s\) on the object/.test(partial[1])
+      && restAttrs.every((a) => new RegExp(`missing:.*${a}`).test(partial[1])) && !/on the built page/.test(partial[1]),
+    () => partial);
+  const created = { ...su, targetPackage: "UsrSUApp (primary package of the new app; created by create-app)", createdApp: { primaryPackage: "UsrSUApp2" } };
+  const createdRead = readPlan(runMigration(created, { baseDir: DIR }), checklistOpts(created)).reads.find((r) => r.kind === "entityBusinessRules");
+  const noPkg = { ...su, targetPackage: undefined };
+  const noPkgRead = readPlan(runMigration(noPkg, { baseDir: DIR }), checklistOpts(noPkg)).reads.find((r) => r.kind === "entityBusinessRules");
+  check("entity rules: the read names the package create-app made over the planned note, and says `the run's target package` when the plan names none",
+    () => /in `UsrSUApp2`/.test(createdRead?.what || "") && !/primary package/.test(createdRead?.what || "")
+      && /in the run's target package/.test(noPkgRead?.what || ""),
+    () => [createdRead?.what, noPkgRead?.what]);
   check("entity rules: without the object's read the row is NOT checkable and names `read-entity-business-rules` — a page rule on the same attribute never closes it",
     () => onPageOnly[2] === "unverified" && /read-entity-business-rules/.test(onPageOnly[1]) && /`SupportUnit`/.test(onPageOnly[1]),
     () => onPageOnly);

@@ -320,8 +320,7 @@ to the page's body — it only recorded outcomes, read the stand, or changed a c
 `Page saved: no` under `## Notes`, one line, beside its `Browser checks: 0 — <why>`. The page then
 stands as its last save left it, and the check made after that save still counts. Never write it
 after a save: the line is what lets the earlier check stand, so a wrong one hides a page nobody
-opened. A page whose
-last built task reports no check ends the run as **BUILT, NOT EXERCISED**, with your
+opened. A page with no check after its last save ends the run as **BUILT, NOT EXERCISED**, with your
 `Check on stand (row N): …` lines as the list a person works through by hand. N above 2 is a defect in the task, and the report lists it.
 Write the line on its own, at the start of a line, never inside a quote or a code fence: a quoted or fenced
 line is read as an example and does not count. To correct the count, write the line again; the last one counts.

@@ -31,5 +31,9 @@ Provenance (important):
 - `module-lint-v2/` — **synthetic** client modules, reduced to what the code-quality rules read: log-only and
   comment-only catches, a bare numeric `comparisonType`, and a shared module that only another module imports.
   Names and record ids are placeholders; `run-mapper-quality.mjs` asserts the findings.
+- `mbcontract-v3-browser/` — **real task notes** from a migration benchmark run of the synthetic `MbContract` test
+  package (no customer data): every page-writing task of the run, in queue order, with its status, its `order` and its last
+  `Browser checks:` line, and `unsaved: true` on the tasks whose notes say they saved no page. Generated from the
+  run's `build-tasks/`; `run-tasks.mjs` asserts the run's browser verdict from it, with and without `Page saved: no`.
 
 `employeescore/` was removed — no runner loaded it.
