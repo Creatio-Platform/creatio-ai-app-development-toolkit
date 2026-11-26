@@ -4355,17 +4355,27 @@ function walkModuleCalls(ctx, starts, visit) {
   for (const call of starts) enqueue(call, null);
   for (const key of queue) {
     const { call } = from.get(key);
-    const filed = ctx.modules.has(call.module);
-    if (!filed) missing.add(call.module);
-    const shape = filed ? moduleShapeOf(ctx, call.module) : null;
-    const bodies = filed ? shape?.functions.get(call.fn) || [] : undefined;
+    if (!ctx.modules.has(call.module)) missing.add(call.module);
+    const { shape, bodies } = functionBodiesOf(ctx, call);
     if (visit(call.module, call.fn, bodies)) return { hit: true, path: callPath(from, key), missing: [...missing] };
-    for (const code of (bodies || []).map(codeOnly)) {
-      for (const fn of shape.functions.keys()) if (calledIn(code, fn, true)) enqueue({ module: call.module, fn, via: null }, key);
-      for (const next of moduleCallsIn(code, shape.imports)) enqueue(next, key);
-    }
+    for (const next of calleesOf(shape, call.module, bodies)) enqueue(next, key);
   }
   return { hit: false, path: [], missing: [...missing] };
+}
+// The module's shape and the bodies of `call.fn` in it: `bodies` undefined when the module's source is not filed,
+// empty when the module does not parse or does not define the function.
+function functionBodiesOf(ctx, call) {
+  if (!ctx.modules.has(call.module)) return { shape: null, bodies: undefined };
+  const shape = moduleShapeOf(ctx, call.module);
+  return { shape, bodies: shape?.functions.get(call.fn) || [] };
+}
+// The calls `bodies` make: to the functions of their own `module`, and through the module's imports to others.
+function calleesOf(shape, module, bodies) {
+  if (!shape) return [];
+  return (bodies || []).map(codeOnly).flatMap((code) => [
+    ...[...shape.functions.keys()].filter((fn) => calledIn(code, fn, true)).map((fn) => ({ module, fn, via: null })),
+    ...moduleCallsIn(code, shape.imports),
+  ]);
 }
 function callPath(from, key) {
   const path = [];
