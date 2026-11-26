@@ -244,7 +244,7 @@ export function runEntityRuleChecks({ check, runMigration, checklistOpts, checkl
   const entityRead = plan.reads.find((r) => r.kind === "entityBusinessRules");
   check("entity rules: the read plan asks for `read-entity-business-rules` on the object in the target package, after every other read",
     () => !!entityRead && entityRead.pageKey === "main" && plan.reads.at(-1) === entityRead
-      && /read-entity-business-rules.*`SupportUnit`.*`UsrSU`/.test(entityRead.what) && /-entity-rules-main\.json$/.test(entityRead.file),
+      && /read-entity-business-rules.*`SupportUnit`.*`UsrSU`/.test(entityRead.what) && entityRead.file.endsWith("-entity-rules-main.json"),
     () => plan.reads.map((r) => r.file));
 
   const attr = entityRow.vk.names[0];

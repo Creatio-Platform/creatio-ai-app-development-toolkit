@@ -3639,9 +3639,9 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
 // (attribute → `{ decision, quote }`), so `--verify` stops counting it as missing and quotes the decision instead.
 // `source` names where the rules live when they are not the page's own: an entity rule persists on the OBJECT
 // (`read-entity-business-rules`), and is matched against that read, never against the page's rules.
-function businessRulesRow(deliverableId, label, ruleN, ruleIds, pageKey, ctx, source = null) {
+function businessRulesRow(deliverableId, label, ruleN, ruleIds, pageKey, ctx, source = {}) {
   const decided = rulesBuiltElsewhere(pageKey, ruleIds, ctx);
-  return { deliverableId, label: `${label} × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds, ...(source || {}), ...(decided ? { decided } : {}) } };
+  return { deliverableId, label: `${label} × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds, ...source, ...(decided ? { decided } : {}) } };
 }
 // The slot of `--built.pages[<key>]` that holds an object's entity rules, and the vk fields naming it.
 export const ENTITY_RULES_SLOT = "entityBusinessRules";
