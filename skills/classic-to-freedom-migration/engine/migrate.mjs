@@ -34,6 +34,7 @@
 //   }
 //     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
 //                        // `"<pageKey>#business-rule:<Attribute>": { status: "built-elsewhere", decision: "D<N>" }` closes one business-rule target attribute the user accepted as built another way; D<N> needs `Decided by: user` and a `Quote:`
+//     "createdApp": { primaryPackage }, // optional; the package create-app made, recorded after scaffolding. `--verify` compares built pages and RelatedPage add-ons against it (`packageNameOf`); outside the plan version
 //     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry or this list
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
@@ -66,7 +67,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers } from "./directives.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
@@ -1147,7 +1148,8 @@ export function checklistOpts(manifest, opts = {}) {
   const conventions = runConventionsOf(manifest, opts);
   return {
     // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
-    deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
+    // ...and the rule attributes a user's later answer closes (`Closes:` in decisions.md), read at the root only.
+    deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...answeredRuleStatuses(opts.decisionRecords), ...plainObject(manifest.deliverableStatus) },
     decisions: opts.decisions instanceof Map ? opts.decisions : null,
     // Who decided each decisions.md entry (`Decided by:` and `Quote:`), read once at the root and handed to every
     // fold: a `built-elsewhere` rule status stands only on the user's own decision.
@@ -1158,6 +1160,9 @@ export function checklistOpts(manifest, opts = {}) {
     decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
     template: manifest.template,
     targetPackage: manifest.targetPackage,
+    // The package create-app made, recorded after scaffolding: `--verify` compares built pages against it
+    // (`packageNameOf`) while the plan's rows keep the target as approved.
+    createdPackage: manifest.createdApp?.primaryPackage ?? null,
     planMeta: pm,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => !(processPage && k === "sectionSchema"))
       .filter((k) => k === "formTemplate" ? formTemplateMissing(pm, manifest) : blank(pm[k])),
@@ -1444,7 +1449,7 @@ const openCardIsTheWholeStory = (am) => !!am.openCardOverridden && !anyAddSignal
 const ADD_SIGNALS = ["lookup", "service", "editableGrid", "openCardOverridden", "addDisabled", "customAction", "fixedFilters"];
 const anyAddSignal = (am, ...except) => ADD_SIGNALS.some((k) => !except.includes(k) && am[k]);
 const hasAddMechanism = (am) => anyAddSignal(am);
-const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length);
+const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length || am.rowsOpenNothing);
 
 // What to BUILD for this add mode, as opposed to what it IS (`describeAddMode`). Conditional: one unconditional
 // instruction contradicts the modes it does not fit — "build a CUSTOM add request-handler" on a detail whose own
@@ -1491,8 +1496,8 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
 }
 
 // The questions a detail's feature inventory leaves for the user. A quick filter that Classic kept in the user's
-// profile may lose that memory, since no guidance states that `crt.QuickFilter` keeps it; summaries are an
-// improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
+// profile stays kept, since `crt.QuickFilter` saves its value per user too: the question recommends that default and
+// names the code only a reset needs. Summaries are an improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
 // bar is recorded on the change set (`summaryBar`) so the plan reads it as data. Exported for the goldens.
 export function attachDetailFeatureDecisions(changeSet) {
   for (const d of (changeSet.details || [])) {
@@ -1502,7 +1507,7 @@ export function attachDetailFeatureDecisions(changeSet) {
     const label = detailLabel(d);
     for (const q of f.quickFilters.filter((x) => x.persisted)) {
       changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
-        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. No guidance confirms that \`crt.QuickFilter\` keeps its state between visits. Decide: accept that the filter resets on every visit, or keep it with a custom profile read and write` });
+        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. \`crt.QuickFilter\` does the same: the platform saves its value per user in the page's schema profile (\`get-component-info crt.QuickFilter\`), so the built filter keeps it with no code. Recommended: keep (platform default) — nothing to build. Only "reset on every visit" needs code, which clears the value the platform saved` });
     }
     if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
   }
@@ -1576,34 +1581,41 @@ function addMechanismDecision(am, label) {
 function rowActionsDecision(am, label) {
   const removed = am.rowActionsRemoved || [];
   const unreadable = am.rowActionsUnreadable || [];
-  const parts = [...removedActionsSentences(removed), ...unreadableOverrideSentences(unreadable, removed.length > 0)];
+  const parts = [...removedActionsSentences(removed, !!am.rowsOpenNothing), ...unreadableOverrideSentences(unreadable, removed.length > 0 || !!am.rowsOpenNothing, !!am.rowsOpenNothing)];
   return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
     reason: `Detail '${label}' ${parts.join(" ")}` };
 }
 
 const plural = (n) => (n > 1 ? "s" : "");
 
-// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing was removed.
-function removedActionsSentences(removed) {
-  if (!removed.length) return [];
-  const drop = freedomRowActionsToDrop(removed);
+// How a Freedom row opens its record, as the decision's closing clause: on click, or not at all when Classic rows
+// open nothing.
+const openClause = (opensNothing) => (opensNothing
+  ? "set `features.cells.disableLinks: true` and offer no Open row action, since a click on a row opens nothing in Classic (`editRecord` switched off)."
+  : "keep records opening from the list (open-on-click).");
+// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing changed.
+function removedActionsSentences(removed, opensNothing) {
+  if (!removed.length) return opensNothing ? [`opens nothing on a row click in Classic. Build its list rows so they ${openClause(true)}`] : [];
+  const drop = freedomRowActionsToDrop(removed, opensNothing);
   const build = drop.length
-    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
-    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
-  const edit = removed.includes("Edit")
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and ${openClause(opensNothing)}`
+    : `Nothing to remove from the Freedom list rows — ${openClause(opensNothing)}`;
+  const edit = removed.includes("Edit") && !opensNothing
     ? ["Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."]
     : [];
   return [`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`, build, ...edit];
 }
 
 // The manual-read request for overrides the scan could not read; [] when every override was read.
-function unreadableOverrideSentences(unreadable, afterRemoved) {
+function unreadableOverrideSentences(unreadable, afterRemoved, opensNothing) {
   if (!unreadable.length) return [];
   const lead = afterRemoved ? "It also overrides" : "overrides";
   const members = unreadable.map((m) => "`" + m + "`").join(", ");
   const subject = unreadable.length > 1 ? "they remove" : "it removes";
+  // with rows that open nothing, the sentence before this one already gave the links-off clause
+  const close = opensNothing ? "." : `, and ${openClause(false)}`;
   return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
-    "Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click)."];
+    `Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out${close}`];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -2503,6 +2515,7 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
   const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index))
     && !switchedOff(text, "getSummaryVisible", spans);
   return {
+    sort: gridSortOf(text, spans),
     toolsMenu: toolsMenuDeviations(text, spans),
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
     multiSelect: multiSelectMode(text, spans),
@@ -2510,9 +2523,54 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
     summaries,
   };
 }
+// The order Classic loads the list in: the column whose `orderDirection` `addGridDataColumns` sets, else the
+// direction `getGridSortDirection` returns with no column. `locked` when `initDetailOptions` turns `IsSortable` off,
+// so the user cannot re-sort. Null when the detail keeps the default order. The members are read raw, for the column
+// and attribute names they pass as strings, so every match inside a comment or a string is dropped.
+const ORDER_DIRECTION_SET = /orderDirection\s{0,5}=\s{0,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/g;
+const ORDER_DIRECTION_RETURNED = /return\s{1,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/;
+const SORTED_COLUMN = /(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']/g;
+const SORT_LOCKED = /set\s{0,5}\(\s{0,5}["']IsSortable["']\s{0,5},\s{0,5}false\b/g;
+// The receiver just before `.orderDirection`: a column added or fetched in place, or a variable holding one.
+const SORT_RECEIVER = /(?:(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']\s{0,5}\)|\b([A-Za-z_]\w{0,80}))\s{0,5}\.\s{0,5}$/;
+const SORT_RECEIVER_WINDOW = 200;
+const SORT_ASSIGNMENT_WINDOW = 300;
+const codeMatches = (code, re) => {
+  const spans = literalSpans(code);
+  return [...code.matchAll(re)].filter((m) => !insideSpan(spans, m.index));
+};
+// The one column the variable was last assigned before `at` (`var c = esq.addColumn("X")`, or a ternary that fetches
+// or adds the same column), else null.
+function columnOfVariable(code, name, at) {
+  const assigned = codeMatches(code.slice(0, at), new RegExp(String.raw`(?<![.\w$])${name}\s{0,5}=(?!=)`, "g")).at(-1);
+  if (!assigned) return null;
+  const from = assigned.index + assigned[0].length;
+  const rhs = code.slice(from, from + SORT_ASSIGNMENT_WINDOW).split(";")[0];
+  const names = [...new Set(codeMatches(rhs, SORTED_COLUMN).map((m) => m[1]))];
+  return names.length === 1 ? names[0] : null;
+}
+// The column one `orderDirection` assignment sorts, or null when its receiver names no single column.
+function sortedColumnAt(code, at) {
+  const r = SORT_RECEIVER.exec(code.slice(Math.max(0, at - SORT_RECEIVER_WINDOW), at));
+  if (!r) return null;
+  return r[1] || columnOfVariable(code, r[2], at);
+}
+function gridSortOf(text, spans) {
+  if (!text.includes("OrderDirection")) return null;
+  const cols = lastMemberCode(text, "addGridDataColumns", spans, { raw: true });
+  const sets = cols?.code ? codeMatches(cols.code, ORDER_DIRECTION_SET) : [];
+  const returned = sets.length ? null : ORDER_DIRECTION_RETURNED.exec(lastMemberCode(text, "getGridSortDirection", spans)?.code || "");
+  const direction = (sets[0] || returned)?.[1];
+  if (!direction) return null;
+  // two assignments on different columns, or one whose column is not read, name no single column
+  const columns = new Set(sets.map((m) => sortedColumnAt(cols.code, m.index)));
+  const column = columns.size === 1 ? [...columns][0] : null;
+  const options = lastMemberCode(text, "initDetailOptions", spans, { raw: true });
+  return { column, direction: direction.toLowerCase(), locked: codeMatches(options?.code || "", SORT_LOCKED).length > 0 };
+}
 // Every function of the feature scan, for the structural ReDoS golden.
 export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
-  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode];
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode, gridSortOf, codeMatches, columnOfVariable, sortedColumnAt];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
@@ -2556,7 +2614,9 @@ export function detectAddMode(body, scan = {}) {
   const { fixedFilters, filterCols } = fixedFilterSignal(body, filters);
   const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
     openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
-    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };
+    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable,
+    // `editRecord` switched off: a click on a row opens nothing
+    rowsOpenNothing: switchedOff(body, "editRecord", spans) };
   return hasAddMechanism(am) || hasRowActionSignal(am) ? am : null;
 }
 
@@ -3013,7 +3073,13 @@ function feedPlanObject(h, value, readBody, state, depth) {
 // rewriting its quote, expectation or scope after approval, is a plan the user has not approved. Only those four
 // fields are hashed — who recorded it and the approval entry itself stay out, or approving would move the version it
 // approves. A plan with no record id and no directive hashes exactly as the manifest alone does.
-const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules"]);
+// The `built-elsewhere` statuses the user's answers carry (`closedRuleAttributes`), shaped as
+// `manifest.deliverableStatus` entries so the rule row, its quote and the entry checks treat them alike.
+const answeredRuleStatuses = (records) => Object.fromEntries(closedRuleAttributes(records)
+  .map(({ key, decision }) => [key, { status: STATUS_BUILT_ELSEWHERE, decision }]));
+// `createdApp` is what create-app made (`packageNameOf` in designspec.mjs): a stand fact recorded after the approval,
+// never a plan choice, so recording it leaves the approved version as it was.
+const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules", "createdApp"]);
 // A process step's `consent` is the user's answer to the plan, given in the same answer as the approval and recorded
 // after it, so it stays out like the approval entry: recording it must not move the version it answers.
 function withoutStepConsent(processPage) {
@@ -4991,7 +5057,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let decisionRecords = [];
   try { decisionRecords = decisionsFolder ? readDecisionRecords(decisionsFolder) : []; }
   catch (e) { fail(`cannot read ${path.join(decisionsFolder, "decisions.md")}: ${e.message}`); }
-  const taskOpts = () => ({ ...checklistOpts(manifest), decisions, decisionTexts });
+  // Every mode re-derives the rows from the same opts: the manifest and the answers decisions.md carries, so the
+  // cut, the read plan and `--verify` close the same rule attributes the plan run did.
+  const runOpts = () => checklistOpts(manifest, { decisionRecords });
+  const taskOpts = () => ({ ...runOpts(), decisions, decisionTexts });
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionRecords, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
@@ -5035,7 +5104,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     let plan;
     let records;
     try {
-      plan = readPlan(result, checklistOpts(manifest));
+      plan = readPlan(result, runOpts());
       writeReadIndex(readsDir, plan);
       // …and the record files for the halves the stand does not hold, merged the way every task-folder mode merges
       // them, so no id is ever retyped and no filed value is lost.
@@ -5132,7 +5201,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     output = res.note;
   }
   else if (tasksMode && revokeMode) {
-    const opts = { ...checklistOpts(manifest), decision: revokeArg };
+    const opts = { ...runOpts(), decision: revokeArg };
     let res;
     try { res = runRevokeMode(result, tasksDir, opts); }
     catch (e) { fail(`cannot revoke the decision in '${tasksDir}': ${e.message}`); }
@@ -5142,7 +5211,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--route` writes into a folder that is already cut, and re-slicing it here would be a second opinion on
   // seams the folder froze.
   else if (tasksMode && routeMode) {
-    try { output = runRouteMode(result, tasksDir, checklistOpts(manifest)); }
+    try { output = runRouteMode(result, tasksDir, runOpts()); }
     catch (e) { fail(`cannot write repair tasks to '${tasksDir}': ${e.message}`); }
   }
   else if (tasksMode && !verifyMode) {
@@ -5170,7 +5239,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // payload is written beside the run so the same gate replays against it offline.
       // The plan the index is diffed against is derived HERE, from the manifest this run verifies — so a read
       // plan cut against an earlier draft cannot pass as this one's.
-      let res; try { res = assembleBuilt(fromDir, readPlan(result, checklistOpts(manifest))); }
+      let res; try { res = assembleBuilt(fromDir, readPlan(result, runOpts())); }
       catch (e) { fail(`cannot compose the payload from '${fromDir}': ${e.message}`); }
       // Built as a statement rather than nested inside the template below (Sonar S4624).
       const why = res.problems.map((x) => x.file + " — " + x.why).join("; ");
@@ -5202,7 +5271,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     let preMergedSet = null;
     if (tasksMode) {
       try {
-        preMergedSet = readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+        preMergedSet = readMergedTaskDir(tasksDir, result, runOpts());
         if (preMergedSet && !preMergedSet.refused) {
           decidedKeys = decidedRowKeys(preMergedSet);
           portedAs = portedRowSymbols(preMergedSet);
@@ -5233,7 +5302,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else why = "no --tasks folder — classic-layout EXTRA-field gate NOT applied";
       process.stderr.write(`migrate.mjs: reconcile verify mode = ${why}.\n`);
     }
-    verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2, portedAs }, built, decidedKeys);
+    verifyRes = renderVerify(result, { ...runOpts(), reconcileMode: verifyMode2, portedAs }, built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
@@ -5256,14 +5325,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, { ...checklistOpts(manifest), decisions, decisionTexts });
+        : runRepairMode(result, tasksDir, verifyRes, { ...runOpts(), decisions, decisionTexts });
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing
       // (`rep.set` is null), so the folder is byte-identical to what that pass already read. It cannot be
       // reused for the post-round report, because `runRepairMode`/`syncRepairDir` write repair task files
       // between the two and a reused set would render a stale folder.
-      const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+      const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, runOpts());
       // ONE SET, TWO DOCUMENTS. A round that ran already wrote the index from `rep.set`; a refused one wrote nothing,
       // so the index is re-derived from the same set the report is about to read, or the two disagree on every row
       // recorded since the last `--tasks` run. Not under a PLAN-level gap: that refusal must leave the index as the
