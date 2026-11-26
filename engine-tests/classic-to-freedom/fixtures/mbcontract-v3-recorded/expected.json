@@ -1,0 +1,73 @@
+{
+ "pages": {
+  "main": {
+   "bundle": "bundle-main.json",
+   "handlers": [
+    {
+     "method": "onDetailChanged",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.recalculateAmountOnItemsChange"
+     ]
+    },
+    {
+     "method": "mbRecalculateAmount",
+     "parent": "onDetailChanged",
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.recalculateAmountOnItemsChange",
+      "UsrMbContractsV3App_ContractAmountModule.recalculateContractAmount"
+     ]
+    },
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.initNewContract"
+     ]
+    },
+    {
+     "method": "mbAssignNumber",
+     "parent": "onEntityInitialized",
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.initNewContract"
+     ]
+    },
+    {
+     "method": "mbIsStartApprovalEnabled",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.refreshStartApprovalAvailability"
+     ]
+    },
+    {
+     "method": "mbStartApproval",
+     "parent": null,
+     "portedAs": [
+      "mb.MbStartApprovalButtonClicked",
+      "UsrMbContractsV3App_FormPageModule.startApproval"
+     ]
+    },
+    {
+     "method": "mbOnStatusChanged",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.refreshCanEditFields"
+     ]
+    },
+    {
+     "method": "mbUpdateCanEditFields",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV3App_FormPageModule.refreshCanEditFields"
+     ]
+    }
+   ],
+   "cardActions": [
+    {
+     "label": "Card action — RunProcess",
+     "request": "crt.RunBusinessProcessRequest"
+    }
+   ]
+  }
+ }
+}

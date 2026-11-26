@@ -1127,6 +1127,9 @@ function taskCardBlock(task, set = {}) {
       + " what the `Page code` and `Code quality` rows will hold you to: reuse a helper or a module function it lists,"
       + " never paste a second copy, and give the page its own `<PageSchema>Module`. Clear its findings on code you touched;"
       + " finding none is part of done.",
+    "- **A helper or constant two modules use lives in the shared module.** Code that does what another module's code"
+      + " does with another value is the same code: give it that value as a parameter, keep it once in the shared"
+      + " module and import it; declare a named constant there once, never again in a page module.",
     "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
       + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
       + " you write. Either way, extend the handler the map lists for the SAME feature instead of adding a second one;"
@@ -1251,7 +1254,8 @@ function markersBlock() {
       + " can follow without reading the rest of your notes.",
     "  - for every `Handler — …` row you ported under another name: `Ported as (row N): <symbol>` — the request"
       + " type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or `Module.function`"
-      + " (the module's schema name, also when the page calls it through its `define()` parameter)"
+      + " (the module's schema name, also when the page calls it through its `define()` parameter, and also for a"
+      + " module that one of the page's modules imports)"
       + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
       + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
       + " only a call or a `Ported as` line does.",

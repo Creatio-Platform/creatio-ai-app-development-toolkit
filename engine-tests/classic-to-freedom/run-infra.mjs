@@ -697,6 +697,10 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => /Every page that has handlers has its own module/.test(contract) && contract.includes("`<PageSchema>Module`")
       && /What the run's pages share lives in one module/.test(contract) && /Export only what a page or another module calls/.test(contract)
       && /--modules \.clio-pages/.test(contract));
+  check("page-code-architecture.md: a helper or a constant two modules use lives in the shared module, and a copy with other values is the same code",
+    () => /A helper or a constant two modules use lives in the shared module/.test(contract)
+      && /with another value[\s\S]{0,120}is the same code: make that value a\s+parameter/.test(contract)
+      && /including a copy that differs only in its values/.test(contract));
   const headings = contract.split("\n").filter((l) => l.startsWith("#"));
   check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next` and returns its result, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
     () => /every handler takes `next`, calls `next\?\.handle\(request\)` and returns its\s+result/.test(contract) && /Never in the page factory body/.test(contract)

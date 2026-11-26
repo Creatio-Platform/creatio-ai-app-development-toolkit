@@ -705,6 +705,77 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
       () => count(bindingCase("(sdk, [formPage])", "other.init"), R.unusedModuleExport) === 0);
   }
 
+  // NEAR-COPIES AND SHARED CONSTANTS (module-lint-v3, a benchmark run's modules renamed). Every page there has its own
+  // module and imports the shared one, and the exact-copy check is clean — yet functions and runs of statements repeat
+  // across modules with other values, and named constants are declared in several modules.
+  {
+    const V3DIR = path.join(FIX, "module-lint-v3");
+    const v3 = Object.fromEntries(fs.readdirSync(V3DIR).sort((a, b) => a.localeCompare(b)).map((f) => [f.replace(/\.js$/, ""), fs.readFileSync(path.join(V3DIR, f), "utf8")]));
+    const SHARED = "UsrDemoV3App_ContractAmountModule";
+    const pageFor = (mod) => ({ schemaName: mod.replace(/Module$/, ""), handlers: "[]", args: "(sdk, own, shared)",
+      deps: JSON.stringify(["@creatio-devkit/common", mod, SHARED]) });
+    const runFindings = (pages, modules) => {
+      const run = lintRunQuality(pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), modules);
+      return [...run.modules.values()].flatMap((r) => r.findings);
+    };
+    const v3Findings = runFindings(Object.fromEntries(Object.keys(v3).filter((n) => n !== SHARED).map((n) => [n, pageFor(n)])), v3);
+    const near = v3Findings.filter((f) => f.rule === R.duplicateAcrossModules).map((f) => f.text);
+    const consts = v3Findings.filter((f) => f.rule === R.sharedValueInTwoModules).map((f) => f.text);
+    const reports = (re) => near.filter((t) => re.test(t)).length === 1;
+    check("near-copy: a function that is another module's function with a value made a parameter is reported",
+      () => reports(/^`sendDataServiceQuery` of `\w+ReturnNoteFormPageModule` \(lines 20-26\) is `selectQuery` of `\w+ContractAmountModule`/), () => near);
+    check("near-copy: a function that differs from another only in its entity and the column it writes is reported",
+      () => reports(/^`closeContracts` of `\w+_ListPageModule` .* is `deactivateItems` of `\w+_FormPageModule`/), () => near);
+    check("near-copy: an open-page call that takes its schema name from a constant in one module and a parameter in the other is reported",
+      () => reports(/^`openContractFormPage` .* is `openChildPage`/), () => near);
+    check("near-copy: the same request config inside two different functions is reported as lines of each",
+      () => reports(/^lines 155-164 of `launchApprovalProcess` .* repeat lines 79-88 of `startApproval`/), () => near);
+    check("near-copy: the same selection read at the top of two different functions is reported, once",
+      () => reports(/^lines 53-57 of `readSelectedContractIds` .* repeat lines 251-255 of `readSelectedItemIds`/), () => near);
+    check("near-copy: each pair is reported once — the runs inside a reported one are not reported again",
+      () => near.length === 7 && near.every((t) => /keep one function in the shared module/.test(t)), () => near);
+    const byText = (a, b) => a.localeCompare(b);
+    const reversed = Object.fromEntries(Object.entries(v3).reverse());
+    const reversedFindings = runFindings(Object.fromEntries(Object.keys(reversed).filter((n) => n !== SHARED).map((n) => [n, pageFor(n)])), reversed);
+    check("near-copy: the modules listed in the reverse order give the same findings — which copy is the original does not depend on that order",
+      () => JSON.stringify(reversedFindings.map((f) => f.text).sort(byText)) === JSON.stringify(v3Findings.map((f) => f.text).sort(byText)),
+      () => reversedFindings.map((f) => f.text));
+    const constNames = consts.map((t) => /^`(\w+) = /.exec(t)?.[1]).sort((a, b) => a.localeCompare(b));
+    check("shared constants: a named constant declared with the same value in several modules is reported once, naming every module",
+      () => constNames.join() === "AGGREGATION_SUM,CARD_STATE_ADD,CARD_STATE_EDIT,CONTRACT_ENTITY,DATA_VALUE_TYPE_BOOLEAN,DATA_VALUE_TYPE_GUID"
+        && consts.find((t) => t.startsWith("`DATA_VALUE_TYPE_GUID")).split("(line").length === 4, () => consts);
+
+    // What is NOT a near-copy.
+    const mod = (name, body) => `define("${name}", ["@creatio-devkit/common", "UsrSharedModule"], function(sdk, shared) {\n${body}\nreturn {};\n});`;
+    const twoModules = (a, b, sharedBody = "") => runFindings(
+      { a: { schemaName: "UsrA_Page", handlers: "[]", deps: '["UsrA_PageModule"]' }, b: { schemaName: "UsrB_Page", handlers: "[]", deps: '["UsrB_PageModule"]' } },
+      { UsrA_PageModule: mod("UsrA_PageModule", a), UsrB_PageModule: mod("UsrB_PageModule", b), UsrSharedModule: mod("UsrSharedModule", sharedBody) });
+    const nearIn = (fs) => fs.filter((f) => f.rule === R.duplicateAcrossModules);
+    const open = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.OpenPageRequest\", schemaName: \"UsrX\", modelInitConfigs: [{ action: \"edit\", recordId: request.recordId }], $context: request.$context, scopes: [...request.scopes] }); }";
+    const reload = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.LoadDataRequest\", dataSourceName: \"PDS\", config: { loadType: \"reload\", useLastLoadParameters: true }, $context: request.$context, scopes: [...request.scopes] }); }";
+    check("near-copy: two requests of the same size with different API keys are not copies — a camelCase key is what the code does",
+      () => nearIn(twoModules(open, reload)).length === 0, () => twoModules(open, reload));
+    check("near-copy: the same config under another request `type` is not a copy — the type names what the code does",
+      () => nearIn(twoModules(open, open.replace("crt.OpenPageRequest", "usr.OpenPreviewRequest"))).length === 0);
+    check("near-copy: the same request with only another schema name IS a copy",
+      () => nearIn(twoModules(open, open.replace("\"UsrX\"", "\"UsrY\""))).length === 1);
+    // The same request with only another value, once below the size floor and once above it (the open-page pair).
+    const small = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.A\", schemaName: \"UsrX\", $context: request.$context }); }";
+    check("near-copy: the same small request with another value is below the size floor and is not reported",
+      () => nearIn(twoModules(small, small.replace("\"UsrX\"", "\"UsrY\""))).length === 0
+        && nearIn(twoModules(open, open.replace("\"UsrX\"", "\"UsrY\""))).length === 1);
+    const sharedUpdate = "async function updateEach(entity, values, ids) { const model = await sdk.Model.create(entity); let failed = 0;"
+      + " for (const id of ids) { try { await model.update(values, [{ type: \"primaryColumnValue\", value: id }]); } catch (e) { failed++; } } return { total: ids.length, failed }; }";
+    const viaShared = twoModules("function close(ids) { return shared.updateEach(\"UsrContract\", { UsrStatus: 1 }, ids); }",
+      "function off(ids) { return shared.updateEach(\"UsrItem\", { UsrIsActive: false }, ids); }", sharedUpdate);
+    check("near-copy: two modules calling one shared helper with their own values are not copies",
+      () => nearIn(viaShared).length === 0, () => nearIn(viaShared));
+    const constCase = twoModules("const KIND = 1; const GUID_ID = \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\";", "const KIND = 2; const GUID_ID = \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\";");
+    check("shared constants: the same name with another value is not reported; a record id is reported once, by the record-id check",
+      () => constCase.filter((f) => f.rule === R.sharedValueInTwoModules).length === 1
+        && constCase.some((f) => f.rule === R.sharedValueInTwoModules && f.text.includes("3a8b2f10")), () => constCase);
+  }
+
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
   check("quality: quality.mjs imports only engine siblings (no package)",
     () => { const from = [...src.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]);

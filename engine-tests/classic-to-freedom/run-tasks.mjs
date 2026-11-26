@@ -12390,13 +12390,27 @@ console.log("\n===== project conventions: every writer of a task file carries th
     () => planGaps(runD));
   check("directives (plan): a run without directives renders no section and no directive row",
     () => !/### User directives/.test(RUN.plan) && !GROUPS.some((g) => g.rows.some((r) => r.directive)));
+  const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
   {
-    const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
     const g = checklistGroups(runMigration(MANIFEST, { decisionRecords: everyPage }), OPTS);
     const ids = new Set(g.flatMap((x) => x.rows.filter((r) => r.directive).map((r) => r.id)));
     const keys = new Set(g.map((x) => x.pageKey));
     check("directives (plan): `Scope: run` puts the pair on every page the plan publishes",
       () => ids.size === keys.size && [...keys].every((k) => ids.has(`${k}#directive:D1`)), () => ({ ids: [...ids], keys: [...keys] }));
+  }
+  {
+    // Sub-page groups are the objects the result tree keeps, so a second render must not see the first one's pairs.
+    const run = runMigration(MANIFEST2, { decisionRecords: everyPage });
+    const pairsPerPage = (groups) => {
+      const by = new Map(groups.map((g) => [g.pageKey, []]));
+      for (const g of groups) for (const r of g.rows) if (r.directive) by.get(g.pageKey).push(r.vk.part);
+      return by;
+    };
+    const renders = [1, 2, 3].map(() => pairsPerPage(checklistGroups(run, OPTS2)));
+    const children = [...renders[0].keys()].filter((k) => k.startsWith("child:"));
+    check("directives (plan): rendering the checklist again keeps ONE filed and ONE judged directive row on every page, child pages included",
+      () => children.length >= 2 && renders.every((by) => [...by.values()].every((parts) => parts.sort((a, b) => a.localeCompare(b)).join() === "filed,judged")),
+      () => renders.map((by) => Object.fromEntries(by)));
   }
   {
     const lost = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: typed:Missing\n- Expectation: e");

@@ -671,10 +671,12 @@ add it to `processPagesMigrated` in `process.json` (`./process-page.md` → *Pro
 `UsrX_FormPageModule`): the read-back files its source as `reads/modules/<module>.js` (see *The read plan first*), and
 `--verify --from` reads that folder as `built.modules`. Besides the code rows, a module's source is followed for a
 request a page handler hands to the module (a Run-process card action whose button's handler calls
-`contractPage.startApproval(…)`, which sends `crt.RunBusinessProcessRequest`): only the module functions the handler
-calls, and the module's own functions they call, count. Without the file, that row stays open and names the file
-to add. A `Ported as` record that names a module function needs no module file: the page's `deps` and `args` are
-enough.
+`contractPage.startApproval(…)`, which sends `crt.RunBusinessProcessRequest`) and for a `Ported as` record that names
+a function of a module the page does not import itself (`contractAmount.recalculateContractAmount(…)` called from
+the page's own module). Only the module functions a handler calls count, then the functions they call in turn, in
+their own module or in a module that module imports, page → module → module; an import cycle is walked once.
+Without a file on that path, the row stays open and names the file to add. A `Ported as` record that names a
+function the page's handlers call directly needs no module file: the page's `deps` and `args` are enough.
 
 **A folder of `done` task files is not a completion report — and neither is the machine table
 alone.** The task statuses are how the step-7 orchestrator schedules work and how a killed session

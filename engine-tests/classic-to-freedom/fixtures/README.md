@@ -31,6 +31,10 @@ Provenance (important):
 - `module-lint-v2/` — **synthetic** client modules, reduced to what the code-quality rules read: log-only and
   comment-only catches, a bare numeric `comparisonType`, and a shared module that only another module imports.
   Names and record ids are placeholders; `run-mapper-quality.mjs` asserts the findings.
+- `module-lint-v3/` — the client modules of a benchmark run, renamed (`Demo` names, placeholder record ids) and
+  otherwise unchanged: every page has its own module and one shared module, yet functions and runs of statements
+  repeat across modules with other values, and named constants are declared in several modules.
+  `run-mapper-quality.mjs` asserts the near-copy and shared-constant findings.
 - `mbcontract-v3-browser/` — **real task notes** from a migration benchmark run of the synthetic `MbContract` test
   package (no customer data): every page-writing task of the run, in queue order, with its status, its `order` and its last
   `Browser checks:` line, and `unsaved: true` on the tasks whose notes say they saved no page. Generated from the
