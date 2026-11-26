@@ -558,10 +558,10 @@ function findFactoryReturn(factory) {
 // shared by `parseSchema` (a page) and the project-conventions GUID index (a constants module). Nothing is
 // evaluated. Returns `{ error, deps }` on a body it cannot read (`deps` is what it read before failing), else
 // `{ error: null, deps, factory, returned }` (`returned` may be null). `locations` adds line spans to the nodes.
-export function parseDefineModule(src, { locations = false } = {}) {
+export function parseDefineModule(src, { locations = false, onComment } = {}) {
   const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   let ast;
-  try { ast = acornParse(String(src ?? ""), { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations }); }
+  try { ast = acornParse(String(src ?? ""), { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations, onComment }); }
   catch (e) { return { error: "acorn parse failed: " + String(e?.message || e), deps: [] }; }
   const call = findDefineCall(ast);
   if (!call) return { error: "no define() call found", deps: [] };

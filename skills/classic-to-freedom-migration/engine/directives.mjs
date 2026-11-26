@@ -8,6 +8,8 @@
 //   - Asked: <the question the answer replies to>
 //   - Scope: run | <pageKey>[, <pageKey>…]
 //   - Expectation: <one statement a judge can check on the built page>
+//   - Closes: `<pageKey>#business-rule:<Attribute>`[, …]   (an answer only: the rule attributes the user accepted as
+//     built another way after the plan was approved — see `closedRuleAttributes`)
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
@@ -56,6 +58,7 @@ const FIELD_OF = new Map([
   ["asked", "asked"],
   ["scope", "scope"],
   ["expectation", "expectation"],
+  ["closes", "closes"],
 ]);
 // The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
 // entries and the same titles.
@@ -85,7 +88,8 @@ function unwrapQuote(v) {
   const closing = CLOSING_MARKS.get(v[0]);
   return v.length >= 2 && closing?.includes(v.at(-1)) ? v.slice(1, -1).trim() : v;
 }
-function stripTicks(s) {
+function stripTicks(raw) {
+  const s = String(raw).trim();
   let from = 0;
   let to = s.length;
   while (from < to && s[from] === "`") from++;
@@ -164,6 +168,30 @@ export function directivesOf(records) {
 export const directiveCovers = (directive, pageKey) =>
   directive.scope.includes(RUN_SCOPE) || directive.scope.includes(pageKey);
 
+// THE RULE ATTRIBUTES A USER'S ANSWER CLOSES, as `[{ key, decision }]`. A business rule the user accepts mid-build as
+// built another way is an answer given after the approval: recording it in `manifest.deliverableStatus` would move
+// the plan version and send the whole plan back for re-approval over one accepted row. The `Closes:` line of the
+// answer carries the same address instead, and decisions.md is outside the plan version. Only a business-rule
+// address is read here, and only from an entry the user decided in their own words: the other statuses drop or
+// re-open a deliverable, which is a planning choice the approved plan has to show.
+const RULE_ATTRIBUTE_KEY = /^[^#\s]+#business-rule:[^\s#]+$/;
+const closesFromUser = (f) => f?.kind === KIND_ANSWER && f.decidedBy === DECIDED_BY_USER && !blank(f.quote);
+export function closedRuleAttributes(records) {
+  return (records || []).filter((r) => closesFromUser(r.fields))
+    .flatMap((r) => scopeKeys(r.fields.closes).filter((k) => RULE_ATTRIBUTE_KEY.test(k)).map((key) => ({ key, decision: r.id })));
+}
+// A `Closes:` line that closes nothing is named, never dropped: on an entry that is not the user's own answer, and
+// for each address that is not a business-rule attribute.
+function closesIssues(r) {
+  const keys = scopeKeys(r.fields?.closes);
+  if (!keys.length) return [];
+  if (!closesFromUser(r.fields)) {
+    return [`\`Closes:\` closes a rule only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
+  }
+  return keys.filter((k) => !RULE_ATTRIBUTE_KEY.test(k))
+    .map((k) => `\`Closes:\` names \`${k}\`, which is not a business-rule attribute (\`<pageKey>#business-rule:<Attribute>\`)`);
+}
+
 // Who decided each entry, and in what words: `{ D<N>: { decidedBy, quote } }` for the entries that carry either
 // line, as a plain object so it rides on a run result the way the directives do. An entry without provenance is
 // absent, which reads as "not the user's own words".
@@ -237,6 +265,6 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }
