@@ -146,7 +146,7 @@ you.
   another.
 - Your `writesTo:` names the one artifact you may write. Write that artifact and no other: reaching
   into another task's artifact is how two sub-agents write the same schema. A page artifact
-  (`page:<…>`) includes the page's own logic module, `<SchemaPrefix><Page>Module`
+  (`page:<…>`) includes the page's own logic module, `<PageSchema>Module`
   (`./references/page-code-architecture.md`, which the module follows as the page does): the page's
   tasks write both, one at a time.
 - **Re-check for an existing Freedom artifact before every create** — an app, a section, a page, a

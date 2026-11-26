@@ -19,6 +19,15 @@ export const READS_INDEX_FILE = "index.json";
 export const READS_INDEX_VERSION = 1;
 // The client modules the built pages import, one `<Module>.js` each (see assemble.mjs).
 export const MODULES_DIR = "modules";
+// The module a file in `reads/modules/` holds: `<Module>.js` (or a bare `<Module>` folder name) with an identifier name.
+// One rule for the read-back and the code map, so both see the same module set. Prototype names are never a module.
+const MODULE_FILE = /^([A-Za-z_$][\w$]*)(?:\.js)?$/;
+const UNSAFE_MODULE_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+export function moduleNameOf(fileName, { requireJs = true } = {}) {
+  if (requireJs && !fileName.endsWith(".js")) return null;
+  const name = MODULE_FILE.exec(fileName)?.[1];
+  return name && !UNSAFE_MODULE_NAMES.has(name) ? name : null;
+}
 
 // A page key describes itself to a reader who has to find the page on the stand. The engine cannot name the
 // Freedom SCHEMA — no plan publishes it — so this says which page of the plan the key is and the agent resolves

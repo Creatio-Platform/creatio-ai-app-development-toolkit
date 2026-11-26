@@ -32,14 +32,20 @@ handler's row only, so another handler that drops `next` still opens a row of it
 
 ## 3. The logic lives in a client module
 
-- Behaviour and helpers live in the page's client-unit module, `<SchemaPrefix><Page>Module`, in the page's
-  package, imported through `SCHEMA_DEPS` / `SCHEMA_ARGS` as `shared-client-logic` says. The module is
+- **Every page that has handlers has its own module**, named `<PageSchema>Module` (the page's schema name plus
+  `Module`, e.g. `UsrOrder_FormPageModule`), in the page's package, imported through `SCHEMA_DEPS` /
+  `SCHEMA_ARGS` as `shared-client-logic` says. A page that also uses a shared module still gets its own; its
+  handlers call its own module, never the same calls another page makes. The module is
   part of the page artifact (`build-task-execution.md` → `writesTo:`).
 - **Never in the page factory body** (between `function(...) {` and `return {`): a Designer save deletes it.
-- Before writing a function, look for one that does it in the module and in the project's helper modules
-  (the task file's `## Project conventions`). One function, called from every place that needs it.
+- **What the run's pages share lives in one module.** A record id, a status, a helper or a wrapper that two
+  pages need goes into one shared module (or the project's constants and helper modules, the task file's
+  `## Project conventions`) and is imported, never declared again. Look there before writing a function; a call a
+  module function already wraps is made through it.
+- **Export only what a page or another module calls.** An export nobody imports is removed.
 - The module keeps no page context in module-level variables: the handler passes `request.$context` (and
   `request.scopes` when the function fires requests) on each call.
+- `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules already hold.
 
 ## 4. Custom requests only for what the page fires
 
