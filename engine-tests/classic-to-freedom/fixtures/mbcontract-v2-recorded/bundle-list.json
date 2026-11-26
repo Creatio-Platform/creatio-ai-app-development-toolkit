@@ -1,0 +1,690 @@
+{
+ "name": "UsrMbContractsV2App_ListPage",
+ "viewConfig": [
+  {
+   "type": "crt.FlexContainer",
+   "direction": "column",
+   "gap": "none",
+   "stretch": true,
+   "fitContent": false,
+   "items": [
+    {
+     "type": "crt.FlexContainer",
+     "color": "primary",
+     "padding": {
+      "top": "large",
+      "right": "large",
+      "bottom": "small",
+      "left": "large"
+     },
+     "fitContent": true,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "items": [
+        {
+         "type": "crt.Label",
+         "caption": "$HeaderCaption",
+         "labelType": "headline-1",
+         "labelThickness": "default",
+         "labelColor": "var(--crt-color-text-heading)",
+         "labelBackgroundColor": "transparent",
+         "labelTextAlign": "start",
+         "headingLevel": "h1",
+         "name": "PageTitle"
+        }
+       ],
+       "direction": "row",
+       "justifyContent": "start",
+       "alignItems": "center",
+       "name": "TitleContainer"
+      },
+      {
+       "type": "crt.FlexContainer",
+       "layoutConfig": {
+        "column": 1,
+        "row": 1,
+        "colSpan": 1,
+        "rowSpan": 1
+       },
+       "direction": "row",
+       "wrap": "nowrap",
+       "items": [
+        {
+         "type": "crt.Button",
+         "clicked": {
+          "request": "crt.CreateRecordRequest",
+          "params": {
+           "itemsAttributeName": "Items"
+          }
+         },
+         "color": "primary",
+         "caption": "$Resources.Strings.AddButton",
+         "name": "AddButton",
+         "icon": "add-button-icon",
+         "iconPosition": "left-icon"
+        },
+        {
+         "type": "crt.Button",
+         "caption": "#ResourceString(Button_Data_Import)#",
+         "color": "default",
+         "disabled": false,
+         "layoutConfig": {},
+         "size": "large",
+         "iconPosition": "left-icon",
+         "visible": true,
+         "icon": "import-data-button-icon",
+         "menuItems": [
+          {
+           "type": "crt.MenuItem",
+           "caption": "#ResourceString(MenuItem_ImportFromExcel_caption)#",
+           "visible": true,
+           "clicked": {
+            "request": "crt.ImportDataRequest",
+            "params": {
+             "entitySchemaName": "MbContract"
+            }
+           },
+           "icon": "import-button-icon",
+           "name": "MenuItem_ImportFromExcel"
+          },
+          {
+           "type": "crt.MenuItem",
+           "caption": "#ResourceString(OpenLandingDesignerCaption)#",
+           "visible": true,
+           "clicked": {
+            "request": "crt.OpenPageRequest",
+            "params": {
+             "schemaName": "LandingiDesigner_Page"
+            }
+           },
+           "icon": "webforms-button-icon",
+           "name": "OpenLandingDesigner"
+          }
+         ],
+         "clickMode": "menu",
+         "name": "DataImportButton"
+        },
+        {
+         "type": "crt.Button",
+         "caption": "#ResourceString(ActionButton_caption)#",
+         "color": "default",
+         "disabled": false,
+         "size": "large",
+         "iconPosition": "only-icon",
+         "visible": true,
+         "icon": "more-button-icon",
+         "menuItems": [
+          {
+           "type": "crt.MenuItem",
+           "caption": "#ResourceString(MenuItem_ExportToExcel_caption)#",
+           "visible": true,
+           "clicked": {
+            "request": "crt.ExportDataGridToExcelRequest",
+            "params": {
+             "viewName": "DataTable"
+            }
+           },
+           "icon": "export-button-icon",
+           "name": "MenuItem_ExportToExcel"
+          },
+          {
+           "type": "crt.MenuDivider",
+           "name": "CloseSelectedDivider"
+          },
+          {
+           "type": "crt.MenuItem",
+           "caption": "#ResourceString(CloseSelected_caption)#",
+           "icon": "flag-icon",
+           "visible": true,
+           "disabled": "$DataTable_SelectionState | mb.ToCloseSelectionEmpty",
+           "clicked": {
+            "request": "mb.CloseSelectedClicked"
+           },
+           "name": "CloseSelected"
+          }
+         ],
+         "clickMode": "menu",
+         "name": "ActionButton"
+        }
+       ],
+       "justifyContent": "end",
+       "name": "ActionButtonsContainer"
+      }
+     ],
+     "direction": "row",
+     "justifyContent": "space-between",
+     "wrap": "nowrap",
+     "alignItems": "flex-start",
+     "name": "MainHeader"
+    },
+    {
+     "type": "crt.FlexContainer",
+     "direction": "column",
+     "stretch": true,
+     "fitContent": false,
+     "items": [
+      {
+       "type": "crt.GridContainer",
+       "columns": [
+        "minmax(32px, 1fr)",
+        "minmax(32px, 1fr)",
+        "minmax(32px, 1fr)"
+       ],
+       "rows": "minmax(max-content, 32px)",
+       "gap": {
+        "columnGap": "medium",
+        "rowGap": "none"
+       },
+       "items": [
+        {
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 2,
+          "rowSpan": 1
+         },
+         "type": "crt.FlexContainer",
+         "direction": "row",
+         "wrap": "nowrap",
+         "items": [
+          {
+           "type": "crt.FlexContainer",
+           "direction": "row",
+           "wrap": "wrap",
+           "items": [
+            {
+             "type": "crt.FolderTreeActions",
+             "folderTree": "FolderTree",
+             "name": "FolderTreeActions"
+            },
+            {
+             "type": "crt.FilterBuilderToggler",
+             "visible": true,
+             "viewElement": "Filters",
+             "name": "FiltersMenu"
+            },
+            {
+             "type": "crt.QuickFilter",
+             "config": {
+              "caption": "#ResourceString(LookupQuickFilterByTag_config_caption)#",
+              "hint": "#ResourceString(LookupQuickFilterByTag_config_hint)#",
+              "icon": "tag-icon",
+              "iconPosition": "left-icon",
+              "entitySchemaName": "Tag_Virtual_Schema"
+             },
+             "filterType": "lookup",
+             "_filterOptions": {
+              "expose": [
+               {
+                "attribute": "LookupQuickFilterByTag_Items",
+                "converters": [
+                 {
+                  "converter": "crt.QuickFilterAttributeConverter",
+                  "args": [
+                   {
+                    "target": {
+                     "viewAttributeName": "Items",
+                     "filterColumn": "Tag_Virtual_Column"
+                    },
+                    "quickFilterType": "lookup"
+                   }
+                  ]
+                 }
+                ]
+               }
+              ],
+              "from": "LookupQuickFilterByTag_Value"
+             },
+             "name": "LookupQuickFilterByTag"
+            },
+            {
+             "type": "crt.SearchFilter",
+             "placeholder": "#ResourceString(SearchFilter_placeholder)#",
+             "_filterOptions": {
+              "expose": [
+               {
+                "attribute": "SearchFilter_Items",
+                "converters": [
+                 {
+                  "converter": "crt.SearchFilterAttributeConverter",
+                  "args": [
+                   "Items"
+                  ]
+                 }
+                ]
+               }
+              ],
+              "from": [
+               "SearchFilter_SearchValue",
+               "SearchFilter_FilteredColumnsGroups"
+              ]
+             },
+             "name": "SearchFilter"
+            }
+           ],
+           "color": "transparent",
+           "borderRadius": "none",
+           "padding": {
+            "top": "none",
+            "right": "none",
+            "bottom": "none",
+            "left": "large"
+           },
+           "justifyContent": "start",
+           "gap": "medium",
+           "alignItems": "center",
+           "name": "LeftFilterContainerInner"
+          }
+         ],
+         "color": "transparent",
+         "borderRadius": "none",
+         "padding": {
+          "top": "none",
+          "right": "none",
+          "bottom": "none",
+          "left": "none"
+         },
+         "justifyContent": "start",
+         "gap": "medium",
+         "alignItems": "flex-start",
+         "visible": true,
+         "name": "LeftFilterContainer"
+        },
+        {
+         "layoutConfig": {
+          "column": 3,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "type": "crt.FlexContainer",
+         "direction": "row",
+         "items": [
+          {
+           "type": "crt.Summaries",
+           "items": [],
+           "_designOptions": {
+            "modelName": "PDS"
+           },
+           "name": "DataTable_Summaries"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(RefreshButtonCaption)#",
+           "color": "default",
+           "disabled": false,
+           "size": "small",
+           "clicked": {
+            "request": "crt.LoadDataRequest",
+            "params": {
+             "config": {
+              "loadType": "reload",
+              "useLastLoadParameters": true
+             },
+             "refreshDataConfig": {
+              "mode": "RefreshAll"
+             }
+            }
+           },
+           "iconPosition": "only-icon",
+           "icon": "reload-button-icon",
+           "clickMode": "default",
+           "visible": true,
+           "name": "RefreshButton"
+          },
+          {
+           "for": "MainTabPanel",
+           "fitContent": true,
+           "type": "crt.ButtonToggleGroup",
+           "allowUntoggle": false,
+           "toggleViewMode": "button",
+           "size": "small",
+           "name": "MainButtonToggleGroup"
+          }
+         ],
+         "color": "transparent",
+         "borderRadius": "none",
+         "padding": {
+          "top": "small",
+          "right": "large",
+          "bottom": "none",
+          "left": "none"
+         },
+         "justifyContent": "end",
+         "gap": "small",
+         "alignItems": "flex-start",
+         "wrap": "nowrap",
+         "visible": true,
+         "name": "RightFilterContainer"
+        }
+       ],
+       "color": "primary",
+       "borderRadius": "none",
+       "padding": {
+        "top": "small",
+        "right": "none",
+        "bottom": "none",
+        "left": "none"
+       },
+       "fitContent": true,
+       "visible": true,
+       "name": "MainFilterContainer"
+      },
+      {
+       "type": "crt.FlexContainer",
+       "direction": "row",
+       "wrap": "nowrap",
+       "gap": "small",
+       "stretch": true,
+       "fitContent": false,
+       "items": [
+        {
+         "type": "crt.FolderTree",
+         "sourceSchemaName": "FolderTree",
+         "layoutConfig": {
+          "width": 328.125
+         },
+         "classes": [
+          "section-folder-tree"
+         ],
+         "_filterOptions": {
+          "expose": [
+           {
+            "attribute": "FolderTree_active_folder_filter",
+            "converters": [
+             {
+              "converter": "crt.FolderTreeActiveFilterAttributeConverter",
+              "args": []
+             }
+            ]
+           }
+          ],
+          "from": [
+           "FolderTree_items",
+           "FolderTree_favoriteItems",
+           "FolderTree_active_folder_id"
+          ]
+         },
+         "name": "FolderTree",
+         "rootSchemaName": "MbContract"
+        },
+        {
+         "type": "crt.FilterBuilderSource",
+         "folderTreeName": "FolderTree",
+         "schemaName": "#DataSourceEntityName(PDS)#",
+         "layoutConfig": {
+          "alignSelf": "stretch",
+          "width": 400
+         },
+         "_filterOptions": {
+          "expose": [
+           {
+            "attribute": "Filters_Filter",
+            "converters": [
+             {
+              "converter": "crt.FilterBuilderAttributeConverter"
+             }
+            ]
+           }
+          ],
+          "from": "Filters_Value"
+         },
+         "name": "Filters"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "direction": "column",
+         "stretch": true,
+         "fitContent": false,
+         "color": "primary",
+         "items": [
+          {
+           "type": "crt.TabPanel",
+           "items": [
+            {
+             "type": "crt.TabContainer",
+             "tools": [],
+             "items": [
+              {
+               "type": "crt.FlexContainer",
+               "items": [
+                {
+                 "type": "crt.DataGrid",
+                 "columns": [
+                  {
+                   "id": "f252f581-0ccf-44ac-b7c9-c00df2ad9919",
+                   "code": "PDS_MbName",
+                   "path": "MbName",
+                   "caption": "#ResourceString(PDS_MbName)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "65711ea3-7ddb-445a-9c4b-b144a17d90b5",
+                   "code": "PDS_MbNumber",
+                   "path": "MbNumber",
+                   "caption": "#ResourceString(PDS_MbNumber)#",
+                   "dataValueType": 27
+                  },
+                  {
+                   "id": "9530e74f-9804-48c1-8e04-e94a0899febf",
+                   "code": "PDS_MbAccount",
+                   "path": "MbAccount",
+                   "caption": "#ResourceString(PDS_MbAccount)#",
+                   "dataValueType": 10,
+                   "referenceSchemaName": "Account"
+                  },
+                  {
+                   "id": "7377378e-a9bf-4e79-9460-fef0025d5245",
+                   "code": "PDS_MbStatus",
+                   "path": "MbStatus",
+                   "caption": "#ResourceString(PDS_MbStatus)#",
+                   "dataValueType": 10,
+                   "referenceSchemaName": "MbContractStatus"
+                  },
+                  {
+                   "id": "0095d3ef-7f4a-47aa-8bb0-4aa9431c2a3f",
+                   "code": "PDS_MbStartDate",
+                   "path": "MbStartDate",
+                   "caption": "#ResourceString(PDS_MbStartDate)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "44a7941a-2e06-4e81-88ef-7b4a42ab80b6",
+                   "code": "PDS_MbEndDate",
+                   "path": "MbEndDate",
+                   "caption": "#ResourceString(PDS_MbEndDate)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "33ec84e7-9b62-4617-a9dc-e43567d102ef",
+                   "code": "PDS_MbAmount",
+                   "path": "MbAmount",
+                   "caption": "#ResourceString(PDS_MbAmount)#",
+                   "dataValueType": 6
+                  },
+                  {
+                   "id": "26e6bc5b-586f-4012-8015-4829faf8552d",
+                   "code": "PDS_MbApproved",
+                   "path": "MbApproved",
+                   "caption": "#ResourceString(PDS_MbApproved)#",
+                   "dataValueType": 12
+                  }
+                 ],
+                 "items": "$Items",
+                 "classes": [
+                  "section-data-grid"
+                 ],
+                 "placeholder": [
+                  {
+                   "type": "crt.Placeholder",
+                   "image": {
+                    "type": "animation",
+                    "name": "search"
+                   },
+                   "title": "#ResourceString(FilteredEmptySectionPlaceholderTitle)#",
+                   "subhead": "#ResourceString(FilteredEmptySectionPlaceholderSubHead)#",
+                   "visible": "$DataTable_NoFilteredItems"
+                  },
+                  {
+                   "type": "crt.Placeholder",
+                   "image": {
+                    "type": "animation",
+                    "name": "cat"
+                   },
+                   "title": "#ResourceString(EmptySectionPlaceholderTitle)#",
+                   "subhead": "#ResourceString(EmptySectionPlaceholderSubHead)#",
+                   "visible": "$DataTable_NoItems"
+                  }
+                 ],
+                 "features": {
+                  "rows": {
+                   "selection": {
+                    "enable": true,
+                    "multiple": true
+                   }
+                  }
+                 },
+                 "primaryColumnName": "PDS_Id",
+                 "sorting": "$ItemsSorting | crt.ToDataTableSortingConfig: 'Items'",
+                 "fitContent": true,
+                 "name": "DataTable",
+                 "selectionState": "$DataTable_SelectionState",
+                 "_selectionOptions": {
+                  "attribute": "DataTable_SelectionState"
+                 }
+                }
+               ],
+               "direction": "column",
+               "visible": true,
+               "color": "primary",
+               "borderRadius": "none",
+               "padding": {
+                "top": "none",
+                "right": "none",
+                "bottom": "none",
+                "left": "none"
+               },
+               "alignItems": "stretch",
+               "justifyContent": "start",
+               "gap": "small",
+               "wrap": "nowrap",
+               "stretch": true,
+               "fitContent": false,
+               "name": "ListContainer"
+              }
+             ],
+             "caption": "#ResourceString(ListTabContainer_caption)#",
+             "iconPosition": "only-icon",
+             "visible": true,
+             "icon": "catalog",
+             "padding": {
+              "top": "none",
+              "right": "none",
+              "bottom": "none",
+              "left": "none"
+             },
+             "name": "ListTabContainer"
+            },
+            {
+             "type": "crt.TabContainer",
+             "tools": [],
+             "items": [
+              {
+               "type": "crt.FlexContainer",
+               "items": [
+                {
+                 "type": "crt.Dashboards",
+                 "placeholder": true,
+                 "_designOptions": {
+                  "entitySchemaName": "MbContract",
+                  "dependencies": [
+                   {
+                    "attributePath": "Id",
+                    "relationPath": "PDS.Id"
+                   }
+                  ],
+                  "filters": []
+                 },
+                 "name": "Dashboards"
+                }
+               ],
+               "direction": "column",
+               "visible": true,
+               "color": "primary",
+               "borderRadius": "none",
+               "padding": {
+                "top": "none",
+                "right": "none",
+                "bottom": "none",
+                "left": "none"
+               },
+               "alignItems": "stretch",
+               "justifyContent": "start",
+               "gap": "small",
+               "wrap": "nowrap",
+               "stretch": true,
+               "fitContent": false,
+               "name": "DashboardsContainer"
+              }
+             ],
+             "caption": "#ResourceString(DashboardsTabContainer_caption)#",
+             "iconPosition": "only-icon",
+             "visible": true,
+             "icon": "dashboards-icon",
+             "padding": {
+              "top": "extra-small",
+              "right": "large",
+              "bottom": "extra-small",
+              "left": "large"
+             },
+             "name": "DashboardsTabContainer"
+            }
+           ],
+           "mode": "toggle",
+           "fitContent": false,
+           "styleType": "default",
+           "bodyBackgroundColor": "primary-contrast-500",
+           "selectedTabTitleColor": "auto",
+           "tabTitleColor": "auto",
+           "underlineSelectedTabColor": "auto",
+           "headerBackgroundColor": "auto",
+           "stretch": true,
+           "allowToggleClose": false,
+           "selectedTab": {
+            "value": "ListTabContainer"
+           },
+           "name": "MainTabPanel"
+          }
+         ],
+         "name": "SectionContentWrapper"
+        }
+       ],
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none",
+       "padding": {
+        "top": "none",
+        "right": "none",
+        "bottom": "none",
+        "left": "none"
+       },
+       "alignItems": "stretch",
+       "justifyContent": "start",
+       "name": "ContentContainer"
+      }
+     ],
+     "color": "primary",
+     "gap": "none",
+     "name": "MainContainer"
+    }
+   ],
+   "name": "Main"
+  }
+ ],
+ "handlers": "[\n\t\t\t{\n\t\t\t\trequest: \"mb.CloseSelectedClicked\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst selectionState = await request.$context.DataTable_SelectionState;\n\t\t\t\t\tawait listPage.closeSelectedContracts(request.$context, request.scopes, selectionState);\n\t\t\t\t\treturn next?.handle(request);\n\t\t\t\t}\n\t\t\t}\n\t\t]",
+ "deps": "[\"UsrMbContractsV2App_ListPageModule\"]",
+ "args": "(listPage)",
+ "validators": "{}",
+ "converters": "{\n\t\t\t\"mb.ToCloseSelectionEmpty\": function(selectionState) {\n\t\t\t\treturn listPage.isCloseSelectionEmpty(selectionState);\n\t\t\t}\n\t\t}"
+}

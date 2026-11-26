@@ -1,0 +1,1753 @@
+{
+ "name": "UsrMbContractsV2App_FormPage",
+ "viewConfig": [
+  {
+   "type": "crt.FlexContainer",
+   "direction": "column",
+   "stretch": true,
+   "fitContent": false,
+   "items": [
+    {
+     "type": "crt.FlexContainer",
+     "color": "primary",
+     "padding": {
+      "top": "large",
+      "right": "large",
+      "bottom": "medium",
+      "left": "large"
+     },
+     "fitContent": true,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "justifyContent": "space-between",
+       "wrap": "nowrap",
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "items": [
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(BackButton)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-icon",
+           "visible": true,
+           "icon": "back-button-icon",
+           "clicked": {
+            "request": "crt.ClosePageRequest"
+           },
+           "name": "BackButton"
+          },
+          {
+           "type": "crt.Label",
+           "caption": "$HeaderCaption",
+           "labelType": "headline-1",
+           "labelThickness": "default",
+           "labelColor": "var(--crt-color-text-heading)",
+           "labelBackgroundColor": "transparent",
+           "labelTextAlign": "start",
+           "headingLevel": "h1",
+           "name": "PageTitle"
+          }
+         ],
+         "direction": "row",
+         "justifyContent": "start",
+         "alignItems": "flex-start",
+         "wrap": "nowrap",
+         "name": "TitleContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "direction": "row",
+         "wrap": "nowrap",
+         "items": [
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(MbStartApprovalButton_caption)#",
+           "color": "accent",
+           "size": "large",
+           "iconPosition": "only-text",
+           "visible": true,
+           "disabled": "$MbStartApprovalButtonDisabled",
+           "clicked": {
+            "request": "mb.MbStartApprovalButtonClicked"
+           },
+           "name": "MbStartApprovalButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.SaveRecordRequest",
+            "params": {
+             "showSuccessMessage": true
+            }
+           },
+           "hotkeys": [
+            "save"
+           ],
+           "color": "primary",
+           "caption": "$Resources.Strings.SaveButton",
+           "visible": "$HasUnsavedData",
+           "name": "SaveButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.CancelRecordChangesRequest"
+           },
+           "caption": "$Resources.Strings.CancelButton",
+           "visible": "$HasUnsavedData",
+           "name": "CancelButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.ClosePageRequest"
+           },
+           "color": "default",
+           "caption": "$Resources.Strings.CloseButton",
+           "visible": "$HasUnsavedData | crt.InvertBooleanValue",
+           "name": "CloseButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(SetRecordRightsButtonCaption)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-icon",
+           "visible": true,
+           "icon": "lock-button-icon",
+           "clicked": {
+            "request": "crt.SetRecordRightsRequest"
+           },
+           "clickMode": "default",
+           "name": "SetRecordRightsButton"
+          }
+         ],
+         "justifyContent": "end",
+         "name": "ActionButtonsContainer"
+        }
+       ],
+       "name": "MainHeaderTop"
+      },
+      {
+       "type": "crt.FlexContainer",
+       "direction": "row",
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "alignItems": "center",
+         "justifyContent": "start",
+         "items": [
+          {
+           "type": "crt.TagSelect",
+           "recordId": "$Id",
+           "name": "TagSelect"
+          }
+         ],
+         "padding": {
+          "top": "none",
+          "right": "small",
+          "bottom": "none",
+          "left": "small"
+         },
+         "name": "CardToolsContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "justifyContent": "end",
+         "items": [],
+         "name": "CardToggleContainer"
+        }
+       ],
+       "fitContent": true,
+       "visible": true,
+       "justifyContent": "space-between",
+       "gap": "medium",
+       "wrap": "nowrap",
+       "name": "MainHeaderBottom"
+      }
+     ],
+     "borderRadius": "medium",
+     "gap": "small",
+     "direction": "column",
+     "styles": {
+      "border": "none",
+      "border-bottom-left-radius": 0,
+      "border-bottom-right-radius": 0
+     },
+     "name": "MainHeader"
+    },
+    {
+     "type": "crt.FlexContainer",
+     "direction": "column",
+     "stretch": true,
+     "fitContent": false,
+     "items": [
+      {
+       "type": "crt.GridContainer",
+       "rows": "minmax(max-content, 32px)",
+       "columns": [
+        "minmax(0, 1fr)",
+        "minmax(0, 1fr)",
+        "minmax(0, 1fr)",
+        "minmax(0, 1fr)"
+       ],
+       "gap": {
+        "columnGap": "large",
+        "rowGap": "none"
+       },
+       "padding": {
+        "top": "large",
+        "right": "large",
+        "bottom": "large",
+        "left": "large"
+       },
+       "color": "primary",
+       "borderRadius": "medium",
+       "items": [
+        {
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 2,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbName",
+         "labelPosition": "auto",
+         "control": "$PDS_MbName",
+         "type": "crt.Input",
+         "multiline": false,
+         "name": "MbName"
+        },
+        {
+         "layoutConfig": {
+          "column": 3,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbNumber",
+         "labelPosition": "auto",
+         "control": "$PDS_MbNumber",
+         "type": "crt.Input",
+         "multiline": false,
+         "tooltip": "#ResourceString(MbNumber_tooltip)#",
+         "name": "MbNumber"
+        },
+        {
+         "layoutConfig": {
+          "column": 4,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbStatus",
+         "labelPosition": "auto",
+         "control": "$PDS_MbStatus",
+         "type": "crt.ComboBox",
+         "listActions": [],
+         "showValueAsLink": false,
+         "controlActions": [],
+         "mode": "List",
+         "name": "MbStatus"
+        },
+        {
+         "layoutConfig": {
+          "column": 1,
+          "row": 2,
+          "colSpan": 2,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbAccount",
+         "labelPosition": "auto",
+         "control": "$PDS_MbAccount",
+         "type": "crt.ComboBox",
+         "listActions": [],
+         "showValueAsLink": true,
+         "controlActions": [],
+         "tooltip": "#ResourceString(MbAccount_tooltip)#",
+         "name": "MbAccount"
+        },
+        {
+         "layoutConfig": {
+          "column": 3,
+          "row": 2,
+          "colSpan": 2,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbContact",
+         "labelPosition": "auto",
+         "control": "$PDS_MbContact",
+         "type": "crt.ComboBox",
+         "listActions": [],
+         "showValueAsLink": true,
+         "controlActions": [],
+         "tooltip": "#ResourceString(MbContact_tooltip)#",
+         "name": "MbContact"
+        },
+        {
+         "layoutConfig": {
+          "column": 1,
+          "row": 3,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbStartDate",
+         "labelPosition": "auto",
+         "control": "$PDS_MbStartDate",
+         "type": "crt.DateTimePicker",
+         "pickerType": "datetime",
+         "tooltip": "#ResourceString(MbStartDate_tooltip)#",
+         "name": "MbStartDate"
+        },
+        {
+         "layoutConfig": {
+          "column": 2,
+          "row": 3,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbEndDate",
+         "labelPosition": "auto",
+         "control": "$PDS_MbEndDate",
+         "type": "crt.DateTimePicker",
+         "pickerType": "datetime",
+         "tooltip": "#ResourceString(MbEndDate_tooltip)#",
+         "name": "MbEndDate"
+        },
+        {
+         "layoutConfig": {
+          "column": 3,
+          "row": 3,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbAmount",
+         "labelPosition": "auto",
+         "control": "$PDS_MbAmount",
+         "type": "crt.NumberInput",
+         "readonly": true,
+         "tooltip": "#ResourceString(MbAmount_tooltip)#",
+         "name": "MbAmount"
+        },
+        {
+         "layoutConfig": {
+          "column": 4,
+          "row": 3,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbApproved",
+         "labelPosition": "auto",
+         "control": "$PDS_MbApproved",
+         "type": "crt.Checkbox",
+         "readonly": true,
+         "tooltip": "#ResourceString(MbApproved_tooltip)#",
+         "name": "MbApproved"
+        },
+        {
+         "layoutConfig": {
+          "column": 1,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 1
+         },
+         "label": "$Resources.Strings.PDS_MbApprovalComment",
+         "labelPosition": "auto",
+         "control": "$PDS_MbApprovalComment",
+         "type": "crt.Input",
+         "multiline": false,
+         "tooltip": "#ResourceString(MbApprovalComment_tooltip)#",
+         "name": "MbApprovalComment"
+        }
+       ],
+       "layoutConfig": {
+        "column": 1,
+        "row": 1,
+        "colSpan": 1,
+        "rowSpan": 1
+       },
+       "name": "TopAreaProfileContainer"
+      },
+      {
+       "layoutConfig": {
+        "column": 1,
+        "row": 2,
+        "colSpan": 1,
+        "rowSpan": 1
+       },
+       "type": "crt.TabPanel",
+       "items": [
+        {
+         "caption": "#ResourceString(GeneralInfoTab_caption)#",
+         "type": "crt.TabContainer",
+         "items": [
+          {
+           "type": "crt.GridContainer",
+           "rows": "minmax(32px, max-content)",
+           "columns": [
+            "minmax(64px, 1fr)",
+            "minmax(64px, 1fr)"
+           ],
+           "gap": {
+            "columnGap": "large"
+           },
+           "items": [
+            {
+             "layoutConfig": {
+              "column": 1,
+              "row": 1,
+              "colSpan": 2,
+              "rowSpan": 1
+             },
+             "type": "crt.Input",
+             "label": "$Resources.Strings.PDS_MbNotes",
+             "labelPosition": "auto",
+             "control": "$PDS_MbNotes",
+             "multiline": true,
+             "autoHeight": true,
+             "placeholder": "#ResourceString(MbNotes_placeholder)#",
+             "name": "MbNotes"
+            }
+           ],
+           "name": "GridContainer_uxln7d4"
+          }
+         ],
+         "name": "GeneralInfoTab"
+        },
+        {
+         "type": "crt.TabContainer",
+         "caption": "#ResourceString(MbItemsAndPaymentsTab_caption)#",
+         "iconPosition": "only-text",
+         "visible": true,
+         "items": [
+          {
+           "type": "crt.FlexContainer",
+           "direction": "column",
+           "gap": "medium",
+           "items": [
+            {
+             "type": "crt.ExpansionPanel",
+             "title": "#ResourceString(MbContractItemDetailExpansionPanel_title)#",
+             "toggleType": "default",
+             "togglePosition": "before",
+             "expanded": true,
+             "labelColor": "auto",
+             "fullWidthHeader": true,
+             "titleWidth": 20,
+             "padding": {
+              "top": "small",
+              "bottom": "small",
+              "left": "none",
+              "right": "none"
+             },
+             "fitContent": true,
+             "visible": true,
+             "alignItems": "stretch",
+             "items": [
+              {
+               "type": "crt.GridContainer",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "rows": "minmax(max-content, 32px)",
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "items": [
+                {
+                 "type": "crt.DataGrid",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": "$MbContractItemDetailList",
+                 "activeRow": "$MbContractItemDetailList_ActiveRow",
+                 "primaryColumnName": "MbContractItemDetailListDS_Id",
+                 "fitContent": true,
+                 "visible": true,
+                 "columns": [
+                  {
+                   "id": "4c25205e-481b-4dfd-ae9b-662ba8732d3c",
+                   "code": "MbContractItemDetailListDS_MbName",
+                   "path": "MbName",
+                   "caption": "#ResourceString(MbContractItemDetailList_MbName_caption)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "202fbd5d-d1b6-4bae-a8ca-5f0f1157f71f",
+                   "code": "MbContractItemDetailListDS_MbQuantity",
+                   "path": "MbQuantity",
+                   "caption": "#ResourceString(MbContractItemDetailList_MbQuantity_caption)#",
+                   "dataValueType": 5
+                  },
+                  {
+                   "id": "5d825b71-7cc7-421a-97c1-35d8613481db",
+                   "code": "MbContractItemDetailListDS_MbPrice",
+                   "path": "MbPrice",
+                   "caption": "#ResourceString(MbContractItemDetailList_MbPrice_caption)#",
+                   "dataValueType": 6
+                  },
+                  {
+                   "id": "f672f7be-357f-4969-aedd-db5ffe9851d1",
+                   "code": "MbContractItemDetailListDS_MbTotal",
+                   "path": "MbTotal",
+                   "caption": "#ResourceString(MbContractItemDetailList_MbTotal_caption)#",
+                   "dataValueType": 6
+                  },
+                  {
+                   "id": "733872b8-ed25-4762-917d-5d891ff98b99",
+                   "code": "MbContractItemDetailListDS_MbDeliveryDate",
+                   "path": "MbDeliveryDate",
+                   "caption": "#ResourceString(MbContractItemDetailList_MbDeliveryDate_caption)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "5e0aadaf-dbb7-4705-984e-d9af4b3663d3",
+                   "code": "MbContractItemDetailListDS_MbIsActive",
+                   "path": "MbIsActive",
+                   "caption": "#ResourceString(MbContractItemDetailList_MbIsActive_caption)#",
+                   "dataValueType": 12
+                  }
+                 ],
+                 "features": {
+                  "rows": {
+                   "selection": {
+                    "enable": true,
+                    "multiple": true
+                   }
+                  },
+                  "editable": {
+                   "enable": false,
+                   "itemsCreation": false
+                  }
+                 },
+                 "selectionState": "$MbContractItemDetailList_SelectionState",
+                 "_selectionOptions": {
+                  "attribute": "MbContractItemDetailList_SelectionState"
+                 },
+                 "name": "MbContractItemDetailList"
+                },
+                {
+                 "type": "crt.Label",
+                 "caption": "$MbItemsSummary",
+                 "labelType": "caption",
+                 "labelColor": "auto",
+                 "headingLevel": "label",
+                 "labelTextAlign": "end",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 2,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "name": "MbItemsSummaryLabel"
+                }
+               ],
+               "name": "MbContractItemDetailListWrap"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.GridContainer",
+               "rows": "minmax(max-content, 24px)",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "color": "transparent",
+               "items": [
+                {
+                 "type": "crt.FlexContainer",
+                 "direction": "row",
+                 "alignItems": "center",
+                 "justifyContent": "end",
+                 "gap": "none",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": [
+                  {
+                   "type": "crt.QuickFilter",
+                   "filterType": "custom",
+                   "config": {
+                    "caption": "#ResourceString(MbContractItemDetailQuickFilterByMbOnlyActive_config_caption)#",
+                    "hint": "",
+                    "defaultValue": false,
+                    "approachState": true
+                   },
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbContractItemDetailQuickFilterByMbOnlyActive_MbContractItemDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.QuickFilterAttributeConverter",
+                        "args": [
+                         {
+                          "target": {
+                           "viewAttributeName": "MbContractItemDetailList",
+                           "customFilter": {
+                            "items": {
+                             "9af2b797-8179-4f93-975e-e8c7e03c7911": {
+                              "filterType": 1,
+                              "comparisonType": 3,
+                              "isEnabled": true,
+                              "leftExpression": {
+                               "expressionType": 0,
+                               "columnPath": "MbIsActive"
+                              },
+                              "dataValueType": 12,
+                              "rightExpression": {
+                               "expressionType": 2,
+                               "parameter": {
+                                "dataValueType": 12,
+                                "value": true
+                               }
+                              }
+                             }
+                            },
+                            "logicalOperation": 0,
+                            "isEnabled": true,
+                            "filterType": 6,
+                            "rootSchemaName": "MbContractItem"
+                           }
+                          },
+                          "quickFilterType": "custom",
+                          "config": {
+                           "approachState": true
+                          }
+                         }
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": "MbContractItemDetailQuickFilterByMbOnlyActive_Value"
+                   },
+                   "visible": true,
+                   "name": "MbContractItemDetailQuickFilterByMbOnlyActive"
+                  },
+                  {
+                   "type": "crt.QuickFilter",
+                   "filterType": "custom",
+                   "config": {
+                    "caption": "#ResourceString(MbContractItemDetailQuickFilterByMbDueSoon_config_caption)#",
+                    "hint": "",
+                    "defaultValue": false,
+                    "approachState": true
+                   },
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbContractItemDetailQuickFilterByMbDueSoon_MbContractItemDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.QuickFilterAttributeConverter",
+                        "args": [
+                         {
+                          "target": {
+                           "viewAttributeName": "MbContractItemDetailList",
+                           "customFilter": {
+                            "items": {
+                             "f9112ff7-c936-4b72-b5c4-6cc2364984c5": {
+                              "filterType": 2,
+                              "comparisonType": 2,
+                              "isEnabled": true,
+                              "isNull": false,
+                              "leftExpression": {
+                               "expressionType": 0,
+                               "columnPath": "MbDeliveryDate"
+                              }
+                             }
+                            },
+                            "logicalOperation": 0,
+                            "isEnabled": true,
+                            "filterType": 6,
+                            "rootSchemaName": "MbContractItem"
+                           }
+                          },
+                          "quickFilterType": "custom",
+                          "config": {
+                           "approachState": true
+                          }
+                         }
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": "MbContractItemDetailQuickFilterByMbDueSoon_Value"
+                   },
+                   "visible": true,
+                   "name": "MbContractItemDetailQuickFilterByMbDueSoon"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbContractItemDetailAddButton_caption)#",
+                   "icon": "add-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.CreateRecordRequest",
+                    "params": {
+                     "entityName": "MbContractItem",
+                     "defaultValues": [
+                      {
+                       "attributeName": "MbContract",
+                       "value": "$Id"
+                      }
+                     ]
+                    }
+                   },
+                   "name": "MbContractItemDetailAddButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbContractItemDetailRefreshButton_caption)#",
+                   "icon": "reload-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.LoadDataRequest",
+                    "params": {
+                     "config": {
+                      "loadType": "reload",
+                      "useLastLoadParameters": true
+                     },
+                     "dataSourceName": "MbContractItemDetailListDS",
+                     "mbSkipAmountRecalculation": true
+                    }
+                   },
+                   "name": "MbContractItemDetailRefreshButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbContractItemDetailSettingsButton_caption)#",
+                   "icon": "actions-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clickMode": "menu",
+                   "menuItems": [
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "export-button-icon",
+                     "caption": "#ResourceString(MbContractItemDetailExportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ExportDataGridToExcelRequest",
+                      "params": {
+                       "viewName": "MbContractItemDetailList"
+                      }
+                     },
+                     "name": "MbContractItemDetailExportMenuItem"
+                    },
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "import-button-icon",
+                     "caption": "#ResourceString(MbContractItemDetailImportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ImportDataRequest",
+                      "params": {
+                       "entitySchemaName": "MbContractItem"
+                      }
+                     },
+                     "name": "MbContractItemDetailImportMenuItem"
+                    },
+                    {
+                     "type": "crt.MenuDivider",
+                     "name": "MbDeactivateSelectedDivider"
+                    },
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "flag-icon",
+                     "caption": "#ResourceString(MbDeactivateSelectedMenuItem_caption)#",
+                     "disabled": "$MbContractItemDetailList_SelectionState | mb.ToItemSelectionEmpty",
+                     "clicked": {
+                      "request": "mb.MbDeactivateSelectedClicked"
+                     },
+                     "name": "MbDeactivateSelectedMenuItem"
+                    }
+                   ],
+                   "name": "MbContractItemDetailSettingsButton"
+                  },
+                  {
+                   "type": "crt.SearchFilter",
+                   "iconOnly": true,
+                   "placeholder": "#ResourceString(MbContractItemDetailSearchFilter_placeholder)#",
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbContractItemDetailSearchFilter_MbContractItemDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.SearchFilterAttributeConverter",
+                        "args": [
+                         "MbContractItemDetailList"
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": [
+                     "MbContractItemDetailSearchFilter_SearchValue",
+                     "MbContractItemDetailSearchFilter_FilteredColumnsGroups"
+                    ]
+                   },
+                   "name": "MbContractItemDetailSearchFilter"
+                  }
+                 ],
+                 "name": "MbContractItemDetailToolsRow"
+                }
+               ],
+               "name": "MbContractItemDetailToolsContainer"
+              }
+             ],
+             "name": "MbContractItemDetailExpansionPanel"
+            },
+            {
+             "type": "crt.ExpansionPanel",
+             "title": "#ResourceString(MbContractPaymentDetailExpansionPanel_title)#",
+             "toggleType": "default",
+             "togglePosition": "before",
+             "expanded": true,
+             "labelColor": "auto",
+             "fullWidthHeader": true,
+             "titleWidth": 20,
+             "padding": {
+              "top": "small",
+              "bottom": "small",
+              "left": "none",
+              "right": "none"
+             },
+             "fitContent": true,
+             "visible": true,
+             "alignItems": "stretch",
+             "items": [
+              {
+               "type": "crt.GridContainer",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "rows": "minmax(max-content, 32px)",
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "items": [
+                {
+                 "type": "crt.DataGrid",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": "$MbContractPaymentDetailList",
+                 "activeRow": "$MbContractPaymentDetailList_ActiveRow",
+                 "primaryColumnName": "MbContractPaymentDetailListDS_Id",
+                 "fitContent": true,
+                 "visible": true,
+                 "columns": [
+                  {
+                   "id": "710d2407-7acd-43ee-b391-46b4e2a2a9af",
+                   "code": "MbContractPaymentDetailListDS_MbName",
+                   "path": "MbName",
+                   "caption": "#ResourceString(MbContractPaymentDetailList_MbName_caption)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "5c050e50-9f17-4309-8cb4-dbf527999ca0",
+                   "code": "MbContractPaymentDetailListDS_MbDate",
+                   "path": "MbDate",
+                   "caption": "#ResourceString(MbContractPaymentDetailList_MbDate_caption)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "6e6a46ca-efce-4042-ae31-4c2db2385d7e",
+                   "code": "MbContractPaymentDetailListDS_MbAmount",
+                   "path": "MbAmount",
+                   "caption": "#ResourceString(MbContractPaymentDetailList_MbAmount_caption)#",
+                   "dataValueType": 6
+                  }
+                 ],
+                 "features": {
+                  "rows": {
+                   "selection": {
+                    "enable": false,
+                    "multiple": false
+                   }
+                  },
+                  "editable": {
+                   "enable": false,
+                   "itemsCreation": false
+                  }
+                 },
+                 "rowToolbarItems": [],
+                 "name": "MbContractPaymentDetailList"
+                }
+               ],
+               "name": "MbContractPaymentDetailListWrap"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.GridContainer",
+               "rows": "minmax(max-content, 24px)",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "color": "transparent",
+               "items": [
+                {
+                 "type": "crt.FlexContainer",
+                 "direction": "row",
+                 "alignItems": "center",
+                 "justifyContent": "end",
+                 "gap": "none",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": [
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbContractPaymentDetailRefreshButton_caption)#",
+                   "icon": "reload-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.LoadDataRequest",
+                    "params": {
+                     "config": {
+                      "loadType": "reload",
+                      "useLastLoadParameters": true
+                     },
+                     "dataSourceName": "MbContractPaymentDetailListDS"
+                    }
+                   },
+                   "name": "MbContractPaymentDetailRefreshButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbContractPaymentDetailSettingsButton_caption)#",
+                   "icon": "actions-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clickMode": "menu",
+                   "menuItems": [
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "export-button-icon",
+                     "caption": "#ResourceString(MbContractPaymentDetailExportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ExportDataGridToExcelRequest",
+                      "params": {
+                       "viewName": "MbContractPaymentDetailList"
+                      }
+                     },
+                     "name": "MbContractPaymentDetailExportMenuItem"
+                    }
+                   ],
+                   "name": "MbContractPaymentDetailSettingsButton"
+                  },
+                  {
+                   "type": "crt.SearchFilter",
+                   "iconOnly": true,
+                   "placeholder": "#ResourceString(MbContractPaymentDetailSearchFilter_placeholder)#",
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbContractPaymentDetailSearchFilter_MbContractPaymentDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.SearchFilterAttributeConverter",
+                        "args": [
+                         "MbContractPaymentDetailList"
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": [
+                     "MbContractPaymentDetailSearchFilter_SearchValue",
+                     "MbContractPaymentDetailSearchFilter_FilteredColumnsGroups"
+                    ]
+                   },
+                   "name": "MbContractPaymentDetailSearchFilter"
+                  }
+                 ],
+                 "name": "MbContractPaymentDetailToolsRow"
+                }
+               ],
+               "name": "MbContractPaymentDetailToolsContainer"
+              }
+             ],
+             "name": "MbContractPaymentDetailExpansionPanel"
+            }
+           ],
+           "name": "MbItemsAndPaymentsTabFlex"
+          }
+         ],
+         "name": "MbItemsAndPaymentsTab"
+        },
+        {
+         "type": "crt.TabContainer",
+         "caption": "#ResourceString(MbDocumentsTab_caption)#",
+         "iconPosition": "only-text",
+         "visible": true,
+         "items": [
+          {
+           "type": "crt.FlexContainer",
+           "direction": "column",
+           "gap": "medium",
+           "items": [
+            {
+             "type": "crt.ExpansionPanel",
+             "title": "#ResourceString(MbDeliveryNoteDetailExpansionPanel_title)#",
+             "toggleType": "default",
+             "togglePosition": "before",
+             "expanded": true,
+             "labelColor": "auto",
+             "fullWidthHeader": true,
+             "titleWidth": 20,
+             "padding": {
+              "top": "small",
+              "bottom": "small",
+              "left": "none",
+              "right": "none"
+             },
+             "fitContent": true,
+             "visible": true,
+             "alignItems": "stretch",
+             "items": [
+              {
+               "type": "crt.GridContainer",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "rows": "minmax(max-content, 32px)",
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "items": [
+                {
+                 "type": "crt.DataGrid",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": "$MbDeliveryNoteDetailList",
+                 "activeRow": "$MbDeliveryNoteDetailList_ActiveRow",
+                 "primaryColumnName": "MbDeliveryNoteDetailListDS_Id",
+                 "fitContent": true,
+                 "visible": true,
+                 "columns": [
+                  {
+                   "id": "abe71bef-3ec4-404b-99c2-9ffa3353cd7e",
+                   "code": "MbDeliveryNoteDetailListDS_MbNumber",
+                   "path": "MbNumber",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailList_MbNumber_caption)#",
+                   "dataValueType": 27
+                  },
+                  {
+                   "id": "ae0a2f5b-34a6-40e6-96bf-470af479fa14",
+                   "code": "MbDeliveryNoteDetailListDS_MbName",
+                   "path": "MbName",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailList_MbName_caption)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "05444b96-9a6b-4aca-99db-d72a964d86c6",
+                   "code": "MbDeliveryNoteDetailListDS_MbDate",
+                   "path": "MbDate",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailList_MbDate_caption)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "e6a45de1-c9d0-46d4-90ac-8eeb52cded5e",
+                   "code": "MbDeliveryNoteDetailListDS_MbAmount",
+                   "path": "MbAmount",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailList_MbAmount_caption)#",
+                   "dataValueType": 6
+                  },
+                  {
+                   "id": "f2455a37-d144-4393-8874-6cb4607e3e84",
+                   "code": "MbDeliveryNoteDetailListDS_MbIsPosted",
+                   "path": "MbIsPosted",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailList_MbIsPosted_caption)#",
+                   "dataValueType": 12
+                  }
+                 ],
+                 "features": {
+                  "rows": {
+                   "selection": {
+                    "enable": true,
+                    "multiple": true
+                   }
+                  },
+                  "editable": {
+                   "enable": false,
+                   "itemsCreation": false
+                  }
+                 },
+                 "selectionState": "$MbDeliveryNoteDetailList_SelectionState",
+                 "_selectionOptions": {
+                  "attribute": "MbDeliveryNoteDetailList_SelectionState"
+                 },
+                 "name": "MbDeliveryNoteDetailList"
+                }
+               ],
+               "name": "MbDeliveryNoteDetailListWrap"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.GridContainer",
+               "rows": "minmax(max-content, 24px)",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "color": "transparent",
+               "items": [
+                {
+                 "type": "crt.FlexContainer",
+                 "direction": "row",
+                 "alignItems": "center",
+                 "justifyContent": "end",
+                 "gap": "none",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": [
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailAddButton_caption)#",
+                   "icon": "add-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.CreateRecordRequest",
+                    "params": {
+                     "entityName": "MbDeliveryNote",
+                     "defaultValues": [
+                      {
+                       "attributeName": "MbContract",
+                       "value": "$Id"
+                      }
+                     ]
+                    }
+                   },
+                   "name": "MbDeliveryNoteDetailAddButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailRefreshButton_caption)#",
+                   "icon": "reload-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.LoadDataRequest",
+                    "params": {
+                     "config": {
+                      "loadType": "reload",
+                      "useLastLoadParameters": true
+                     },
+                     "dataSourceName": "MbDeliveryNoteDetailListDS"
+                    }
+                   },
+                   "name": "MbDeliveryNoteDetailRefreshButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbDeliveryNoteDetailSettingsButton_caption)#",
+                   "icon": "actions-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clickMode": "menu",
+                   "menuItems": [
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "export-button-icon",
+                     "caption": "#ResourceString(MbDeliveryNoteDetailExportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ExportDataGridToExcelRequest",
+                      "params": {
+                       "viewName": "MbDeliveryNoteDetailList"
+                      }
+                     },
+                     "name": "MbDeliveryNoteDetailExportMenuItem"
+                    },
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "import-button-icon",
+                     "caption": "#ResourceString(MbDeliveryNoteDetailImportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ImportDataRequest",
+                      "params": {
+                       "entitySchemaName": "MbDeliveryNote"
+                      }
+                     },
+                     "name": "MbDeliveryNoteDetailImportMenuItem"
+                    }
+                   ],
+                   "name": "MbDeliveryNoteDetailSettingsButton"
+                  },
+                  {
+                   "type": "crt.SearchFilter",
+                   "iconOnly": true,
+                   "placeholder": "#ResourceString(MbDeliveryNoteDetailSearchFilter_placeholder)#",
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbDeliveryNoteDetailSearchFilter_MbDeliveryNoteDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.SearchFilterAttributeConverter",
+                        "args": [
+                         "MbDeliveryNoteDetailList"
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": [
+                     "MbDeliveryNoteDetailSearchFilter_SearchValue",
+                     "MbDeliveryNoteDetailSearchFilter_FilteredColumnsGroups"
+                    ]
+                   },
+                   "name": "MbDeliveryNoteDetailSearchFilter"
+                  }
+                 ],
+                 "name": "MbDeliveryNoteDetailToolsRow"
+                }
+               ],
+               "name": "MbDeliveryNoteDetailToolsContainer"
+              }
+             ],
+             "name": "MbDeliveryNoteDetailExpansionPanel"
+            },
+            {
+             "type": "crt.ExpansionPanel",
+             "title": "#ResourceString(MbReturnNoteDetailExpansionPanel_title)#",
+             "toggleType": "default",
+             "togglePosition": "before",
+             "expanded": true,
+             "labelColor": "auto",
+             "fullWidthHeader": true,
+             "titleWidth": 20,
+             "padding": {
+              "top": "small",
+              "bottom": "small",
+              "left": "none",
+              "right": "none"
+             },
+             "fitContent": true,
+             "visible": true,
+             "alignItems": "stretch",
+             "items": [
+              {
+               "type": "crt.GridContainer",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "rows": "minmax(max-content, 32px)",
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "items": [
+                {
+                 "type": "crt.DataGrid",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": "$MbReturnNoteDetailList",
+                 "activeRow": "$MbReturnNoteDetailList_ActiveRow",
+                 "primaryColumnName": "MbReturnNoteDetailListDS_Id",
+                 "fitContent": true,
+                 "visible": true,
+                 "columns": [
+                  {
+                   "id": "43abca78-0ee9-426f-8f99-39a6ce7ffd6b",
+                   "code": "MbReturnNoteDetailListDS_MbNumber",
+                   "path": "MbNumber",
+                   "caption": "#ResourceString(MbReturnNoteDetailList_MbNumber_caption)#",
+                   "dataValueType": 27
+                  },
+                  {
+                   "id": "08bd43dc-fa5d-4d38-824b-8aa353ae8f19",
+                   "code": "MbReturnNoteDetailListDS_MbName",
+                   "path": "MbName",
+                   "caption": "#ResourceString(MbReturnNoteDetailList_MbName_caption)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "35e313fc-2fc5-43de-9091-ff5d06c83bd9",
+                   "code": "MbReturnNoteDetailListDS_MbDate",
+                   "path": "MbDate",
+                   "caption": "#ResourceString(MbReturnNoteDetailList_MbDate_caption)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "cf9c4482-a7fa-4772-907c-cc2fc7eeab22",
+                   "code": "MbReturnNoteDetailListDS_MbAmount",
+                   "path": "MbAmount",
+                   "caption": "#ResourceString(MbReturnNoteDetailList_MbAmount_caption)#",
+                   "dataValueType": 6
+                  },
+                  {
+                   "id": "4a78f2f5-c4c7-443d-a2e8-d903b51f2d3f",
+                   "code": "MbReturnNoteDetailListDS_MbReason",
+                   "path": "MbReason",
+                   "caption": "#ResourceString(MbReturnNoteDetailList_MbReason_caption)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "8df11c81-8093-4bae-b142-2674698a5b06",
+                   "code": "MbReturnNoteDetailListDS_MbIsPosted",
+                   "path": "MbIsPosted",
+                   "caption": "#ResourceString(MbReturnNoteDetailList_MbIsPosted_caption)#",
+                   "dataValueType": 12
+                  }
+                 ],
+                 "features": {
+                  "rows": {
+                   "selection": {
+                    "enable": true,
+                    "multiple": true
+                   }
+                  },
+                  "editable": {
+                   "enable": false,
+                   "itemsCreation": false
+                  }
+                 },
+                 "selectionState": "$MbReturnNoteDetailList_SelectionState",
+                 "_selectionOptions": {
+                  "attribute": "MbReturnNoteDetailList_SelectionState"
+                 },
+                 "name": "MbReturnNoteDetailList"
+                }
+               ],
+               "name": "MbReturnNoteDetailListWrap"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.GridContainer",
+               "rows": "minmax(max-content, 24px)",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "color": "transparent",
+               "items": [
+                {
+                 "type": "crt.FlexContainer",
+                 "direction": "row",
+                 "alignItems": "center",
+                 "justifyContent": "end",
+                 "gap": "none",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": [
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbReturnNoteDetailAddButton_caption)#",
+                   "icon": "add-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.CreateRecordRequest",
+                    "params": {
+                     "entityName": "MbReturnNote",
+                     "defaultValues": [
+                      {
+                       "attributeName": "MbContract",
+                       "value": "$Id"
+                      }
+                     ]
+                    }
+                   },
+                   "name": "MbReturnNoteDetailAddButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbReturnNoteDetailRefreshButton_caption)#",
+                   "icon": "reload-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.LoadDataRequest",
+                    "params": {
+                     "config": {
+                      "loadType": "reload",
+                      "useLastLoadParameters": true
+                     },
+                     "dataSourceName": "MbReturnNoteDetailListDS"
+                    }
+                   },
+                   "name": "MbReturnNoteDetailRefreshButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbReturnNoteDetailSettingsButton_caption)#",
+                   "icon": "actions-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clickMode": "menu",
+                   "menuItems": [
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "export-button-icon",
+                     "caption": "#ResourceString(MbReturnNoteDetailExportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ExportDataGridToExcelRequest",
+                      "params": {
+                       "viewName": "MbReturnNoteDetailList"
+                      }
+                     },
+                     "name": "MbReturnNoteDetailExportMenuItem"
+                    },
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "import-button-icon",
+                     "caption": "#ResourceString(MbReturnNoteDetailImportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ImportDataRequest",
+                      "params": {
+                       "entitySchemaName": "MbReturnNote"
+                      }
+                     },
+                     "name": "MbReturnNoteDetailImportMenuItem"
+                    }
+                   ],
+                   "name": "MbReturnNoteDetailSettingsButton"
+                  },
+                  {
+                   "type": "crt.SearchFilter",
+                   "iconOnly": true,
+                   "placeholder": "#ResourceString(MbReturnNoteDetailSearchFilter_placeholder)#",
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbReturnNoteDetailSearchFilter_MbReturnNoteDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.SearchFilterAttributeConverter",
+                        "args": [
+                         "MbReturnNoteDetailList"
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": [
+                     "MbReturnNoteDetailSearchFilter_SearchValue",
+                     "MbReturnNoteDetailSearchFilter_FilteredColumnsGroups"
+                    ]
+                   },
+                   "name": "MbReturnNoteDetailSearchFilter"
+                  }
+                 ],
+                 "name": "MbReturnNoteDetailToolsRow"
+                }
+               ],
+               "name": "MbReturnNoteDetailToolsContainer"
+              }
+             ],
+             "name": "MbReturnNoteDetailExpansionPanel"
+            }
+           ],
+           "name": "MbDocumentsTabFlex"
+          }
+         ],
+         "name": "MbDocumentsTab"
+        },
+        {
+         "type": "crt.TabContainer",
+         "caption": "#ResourceString(MbHistoryTab_caption)#",
+         "iconPosition": "only-text",
+         "visible": true,
+         "items": [
+          {
+           "type": "crt.FlexContainer",
+           "direction": "column",
+           "gap": "medium",
+           "items": [
+            {
+             "type": "crt.ExpansionPanel",
+             "title": "#ResourceString(MbDocumentLogDetailExpansionPanel_title)#",
+             "toggleType": "default",
+             "togglePosition": "before",
+             "expanded": true,
+             "labelColor": "auto",
+             "fullWidthHeader": true,
+             "titleWidth": 20,
+             "padding": {
+              "top": "small",
+              "bottom": "small",
+              "left": "none",
+              "right": "none"
+             },
+             "fitContent": true,
+             "visible": true,
+             "alignItems": "stretch",
+             "items": [
+              {
+               "type": "crt.GridContainer",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "rows": "minmax(max-content, 32px)",
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "items": [
+                {
+                 "type": "crt.DataGrid",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": "$MbDocumentLogDetailList",
+                 "activeRow": "$MbDocumentLogDetailList_ActiveRow",
+                 "primaryColumnName": "MbDocumentLogDetailListDS_Id",
+                 "fitContent": true,
+                 "visible": true,
+                 "columns": [
+                  {
+                   "id": "363dde27-8d96-4170-b4ef-e73439df4cb9",
+                   "code": "MbDocumentLogDetailListDS_CreatedOn",
+                   "path": "CreatedOn",
+                   "caption": "#ResourceString(MbDocumentLogDetailList_CreatedOn_caption)#",
+                   "dataValueType": 7
+                  },
+                  {
+                   "id": "a37ee196-3da2-4855-8955-f6826da92115",
+                   "code": "MbDocumentLogDetailListDS_MbName",
+                   "path": "MbName",
+                   "caption": "#ResourceString(MbDocumentLogDetailList_MbName_caption)#",
+                   "dataValueType": 28
+                  },
+                  {
+                   "id": "b2a48363-476e-4015-8bd1-d18cbd4ac93c",
+                   "code": "MbDocumentLogDetailListDS_CreatedBy",
+                   "path": "CreatedBy",
+                   "caption": "#ResourceString(MbDocumentLogDetailList_CreatedBy_caption)#",
+                   "dataValueType": 10,
+                   "referenceSchemaName": "Contact"
+                  }
+                 ],
+                 "features": {
+                  "rows": {
+                   "selection": {
+                    "enable": false,
+                    "multiple": false
+                   }
+                  },
+                  "editable": {
+                   "enable": false,
+                   "itemsCreation": false
+                  },
+                  "columns": {
+                   "sorting": {
+                    "enable": false
+                   }
+                  }
+                 },
+                 "rowToolbarItems": [],
+                 "name": "MbDocumentLogDetailList"
+                }
+               ],
+               "name": "MbDocumentLogDetailListWrap"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.GridContainer",
+               "rows": "minmax(max-content, 24px)",
+               "columns": [
+                "minmax(32px, 1fr)"
+               ],
+               "gap": {
+                "columnGap": "large",
+                "rowGap": "none"
+               },
+               "color": "transparent",
+               "items": [
+                {
+                 "type": "crt.FlexContainer",
+                 "direction": "row",
+                 "alignItems": "center",
+                 "justifyContent": "end",
+                 "gap": "none",
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 1,
+                  "rowSpan": 1
+                 },
+                 "items": [
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbDocumentLogDetailRefreshButton_caption)#",
+                   "icon": "reload-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.LoadDataRequest",
+                    "params": {
+                     "config": {
+                      "loadType": "reload",
+                      "useLastLoadParameters": true
+                     },
+                     "dataSourceName": "MbDocumentLogDetailListDS"
+                    }
+                   },
+                   "name": "MbDocumentLogDetailRefreshButton"
+                  },
+                  {
+                   "type": "crt.Button",
+                   "caption": "#ResourceString(MbDocumentLogDetailSettingsButton_caption)#",
+                   "icon": "actions-button-icon",
+                   "iconPosition": "only-icon",
+                   "color": "default",
+                   "size": "medium",
+                   "clickMode": "menu",
+                   "menuItems": [
+                    {
+                     "type": "crt.MenuItem",
+                     "icon": "export-button-icon",
+                     "caption": "#ResourceString(MbDocumentLogDetailExportMenuItem_caption)#",
+                     "clicked": {
+                      "request": "crt.ExportDataGridToExcelRequest",
+                      "params": {
+                       "viewName": "MbDocumentLogDetailList"
+                      }
+                     },
+                     "name": "MbDocumentLogDetailExportMenuItem"
+                    }
+                   ],
+                   "name": "MbDocumentLogDetailSettingsButton"
+                  },
+                  {
+                   "type": "crt.SearchFilter",
+                   "iconOnly": true,
+                   "placeholder": "#ResourceString(MbDocumentLogDetailSearchFilter_placeholder)#",
+                   "_filterOptions": {
+                    "expose": [
+                     {
+                      "attribute": "MbDocumentLogDetailSearchFilter_MbDocumentLogDetailList",
+                      "converters": [
+                       {
+                        "converter": "crt.SearchFilterAttributeConverter",
+                        "args": [
+                         "MbDocumentLogDetailList"
+                        ]
+                       }
+                      ]
+                     }
+                    ],
+                    "from": [
+                     "MbDocumentLogDetailSearchFilter_SearchValue",
+                     "MbDocumentLogDetailSearchFilter_FilteredColumnsGroups"
+                    ]
+                   },
+                   "name": "MbDocumentLogDetailSearchFilter"
+                  }
+                 ],
+                 "name": "MbDocumentLogDetailToolsRow"
+                }
+               ],
+               "name": "MbDocumentLogDetailToolsContainer"
+              }
+             ],
+             "name": "MbDocumentLogDetailExpansionPanel"
+            }
+           ],
+           "name": "MbHistoryTabFlex"
+          }
+         ],
+         "name": "MbHistoryTab"
+        }
+       ],
+       "name": "Tabs"
+      }
+     ],
+     "name": "MainContainer",
+     "padding": {
+      "left": "small",
+      "right": "small"
+     }
+    }
+   ],
+   "name": "Main"
+  }
+ ],
+ "handlers": "[\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelInitRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait contractPage.refreshCanEditFields(request);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelAttributeChangeRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (request.attributeName === \"PDS_MbStatus\") {\n\t\t\t\t\t\tawait contractPage.updateCanEditFields(request.$context, request.value);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelAttributeChangeRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (request.attributeName === \"Id\") {\n\t\t\t\t\t\tawait contractPage.refreshItemsSummary(request.$context);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.LoadDataRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (request.dataSourceName === \"MbContractItemDetailListDS\") {\n\t\t\t\t\t\tawait contractPage.refreshItemsSummary(request.$context);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelAttributeChangeRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (request.attributeName === \"MbContractItemDetailQuickFilterByMbDueSoon_Value\") {\n\t\t\t\t\t\tawait contractPage.setDueSoonFilter(request.$context, Boolean(request.value));\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelInitRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (await contractPage.isAddMode(request.$context)) {\n\t\t\t\t\t\tawait contractPage.setDraftStatus(request.$context);\n\t\t\t\t\t\tawait contractPage.assignNextContractNumber(request.$context);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelInitRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait contractPage.resetItemsQuickFilters(request.$context);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelInitRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait contractPage.refreshStartApprovalEnabled(request.$context);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelAttributeChangeRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (contractPage.isStartApprovalInput(request.attributeName)) {\n\t\t\t\t\t\tawait contractPage.refreshStartApprovalEnabled(request.$context);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.SaveRecordRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait contractPage.refreshStartApprovalEnabled(request.$context);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"mb.MbStartApprovalButtonClicked\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tawait contractPage.startApproval(request);\n\t\t\t\t\treturn next?.handle(request);\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.LoadDataRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (contractPage.isItemsChangeReload(request)) {\n\t\t\t\t\t\tawait contractPage.recalculateAmount(request.$context);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.DeleteRecordsRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tif (request.dataSourceName === contractPage.ITEMS_DATA_SOURCE) {\n\t\t\t\t\t\tawait contractPage.recalculateAmount(request.$context);\n\t\t\t\t\t}\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"mb.MbDeactivateSelectedClicked\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tawait contractPage.deactivateSelectedItems(request);\n\t\t\t\t\treturn next?.handle(request);\n\t\t\t\t}\n\t\t\t}\n\t\t]",
+ "deps": "[\"UsrMbContractsV2App_FormPageModule\"]",
+ "args": "(contractPage)",
+ "validators": "{}",
+ "converters": "{\n\t\t\t\"mb.ToItemSelectionEmpty\": function(selectionState) {\n\t\t\t\treturn contractPage.isItemSelectionEmpty(selectionState);\n\t\t\t}\n\t\t}"
+}

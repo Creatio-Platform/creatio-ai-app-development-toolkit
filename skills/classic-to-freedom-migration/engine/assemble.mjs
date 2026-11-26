@@ -55,7 +55,8 @@ const metaPage = (j) => (j && typeof j === "object" && j.page && typeof j.page =
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 const META_FIELDS = ["schemaName", "schemaUId", "packageName", "packageUId", "parentSchemaName"];
-const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources", "deps", "validators", "converters"];
+// `args` beside `deps`: the local name each dependency goes by, which a handler's `contractPage.fn(…)` call is read through.
+const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources", "deps", "args", "validators", "converters"];
 
 // The entity the page's PRIMARY data source is bound to, for `--verify`'s entity row. `modelConfig` names the
 // primary source; that source's config names the entity. Derived rather than asked of the agent — "read two
@@ -358,19 +359,25 @@ function mergeSideFiles(dir, built, acc, problems) {
   }
   const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
   for (const key of ["processSteps", "processStandCheck"]) if (proc?.[key] != null) built[key] = proc[key];
-  const modules = readModuleSources(dir);
+  const modules = readModuleSources(dir, problems);
   if (modules) built.modules = modules;
 }
 
 // `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. A file whose name is not a
-// module name is not read.
-function readModuleSources(dir) {
+// module name is not read; a folder or file that cannot be read is a problem, never a crash.
+function readModuleSources(dir, problems) {
+  const rel = path.posix.join(READS_DIR, MODULES_DIR);
   const root = path.join(dir, READS_DIR, MODULES_DIR);
   if (!fs.existsSync(root)) return null;
+  let files;
+  try { files = fs.readdirSync(root).sort((a, b) => a.localeCompare(b)); }
+  catch (e) { problems.push({ file: rel, what: "the client module sources", why: `not readable as a folder (${e.message})` }); return null; }
   const modules = {};
-  for (const file of fs.readdirSync(root).sort((a, b) => a.localeCompare(b))) {
+  for (const file of files) {
     const name = MODULE_FILE.exec(file)?.[1];
-    if (name && !UNSAFE_KEYS.has(name)) modules[name] = fs.readFileSync(path.join(root, file), "utf8");
+    if (!name || UNSAFE_KEYS.has(name)) continue;
+    try { modules[name] = fs.readFileSync(path.join(root, file), "utf8"); }
+    catch (e) { problems.push({ file: `${rel}/${file}`, what: `module \`${name}\``, why: `not readable (${e.message})` }); }
   }
   return modules;
 }
@@ -439,6 +446,7 @@ export function assembleBuilt(dir, expect = null) {
   if (claims) built.decisionClaims = claims;
   return { built, problems };
 }
+
 
 // Writes the composed payload beside the run — never a temp dir, which cannot be re-checked once the session
 // ends.

@@ -80,7 +80,11 @@ answer, never a crash of that mode. Like
 merged view from `bundle.json`, rules and reachability from their own files. `entitySchemaName` is the one DERIVED
 value, read off the primary data source rather than retyped. `evidence.json` / `judge.json` are merged when
 present, and `recorded.json` carries the on-stand keys the BUILD agent records rather than reads (a card widget
-the converter placed) — a key still `null` there is left unset, so its row stays unconfirmed. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
+the converter placed) — a key still `null` there is left unset, so its row stays unconfirmed. `reads/modules/<Module>.js`
+files (each client module a built page imports, its get-page `body.js` copied whole) become `built.modules`: linted
+for the code rows, and followed for a request a page handler hands to the module — through the module functions the
+handler calls and the module's own functions they call. A folder or file there that cannot be read is a read
+problem. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
 `migration-result.md` under `--tasks`, where the report replaces the table. Either way the run replays offline
 with `--verify --built <that file>`.
 
@@ -603,7 +607,8 @@ whose `condition`/`actions` carry it as a whole token in any of those forms — 
 **Machine rows that would otherwise be confirm-on-stand:** with `--built.pages[k].handlers` and `.viewModelConfig`
 (verbatim from get-page) the engine resolves `handler` rows (the build agent's `Ported as (row N): <symbol>` line
 from the task's `## Notes`, which holds only when the page reaches the symbol — a request a handler or element
-sends, a function a handler calls, a `Module.function` called from a module in the entry's optional `deps` · else a
+sends, a function a handler calls, a `Module.function` called from a module in the entry's optional `deps`, as
+`Module.function(…)` or through the name the entry's `args` give the module (`contractPage.function(…)`) · else a
 CALL of the method name or of its folded caller, a definition alone never counts · a branch on the method's Classic
 trigger attribute/control — else ☐ confirm on-stand, never ❌; a `Ported as` symbol the page does not reach is ⚠), `vmattr` rows (virtual attribute present), `layout` rows
 (side profile / tab found by caption words — a `#ResourceString(K)#` caption resolved through `.resources` when
