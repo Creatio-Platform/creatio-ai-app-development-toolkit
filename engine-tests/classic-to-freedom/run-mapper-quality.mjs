@@ -85,6 +85,9 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     "async (request, next) => { if (await isLocked(request)) { await showLocked(request); return true; } return next?.handle(request); }",
     "async (request, next) => { const child = page.childOf(request); if (child) { return page.openChild(request, child); } return next?.handle(request); }",
     "async (request, next) => { if (!request.value) { return; } return next?.handle(request); }",
+    "async (request, next) => { if (!request.value) { return next?.handle(request); } else { return page.open(request); } }",
+    "async (request, next) => { if (request.value) { return next?.handle(request); } }",
+    "async (request, next) => { switch (request.kind) { case 1: return next.handle(request); case 2: return next.handle(request); } }",
   ];
   const endsChain = [
     ["async (request) => { await post(request); }", /takes no `next`/],
@@ -94,10 +97,11 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     ["(request, next) => next.handle(request) && true", /no `return` gives its result/],
     ["async (request, next) => { [1].forEach(() => next.handle(request)); return null; }", /never calls/],
     ["(request, next) => post(request)", /never calls/],
-    ["async (request, next) => { const r = await next.handle(request); if (r) return; return r; }", /a `return` after that call does not give its result/],
-    ["async (request, next) => { const r = await next.handle(request); if (!r) { return false; } return r; }", /a `return` after that call does not give its result/],
-    ["async (request, next) => { const r = await next.handle(request); if (r) { return r; } }", /can reach its end without a `return`/],
-    ["async (request, next) => { switch (request.kind) { case 1: return next.handle(request); case 2: return next.handle(request); } }", /can reach its end without a `return`/],
+    ["async (request, next) => { const r = await next.handle(request); if (r) return; return r; }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (!r) { return false; } return r; }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { await next.handle(request); switch (request.kind) { case 1: return true; default: return next.handle(request); } }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { for (const x of request.items) { if (x) { return false; } await next.handle(request); } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (r) { return r; } }", /can reach its end after that call without a `return`/],
   ];
   const chainOf = (fn) => lintPageQuality({ handlers: `[{ request: "usr.Post", handler: ${fn} }]` }).findings.filter((f) => f.rule === R.handlerWithoutNext);
   check("quality: a handler that calls next.handle(request) and returns its result passes the request on",
@@ -135,7 +139,8 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   // A real built page and its modules, as a migration run built them: every runtime defect the build contract
   // forbids is found at its line — a Post handler that ends the chain, totals and counts paged in the browser, bulk
   // actions and numbering that only log a failure, and a recalculation whose failure the caller drops.
-  const v2 = (f) => fs.readFileSync(path.join(FIX, "client-modules-v2", f), "utf8");
+  const fixtureIn = (dir) => (f) => fs.readFileSync(path.join(FIX, dir, f), "utf8");
+  const v2 = fixtureIn("client-modules-v2");
   const at = (page, rule) => page.findings.filter((f) => f.rule === rule && !f.advisory).map((f) => f.line);
   const v2Post = lintPageQuality({ handlers: v2("UsrMbContractsV2App_MbDeliveryNoteFormPage.handlers.js") });
   const v2Totals = lintModuleQuality("UsrMbContractsV2DocumentTotals", v2("UsrMbContractsV2DocumentTotals.js"));
@@ -158,7 +163,7 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   // The next run of the same package: the record and list pages stop the chain on purpose when a record opens its own
   // page, before the request is handed on, and the return-note module was saved with a bare comparisonType before
   // the gate's repair round rewrote it.
-  const v3 = (f) => fs.readFileSync(path.join(FIX, "client-modules-v3", f), "utf8");
+  const v3 = fixtureIn("client-modules-v3");
   const v3Form = lintPageQuality({ handlers: v3("UsrMbContractsV3App_FormPage.handlers.js") });
   const v3List = lintPageQuality({ handlers: v3("UsrMbContractsV3App_ListPage.handlers.js") });
   const v3ReturnNote = lintModuleQuality("UsrMbContractsV3App_MbReturnNoteFormPageModule", v3("UsrMbContractsV3App_MbReturnNoteFormPageModule.js"));
