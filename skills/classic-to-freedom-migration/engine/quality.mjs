@@ -303,20 +303,24 @@ function namesFromNext(own, nextName) {
 
 
 // Follows a handler body path by path, so a `return` is judged by whether `next.handle(…)` may have run before it on
-// its own path, not by where it is written. Each step returns `{ called, ends }`: whether the call may have run on a
-// path that goes on past the statement, and whether every path through it ends in a `return` or a `throw`. A loop body
-// counts as run after itself. The first wrong `return` is kept in `walk.problem`.
+// its own path, not by where it is written. Each step returns `{ normal, called, brk }`: `normal` — some path completes
+// the statement and goes on, with `called` saying whether the call may have run on it; `brk` — the state of the paths
+// that leave through `break` / `continue` (null when none does), which the enclosing switch or loop takes over. A path
+// ending in a `return` or a `throw` is in neither. A switch case starts from the switch's entry and from the case that
+// falls into it; a loop body counts as run after itself. The first wrong `return` is kept in `walk.problem`.
 function nextPathWalk(callsNext, givesNext) {
   const walk = { problem: null };
-  const join = (a, b) => ({ called: (!a.ends && a.called) || (!b.ends && b.called), ends: a.ends && b.ends });
+  const or = (a, b) => (a === null ? b : b === null ? a : a || b);
+  const join = (a, b) => ({ normal: a.normal || b.normal, called: (a.normal && a.called) || (b.normal && b.called), brk: or(a.brk, b.brk) });
   const all = (list, called, depth) => {
+    let brk = null;
     for (const st of list) {
-      if (st.type === "BreakStatement" || st.type === "ContinueStatement") return { called, ends: false };
       const r = step(st, called, depth);
-      if (r.ends) return r;
+      brk = or(brk, r.brk);
+      if (!r.normal) return { normal: false, called, brk };
       called = r.called;
     }
-    return { called, ends: false };
+    return { normal: true, called, brk };
   };
   const tryStep = (st, called, depth) => {
     const body = step(st.block, called, depth + 1);
@@ -324,30 +328,38 @@ function nextPathWalk(callsNext, givesNext) {
     const handled = st.handler ? join(body, step(st.handler.body, mayHaveRun, depth + 1)) : body;
     if (!st.finalizer) return handled;
     const fin = step(st.finalizer, mayHaveRun || callsNext(st.handler?.body), depth + 1);
-    return fin.ends ? fin : { called: handled.called || fin.called, ends: handled.ends };
+    return fin.normal ? { normal: handled.normal, called: handled.called || fin.called, brk: or(handled.brk, fin.brk) } : fin;
   };
-  // Each case is walked from the switch's entry; one that does not end goes on past the switch (or falls through, which
-  // ends where the next case ends). Without a `default` a value no case matches goes on past it too.
+  // Cases in order: each starts from the switch's entry, or from the case before it when that one falls through. A
+  // `break`, the last case running off its end and, without a `default`, a value no case matches all leave the switch.
   const switchStep = (st, called, depth) => {
     const entry = called || callsNext(st.discriminant);
-    let goesOn = !st.cases.some((c) => c.test === null);
-    let calledOnward = goesOn && entry;
-    for (const c of st.cases.filter((x) => x.consequent.length)) {
-      const r = all(c.consequent, entry, depth + 1);
-      if (!r.ends) { goesOn = true; calledOnward ||= r.called; }
+    let leaving = st.cases.some((c) => c.test === null) ? null : entry;
+    let fallsThrough = null;
+    for (const c of st.cases) {
+      const r = all(c.consequent, entry || fallsThrough === true, depth + 1);
+      leaving = or(leaving, r.brk);
+      fallsThrough = r.normal ? r.called : null;
     }
-    goesOn ||= !st.cases.length || !st.cases.at(-1).consequent.length;
-    return { called: calledOnward || (goesOn && entry), ends: !goesOn };
+    leaving = or(leaving, fallsThrough);
+    return leaving === null ? { normal: false, called: entry, brk: null } : { normal: true, called: leaving, brk: null };
   };
   const step = (st, called, depth) => {
-    if (walk.problem || !st) return { called, ends: Boolean(walk.problem) };
-    if (depth > 1000) { walk.problem = END_AFTER_NEXT; return { called, ends: true }; }
+    if (walk.problem) return { normal: false, called, brk: null };
+    if (!st) return { normal: true, called, brk: null };
+    if (depth > 1000) { walk.problem = END_AFTER_NEXT; return { normal: false, called, brk: null }; }
     switch (st.type) {
       case "ReturnStatement":
         if (!(st.argument && givesNext(st.argument)) && (called || callsNext(st.argument))) walk.problem = RETURN_AFTER_NEXT;
-        return { called, ends: true };
-      case "ThrowStatement": return { called, ends: true };
+        return { normal: false, called, brk: null };
+      case "ThrowStatement": return { normal: false, called, brk: null };
+      case "BreakStatement":
+      case "ContinueStatement": return { normal: false, called, brk: called };
       case "BlockStatement": return all(st.body, called, depth + 1);
+      case "LabeledStatement": {
+        const inner = step(st.body, called, depth + 1);
+        return inner.brk === null ? inner : join({ ...inner, brk: null }, { normal: true, called: inner.brk, brk: null });
+      }
       case "IfStatement": {
         const afterTest = called || callsNext(st.test);
         return join(step(st.consequent, afterTest, depth + 1), step(st.alternate, afterTest, depth + 1));
@@ -358,9 +370,9 @@ function nextPathWalk(callsNext, givesNext) {
         if (LOOPS.has(st.type)) {
           const inLoop = called || callsNext(st);
           step(st.body, inLoop, depth + 1);
-          return { called: inLoop, ends: false };
+          return { normal: true, called: inLoop, brk: null };
         }
-        return { called: called || callsNext(st), ends: false };
+        return { normal: true, called: called || callsNext(st), brk: null };
     }
   };
   walk.run = (body) => step(body, false, 0);
@@ -376,13 +388,14 @@ function nextParamName(handler) {
 
 const NO_RETURN_OF_NEXT = "calls `next.handle(request)` but no `return` gives its result";
 const RETURN_AFTER_NEXT = "calls `next.handle(request)` but a `return` reached after that call does not give its result";
+const END_WITHOUT_RETURN = "can reach its end without a `return`, which ends the chain on that path without handing the request on";
 const END_AFTER_NEXT = "calls `next.handle(request)` but can reach its end after that call without a `return`, which drops the result";
 
 // A handler passes the request on: it takes `next`, calls `next.handle(…)` and returns what that call gives (directly,
-// or through a variable it assigned the call to; an arrow's expression body is what it returns) and, on every path
-// where the call may already have run, every `return` gives it and the body does not run off its end. A path that ends
+// or through a variable it assigned the call to; an arrow's expression body is what it returns), never runs off its
+// end, and on every path where the call may already have run every `return` gives it. A `return` (or `throw`) reached
 // before the call runs is a deliberate stop (`if (child) { return openChild(request, child); }
-// return next?.handle(request);`), whichever branch it is written in. Anything else ends the chain or drops its
+// return next?.handle(request);`), whichever branch it is written in; running off the end is not. Anything else ends the chain or drops its
 // result; a handler meant to end it is accepted by a plan decision on the row.
 function checkPassesOn(handler, request, page) {
   const fail = (why) => page.findings.push(finding(QUALITY_RULES.handlerWithoutNext, "handlers", lineOf(handler),
@@ -406,7 +419,7 @@ function checkPassesOn(handler, request, page) {
   const callsNext = (node) => Boolean(node) && ownNodes(node).some((n) => n.type === "CallExpression" && isNextCall(n, nextName));
   const walk = nextPathWalk(callsNext, givesNext);
   const end = walk.run(handler.body);
-  const problem = walk.problem || (!end.ends && end.called ? END_AFTER_NEXT : null);
+  const problem = walk.problem || (end.normal ? (end.called ? END_AFTER_NEXT : END_WITHOUT_RETURN) : null);
   if (problem) fail(problem);
 }
 
