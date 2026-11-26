@@ -31,6 +31,7 @@ import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } f
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
 import { processPagePlanLines, processPageRows, PROCESS_VK_RESOLVERS } from "./process-page.mjs";
+import { launchedProcessesPlanLines, launchedProcessesRows, launchedProcessNames, LAUNCHED_VK_RESOLVERS } from "./launched-processes.mjs";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -1829,7 +1830,8 @@ function renderPlanBanners(result, opts) {
   // The keys come from the engine's gate (requiredPlacementKeys in migrate.mjs), never a second list kept here.
   const placementKeys = opts.placementKeys || [];
   if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (${placementKeys.map((k) => "`" + k + "`").join(" · ")}), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable. \`existing-section\` registers nothing: it needs the existing section's \`listPage\` / \`formPage\` names on \`sectionHost\` and \`planMeta.freedomExists: true\`.`, "");
-  P.push(...conventionsBanner(opts.conventionsBlockers || []), ...processStepsBanner(result.processPageBlockers || []));
+  P.push(...conventionsBanner(opts.conventionsBlockers || []), ...processStepsBanner(result.processPageBlockers || []),
+    ...launchedProcessesBanner(result.launchedProcessesBlockers || []));
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **dashboards** = \`execute-esq\` (NOT \`odata-read\` — it drops the plain-Guid \`SysModule.SectionSchemaUId\`) on \`SysDashboard\` filtered \`Section\` = the section's \`SysModule.Id\`, select \`["Id","Caption"]\`, then read which package SHIPS each dashboard from the \`SysDashboard\` data bindings and record it as \`items:[{ id, caption, sourcePackage? }]\` (omitted = stand data only). That is the read; \`saveInPackage\` (defaulting from it) and \`skip\` (absent unless recorded) are the user's decisions — the full two-step chain is in the skill's \`signals\` step. **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
@@ -2256,14 +2258,29 @@ function renderRunDiagnostics(raw) {
   return [renderDiagnosticsBlock(normalizeDiagnostics(raw, esc)).trimEnd(), ""];
 }
 
-// The project-conventions banner: empty when the block is settled.
-function processStepsBanner(blockers) {
+// A PLAN INCOMPLETE banner: empty when nothing blocks it; otherwise its title, why the plan stops, each blocker and
+// what to do.
+function incompleteBanner(title, lead, blockers, remedy) {
   if (!blockers.length) return [];
-  return [`> ⛔ **PLAN INCOMPLETE — process steps not recorded:** this is a process page, and the plan must name the steps that open it. ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> Ask the user which business processes and steps open the page; for each, read the Pre-configured page element with \`describe-business-process\` (its \`Buttons\` and whether a conditional flow branches on its result) and record it in \`manifest.processPage.steps\`, then re-run \`migrate.mjs --plan\`.`, ""];
+  return [`> ⛔ **PLAN INCOMPLETE — ${title}:** ${lead} ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> ${remedy}`, ""];
 }
-function conventionsBanner(blockers) {
-  if (!blockers.length) return [];
-  return [`> ⛔ **PLAN INCOMPLETE — project conventions not settled:** the plan cannot say which namespace this team names its requests in, or which of its modules the builders reuse. ${blockers.map((b) => "\n> - " + esc(b)).join("")}\n>\n> Detect them read-only (the skill's step 4.2): custom request names in the existing Freedom pages of the target package and its direct customer-package dependencies (\`get-page\` → \`ownBodySummary.handlerRequests\`, majority namespace), else the team's schema name prefix, else the \`SchemaNamePrefix\` system setting, else \`usr\`. Record them in \`manifest.projectConventions\` with the module bodies in \`manifest.constantsModules\`, then re-run \`migrate.mjs --plan\`.`, ""];
+const launchedProcessesBanner = (blockers) => incompleteBanner("started processes not followed",
+  "the page code starts a business process whose user-task pages are not in this page's chain.", blockers,
+  "Read each process with `describe-business-process`; record its Pre-configured page steps (the page each opens and whether that page is Classic or Freedom) in `manifest.launchedProcesses`, then re-run `migrate.mjs --plan`.");
+const processStepsBanner = (blockers) => incompleteBanner("process steps not recorded",
+  "this is a process page, and the plan must name the steps that open it.", blockers,
+  "Ask the user which business processes and steps open the page; for each, read the Pre-configured page element with `describe-business-process` (its `Buttons` and whether a conditional flow branches on its result) and record it in `manifest.processPage.steps`, then re-run `migrate.mjs --plan`.");
+const conventionsBanner = (blockers) => incompleteBanner("project conventions not settled",
+  "the plan cannot say which namespace this team names its requests in, or which of its modules the builders reuse.", blockers,
+  "Detect them read-only (the skill's step 4.2): custom request names in the existing Freedom pages of the target package and its direct customer-package dependencies (`get-page` → `ownBodySummary.handlerRequests`, majority namespace), else the team's schema name prefix, else the `SchemaNamePrefix` system setting, else `usr`. Record them in `manifest.projectConventions` with the module bodies in `manifest.constantsModules`, then re-run `migrate.mjs --plan`.");
+// The `Connected processes` line reads two facts: the section's process menu (`ProcessInModules`) and the processes
+// the page code starts. A menu with no process is not "none" while the code starts one.
+function processesSigLine(sigLine, sig, started) {
+  if (!started) return sigLine("processes", "Connected processes");
+  const see = `the code starts ${started} — see **Processes this page starts**`;
+  if (sig?.resolved === true && sig.present) return `${sigLine("processes", "Connected processes")}; ${see}`;
+  const menu = sig?.resolved === true ? "none in the section process menu" : "⚠ section process menu not resolved — run the on-stand check";
+  return `- **Connected processes:** ${menu}; ${see}`;
 }
 export function renderPlan(result, opts = {}) {
   return renderPlanWith(result, { ...opts, printedStatus: new Set() });
@@ -2355,7 +2372,7 @@ function renderPlanWith(result, opts) {
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
   const signalLines = opts.processPage ? ["- not applicable — a process page has no section, list page or object; its process steps are listed under **Process page**"]
-    : [sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check")];
+    : [sigLine("dcm", "DCM case"), processesSigLine(sigLine, signals.processes, launchedProcessNames(result.launchedProcesses, esc)), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check")];
   P.push("### On-stand signals", ...signalLines, "",
     ...conventionsPlanLines(opts.projectConventions, opts.recordIds || [], esc));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
@@ -2385,6 +2402,7 @@ function renderPlanWith(result, opts) {
     ...freedomExistsBanner(pm, opts),
     ...buildChildScopeRows(childs, opts), "", ...renderChildScopeLegend(childs),
     ...processPagePlanLines(result.processPage, esc),
+    ...launchedProcessesPlanLines(result.launchedProcesses, esc),
     ...(isExistingSection(opts) ? existingSectionTemplateBanner(result) : renderTemplateBanner(result, entity, typed, someBindOnly, formTpl)),
     "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
     ...renderMiniPageMapping(result),
@@ -3615,6 +3633,8 @@ export function checklistGroups(result, opts = {}) {
   G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
   // A process page's buttons, its way out, the steps that open it and the stand check (process-page.mjs).
   if (isMain) G("Process page", processPageRows(result.processPage, esc));
+  // The Classic user-task pages of the processes the page starts (launched-processes.mjs).
+  if (isMain) G("Processes this page starts", launchedProcessesRows(result.launchedProcesses, esc));
   const { listConfirmOnMain, sectionLogicKey } = emitListPageGroups(groups, G, pageKey, isMain, pm, result, ctx);
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
@@ -5588,7 +5608,7 @@ const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCou
 const VK_BY_TYPE = new Map([["detailfilter", (vk, ctx) => resolveQuickFilterVk(vk, ctx, "detail")], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk], ["rowlinks", resolveRowLinksVk], ["listsort", resolveListSortVk],
   ["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk],
-  ...PROCESS_VK_RESOLVERS.map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, { absentEntry, esc })])]);
+  ...[...PROCESS_VK_RESOLVERS, ...LAUNCHED_VK_RESOLVERS].map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, { absentEntry, esc })])]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveQuickFilterVk(vk, ctx, "list");

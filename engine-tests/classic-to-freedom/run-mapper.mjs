@@ -3,6 +3,7 @@ import { runMachineRowChecks } from "./run-mapper-machine-rows.mjs";
 import { runConventionsChecks } from "./run-mapper-conventions.mjs";
 import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
+import { runLaunchedProcessesChecks } from "./run-mapper-launched-processes.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
 import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
 import { runVerifyFalseNegativeChecks, runCaptionKeyChecks } from "./run-mapper-verify-false-negatives.mjs";
@@ -10757,6 +10758,7 @@ runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups
 runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX, ENGINE_DIR });
 runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta });
 runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
+runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
 runModuleDepChecks({ check, verifyCtx, resolveVk, FIX });
 

@@ -640,6 +640,10 @@ user approved and run the stand check yourself — both act on the user's proces
 what `describe-business-process` returns for each re-pointed step and the outcome of every button you pressed into
 `<migration-folder>/process.json`, as `./process-page.md` → *Verify* shows. Without it the process rows stay open.
 
+**A page that starts a business process** (the plan has a `### Processes this page starts` section): each Classic
+user-task page the user chose to migrate is its own migration run with the process-page profile. When it is done,
+add it to `processPagesMigrated` in `process.json` (`./process-page.md` → *Processes a migrated page starts*).
+
 **A page that imports a custom client module** (its `define()` deps name a module the build created, such as
 `UsrX_FormPageModule`): the read-back files its source as `reads/modules/<module>.js` (see *The read plan first*), and
 `--verify --from` reads that folder as `built.modules`. Besides the code rows, a module's source is followed for a

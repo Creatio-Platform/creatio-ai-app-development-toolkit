@@ -82,6 +82,7 @@ import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VER
 import { renderFinalReport, readDecisions, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "./report.mjs";
 import { conventionFacts, recordIdsUsed } from "./conventions.mjs";
 import { processTemplateOf, processTemplateOfManifest, recordProcessTemplate, processPageInfo, processButtonMap } from "./process-page.mjs";
+import { launchedProcessesInfo } from "./launched-processes.mjs";
 import { qualityThresholdsOf } from "./quality.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -1297,6 +1298,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   c.spec = res.designSpec;
   c.changeSet = pageTextsOf(res.changeSet);
   c.recordIds = res.recordIds; c.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
+  c.processStarts = res.processStarts; // the processes it starts, followed by the root run
   c.mappedEntity = res.entity;
   c.resolvedFrom = key;
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
@@ -1359,6 +1361,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     const res = f.res;
     t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
     t.recordIds = res.recordIds; t.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
+    t.processStarts = res.processStarts; // the processes it starts, followed by the root run
     t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
     t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
     t.coverage = res.coverage || null;        // aggregated into the parent's coverage gate
@@ -1400,6 +1403,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     const res = f.res;
     miniPage.spec = res.designSpec; miniPage.changeSet = pageTextsOf(res.changeSet); miniPage.blocked = !!res.gate?.blocked;
     miniPage.recordIds = res.recordIds; miniPage.conventionsBlockers = res.conventionsBlockers; // carried up to the root's plan
+    miniPage.processStarts = res.processStarts; // the processes it starts, followed by the root run
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
@@ -3312,7 +3316,21 @@ function processPageOfRun(manifest, opts, { seedTemplate, schemas, eff }) {
   return processPageInfo({ template, pageName: schemas.at(-1)?.moduleName, items: eff.items, methods: eff.methods, manifest });
 }
 
-const processPageBlockersOf = (processPage) => processPage?.issues || [];
+// The open questions of a profile (process page, started processes) that keep the plan incomplete.
+const processPageBlockersOf = (profile) => profile?.issues || [];
+// The processes each page of the run starts: this page's own, then every folded sub-page's (child, typed, mini), so the
+// root run sees the whole tree.
+function processStartsOf(schemas, eff, folded) {
+  const own = { from: `page ${schemas.at(-1)?.moduleName || "?"}`, launch: !!eff.processLaunch, names: eff.processNames };
+  return [own, ...folded.flatMap((f) => f.processStarts || [])];
+}
+// The processes the run's pages and its section start (launched-processes.mjs): the root run follows them for the
+// whole tree; a nested fold only reports its own upward.
+function launchedProcessesOfRun(manifest, opts, processStarts, section) {
+  if (isNestedFold(opts)) return null;
+  const sectionStart = { from: "section", launch: !!section?.processLaunch, names: section?.processNames };
+  return launchedProcessesInfo({ sources: [...processStarts, sectionStart], manifest });
+}
 // A process page is opened by its process step: it has no section, so no add-record mini page is folded for it.
 const miniPageNameOf = (processPage, mpDecl, secMpName) => (processPage ? null : resolveMiniPageName(mpDecl, secMpName));
 
@@ -3638,6 +3656,9 @@ export function runMigration(manifest, opts = {}) {
   const folded = [...(out.childPages || []), ...(out.typedPages || []), out.miniPage].filter(Boolean);
   out.processPage = processPage;
   out.processPageBlockers = processPageBlockersOf(processPage);
+  out.processStarts = processStartsOf(schemas, eff, folded);
+  out.launchedProcesses = launchedProcessesOfRun(manifest, opts, out.processStarts, section);
+  out.launchedProcessesBlockers = processPageBlockersOf(out.launchedProcesses);
   out.conventionsBlockers = [...new Set([...specOpts.conventionsBlockers, ...ownConventionsBlockers(manifest, opts),
     ...folded.flatMap((f) => f.conventionsBlockers || [])])];
   // The plan's record-id table: the ids the builders port from (mapped change sets, Classic bodies) that a declared
@@ -5355,7 +5376,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
   const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0)
-    || (result.conventionsBlockers?.length > 0) || (result.processPageBlockers?.length > 0));
+    || (result.conventionsBlockers?.length > 0) || (result.processPageBlockers?.length > 0) || (result.launchedProcessesBlockers?.length > 0));
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
@@ -5486,6 +5507,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (planMode && result.conventionsBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — project conventions not settled: " + result.conventionsBlockers.join(" | ") + "\n");
   if (planMode && result.processPageBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — process steps not recorded: " + result.processPageBlockers.join(" | ") + "\n");
+  if (planMode && result.launchedProcessesBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — started processes not followed: " + result.launchedProcessesBlockers.join(" | ") + "\n");
   // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
   // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
   // the built pages and nothing about who built them.

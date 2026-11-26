@@ -49,9 +49,10 @@ const CLASSIC_TEMPLATE_SAVE_BUTTON = "Button-be6148b819154a0791eaee8f1635d859";
 const CLASSIC_TEMPLATE_CLOSE_BUTTON = "Button-3a8ac667899d4aa68021a07eb1c7c49c";
 const FREEDOM_CLOSE_BUTTON = "CloseButton";
 
-const isStr = (v) => typeof v === "string" && v.trim() !== "";
-const plainObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
-const code = (s) => "`" + s + "`";
+// Shared with the other pure plan modules (launched-processes.mjs).
+export const isStr = (v) => typeof v === "string" && v.trim() !== "";
+export const plainObject = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+export const code = (s) => "`" + s + "`";
 
 // The process template a page's seed chain defines, or null. `names` are the seed layers' define() names. An empty
 // `entitySchemaName` is not evidence on its own: hundreds of Classic pages with no object are not process pages.
@@ -284,7 +285,7 @@ export function processPageRows(info, esc) {
       vk: { type: "processstand", buttons: info.buttons.map((b) => ({ freedom: b.freedom, behaviour: b.behaviour, perStep: b.perStep || [] })) } }];
 }
 
-const MISSING = "❌ MISSING", VERIFY = "⚠ verify", DONE = "✅ Done";
+export const MISSING = "❌ MISSING", VERIFY = "⚠ verify", DONE = "✅ Done";
 const builtSteps = (ctx) => (Array.isArray(ctx.root?.processSteps) ? ctx.root.processSteps.filter((s) => s && typeof s === "object") : []);
 const selectedIn = (step, name) => (Array.isArray(step.buttons) ? step.buttons : []).find((b) => b && b.name === name) || null;
 const buttonOps = (ctx) => (ctx.ops || []).filter((o) => o && typeof o.name === "string");
