@@ -1441,7 +1441,7 @@ const openCardIsTheWholeStory = (am) => !!am.openCardOverridden && !anyAddSignal
 const ADD_SIGNALS = ["lookup", "service", "editableGrid", "openCardOverridden", "addDisabled", "customAction", "fixedFilters"];
 const anyAddSignal = (am, ...except) => ADD_SIGNALS.some((k) => !except.includes(k) && am[k]);
 const hasAddMechanism = (am) => anyAddSignal(am);
-const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length);
+const hasRowActionSignal = (am) => !!(am.rowActionsRemoved?.length || am.rowActionsUnreadable?.length || am.rowsOpenNothing);
 
 // What to BUILD for this add mode, as opposed to what it IS (`describeAddMode`). Conditional: one unconditional
 // instruction contradicts the modes it does not fit — "build a CUSTOM add request-handler" on a detail whose own
@@ -1488,8 +1488,8 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
 }
 
 // The questions a detail's feature inventory leaves for the user. A quick filter that Classic kept in the user's
-// profile may lose that memory, since no guidance states that `crt.QuickFilter` keeps it; summaries are an
-// improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
+// profile stays kept, since `crt.QuickFilter` saves its value per user too: the question recommends that default and
+// names the code only a reset needs. Summaries are an improvement over Classic, never parity. Both are asked, not decided by a builder in a note. The page's own summary
 // bar is recorded on the change set (`summaryBar`) so the plan reads it as data. Exported for the goldens.
 export function attachDetailFeatureDecisions(changeSet) {
   for (const d of (changeSet.details || [])) {
@@ -1499,7 +1499,7 @@ export function attachDetailFeatureDecisions(changeSet) {
     const label = detailLabel(d);
     for (const q of f.quickFilters.filter((x) => x.persisted)) {
       changeSet.needsDecision.push({ kind: "detail-filter-persistence", item: `${label} · ${q.attribute}`,
-        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. No guidance confirms that \`crt.QuickFilter\` keeps its state between visits. Decide: accept that the filter resets on every visit, or keep it with a custom profile read and write` });
+        reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. \`crt.QuickFilter\` does the same: the platform saves its value per user in the page's schema profile (\`get-component-info crt.QuickFilter\`), so the built filter keeps it with no code. Recommended: keep (platform default) — nothing to build. Only "reset on every visit" needs code, which clears the value the platform saved` });
     }
     if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
   }
@@ -1573,34 +1573,41 @@ function addMechanismDecision(am, label) {
 function rowActionsDecision(am, label) {
   const removed = am.rowActionsRemoved || [];
   const unreadable = am.rowActionsUnreadable || [];
-  const parts = [...removedActionsSentences(removed), ...unreadableOverrideSentences(unreadable, removed.length > 0)];
+  const parts = [...removedActionsSentences(removed, !!am.rowsOpenNothing), ...unreadableOverrideSentences(unreadable, removed.length > 0 || !!am.rowsOpenNothing, !!am.rowsOpenNothing)];
   return { kind: "detail-row-actions", item: label, actions: removed, unreadable,
     reason: `Detail '${label}' ${parts.join(" ")}` };
 }
 
 const plural = (n) => (n > 1 ? "s" : "");
 
-// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing was removed.
-function removedActionsSentences(removed) {
-  if (!removed.length) return [];
-  const drop = freedomRowActionsToDrop(removed);
+// How a Freedom row opens its record, as the decision's closing clause: on click, or not at all when Classic rows
+// open nothing.
+const openClause = (opensNothing) => (opensNothing
+  ? "set `features.cells.disableLinks: true` and offer no Open row action, since a click on a row opens nothing in Classic (`editRecord` switched off)."
+  : "keep records opening from the list (open-on-click).");
+// What the rows must drop for the removed actions, as the sentences of the decision; [] when nothing changed.
+function removedActionsSentences(removed, opensNothing) {
+  if (!removed.length) return opensNothing ? [`opens nothing on a row click in Classic. Build its list rows so they ${openClause(true)}`] : [];
+  const drop = freedomRowActionsToDrop(removed, opensNothing);
   const build = drop.length
-    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and keep records opening from the list (open-on-click).`
-    : "Nothing to remove from the Freedom list rows — keep records opening from the list (open-on-click).";
-  const edit = removed.includes("Edit")
+    ? `Build its list rows WITHOUT the ${drop.join(" and ")} row action${plural(drop.length)}, and ${openClause(opensNothing)}`
+    : `Nothing to remove from the Freedom list rows — ${openClause(opensNothing)}`;
+  const edit = removed.includes("Edit") && !opensNothing
     ? ["Classic Edit has no separate Freedom row action, so its removal changes nothing here: records still open on click."]
     : [];
   return [`removes the standard row action${plural(removed.length)} ${removed.join(", ")} in Classic.`, build, ...edit];
 }
 
 // The manual-read request for overrides the scan could not read; [] when every override was read.
-function unreadableOverrideSentences(unreadable, afterRemoved) {
+function unreadableOverrideSentences(unreadable, afterRemoved, opensNothing) {
   if (!unreadable.length) return [];
   const lead = afterRemoved ? "It also overrides" : "overrides";
   const members = unreadable.map((m) => "`" + m + "`").join(", ");
   const subject = unreadable.length > 1 ? "they remove" : "it removes";
+  // with rows that open nothing, the sentence before this one already gave the links-off clause
+  const close = opensNothing ? "." : `, and ${openClause(false)}`;
   return [`${lead} ${members} in a form the engine cannot read, so what ${subject} is UNKNOWN.`,
-    "Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out, and keep records opening from the list (open-on-click)."];
+    `Read that Classic member: build the list rows without every standard row action (Copy, Delete) it leaves out${close}`];
 }
 
 // The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
@@ -2500,6 +2507,7 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
   const summaries = [...text.matchAll(/\b(?:SummaryModuleV2|getSummaryVisible|getSummaryModuleSandboxId)\b/g)].some((m) => !insideSpan(spans, m.index))
     && !switchedOff(text, "getSummaryVisible", spans);
   return {
+    sort: gridSortOf(text, spans),
     toolsMenu: toolsMenuDeviations(text, spans),
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
     multiSelect: multiSelectMode(text, spans),
@@ -2507,9 +2515,54 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
     summaries,
   };
 }
+// The order Classic loads the list in: the column whose `orderDirection` `addGridDataColumns` sets, else the
+// direction `getGridSortDirection` returns with no column. `locked` when `initDetailOptions` turns `IsSortable` off,
+// so the user cannot re-sort. Null when the detail keeps the default order. The members are read raw, for the column
+// and attribute names they pass as strings, so every match inside a comment or a string is dropped.
+const ORDER_DIRECTION_SET = /orderDirection\s{0,5}=\s{0,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/g;
+const ORDER_DIRECTION_RETURNED = /return\s{1,5}(?:this\.)?(?:Terrasoft\.)?OrderDirection\.(ASC|DESC)\b/;
+const SORTED_COLUMN = /(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']/g;
+const SORT_LOCKED = /set\s{0,5}\(\s{0,5}["']IsSortable["']\s{0,5},\s{0,5}false\b/g;
+// The receiver just before `.orderDirection`: a column added or fetched in place, or a variable holding one.
+const SORT_RECEIVER = /(?:(?:addColumn|columns\.get)\s{0,5}\(\s{0,5}["'](\w{1,80})["']\s{0,5}\)|\b([A-Za-z_]\w{0,80}))\s{0,5}\.\s{0,5}$/;
+const SORT_RECEIVER_WINDOW = 200;
+const SORT_ASSIGNMENT_WINDOW = 300;
+const codeMatches = (code, re) => {
+  const spans = literalSpans(code);
+  return [...code.matchAll(re)].filter((m) => !insideSpan(spans, m.index));
+};
+// The one column the variable was last assigned before `at` (`var c = esq.addColumn("X")`, or a ternary that fetches
+// or adds the same column), else null.
+function columnOfVariable(code, name, at) {
+  const assigned = codeMatches(code.slice(0, at), new RegExp(String.raw`(?<![.\w$])${name}\s{0,5}=(?!=)`, "g")).at(-1);
+  if (!assigned) return null;
+  const from = assigned.index + assigned[0].length;
+  const rhs = code.slice(from, from + SORT_ASSIGNMENT_WINDOW).split(";")[0];
+  const names = [...new Set(codeMatches(rhs, SORTED_COLUMN).map((m) => m[1]))];
+  return names.length === 1 ? names[0] : null;
+}
+// The column one `orderDirection` assignment sorts, or null when its receiver names no single column.
+function sortedColumnAt(code, at) {
+  const r = SORT_RECEIVER.exec(code.slice(Math.max(0, at - SORT_RECEIVER_WINDOW), at));
+  if (!r) return null;
+  return r[1] || columnOfVariable(code, r[2], at);
+}
+function gridSortOf(text, spans) {
+  if (!text.includes("OrderDirection")) return null;
+  const cols = lastMemberCode(text, "addGridDataColumns", spans, { raw: true });
+  const sets = cols?.code ? codeMatches(cols.code, ORDER_DIRECTION_SET) : [];
+  const returned = sets.length ? null : ORDER_DIRECTION_RETURNED.exec(lastMemberCode(text, "getGridSortDirection", spans)?.code || "");
+  const direction = (sets[0] || returned)?.[1];
+  if (!direction) return null;
+  // two assignments on different columns, or one whose column is not read, name no single column
+  const columns = new Set(sets.map((m) => sortedColumnAt(cols.code, m.index)));
+  const column = columns.size === 1 ? [...columns][0] : null;
+  const options = lastMemberCode(text, "initDetailOptions", spans, { raw: true });
+  return { column, direction: direction.toLowerCase(), locked: codeMatches(options?.code || "", SORT_LOCKED).length > 0 };
+}
 // Every function of the feature scan, for the structural ReDoS golden.
 export const DETAIL_FEATURE_SCAN_FNS = [lastMemberCode, switchedOff, toolsMenuDeviations, multiSelectMode, changedAttributes,
-  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode];
+  filterKind, profileWindows, columnFilterCalls, guardedBlocks, classifyDetailFilters, scanDetailFeatures, fixedFilterSignal, memberSpans, diffSpans, matchingBracket, filterChainCode, gridSortOf, codeMatches, columnOfVariable, sortedColumnAt];
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
 // backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
@@ -2553,7 +2606,9 @@ export function detectAddMode(body, scan = {}) {
   const { fixedFilters, filterCols } = fixedFilterSignal(body, filters);
   const am = { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
     openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols,
-    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable };
+    rowActionsRemoved: rowScan.removed, rowActionsUnreadable: rowScan.unreadable,
+    // `editRecord` switched off: a click on a row opens nothing
+    rowsOpenNothing: switchedOff(body, "editRecord", spans) };
   return hasAddMechanism(am) || hasRowActionSignal(am) ? am : null;
 }
 
