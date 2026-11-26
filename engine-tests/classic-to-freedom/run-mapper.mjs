@@ -4,6 +4,7 @@ import { runConventionsChecks } from "./run-mapper-conventions.mjs";
 import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
+import { runVerifyFalseNegativeChecks, runCaptionKeyChecks } from "./run-mapper-verify-false-negatives.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -13370,6 +13371,7 @@ const n2TreeManifest = (titleA, titleB) => ({
       return run.changeSet.resources.GeneralInfoTabCaption === "General information"
         && run.changeSet.resourceCultures.GeneralInfoTabCaption["en-US"] === "General information" && row.includes("✅");
     });
+  runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, verifyCtx, coTextsManifest, FIX });
   // A folded child page and a mini page check their own texts in every culture, like the typed page.
   {
     const m = coTextsManifest();
@@ -15761,13 +15763,10 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
         businessRules: () => ({ count: 0, rules: [] }),
         reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
         dashboards: () => [],
-        // A folder of module bodies; an empty one answers "the pages import no module of the run".
-        modules: () => fs.mkdirSync(path.join(d, r.file), { recursive: true }),
       }[r.kind];
       check(`(seam): the read plan emits no kind the filler does not know — \`${r.kind}\` is one the composing half can answer`,
         () => typeof body === "function", () => ({ kind: r.kind, file: r.file }));
-      if (body && r.kind === "modules") body();
-      else if (body) asWrite(d, r.file, body());
+      if (body) asWrite(d, r.file, body());
     });
     const composed = assembleBuilt(d, readPlan(lpRun, checklistOpts(LP_MANIFEST)));
     check("`--reads` → fill every file it names → compose reports ZERO problems — the vocabulary the two modules share is pinned by a real index, not a hand-written one",
@@ -15875,45 +15874,40 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   }
 }
 {
-  // THE RUN'S CLIENT MODULES. The module checks read the bodies the read-back copies into `reads/modules/`; which
-  // modules exist is only known after the pages are read, so the plan names the folder, never a file per module.
+  // THE RUN'S CLIENT MODULES. The read-back copies each imported module's body into `reads/modules/`, beside the
+  // indexed reads: the folder needs no index entry, because the code rows name every import whose source is not filed.
   const plan = readPlan(lpRun, checklistOpts(LP_MANIFEST));
-  const modRead = plan.reads.filter((r) => r.kind === "modules");
-  check("read plan: ONE `modules` read naming the folder and how to fill it (get-page, copy body.js as <Module>.js)",
-    () => modRead.length === 1 && modRead[0].file === "reads/modules" && /body\.js/.test(modRead[0].what) && /<Module>\.js/.test(modRead[0].what),
-    () => modRead);
+  check("read plan: no indexed `modules` read — the module folder is filled as the read plan's prose says",
+    () => !plan.reads.some((r) => r.kind === "modules"), () => plan.reads.map((r) => r.kind));
   const compose = (files) => {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_mod_"));
     fs.mkdirSync(path.join(d, "reads"), { recursive: true });
-    fs.writeFileSync(path.join(d, "reads", "index.json"), JSON.stringify({ version: 1, reads: [{ kind: "modules", file: "reads/modules" }] }));
+    fs.writeFileSync(path.join(d, "reads", "index.json"), JSON.stringify({ version: 1, reads: [] }));
     if (files) {
       fs.mkdirSync(path.join(d, "reads", "modules"));
-      for (const [n, body] of Object.entries(files)) fs.writeFileSync(path.join(d, "reads", "modules", n), body);
+      for (const [n, body] of Object.entries(files)) {
+        if (body === null) fs.mkdirSync(path.join(d, "reads", "modules", n));
+        else fs.writeFileSync(path.join(d, "reads", "modules", n), body);
+      }
     }
     try { return assembleBuilt(d); } finally { fs.rmSync(d, { recursive: true, force: true }); }
   };
+  const modProblems = (r) => r.problems.filter((p) => /^reads\/modules/.test(p.file));
   const filled = compose({ "UsrApp_FormPageModule.js": "define(\"UsrApp_FormPageModule\", [], function() { return {}; });", "notes.txt": "x" });
   check("compose: every `<Module>.js` in the folder lands in `built.modules` as source text; a file named otherwise is a problem",
     () => Object.keys(filled.built.modules).join() === "UsrApp_FormPageModule" && /define/.test(filled.built.modules.UsrApp_FormPageModule)
-      && filled.problems.some((p) => /notes\.txt/.test(p.file)),
+      && modProblems(filled).some((p) => /notes\.txt/.test(p.file)),
     () => filled);
   const empty = compose({});
-  check("compose: an EMPTY folder means the pages import no module of the run — no problem, and `built.modules` is an empty map",
-    () => empty.problems.length === 0 && Object.keys(empty.built.modules).length === 0, () => empty);
-  const odd = (() => {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_mod_"));
-    fs.mkdirSync(path.join(d, "reads", "modules", "Folder.js"), { recursive: true });
-    fs.writeFileSync(path.join(d, "reads", "modules", "__proto__.js"), "x");
-    fs.writeFileSync(path.join(d, "reads", "index.json"), JSON.stringify({ version: 1, reads: [{ kind: "modules", file: "reads/modules" }] }));
-    try { return assembleBuilt(d); } finally { fs.rmSync(d, { recursive: true, force: true }); }
-  })();
+  check("compose: an EMPTY folder is no problem, and `built.modules` is an empty map",
+    () => modProblems(empty).length === 0 && Object.keys(empty.built.modules).length === 0, () => empty);
+  const odd = compose({ "Folder.js": null, "__proto__.js": "x" });
   check("compose: a folder named like a module and a prototype name are reported, never read or crashed on",
-    () => odd.problems.some((p) => /Folder\.js/.test(p.file) && /not a file/.test(p.why)) && odd.problems.some((p) => /__proto__/.test(p.file))
+    () => modProblems(odd).some((p) => /Folder\.js/.test(p.file) && /not a file/.test(p.why)) && modProblems(odd).some((p) => /__proto__/.test(p.file))
       && Object.keys(odd.built.modules).length === 0, () => odd);
   const missing = compose(null);
-  check("compose: a MISSING folder is a problem (not read), never read as 'no modules'",
-    () => missing.problems.some((p) => p.file === "reads/modules" && /not written/.test(p.why)) && !missing.built?.modules,
-    () => missing);
+  check("compose: a MISSING folder leaves `built.modules` absent — the code rows then name each import as not filed",
+    () => modProblems(missing).length === 0 && !missing.built?.modules, () => missing);
 }
 {
   // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what step 7.5
@@ -15941,8 +15935,7 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
         reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
         dashboards: () => [],
       }[r.kind];
-      if (r.kind === "modules") fs.mkdirSync(path.join(d, r.file), { recursive: true });
-      else if (body) asWrite(d, r.file, body());
+      if (body) asWrite(d, r.file, body());
     });
     const before = fs.existsSync(tasks) ? fs.readdirSync(tasks).length : 0;
     const run = runMigrate([mf, "--verify", "--from", d, "--tasks", tasks], { encoding: "utf8" });
@@ -16726,6 +16719,9 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       && lineDrifts(multi, [at("Card action — Run report", false)]).length === 1
       && itemsOf("| — | — | **Won't do** — none |").length === 0);
 }
+
+runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, checklistOpts, checklistGroups, renderVerify, resolveVk, resolveRuleVk,
+  verifyCtx, parseDecisionRecords, verifyManifest, DIR });
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

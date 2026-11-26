@@ -14,10 +14,13 @@
 // A literal `null` is none of the three and is a problem of its own (see `readJson`).
 import fs from "node:fs";
 import path from "node:path";
-import { READS_DIR, READS_INDEX_FILE, moduleNameOf } from "./reads.mjs";
+import { READS_DIR, READS_INDEX_FILE, MODULES_DIR, moduleNameOf } from "./reads.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
+// The client modules the built pages import: `get-page` of a module writes its source to
+// `.clio-pages/<Module>/body.js`, copied whole into `reads/modules/` as `<Module>.js`. The code rows ask for each module
+// a page imports and name the ones not filed, so the folder needs no index of its own.
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
 // together or not at all.
 export const VERIFY_FILE = "verify.md";
@@ -221,8 +224,6 @@ function noteDenial(acc, r) {
 }
 
 function composeOneRead(dir, r, acc) {
-  // A folder of module bodies, not one JSON file: composed on its own, before any JSON is read.
-  if (r.kind === "modules") { composeModules(dir, r, acc); return; }
   const compose = COMPOSE[r.kind], label = READ_LABEL[r.kind];
   // An unknown kind is drift between the read plan and this half. Report it; never return silently.
   if (!compose || !label) {
@@ -246,27 +247,6 @@ function composeOneRead(dir, r, acc) {
   }
   if (j === false && PAGE_KINDS.has(r.kind)) { noteDenial(acc, r); return; }
   compose(r, j, acc);
-}
-
-// THE RUN'S CLIENT MODULES: every `<Module>.js` in the folder, as source text under `built.modules`. The bodies are
-// read, never run. A missing folder is "not read", and the module checks then say they did not run; an empty one is
-// "the pages import no module of the run".
-function composeModules(dir, r, acc) {
-  const full = resolvedReadPath(dir, r.file);
-  if (!full) { acc.problems.push({ file: r.file, what: "the run's client modules", why: `resolves outside \`${READS_DIR}/\` — re-run \`--reads <dir>\`` }); return; }
-  if (!fs.existsSync(full) || !fs.statSync(full).isDirectory()) {
-    acc.problems.push({ file: r.file, what: "the run's client modules", why: "not written — create the folder (empty when no page imports a module of the run) and copy each module's `body.js` into it" });
-    return;
-  }
-  const modules = Object.create(null);
-  for (const entry of fs.readdirSync(full, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const name = moduleNameOf(entry.name);
-    const problem = !entry.isFile() ? "is not a file — copy each module's `body.js` in as one `<Module>.js` file"
-      : (!name && "is not named `<Module>.js` — name it after the module's schema");
-    if (problem) { acc.problems.push({ file: path.posix.join(r.file, entry.name), what: "a client module file", why: problem }); continue; }
-    modules[name] = fs.readFileSync(path.join(full, entry.name), "utf8");
-  }
-  acc.modules = modules;
 }
 
 // A denied page survives the drop sweep, but only when BOTH its page files answered `false`. Two ways they do
@@ -329,7 +309,7 @@ function namePageShapeProblem(acc, k, noView, noUid) {
 function newAccumulator(problems) {
   const pages = Object.create(null);
   return {
-    problems, pages, reachability: Object.create(null), dashboards: null, modules: null,
+    problems, pages, reachability: Object.create(null), dashboards: null,
     absent: new Map(),   // page key -> the page files that answered `false`; a full pair is genuinely not built
     // Recorded as the files are read, NOT derived from `pages` afterwards: the drop sweep removes a page whose
     // other file never arrived, so by then a contradiction is indistinguishable from a half-read entry.
@@ -377,6 +357,24 @@ function mergeSideFiles(dir, built, acc, problems) {
   }
   const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
   for (const key of ["processSteps", "processStandCheck"]) if (proc?.[key] != null) built[key] = proc[key];
+  const modules = readModuleSources(dir, problems);
+  if (modules) built.modules = modules;
+}
+
+// `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. An entry that is not a
+// `<Module>.js` file is reported, never read: the module it should hold then reads as not filed.
+function readModuleSources(dir, problems) {
+  const root = path.join(dir, READS_DIR, MODULES_DIR);
+  if (!fs.existsSync(root)) return null;
+  const modules = Object.create(null);
+  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const name = moduleNameOf(entry.name);
+    const problem = !entry.isFile() ? "is not a file — copy each module's `body.js` in as one `<Module>.js` file"
+      : (!name && "is not named `<Module>.js` — name it after the module's schema");
+    if (problem) { problems.push({ file: path.posix.join(READS_DIR, MODULES_DIR, entry.name), what: "a client module file", why: problem }); continue; }
+    modules[name] = fs.readFileSync(path.join(root, entry.name), "utf8");
+  }
+  return modules;
 }
 
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload
@@ -436,7 +434,6 @@ export function assembleBuilt(dir, expect = null) {
   resolveDenials(acc, pages);
   const built = { pages, reachability: acc.reachability };
   if (acc.dashboards) built.dashboards = acc.dashboards;
-  if (acc.modules) built.modules = acc.modules;
   // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
   // costs is already visible — every evidence row names the id nothing was filed under.
   mergeSideFiles(dir, built, acc, problems);

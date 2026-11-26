@@ -161,7 +161,7 @@ export function runModuleFindings(root, pageKey, modules, thresholds = DEFAULT_Q
   // or through those modules. Two unrelated modules elsewhere in the folder are not this page's to fix.
   const reach = wholeRun ? null : importClosure(root, modules);
   const out = [];
-  const run = lintRunQuality(pages, thresholds, new Set(), modules, wholeRun);
+  const run = lintRunQuality(pages, thresholds, new Set(), modules, new Set(), wholeRun);
   for (const key of new Set([...run.keys(), ...run.modules.keys()])) out.push(...pageModuleFindings(key, run.get(key), runModuleLint(run, key), reach));
   return { modules: Object.keys(modules).length, findings: out, wholeRun };
 }

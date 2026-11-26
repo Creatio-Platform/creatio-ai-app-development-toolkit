@@ -17,9 +17,9 @@ export { RENAME_ATTEMPTS, isRenameLockError } from "./fsatomic.mjs";
 export const READS_DIR = "reads";
 export const READS_INDEX_FILE = "index.json";
 export const READS_INDEX_VERSION = 1;
-// The folder the run's client-module bodies are copied into, one `<ModuleName>.js` each (see the `modules` read).
-export const MODULES_DIR = path.posix.join(READS_DIR, "modules");
-// The module a file in that folder holds: `<Module>.js` (or a bare `<Module>` folder name) with an identifier name.
+// The client modules the built pages import, one `<Module>.js` each (see assemble.mjs).
+export const MODULES_DIR = "modules";
+// The module a file in `reads/modules/` holds: `<Module>.js` (or a bare `<Module>` folder name) with an identifier name.
 // One rule for the read-back and the code map, so both see the same module set. Prototype names are never a module.
 const MODULE_FILE = /^([A-Za-z_$][\w$]*)(?:\.js)?$/;
 const UNSAFE_MODULE_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -127,13 +127,6 @@ export function readPlan(result, opts = {}) {
     if (ruleKeys.has(key)) add("businessRules", slugKey(key), { pageKey: key,
       what: `clio's page-business-rules read for ${pageKeyDescription(key)} — the persisted \`BusinessRule_*\` schemas (\`{ count, rules }\`), never a page-body grep` });
   }
-  // ONE read for the run's client modules, not one per module: which modules exist is only known once the pages are
-  // read (their `deps`), so the read names the folder and the rule, and the composing half takes every file in it.
-  if (pageKeys.length) reads.push({ kind: "modules", file: MODULES_DIR,
-    what: "every client module a built page or one of these modules imports from the run's packages (not"
-      + " `@creatio-devkit/*`, not `css!…`): `get-page` it, then copy `.clio-pages/<Module>/body.js` here whole as"
-      + " `<Module>.js`. A run whose pages import no module of their own leaves the folder empty — create it anyway,"
-      + " so an empty folder says \"none\" and a missing one says \"not read\"" });
   // A run that moves NO dashboard emits no read: the rows resolve on their own, and a read for an empty
   // expectation is a file somebody has to answer with nothing.
   if (dashboards.length) add("dashboards", "migration-log", {
@@ -272,9 +265,9 @@ export function writeReadIndex(dir, plan) {
 // The filename stem per kind — short, and distinct from the kind token so a folder listing reads as files
 // rather than as a schema.
 const FILE_STEM = { pageMeta: "meta", pageBundle: "bundle", businessRules: "rules", reachability: "reachability",
-  dashboards: "dashboards", modules: "modules" };
+  dashboards: "dashboards" };
 const KIND_TITLE = { pageMeta: "Pages — metadata", pageBundle: "Pages — merged bundle",
-  businessRules: "Business rules", reachability: "Reachability", dashboards: "Dashboards", modules: "Client modules" };
+  businessRules: "Business rules", reachability: "Reachability", dashboards: "Dashboards" };
 // The agent-facing artifact. It names one file per read and says the response goes in VERBATIM, because the
 // whole point is that nothing between the stand and `built.json` is retyped: the agent copies bytes, the engine
 // composes the JSON.
@@ -284,7 +277,7 @@ export function renderReadPlan(plan, dir) {
     + " Copy the WHOLE response — do not slice it, do not re-key it, do not compose any JSON yourself."
     + ` The engine composes \`built.json\` from these files and reads \`${path.posix.join(READS_DIR, READS_INDEX_FILE)}\` to find them,`
     + " so a file written under a name of your own is a file it cannot see.", ""];
-  for (const kind of ["pageMeta", "pageBundle", "businessRules", "reachability", "dashboards", "modules"]) {
+  for (const kind of ["pageMeta", "pageBundle", "businessRules", "reachability", "dashboards"]) {
     const rows = plan.reads.filter((r) => r.kind === kind);
     if (!rows.length) continue;
     L.push(`**${KIND_TITLE[kind]}**`, "", "| # | Key | Read | Write the response to |", "| --- | --- | --- | --- |");
@@ -298,7 +291,12 @@ export function renderReadPlan(plan, dir) {
     + " no such schema, write the literal `false` into **both** of that page's files — the metadata slot AND the"
     + " bundle slot. That reports the page ❌ MISSING and opens a repair. Leaving them unwritten instead says \"I"
     + " could not ask\", which is a re-read and never closes; writing `false` into only one of the two is read as a"
-    + " copy error, because one `get-page` call cannot answer both ways.");
+    + " copy error, because one `get-page` call cannot answer both ways.",
+  "", `**Then the client modules the built pages import.** For each project module in a page bundle's \`deps\` (and in`
+    + " those modules' own `define` lists; not a platform module, whose name holds `@`, `!` or `/`, and not the"
+    + ` project's declared helper or constants modules), \`get-page\` the module and copy its \`.clio-pages/<Module>/body.js\` whole to`
+    + ` \`${path.posix.join(READS_DIR, MODULES_DIR)}/<Module>.js\`. The page's code is held to the same rules there, and the`
+    + " `Page code` and `Code quality` rows name every module whose source is missing.");
 
   // Named, not dropped: these keys gate rows like any other, and a reader who sees only the read list would take
   // the rows that depend on them for rows nobody owes anything on.

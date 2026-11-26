@@ -12,6 +12,10 @@
 //
 // Everything is read from get-page's bundle as the read-back filed it (`handlers`, `validators`, `converters` are
 // SOURCE strings; `viewConfig`, `viewModelConfig`, `modelConfig`, `resources` are JSON). Nothing is evaluated.
+//
+// A page's logic lives in the client modules it imports (`<Prefix><Page>Module`, shared ones beside it), so the rules
+// that hold outside a page section run over those too: the read-back files each module's source (`built.modules`),
+// and a page carries the findings of every module it imports, directly or through another module.
 import { parseJsExpression, parseDefineModule, staticPropKey, childNodesOf, isFnNode, walkAstBounded } from "./engine.mjs";
 import { GUID_RE, bundleDeps } from "./conventions.mjs";
 
@@ -241,7 +245,7 @@ function lintHandler(handler, { page, t }) {
       `${helpers.length} functions in one handler (limit ${t.maxNestedFunctionsPerHandler}): ${helpers.map((h) => h.name).join(", ")}`,
       { value: helpers.length, limit: t.maxNestedFunctionsPerHandler }));
   }
-  checkSequentialAwaits(handler.body, page, t);
+  checkSequentialAwaits(handler.body, page, t, "handlers");
 }
 
 // Named functions only (`function name() {}`, `const name = () => {}`): an inline callback is not a helper.
@@ -341,13 +345,13 @@ function referencedNames(node, out = new Set(), depth = 0) {
 // Within each block: the awaited model loads (`await x.load(…)`, `await sdk.Model.create(…)`) that use no earlier
 // load's result, followed through the variables assigned from it. A nested function is its own sequence: its body is
 // checked on its own (each block keeps its own count).
-function checkSequentialAwaits(node, page, t, depth = 0) {
+function checkSequentialAwaits(node, page, t, section, depth = 0) {
   if (!node || depth > 1000) return;
-  if (node.type === "BlockStatement") checkBlockAwaits(node, page, t);
-  for (const child of childNodes(node)) checkSequentialAwaits(isFunction(child) ? child.body : child, page, t, depth + 1);
+  if (node.type === "BlockStatement") checkBlockAwaits(node, page, t, section);
+  for (const child of childNodes(node)) checkSequentialAwaits(isFunction(child) ? child.body : child, page, t, section, depth + 1);
 }
 
-function checkBlockAwaits(block, page, t) {
+function checkBlockAwaits(block, page, t, section) {
   const fromLoads = new Set();
   let independent = 0;
   let first = null;
@@ -359,7 +363,7 @@ function checkBlockAwaits(block, page, t) {
     if (isLoad || usesLoad) statementBindings(statement).forEach((n) => fromLoads.add(n));
   }
   if (independent <= t.maxSequentialIndependentAwaits) return;
-  page.findings.push(finding(QUALITY_RULES.sequentialAwaits, "handlers", lineOf(first),
+  page.findings.push(finding(QUALITY_RULES.sequentialAwaits, section, lineOf(first),
     `${independent} independent model loads awaited one after another (limit ${t.maxSequentialIndependentAwaits})`,
     { value: independent, limit: t.maxSequentialIndependentAwaits }));
 }
@@ -395,6 +399,64 @@ function statementBindings(statement) {
   return [];
 }
 
+// ---- client modules ----
+
+// A module the platform ships (`@creatio-devkit/common`, `css!...`, a path) is not the project's code.
+const isPlatformModule = (name) => /[@!/]/.test(name);
+export const moduleSection = (name) => `module ${name}`;
+
+// Lint one client module (`define("Name", [deps], function (...) { ... })`) with the rules that hold outside a page
+// section: function length, log-only catch blocks, bare numeric comparison types, sequential independent loads, record
+// ids a constants module holds, plan codes in comments. The factory is the module itself, so it is not measured as one
+// function. `deps` are the modules it imports in turn.
+export function lintModuleQuality(name, src, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set()) {
+  const section = moduleSection(name);
+  const comments = [];
+  const mod = parseDefineModule(src, { locations: true, onComment: comments });
+  const page = { findings: [], helpers: [], unreadable: [], deps: mod.deps || [] };
+  if (mod.error) { page.unreadable.push(section); return page; }
+  const ctx = { page, t: thresholds, constantsGuids, fnNames: new WeakMap() };
+  walkSection(mod.factory.body, section, false, ctx);
+  checkSequentialAwaits(mod.factory.body, page, thresholds, section);
+  for (const c of comments) checkComment(c, section, page);
+  for (const f of page.findings) f.module = name;
+  return page;
+}
+
+// The project modules a page imports, directly or through a module it imports, in import order: `read` when the
+// payload carries the module's source, `unread` when it does not. Platform modules and `external` ones (the project's
+// declared helper and constants modules: existing code the run did not write) are not followed.
+function importedModulesOf(deps, modules, external, depsOf) {
+  const read = [], unread = [], seen = new Set();
+  const queue = [...(deps || [])];
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name) || isPlatformModule(name) || external.has(name)) continue;
+    seen.add(name);
+    if (typeof modules[name] === "string") { read.push(name); queue.push(...depsOf(name)); }
+    else unread.push(name);
+  }
+  return { read, unread };
+}
+
+// The run's modules linted once each, and each page given the findings of the modules it imports.
+function addModuleFindings(byPage, pages, modules, external, thresholds, constantsGuids) {
+  const linted = new Map();
+  const lintOf = (name) => {
+    if (!linted.has(name)) linted.set(name, lintModuleQuality(name, modules[name], thresholds, constantsGuids));
+    return linted.get(name);
+  };
+  for (const [key, page] of byPage) {
+    if (!page) continue;
+    const { read, unread } = importedModulesOf(bundleDeps(pages[key]), modules, external, (name) => lintOf(name).deps);
+    for (const name of read) page.findings.push(...lintOf(name).findings);
+    page.modules = read;
+    page.unreadModules = unread;
+    // A filed module that does not parse was not measured, and the modules it imports are not known.
+    page.unparsedModules = read.filter((name) => lintOf(name).unreadable.length);
+  }
+}
+
 // ---- strings and resources ----
 
 // The page's resource strings, from get-page's `{ strings: {…} }` or a flat map; null when the bundle has none.
@@ -427,19 +489,22 @@ function groupBy(items, keyOf) {
 }
 
 // Every built page of the run linted once, then the check that needs more than one page: a helper copied from another
-// page. `pages` is `{ pageKey: bundle entry }`.
+// page. `pages` is `{ pageKey: bundle entry }`; `modules` is `{ moduleName: source }`, the client modules the read-back
+// filed (null: none were read); `external` names the modules not followed (see `importedModulesOf`): the team's
+// declared helper and constants modules.
 // `wholeRun` says `pages` are ALL the run's pages (the verify payload): only then is an export nobody uses known to be
 // unused — one page alone cannot see what the others import. Even then only a run page's own `<PageSchema>Module` is
-// judged; `projectModules` (the team's declared helper and constants modules, `projectConventions`) never are.
-export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, wholeRun = true, projectModules = new Set()) {
+// judged, never an external one.
+export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, external = new Set(), wholeRun = true) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
+  addModuleFindings(byPage, pages || {}, modules || {}, external, thresholds, constantsGuids);
   const helperOwners = new Map();
   for (const [key, page] of byPage) {
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
   for (const [key, page] of byPage) if (page) reportCopiesFromOtherPages(key, page, helperOwners);
-  lintRunModules(byPage, pages || {}, modules, wholeRun, projectModules);
+  lintRunModules(byPage, pages || {}, modules, wholeRun, external);
   return byPage;
 }
 
@@ -455,17 +520,20 @@ function reportCopiesFromOtherPages(key, page, helperOwners) {
 
 // The run's findings, built once per `--built` root: the verify rows of every page read the same result.
 const RUN_CACHE = new WeakMap();
-// The key of one thresholds + constants-module combination, built once per set of rows (see `codeQualityRows`).
-export const qualityRunKey = (thresholds, constantsGuids, projectModules = []) =>
-  JSON.stringify(thresholds) + "|" + [...(constantsGuids || [])].sort((a, b) => a.localeCompare(b)).join()
-  + "|" + [...projectModules].sort((a, b) => a.localeCompare(b)).join();
-export function runQualityOf(root, thresholds, constantsGuids, cacheKey = qualityRunKey(thresholds, constantsGuids), projectModules = []) {
+// The key of one thresholds + constants-module + external-module combination, built once per set of rows (see
+// `codeQualityRows`).
+const sortedList = (xs) => [...(xs || [])].sort((a, b) => a.localeCompare(b)).join();
+export const qualityRunKey = (thresholds, constantsGuids, externalModules = []) =>
+  JSON.stringify(thresholds) + "|" + sortedList(constantsGuids) + "|" + sortedList(externalModules);
+export function runQualityOf(root, thresholds, constantsGuids, externalModules = [], cacheKey = qualityRunKey(thresholds, constantsGuids, externalModules)) {
   const wholeRun = Boolean(root?.pages && typeof root.pages === "object");
   const pages = wholeRun ? root.pages : { main: root };
+  const modules = root?.modules && typeof root.modules === "object" ? root.modules : null;
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
-  const modules = root?.modules && typeof root.modules === "object" ? root.modules : null;
-  if (!perRoot.has(cacheKey)) perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, wholeRun, new Set(projectModules)));
+  if (!perRoot.has(cacheKey)) {
+    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules), wholeRun));
+  }
   return perRoot.get(cacheKey);
 }
 
@@ -499,7 +567,7 @@ export function runModuleLint(run, pageKey) {
   return run?.modules?.get(pageKey) || { findings: [], unreadable: [] };
 }
 
-function lintRunModules(byPage, pages, modules, wholeRun, projectModules = new Set()) {
+function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) {
   const keys = Object.keys(pages);
   const bindings = new Map(keys.map((k) => [k, pageBindings(pages[k])]));
   reportPagesWithoutModule(byPage, pages);
@@ -521,7 +589,7 @@ function lintRunModules(byPage, pages, modules, wholeRun, projectModules = new S
   // Only a run page's own `<PageSchema>Module`: any other module (a shared one, a declared project module) can serve
   // pages outside the run, whose imports nothing here sees.
   const pageModules = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
-  if (wholeRun) reportUnusedExports(read.filter((m) => pageModules.has(m.name) && !projectModules.has(m.name)), importers, report);
+  if (wholeRun) reportUnusedExports(read.filter((m) => pageModules.has(m.name) && !external.has(m.name)), importers, report);
   reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
 }
 

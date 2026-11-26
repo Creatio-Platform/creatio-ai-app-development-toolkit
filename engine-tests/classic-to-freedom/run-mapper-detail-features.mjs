@@ -139,6 +139,42 @@ const VENDOR_LAYER = `define("LayeredDetail",[],function(){return{entitySchemaNa
 const CUSTOMER_LAYER = `define("LayeredDetail",[],function(){return{methods:{getFilters:function(){var f=this.callParent(arguments);
     f.addItem(this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.Service));return f;}}};});`;
 // Row actions taken away: the list must declare its own row toolbar.
+// A read-only payments list: no add, no row actions, rows open nothing, newest payment first and the user cannot
+// re-sort.
+const PAYMENTS_BODY = `define("PaymentDetail",[],function(){return{entitySchemaName:"Payment",
+  methods:{getAddRecordButtonVisible:function(){return false;},
+    getEditRecordMenuItem:Terrasoft.emptyFn,getCopyRecordMenuItem:Terrasoft.emptyFn,getDeleteRecordMenuItem:Terrasoft.emptyFn,
+    editRecord:Terrasoft.emptyFn,
+    initDetailOptions:function(){this.callParent(arguments);this.set("IsSortable",false);},
+    getGridSortDirection:function(){return Terrasoft.OrderDirection.DESC;},
+    addGridDataColumns:function(esq){this.callParent(arguments);
+      const column=esq.columns.contains("PayDate")?esq.columns.get("PayDate"):esq.addColumn("PayDate");
+      column.orderPosition=0;column.orderDirection=Terrasoft.OrderDirection.DESC;}},
+  diff:[]};});`;
+// Rows that open nothing and nothing else changed; the same with Edit removed; the same beside an override the scan
+// cannot read.
+const OPEN_ONLY_BODY = `define("ViewOnlyDetail",[],function(){return{entitySchemaName:"Line",methods:{editRecord:Terrasoft.emptyFn}};});`;
+const EDIT_AND_OPEN_BODY = `define("NoEditDetail",[],function(){return{entitySchemaName:"Line",methods:{getEditRecordMenuItem:Terrasoft.emptyFn,editRecord:Terrasoft.emptyFn}};});`;
+const UNREAD_AND_OPEN_BODY = `define("OddDetail",[],function(){return{entitySchemaName:"Line",methods:{editRecord:Terrasoft.emptyFn,
+  addRecordOperationsMenuItems:function(m){this.callParent(arguments);m.removeByKey("x");}}};});`;
+// An order with no column: only the direction is overridden. An order set on two columns: the column is not one.
+// Several columns added and one of them ordered, through a variable: that column. An order and a re-sort lock that are
+// only commented out: the default order, no lock.
+const DIRECTION_ONLY_BODY = `define("AscDetail",[],function(){return{entitySchemaName:"Line",methods:{getGridSortDirection:function(){return Terrasoft.OrderDirection.ASC;}}};});`;
+const TWO_COLUMNS_BODY = `define("TwoColDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
+  esq.addColumn("A").orderDirection=Terrasoft.OrderDirection.DESC;esq.addColumn("B").orderDirection=Terrasoft.OrderDirection.DESC;}}};});`;
+const ONE_OF_MANY_BODY = `define("ManyColDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
+  esq.addColumn("Status");var c=esq.addColumn("CreatedOn");esq.addColumn("Amount");c.orderDirection=Terrasoft.OrderDirection.DESC;}}};});`;
+const CHAINED_ONE_OF_MANY_BODY = `define("ChainDetail",[],function(){return{entitySchemaName:"Line",methods:{addGridDataColumns:function(esq){this.callParent(arguments);
+  esq.addColumn("Status");esq.addColumn("DueDate").orderDirection=Terrasoft.OrderDirection.ASC;}}};});`;
+const COMMENTED_SORT_BODY = `define("CommentDetail",[],function(){return{entitySchemaName:"Line",methods:{
+  initDetailOptions:function(){this.callParent(arguments);/* this.set("IsSortable",false); */},
+  addGridDataColumns:function(esq){this.callParent(arguments);/* column.orderDirection = Terrasoft.OrderDirection.DESC; */
+    // esq.addColumn("X").orderDirection = Terrasoft.OrderDirection.ASC;
+    esq.addColumn("PayDate");}}};});`;
+const COMMENTED_LOCK_BODY = `define("LockCommentDetail",[],function(){return{entitySchemaName:"Line",methods:{
+  initDetailOptions:function(){this.callParent(arguments);// this.set("IsSortable", false);
+  },getGridSortDirection:function(){return Terrasoft.OrderDirection.DESC;}}};});`;
 const NO_COPY_BODY = `define("NoCopyDetail",[],function(){return{entitySchemaName:"Line",methods:{getCopyRecordMenuItem:Terrasoft.emptyFn}};});`;
 // Summaries present but switched off.
 const SUMMARY_OFF_BODY = `define("SumOffDetail",["SummaryModuleV2"],function(){return{entitySchemaName:"Line",methods:{getSummaryVisible:function(){return false;}}};});`;
@@ -249,9 +285,17 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
     () => dq.length === 1 && dq[0].attribute === "OnDate" && dq[0].kind === "date" && dq[0].columns.join(",") === "EndDate,StartDate" && dq[0].persisted === false,
     () => dq);
   check("detail features: only the filter Classic kept in the profile raises `detail-filter-persistence`",
-    () => toggle.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence" && /IsActiveOnly/.test(n.item) && /resets on every visit/.test(n.reason))
+    () => toggle.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence" && /IsActiveOnly/.test(n.item))
       && !date.changeSet.needsDecision.some((n) => n.kind === "detail-filter-persistence"),
     () => toggle.changeSet.needsDecision.filter((n) => n.kind === "detail-filter-persistence"));
+  const persistence = toggle.changeSet.needsDecision.find((n) => n.kind === "detail-filter-persistence");
+  check("detail features: the persistence question states that `crt.QuickFilter` keeps its value per user, and recommends keeping it (the platform default)",
+    () => !!persistence
+      && /`crt\.QuickFilter` does the same: the platform saves its value per user/.test(persistence.reason)
+      && /Recommended: keep \(platform default\) — nothing to build/.test(persistence.reason)
+      && /"reset on every visit" needs code/.test(persistence.reason) && !/No guidance confirms/.test(persistence.reason)
+      && features(toggle).some((l) => /kept in the user's profile, as `crt\.QuickFilter` keeps it by default/.test(l)),
+    () => persistence);
 
   // AC 3 — summaries are a decision, unless a user directive already asked for them.
   const sum = run("SumDetail", "Line", SUMMARY_BODY);
@@ -476,6 +520,100 @@ export function runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_
       && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "D", values: { rowToolbarItems: [] } }]))[0] === "✅ Done"
       && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "OtherGrid", rowToolbarItems: [] }]))[0] !== "✅ Done",
     () => tbRow);
+  check("detail features: a list that only removes Copy keeps Open and Delete — a toolbar that still offers Copy fails, one without it passes",
+    () => tbRow.vk.lists?.[0]?.drop.join(",") === "crt.CopyRecordRequest" && tbRow.vk.lists[0].noToolbar === false
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.CopyRecordRequest" } }] }]))[0] === "❌ MISSING"
+      && resolveVk(tbRow.vk, builtPage([{ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.UpdateRecordRequest" } }] }]))[0] === "✅ Done",
+    () => tbRow);
+
+  // A detail's row settings — row actions, row links, sort — are plan rows and verify rows.
+  const payments = run("PaymentDetail", "Payment", PAYMENTS_BODY);
+  const payDetail = detailOf(payments, "PaymentDetail");
+  check("detail features: the scan reads a list whose rows open nothing and its Classic order (column, direction, re-sort locked)",
+    () => payDetail.addMode?.rowsOpenNothing === true && payDetail.features.sort?.column === "PayDate"
+      && payDetail.features.sort.direction === "desc" && payDetail.features.sort.locked === true
+      && !detailOf(toggle, "LimitDetail").addMode?.rowsOpenNothing && detailOf(toggle, "LimitDetail").features.sort === null,
+    () => payDetail.features);
+  const payRows = payments.plan.split("\n").filter((l) => /^\| PaymentDetail \| (Row actions|Row links|Sort) \|/.test(l));
+  check("detail features: the plan carries Row actions, Row links and Sort rows that say what to set on the Freedom list",
+    () => payRows.some((l) => /Row actions/.test(l) && /Open, Copy, Delete not offered on a row/.test(l) && /`rowToolbarItems: \[\]` and `features\.rows\.toolbar: false`/.test(l))
+      && payRows.some((l) => /Row links/.test(l) && /`features\.cells\.disableLinks: true`/.test(l))
+      && payRows.some((l) => /\| Sort \|/.test(l) && /`PayDate` descending; the user cannot re-sort/.test(l) && /sortingConfig\.default/.test(l) && /columnName: "PayDate", direction: "desc"/.test(l)),
+    () => payRows);
+  const payDecision = payments.changeSet.needsDecision.find((n) => n.kind === "detail-row-actions");
+  check("detail features: for a list whose rows open nothing, the row-action decision and the Layout note say links off and no Open — never open-on-click",
+    () => /disableLinks: true` and offer no Open row action/.test(payDecision?.reason || "") && !/open-on-click|still open on click/.test(payDecision.reason)
+      && payments.plan.split("\n").some((l) => /no row Open\/Copy\/Delete \(rows open nothing — links off\)/.test(l))
+      && !payments.plan.split("\n").some((l) => /PaymentDetail|Payment/.test(l) && /keep open-on-click/.test(l)),
+    () => ({ payDecision, notes: payments.plan.split("\n").filter((l) => /no row /.test(l)) }));
+  const payChecks = checklistGroups(payments, {}).flatMap((g) => g.rows);
+  const byType = (t) => payChecks.find((r) => r.vk?.type === t);
+  const sortAttrs = (dir) => ({ DList: { modelConfig: { path: "DListDS", sortingConfig: { default: [{ columnName: "PayDate", direction: dir }] } } } });
+  const builtWith = (grid, attributes) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", viewConfig: { items: [grid] },
+    ...(attributes ? { viewModelConfig: { attributes } } : {}) } } }, "main");
+  // the grid a builder starts from: no row actions declared as empty, no row settings, no sort
+  const standard = { type: "crt.DataGrid", name: "DList", items: "$DList", rowToolbarItems: [] };
+  const kept = { ...standard, features: { rows: { toolbar: false }, cells: { disableLinks: true } } };
+  check("detail features: --verify fails a read-only list built from the standard grid — a row toolbar still shown, row links on, the default order",
+    () => resolveVk(byType("rowtoolbar").vk, builtWith(standard))[0] === "❌ MISSING"
+      && resolveVk(byType("rowlinks").vk, builtWith(standard))[0] === "❌ MISSING"
+      && resolveVk(byType("listsort").vk, builtWith(standard, { DList: { modelConfig: { path: "DListDS" } } }))[0] === "❌ MISSING"
+      && resolveVk(byType("listsort").vk, builtWith(standard, sortAttrs("asc")))[0] === "❌ MISSING",
+    () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
+  check("detail features: --verify passes the list built with no row toolbar, links off and Classic's order",
+    () => resolveVk(byType("rowtoolbar").vk, builtWith(kept))[0] === "✅ Done"
+      && resolveVk(byType("rowlinks").vk, builtWith(kept))[0] === "✅ Done"
+      && resolveVk(byType("listsort").vk, builtWith(kept, sortAttrs("desc")))[0] === "✅ Done"
+      && resolveVk(byType("listsort").vk, builtWith(kept))[0] === "⚠ verify"
+      && byType("listsort").label.endsWith("keep Classic's row order in `sortingConfig.default`: `D` (PayDate desc)"),
+    () => payChecks.filter((r) => /rowtoolbar|rowlinks|listsort/.test(r.vk?.type || "")));
+  const decisionOf = (r) => r.changeSet.needsDecision.find((n) => n.kind === "detail-row-actions");
+  const settingRows = (r, schema) => r.plan.split("\n").filter((l) => new RegExp(String.raw`^\| ${schema} \| (Row actions|Row links|Sort) \|`).test(l));
+  const openOnly = run("ViewOnlyDetail", "Line", OPEN_ONLY_BODY);
+  const openOnlyTb = checklistGroups(openOnly, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "rowtoolbar");
+  check("detail features: a detail whose only change is rows that open nothing raises the row-action decision, a Row actions row without Open, a Row links row, and drops only Open in --verify",
+    () => /opens nothing on a row click in Classic/.test(decisionOf(openOnly)?.reason || "") && /disableLinks: true` and offer no Open row action/.test(decisionOf(openOnly).reason)
+      && settingRows(openOnly, "ViewOnlyDetail").some((l) => /Row actions/.test(l) && /`rowToolbarItems` without Open/.test(l))
+      && settingRows(openOnly, "ViewOnlyDetail").some((l) => /Row links/.test(l))
+      && openOnlyTb?.vk.lists[0].drop.join(",") === "crt.UpdateRecordRequest" && openOnlyTb.vk.lists[0].noToolbar === false
+      && resolveVk(openOnlyTb.vk, builtWith({ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.UpdateRecordRequest" } }] }))[0] === "❌ MISSING"
+      && resolveVk(openOnlyTb.vk, builtWith({ type: "crt.DataGrid", name: "DList", rowToolbarItems: [{ type: "crt.MenuItem", clicked: { request: "crt.CopyRecordRequest" } }, { type: "crt.MenuItem", clicked: { request: "crt.DeleteRecordRequest" } }] }))[0] === "✅ Done",
+    () => ({ decision: decisionOf(openOnly), rows: settingRows(openOnly, "ViewOnlyDetail"), vk: openOnlyTb?.vk }));
+  const editAndOpen = decisionOf(run("NoEditDetail", "Line", EDIT_AND_OPEN_BODY));
+  check("detail features: with Edit removed and rows that open nothing, the decision drops Open — it never says there is nothing to remove",
+    () => /WITHOUT the Open row action, and set `features\.cells\.disableLinks: true`/.test(editAndOpen?.reason || "")
+      && !/Nothing to remove/.test(editAndOpen.reason) && !/still open on click/.test(editAndOpen.reason),
+    () => editAndOpen);
+  const unreadAndOpen = decisionOf(run("OddDetail", "Line", UNREAD_AND_OPEN_BODY));
+  check("detail features: an unreadable row-action override beside rows that open nothing reads 'It also overrides', and the links-off clause appears once",
+    () => /It also overrides `addRecordOperationsMenuItems`/.test(unreadAndOpen?.reason || "") && !/\. overrides /.test(unreadAndOpen.reason)
+      && (unreadAndOpen.reason.match(/disableLinks: true/g) || []).length === 1 && !/open-on-click/.test(unreadAndOpen.reason),
+    () => unreadAndOpen);
+  const asc = run("AscDetail", "Line", DIRECTION_ONLY_BODY);
+  const ascSort = checklistGroups(asc, {}).flatMap((g) => g.rows).find((r) => r.vk?.type === "listsort");
+  check("detail features: a sort with only a direction reads no column, its row says to read the column, and --verify never closes it",
+    () => JSON.stringify(detailOf(asc, "AscDetail").features.sort) === JSON.stringify({ column: null, direction: "asc", locked: false })
+      && settingRows(asc, "AscDetail").some((l) => /column not read, ascending/.test(l) && /⚠ read the sort column in the Classic body/.test(l) && !/re-sort lock/.test(l))
+      && resolveVk(ascSort.vk, builtWith({ ...kept, name: "DList" }, sortAttrs("asc")))[0] === "⚠ verify",
+    () => ({ sort: detailOf(asc, "AscDetail").features.sort, rows: settingRows(asc, "AscDetail"), vk: ascSort?.vk }));
+  check("detail features: an order set on two columns names no single column",
+    () => detailOf(run("TwoColDetail", "Line", TWO_COLUMNS_BODY), "TwoColDetail").features.sort?.column === null);
+  const sortOf = (name, body) => JSON.stringify(detailOf(run(name, "Line", body), name).features.sort);
+  check("detail features: several added columns with one ordered through a variable name that column",
+    () => sortOf("ManyColDetail", ONE_OF_MANY_BODY) === JSON.stringify({ column: "CreatedOn", direction: "desc", locked: false }),
+    () => sortOf("ManyColDetail", ONE_OF_MANY_BODY));
+  check("detail features: several added columns with one ordered in place name that column",
+    () => sortOf("ChainDetail", CHAINED_ONE_OF_MANY_BODY) === JSON.stringify({ column: "DueDate", direction: "asc", locked: false }),
+    () => sortOf("ChainDetail", CHAINED_ONE_OF_MANY_BODY));
+  check("detail features: an order and a re-sort lock that are only commented out read as the default order",
+    () => detailOf(run("CommentDetail", "Line", COMMENTED_SORT_BODY), "CommentDetail").features.sort === null,
+    () => sortOf("CommentDetail", COMMENTED_SORT_BODY));
+  check("detail features: a commented-out re-sort lock is not a lock",
+    () => sortOf("LockCommentDetail", COMMENTED_LOCK_BODY) === JSON.stringify({ column: null, direction: "desc", locked: false }),
+    () => sortOf("LockCommentDetail", COMMENTED_LOCK_BODY));
+  check("detail features: a locked sort says the re-sort lock is neither carried nor checked",
+    () => payRows.some((l) => /\| Sort \|/.test(l) && /the re-sort lock is not carried or checked/.test(l)),
+    () => payRows);
   const prefixVk = { type: "rowtoolbar", n: 1, names: ["Activity"] };
   check("detail features: --verify never takes a grid whose name merely starts with the detail's — the exact name wins, a longer name is not the list",
     () => resolveVk(prefixVk, builtPage([{ type: "crt.DataGrid", name: "ActivityTypeGrid", rowToolbarItems: [] }, { type: "crt.DataGrid", name: "Activity" }]))[0] === "❌ MISSING"
