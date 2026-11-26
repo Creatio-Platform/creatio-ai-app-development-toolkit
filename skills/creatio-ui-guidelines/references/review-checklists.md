@@ -10,6 +10,7 @@ Use this reference for audits, acceptance criteria, and final checks.
 - [ ] You walked the user's **fill scenario** on the render before reconciling with the schema — not the reverse.
 - Why: many defects are **visual-only** and do NOT appear in the schema or the a11y tree — empty/short or unbalanced left island, group headings that don't actually render, placeholder quality (e.g. junk like "Phone 123"), spacing/proportion problems. "Looks fine in the schema" is not evidence the page is fine.
 - [ ] No finding was silently dropped because it looked "intentional" or "temporary" (e.g. a placeholder added for a demo) — flag it explicitly instead of omitting it.
+- [ ] The rendered page was measured against a native page on the same template, not only looked at: style census, zoomed crops, overflow, and (where the components are comparable) a difference overlay, per `visual-check.md`; what was not run is named in the report.
 
 ### Think like a user (UX sanity — do this first)
 
@@ -94,7 +95,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
 - [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
 - [ ] The primary display name is auto-composed from key fields where derivable, and kept editable.
-- [ ] Every money/quantity field the user reasons about (typed or calculated — amount, total, price, hours, …) has useful analytics on its value nearby — rollup, comparison, or trend as an XS/S island metric or an Analytics-tab chart — not a bare number and not a widget repeating the field. (A bare line-item quantity the user does not reason about — e.g. a qty on a mini page — is out of scope.)
+- [ ] Every money/quantity field has analytics where the page asks a question about it — total against the limit, paid against remaining, plan against actual, a rollup across related records — as an XS/S island metric or an Analytics-tab chart, and the plan names that question. A page that asks no question about the amount (e.g. a line amount on an add mini page) keeps the field alone; a widget repeating the field's own value is never analytics.
 - [ ] Every deadline/due-date/SLA field has a timer beside it showing time left/overdue, in the same block, with the date itself still visible (not hidden or replaced by the timer; a read-only/calculated SLA date is fine) — or, where the target version's catalog has no timer component, the closest native alternative was offered instead of a hand-built process-maintained countdown.
 - [ ] Every business-relationship Contact/Account lookup (responsible, primary contact, customer, supplier, owner — someone the user needs to reach) has a read-only related-record profile island — identity plus communication options, captioned for the relationship, visible only when the lookup is filled; multiple profiles stack vertically. Pure audit lookups (Created by / Modified by) are out of scope.
 
@@ -202,6 +203,16 @@ Report findings separately for each audited page. One subsection per page; if a 
 - [ ] ...
 ```
 
+## Citing the source of a finding
+
+The **Category** column of the audit table stays **Accessibility** or **UX improvement**. Each finding also names where its rule comes from, in parentheses at the end of the Issue cell, so a reader can check it without trusting the auditor:
+
+- **a Nielsen heuristic** — H1 visibility of system status · H2 match between the system and the real world · H3 user control and freedom · H4 consistency and standards · H5 error prevention · H6 recognition rather than recall · H7 flexibility and efficiency of use · H8 aesthetic and minimalist design · H9 help users recognize, diagnose and recover from errors · H10 help and documentation;
+- **a WCAG success criterion** — by number, e.g. `SC 1.4.3`, `SC 2.5.8` (see `accessibility-and-colors.md`);
+- **a rule of this skill** — by its title, e.g. `rule: Few-value lookups MUST be dropdowns` or `visual-check: style census`.
+
+Example: `| Medium | UX improvement | Lookups | Status opens a selection window for six values (H7; rule: Few-value lookups MUST be dropdowns) | Set simple-lookup on the column |`. A finding that cannot name any source is an opinion: keep it only if you can say which user task it slows, and mark it as such.
+
 ## Page design output template
 
 ```markdown
@@ -253,3 +264,101 @@ Report findings separately for each audited page. One subsection per page; if a 
 - “Use dropdown instead of lookup because the value set is small.”
 - “Do not rely on color alone; add label/icon/status text.”
 - “Validate this custom tab/background pair against 4.5:1 contrast before release.”
+
+## Self-critique before delivering
+
+Answer these twelve questions **in writing** before anyone else sees the page — "yes, probably" is how a weak page survives. Look at the rendered page, not the schema.
+
+1. **Is the most important information immediately recognisable?** Squint at the page: is what survives the answer to the page's question?
+2. **Is the space used deliberately?** No region is stretched to fill or left holed; you can say what each region is for. On a record page the left and right columns stay balanced (*Default page design principles* in `SKILL.md`): an empty stretch of the left column is not a deliberate region.
+3. **Is the density right for the task?** Scanned (a list) → dense; read (a record) → comfortable; filled in (a mini page, a step) → generous.
+4. **Does the layout follow the user's priorities, or the data model's?** Would the person who uses this page recognise their own order of importance?
+5. **Is any block too large or too small** for how much it matters?
+6. **Are related things grouped by the native containers** — islands, field groups, expansion panels — rather than by extra borders or colour?
+7. **Is the primary action unmistakable**, with only one competing for that role in its context?
+8. **Is the hierarchy strong without being noisy?** Could you promote one thing by demoting others instead of adding emphasis?
+9. **Is colour used consistently and semantically**, on data and status rather than on chrome?
+10. **Are the labels and messages specific?** Any *Submit*, *Manage*, *Process*, *OK*, *An error occurred*?
+11. **Does it support the real workflow at real data volume** — thousands of rows in a list, long names, empty optional fields — not a dozen clean demo records?
+12. **Does it look deliberate rather than assembled?** Could you explain why each block is the size it is and sits where it does?
+
+**If two or more answers are weak, revise before delivering** — not note them for later. A known weakness shipped is a decision to ship it; if you keep one, name it in the report under *What was not verified* or as an open item.
+
+## Quality rubric
+
+Use the rubric to find **which** dimension is weak, not to produce a total. Score each dimension 1–5 quickly, then write **one line for every dimension scoring 3 or below**, saying what specifically is wrong. That list is the revision plan; a score with no line attached is not a finding.
+
+| Dimension | 1 — broken | 3 — acceptable | 5 — excellent |
+|---|---|---|---|
+| **Purpose** | no discernible question answered | a purpose can be inferred | one question, answered by the most prominent block |
+| **Hierarchy** | everything the same weight | a title leads, the rest is flat | one focal point, clear second and third tiers |
+| **Composition** | arbitrary placement, holes, orphans, unbalanced columns | consistent grid, uniform spans | spans follow importance within the container's column count; edges line up; columns balanced |
+| **Density** | consumer-airy or packed beyond reading | consistent, unexamined | matched to the task and defensible |
+| **Grouping** | fragmented into many thin groups, or one undifferentiated wall | groups exist but split related fields | native containers carry the grouping; each group is a logical block |
+| **Colour** | decorative, inconsistent, custom | semantic but overused | on data and status only; one role per hue; theme colours only |
+| **Typography** | many sizes, custom fonts, weak contrast | the Freedom UI scale, inconsistently used | the Freedom UI scale only; values lead and labels recede |
+| **States** | missing empty, error, read-only or loading states | present, not all considered | every state that applies is handled: empty, loading, error, read-only, disabled, no rights |
+| **Writing** | *Submit* / *Manage* / "An error occurred" | clear, inconsistent terminology | specific business terms; errors say what to do next |
+| **Patterns** | invented shape or hand-built composite | right page kind, mishandled | right page kind and template, native components and composites, known traps avoided |
+| **Accessibility** | fails AA visibly | the components' built-in basics only | AA in full, verified by keyboard and zoom |
+| **Realism** | demo data, demo volume | plausible data | real volume, totals that add up, empty and error states seen |
+
+## Verdict file
+
+A checklist run that lives only in the chat did not happen. Every audit or acceptance run writes one verdict file. The format comes from design-spec-framework (github.com/denysosadchyi/design-spec-framework, MIT).
+
+**Where it lives:** the task's working directory, never this skill. The skill carries the format; the run carries the verdict.
+
+```md
+# <page or app> · review verdict
+
+Checked: <date> · Checklist: creatio-ui-guidelines `review-checklists.md` (<toolkit version>)
+Result: **fail** — <n> pass · <n> fail · <n> human · <n> of <n> items
+
+| # | Item | Verdict | Evidence |
+|---|---|---|---|
+| 33 | Page content reads as proper islands | human | zoom `SideAreaProfileContainer` and the first tab's groups; each must read as a card on the page background |
+| 45 | Style parity, verified with tools | pass | `__vcCensus('ours')` → `0 only in ours (+), 0 only in the reference (-)` |
+| 55 | Small enum-like lookups are simple lookups | fail | `UsrStatus` column has no `simple-lookup`; the field opens a selection window |
+
+## Open
+- 55: set `simple-lookup: true` on the `UsrStatus` entity column, re-open the page
+```
+
+| Verdict | Meaning |
+|---|---|
+| **pass** | verified, with evidence: a `get-page` node and property, a tool's real output, a measured number, a census or overflow line |
+| **fail** | verified absent or wrong, with the same kind of evidence |
+| **human** | confirmable only by eye on the rendered page — say exactly what to look at |
+
+- **Evidence is a path or an output, not a claim.** "Styles match" is not evidence; the census line is. Paste a tool's real output, never a paraphrase of it.
+- **A stub is `fail`, partial is `fail`** — with the remainder named. Never mark an item pass because it is "essentially done".
+- **The overall result is `pass` only when every item passes and every `human` item was confirmed by a person in the same session.** A green list is evidence, not permission.
+- **Every item gets a row, in checklist order, carrying its ordinal**, the unresolved ones too. The ordinal counts the `- [ ]` lines of *Quick audit checklist* straight through its headings, starting at 1. Ordinals hold for the version of this file the run read, so the header names the toolkit version; compare verdicts by item text across versions.
+- **Open** lists one line per failure, each naming what closes it.
+- **Finding and fixing stay in separate passes.** Write the verdict file before editing anything. If a failure is trivially fixable, name the fix; apply it in the next pass, because a reviewer who is also repairing stops reading.
+
+## Pixel review format
+
+A pixel review says what came back from a build compared with what was meant — here, the page under review against the native reference (see `visual-check.md`). Use it for visual findings instead of a comment thread.
+
+- **Every finding is a numbered issue with a stable id** — `<PAGE>-01`, `<PAGE>-02` … The ids survive into the next check, so "`<PAGE>-07` is fixed" can be verified.
+- **Every issue is a pair of crops, labelled** — *Now — build* beside *Should be — native*, the same region at the same scale (zoomed crops, not a full screenshot with an arrow).
+- **Where the defect is a number, the number is in the label** — measured, not estimated: *Now — build (island padding wider than native)* with the two measured values in the label. A two-pixel difference is invisible in a picture and unarguable in a label.
+- **Every issue ends in a `Done when:` line** — an observable end state in the product's own vocabulary, naming native components and properties rather than describing appearance: *Done when: the related list sits in the native Expanded list composite and its panel shows the native header row.* For accessibility, cite the criterion: *Done when: Tab reaches every row action and the focused one shows the focus ring (WCAG 2.4.7).*
+- **Colour findings name roles and relationships, never hex values** — *"the status chip uses the same role colour as the status in the list"*, *"the custom header background is not a theme colour"*. A relationship stays true after a theme change; a hex does not.
+- **Priority lives in the issue** — nice-to-have issues say *optional* so nobody has to ask which matter.
+- **A gap in the platform is annotated where it bites** — where no native component or input achieves the look, say so on the issue (*no native input; custom CSS needs confirmation*), following the custom-CSS rule in `SKILL.md`.
+
+Write the `Done when:` line first, for your own decisions too: if you cannot state an observable outcome for a decision, it is not specific enough to build.
+
+## Report a delivered design
+
+When delivering a page design or a built page, state these four things — they are what a reviewer needs and what most handovers omit:
+
+1. **The page's question**, and who it is for.
+2. **The layout decision and why** — including the alternative you rejected and the criterion it lost on (e.g. "progress-bar template rejected: the record has no ordered stages").
+3. **What you assumed** where you could not ask.
+4. **What you did not verify** — "keyboard pass done, not tested with a screen reader; checked at one window width with panels closed" is useful; "accessible" with no method is not.
+
+A design delivered with its reasoning can be argued with productively; one delivered as a finished artefact can only be accepted or rejected.

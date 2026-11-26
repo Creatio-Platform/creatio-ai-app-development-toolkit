@@ -62,6 +62,25 @@ Beyond the principles above, verify these page-design criteria. Each maps to a W
 - **Link purpose in context (SC 2.4.4):** link text must convey its destination on its own or with adjacent text — avoid a bare "Click here"; prefer "View pricing table".
 - **Status messages (SC 4.1.3):** surface meaningful status messages where needed (e.g. a success message on the Save action); rely on Creatio's built-in notification/validation mechanisms.
 
+### Screen-level decisions: order, focus, and keyboard
+
+Native components bring their own roles, names, and keyboard behaviour. A conformant component is still not a conformant page: the decisions below are made when you compose the page, and they are where real audits fail. Check each on the rendered page, not in the schema.
+
+- **Reading order and focus order follow the visual order (SC 1.3.2, 2.4.3).** Screen readers and the Tab key follow the order of a container's `items`: in a grid container that order follows `layoutConfig` row, then column; in a flex container it is the order the children were inserted (`index`). A field that sits first visually but was inserted last is read and reached last. Make the order match the order a user fills the page in (how `index` counts is in page-layout-and-controls.md, *Layout coordinates and container nesting*).
+- **Heading levels describe the structure, not the look.** This complements *Heading hierarchy* above: choose a heading's level by its place in the page, never because its size looks right; never skip a level for a smaller look, and never fake a heading with bold body text.
+- **Every function works from the keyboard alone, with no trap (SC 2.1.1, 2.1.2).** This covers the buttons you add, inline-editable lists, custom components, and every dialog. Esc closes a dialog or mini page and focus returns to the control that opened it; while a modal is open, focus stays inside it.
+- **Focus stays visible (SC 2.4.7).** Native components draw their focus indicator; custom CSS that removes or recolours it fails (custom CSS is a last resort — see *Mandatory implementation rules* in `SKILL.md`).
+- **The focused element is never entirely hidden (SC 2.4.11).** Sticky page headers, a stepper's footer with its buttons, pinned list headers, and side panels can cover the element that has focus. Tab down a long page and a long list and confirm the focused element never disappears beneath them.
+- **Nothing changes context on focus or on a value change alone (SC 3.2.1, 3.2.2).** A business rule that shows, hides, or fills fields when a value changes is a change of content and is fine. A handler that navigates, opens another page, saves, or starts a process when a field gets focus or a value changes is a violation — put that behind a button.
+
+### Screen-level decisions: hover, drag, zoom, and text spacing
+
+- **Nothing is revealed only on hover.** Tooltips, `i` help icons, row actions, and any hover-revealed content must also appear on keyboard focus, stay while the pointer is over them, and be dismissible without moving focus (SC 1.4.13). Information the user must see every time does not go into a tooltip at all — see the guidance-channel rule in page-layout-and-controls.md, *Fields*.
+- **Every drag has a non-drag path (SC 2.5.7).** Wherever the page lets a user drag — reorder items, move a card between stage columns, drop a file, resize a panel — confirm on the rendered page that the same result is reachable without dragging: a button, a menu action, or an editable field (for example the record's stage field or progress bar instead of dragging its card). If a native component offers only the drag path, report it; do not hand-build a replacement.
+- **The page works at 200% zoom and reflows (SC 1.4.4, 1.4.10).** At 200%, nothing is clipped, overlapping, or unreachable — with the side panel open and inside every dialog. At 400% (equivalent to a 320 CSS px wide viewport) content reflows into one column without scrolling in two directions; data lists are the allowed exception. Fixed widths or heights set through custom CSS are the usual cause of a failure.
+- **Overriding text spacing loses nothing (SC 1.4.12).** With line height at 1.5 times the font size, paragraph spacing at 2 times, letter spacing at 0.12 times, and word spacing at 0.16 times, no caption, button, tooltip, or helper line is clipped or overlaps. Custom-styled labels and long translated captions fail this first.
+- **A tight target is never fixed by removing the keyboard path.** Where a pointer target is small (see *Element size & appearance* above), the keyboard route to the same action must be complete.
+
 ## Contrast rules
 
 - Minimum contrast ratio for standard and small text: **4.5:1**.
@@ -70,6 +89,13 @@ Beyond the principles above, verify these page-design criteria. Each maps to a W
 - Pay special attention to widgets, tabs, Area backgrounds, chart values, glassmorphism effects, and desktop wallpapers.
 - Prefer dark solid desktop backgrounds. Light wallpapers can reduce contrast for overlay text and widget values.
 - Avoid glassmorphism when text or chart values become harder to read.
+
+### Non-text contrast, placeholders, and disabled controls
+
+- **Non-text elements need 3:1 against what is next to them (SC 1.4.11):** input and control boundaries, focus indicators, icons that carry meaning, checkbox and toggle states, chart marks and lines, and progress-bar segments. Native components on the default theme are built for this; check every custom colour, every Area background placed behind inputs, and every custom icon.
+- **Placeholder text is content.** Where it sits on a non-default background or has been restyled, it must still meet the text minimum above — and it is never the only label of a field.
+- **Disabled and read-only content stays legible.** Disabled controls are exempt from the contrast minimums, but a user needs to read a disabled or read-only value to understand why it cannot change; do not grey custom-styled disabled content further than the platform does.
+- **A coloured status chip must pass as text.** A pale tint with dark text of the same hue usually passes; a saturated fill with white text usually fails at small sizes. Validate the exact pair, and keep the status in words (see *Freedom UI color guidance*).
 
 ## Freedom UI color guidance
 
@@ -128,3 +154,16 @@ Do not assume black, gray, red, green, white, or light tones are valid in every 
 - CSS images that convey information must have an accessible label on the containing element.
 - Icon buttons must have visible labels, tooltips, or accessible names.
 - Charts and complex diagrams need a text alternative or data table when the information is not otherwise available.
+
+## Verifying accessibility on the rendered page
+
+Accessibility is checked while the page is built, not as a closing pass, and it is checked on the rendered page, not in the schema. Run these checks in this order — each catches what the previous one misses:
+
+1. **Accessibility tree and automated checks.** Read the live accessibility tree of the rendered page, and run an automated checker when the environment has one. This catches missing or empty accessible names, wrong roles, and some contrast failures — a minority of real issues: necessary, never sufficient.
+2. **Keyboard only.** Without the mouse, complete the page's primary task: create or edit the record and save it, go through every stepper step, open and close each dialog and mini page. Watch the focus order, that focus stays visible and is never hidden under sticky areas, that nothing traps focus, and that Esc closes and returns focus. This finds more real defects than any other single check.
+3. **Zoom to 200%, then 400%**, with the side panel open. When the browser cannot zoom, emulate it by narrowing the viewport to half, then a quarter, of the desktop width. Is anything clipped or unreachable?
+4. **Greyscale.** View the page without colour, applied in the browser for inspection only, never to the page. Is any meaning lost? This is the check for SC 1.4.1, and it doubles as a hierarchy check.
+5. **Screen reader** through the primary task, when one is available. Nothing replaces hearing the page read aloud; an agent usually has none, and then says so.
+6. **Text spacing override.** Apply the SC 1.4.12 values from *Screen-level decisions: hover, drag, zoom, and text spacing* in the browser, for inspection only, and look for clipping.
+
+**Say what you verified and what you did not.** "Accessibility tree and keyboard pass clean on create and edit; zoom checked at 200% only; no screen reader available" is a useful finding. "Accessible", with no method named, is not. Put this statement in the audit's *Accessibility checks* (`SKILL.md`, *Review output format*).
