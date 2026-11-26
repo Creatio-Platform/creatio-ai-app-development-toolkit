@@ -5390,27 +5390,43 @@ export function resolveCardNativeVk(vk, ctx) {
 // checked. They measure how the plan's rows were written and add no row of their own to build, so they stay out of
 // `checklistGroups` — the plan, the task cut, a split's coverage and every task's digest never see them. An open one
 // still becomes a repair task, because those are cut from the verify rows.
-function codeQualityGroups(planGroups, opts) {
+function codeQualityGroups(planGroups, opts, root) {
   const pageKeys = [...new Set(planGroups.map((g) => g.pageKey).filter((k) => k && k !== "run"))];
-  return pageKeys.map((k) => pageGroup(k, "Code quality", codeQualityRows(opts), opts));
+  return pageKeys.map((k) => pageGroup(k, "Code quality", codeQualityRows(opts, k, root), opts));
 }
 // The code-quality rows of one page, one per rule. The thresholds and the constants modules' record ids travel in
 // the row itself, so the resolver needs nothing but the built root.
-function codeQualityRows(opts) {
+function codeQualityRows(opts, pageKey, root) {
   const run = qualityRunOf(opts);
   // A rule whose check needs something the run did not record says so on its own row.
   const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
-  return QUALITY_ROW_RULES.map(({ rule, label }) => ({
-    deliverableId: `quality:${rule}`,
-    label: `[code-quality] ${rule} — ${label}`,
-    vk: { type: "quality", rule, ...run, note: notes[rule] || "" },
-  }));
+  return QUALITY_ROW_RULES.flatMap(({ rule, label }) => {
+    const row = { deliverableId: `quality:${rule}`, label: `[code-quality] ${rule} — ${label}`,
+      vk: { type: "quality", rule, ...run, note: notes[rule] || "" } };
+    if (rule !== QUALITY_RULES.handlerWithoutNext) return [row];
+    return [row, ...chainEndingRequests(root, pageKey, run).map((request) => ({
+      deliverableId: `quality:${rule}:${request}`,
+      label: `[code-quality] ${rule} — \`${request}\` ${label.replace(/^every handler /, "")}`,
+      vk: { ...row.vk, request },
+    }))];
+  });
+}
+// A handler that ends the chain gets a row of its own, keyed by its request: the decision that accepts it (a save
+// that must not reach the platform save) then closes that handler's row only, and a handler added later that drops
+// `next` opens a new row instead of passing under the old decision. The shared row keeps a handler with no literal
+// request.
+function chainEndingRequests(root, pageKey, run) {
+  if (!root || !pageKey) return [];
+  const page = runQualityOf(root, run.thresholds, run.constantsGuids, run.externalModules, run.runKey).get(pageKey);
+  const requests = (page?.findings || []).filter((f) => f.rule === QUALITY_RULES.handlerWithoutNext && f.request).map((f) => f.request);
+  return [...new Set(requests)].sort((a, b) => a.localeCompare(b));
 }
 const QUALITY_LISTED = 5;
 // The Code quality rules a client module's code can break. A module not measured holds these rows only: the rules about
 // a page's handlers and resources (nested functions, helpers copied between pages, unused strings) read no module.
 const MODULE_QUALITY_RULES = new Set([QUALITY_RULES.catchLogOnly, QUALITY_RULES.numericComparisonType,
-  QUALITY_RULES.sequentialAwaits, QUALITY_RULES.guidLiteral, QUALITY_RULES.planCodeInComment]);
+  QUALITY_RULES.sequentialAwaits, QUALITY_RULES.guidLiteral, QUALITY_RULES.planCodeInComment,
+  QUALITY_RULES.uncheckedWriteResult, QUALITY_RULES.pagedReadLoop]);
 // A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
 // `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
 // not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
@@ -5446,7 +5462,8 @@ export function resolveQualityVk(vk, ctx) {
     return ["☐ confirm on-stand", "the page has handlers but its bundle carries no `deps` or no schema name, so its own module could not be checked — pass get-page's `bundle.json` and `meta.json` whole", "skip"];
   }
   if (rec.unreadable.length) return ["⚠ verify", `${rec.unreadable.map((s) => (s.startsWith("module ") ? s : "the bundle's `" + s + "`")).join(", ")} could not be parsed, so the code was not checked`, "unverified"];
-  const found = rec.findings.filter((f) => f.rule === vk.rule);
+  const found = rec.findings.filter((f) => f.rule === vk.rule
+    && (vk.rule !== QUALITY_RULES.handlerWithoutNext || (f.request || null) === (vk.request || null)));
   const blocking = found.filter((f) => !f.advisory);
   const noted = found.filter((f) => f.advisory);
   const note = vk.note ? vk.note + " " : "";
@@ -6012,7 +6029,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const planGroups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
-  const groups = [...planGroups, ...codeQualityGroups(planGroups, opts)];
+  const groups = [...planGroups, ...codeQualityGroups(planGroups, opts, root)];
   const L = []; let n = 0;
   // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the

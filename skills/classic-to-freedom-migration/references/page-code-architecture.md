@@ -18,8 +18,17 @@ functions by what each does.
 
 Several handlers on the same `crt.*` request are legal and all of them run, as a chain in the order the
 schema lists them. Give each feature its own handler; never merge a second feature into an existing one.
-The chain has one rule: **every handler calls `next`**, unless it deliberately replaces the platform
-behaviour. A handler that skips `next` silently skips every handler after it.
+The chain has one rule: **every handler takes `next`, calls `next?.handle(request)` and returns its
+result**. That holds for a custom request too (`<prefix>.<Name>Request`, a button's `clicked`): another
+handler for the same request — a replacing schema, a later feature — runs only when this one passes it on.
+A handler that skips `next`, or calls it and drops its result, silently ends the chain for every handler
+after it and for whoever fired the request.
+
+A handler ends the chain only when the plan says so: a decision that names the handler and why it
+replaces the platform behaviour (for example a save that must not reach the platform save). Each page
+handler that ends the chain has its own `--verify` row, `[code-quality] handler-without-next` followed by
+its request. Without the decision that row stays open; the decision (`--decide D<N>`) closes that
+handler's row only, so another handler that drops `next` still opens a row of its own.
 
 ## 3. The logic lives in a client module
 
@@ -52,6 +61,64 @@ function call in a custom request to give it a name.
   model, not loaded with a second request.
 - A list is scoped through `dependencies` or a declarative filter on its data source, not by filtering
   rows in a handler.
+- **A total comes from the server.** A sum, a count, a minimum or a maximum over records is ONE aggregate
+  query (ESQ aggregation, `get-guidance esq`), never a loop that pages through the rows and adds them up in
+  the browser — that reads every row on every call and grows with the data. A total is recalculated when a
+  record it counts really changes (an item saved, deleted or (de)activated), not on every list load,
+  paging or page open. `--verify` reports a paged loop as `[code-quality] paged-read-loop`.
+
+## 6. A write reports its outcome, and the user sees a failure
+
+A module function that writes data — an insert, an update, a delete, a system setting, a counter, a
+process start — returns a result its caller checks: `true`/`false`, or `{ success, … }` with what failed.
+The caller (the handler, or the module function the handler calls) checks it, and a failure reaches the
+USER: a dialog or a notification with a localizable message, never only `console.error`, never a silent
+`return null`.
+
+- **Every step that can fail is reported.** When the main write succeeds and a later step fails — a log
+  line, a recalculated total, a reload — the user is told what was not updated ("Posted, but the contract
+  amount was not recalculated"). A step that fails silently leaves stale data that looks correct.
+- **A generated value is never left empty in silence.** When a number, a code or a counter cannot be
+  assigned, the user is told and the field shows that it has no value yet. Write the counter back only
+  after the new value is computed and can be shown, so a failure does not consume a number nobody sees.
+- **A bulk action counts its failures.** An action over selected records (close, deactivate, delete)
+  goes on past a failed record, counts the records that failed and, when any did, tells the user how many
+  of how many ("2 of 5 contracts were not closed"); then it reloads the list once.
+- `--verify` reports a `catch` that only logs (or is empty) as `[code-quality] catch-log-only`, and a write
+  function whose failure result a caller ignores (`await recalculate(…);` as a bare statement when
+  `recalculate` returns `null` on a failure) as `[code-quality] unchecked-write-result`, in the page's
+  code and in the client modules it imports (the call and the function it calls in one source).
+
+```js
+// Incorrect — the failure stays in the console; the caller ignores the result.
+async function closeContracts(ids) {
+  for (const id of ids) {
+    try { await model.update({ Status: CLOSED }, [{ type: "primaryColumnValue", value: id }]); }
+    catch (e) { console.error(e); }
+  }
+}
+// …
+await recalculateContractAmount(sdk, contractId);
+
+// Correct — the function returns its outcome, the caller tells the user.
+async function closeContracts(ids) {
+  let failed = 0;
+  for (const id of ids) {
+    try { await model.update({ Status: CLOSED }, [{ type: "primaryColumnValue", value: id }]); }
+    catch (e) { failed++; }
+  }
+  return { total: ids.length, failed };
+}
+// …
+const { total, failed } = await closeContracts(ids);
+if (failed) await showMessage(request, formatTemplate(await $context.UsrCloseFailedText, [failed, total]));
+if ((await recalculateContractAmount(sdk, contractId)) == null) {
+  await showMessage(request, await $context.UsrAmountNotRecalculatedText);
+}
+```
+
+`showMessage` and `formatTemplate` are the page module's own helpers, not platform APIs; the texts are
+localizable resource strings.
 
 ## Example
 
