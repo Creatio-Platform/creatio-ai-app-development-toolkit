@@ -7,7 +7,7 @@ import { runLaunchedProcessesChecks } from "./run-mapper-launched-processes.mjs"
 import { runQualityChecks } from "./run-mapper-quality.mjs";
 import { runWritesOnOpenChecks } from "./run-mapper-writes-on-open.mjs";
 import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
-import { runVerifyFalseNegativeChecks, runCaptionKeyChecks } from "./run-mapper-verify-false-negatives.mjs";
+import { runVerifyFalseNegativeChecks, runCaptionKeyChecks, runEntityRuleChecks } from "./run-mapper-verify-false-negatives.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -16728,6 +16728,7 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
 
 runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, checklistOpts, checklistGroups, renderVerify, resolveVk, resolveRuleVk,
   verifyCtx, parseDecisionRecords, verifyManifest, DIR });
+runEntityRuleChecks({ check, runMigration, checklistOpts, checklistGroups, resolveRuleVk, verifyCtx, readPlan, assembleBuilt, verifyManifest, DIR });
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

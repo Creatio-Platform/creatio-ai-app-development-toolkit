@@ -222,3 +222,59 @@ export function runCaptionKeyChecks({ check, runMigration, checklistOpts, render
     () => planned.substituted.length === 0 && planned.absent.length === 2 && planned.absent.every((a) => a.includes("NotesFieldCaption")),
     () => planned);
 }
+
+// ENTITY RULES ARE READ OFF THE OBJECT. A rule the migration adds to the object persists on the entity, so neither the
+// page body nor the page's own rules read holds it: its row is matched against `read-entity-business-rules`, which
+// the read plan asks for, the read-back files under `entityBusinessRules`, and nothing else satisfies.
+export function runEntityRuleChecks({ check, runMigration, checklistOpts, checklistGroups, resolveRuleVk, verifyCtx, readPlan,
+  assembleBuilt, verifyManifest, DIR }) {
+  const su = { ...JSON.parse(verifyManifest), targetPackage: "UsrSU" };
+  const run = runMigration(su, { baseDir: DIR });
+  const opts = checklistOpts(su);
+  const rows = checklistGroups(run, opts).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })));
+  const entityRow = rows.find((r) => r.deliverableId === "entity-rules");
+  const pageRow = rows.find((r) => r.deliverableId === "business-rules");
+  check("entity rules (anti-vacuity): the fixture has an entity-rules row and a page-rules row on the same page",
+    () => !!entityRow && !!pageRow && entityRow.pageKey === pageRow.pageKey, () => rows.filter((r) => r.vk?.type === "rule").map((r) => r.vk));
+  check("entity rules: the entity-rules row reads its rules from the object's slot and names the object; the page-rules row keeps the page's",
+    () => entityRow.vk.slot === "entityBusinessRules" && entityRow.vk.entity === "SupportUnit" && !pageRow.vk.slot,
+    () => [entityRow.vk, pageRow.vk]);
+
+  const plan = readPlan(run, opts);
+  const entityRead = plan.reads.find((r) => r.kind === "entityBusinessRules");
+  check("entity rules: the read plan asks for `read-entity-business-rules` on the object in the target package, after every other read",
+    () => !!entityRead && entityRead.pageKey === "main" && plan.reads.at(-1) === entityRead
+      && /read-entity-business-rules.*`SupportUnit`.*`UsrSU`/.test(entityRead.what) && /-entity-rules-main\.json$/.test(entityRead.file),
+    () => plan.reads.map((r) => r.file));
+
+  const attr = entityRow.vk.names[0];
+  const ruleOn = (a) => ({ name: `BusinessRule_${a}`, condition: {}, actions: [{ type: "apply-filter", target: a, targetFilterPath: "Account", source: "Other" }] });
+  const page = (extra) => verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: { count: 0, rules: [] }, ...extra } } }, "main");
+  const allOn = { count: entityRow.vk.names.length, rules: entityRow.vk.names.map(ruleOn) };
+  const fromObject = resolveRuleVk(entityRow.vk, page({ entityBusinessRules: allOn }));
+  const onPageOnly = resolveRuleVk(entityRow.vk, page({ businessRules: { count: 1, rules: [ruleOn(attr)] } }));
+  check("entity rules: the row closes from the object's rules read ✅, and saying so names the object",
+    () => fromObject[2] === "ok" && /built entity rule.*on the object/.test(fromObject[1]), () => fromObject);
+  check("entity rules: without the object's read the row is NOT checkable and names `read-entity-business-rules` — a page rule on the same attribute never closes it",
+    () => onPageOnly[2] === "unverified" && /read-entity-business-rules/.test(onPageOnly[1]) && /`SupportUnit`/.test(onPageOnly[1]),
+    () => onPageOnly);
+
+  // The read-back composes the file into the page's own slot, from the file the read plan names.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-entity-rules-"));
+  try {
+    fs.mkdirSync(path.join(tmp, "reads"));
+    const pageReads = plan.reads.filter((r) => r.pageKey === "main" && (r.kind === "pageMeta" || r.kind === "pageBundle"));
+    fs.writeFileSync(path.join(tmp, "reads", "index.json"), JSON.stringify({ ...plan, reads: [...pageReads, entityRead] }));
+    for (const r of pageReads) {
+      fs.writeFileSync(path.join(tmp, r.file), JSON.stringify(r.kind === "pageMeta"
+        ? { page: { schemaUId: "11111111-1111-4111-8111-111111111111", schemaName: "UsrSU_FormPage" }, packageName: "UsrSU" }
+        : { name: "UsrSU_FormPage", viewConfig: [] }));
+    }
+    fs.writeFileSync(path.join(tmp, entityRead.file), JSON.stringify({ count: 1, rules: [ruleOn(attr)] }));
+    const { built, problems } = assembleBuilt(tmp);
+    check("entity rules: `--from` composes the entity-rules read into `pages.main.entityBusinessRules`",
+      () => built?.pages?.main?.entityBusinessRules?.rules?.[0]?.name === `BusinessRule_${attr}`, () => ({ main: built?.pages?.main, problems }));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}

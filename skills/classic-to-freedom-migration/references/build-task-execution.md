@@ -313,9 +313,14 @@ never because the `get-page` read-backs looked right, which read back the saved 
 running page. The engine cannot see your tool calls, so this line is how a reviewer and the judge
 see that the cap held, and the result report reads N from it and quotes your words after the dash
 beside each exercised page, so write what each check answered, not just that it ran. A page counts
-as exercised only when its LAST built task, in queue order, reports a check: a check an earlier task
-or chunk ran on the page does not cover your save. You cannot tell whether your task is the page's
-last one, so every task that saves a page owes its own check after its own last save. A page whose
+as exercised only when a check was made after its LAST SAVE: a check an earlier task or chunk ran on
+the page does not cover your save. You cannot tell whether your task is the page's last one, so
+every task that saves a page owes its own check after its own last save. A task that saved nothing
+to the page's body — it only recorded outcomes, read the stand, or changed a client module — writes
+`Page saved: no` under `## Notes`, one line, beside its `Browser checks: 0 — <why>`. The page then
+stands as its last save left it, and the check made after that save still counts. Never write it
+after a save: the line is what lets the earlier check stand, so a wrong one hides a page nobody
+opened. A page whose
 last built task reports no check ends the run as **BUILT, NOT EXERCISED**, with your
 `Check on stand (row N): …` lines as the list a person works through by hand. N above 2 is a defect in the task, and the report lists it.
 Write the line on its own, at the start of a line, never inside a quote or a code fence: a quoted or fenced

@@ -700,8 +700,9 @@ details of what is still open, with each build agent's `Check on stand (row N)` 
 plan-vs-built table is not written as a file — the report carries everything it says. The verdict is
 the CONJUNCTION: COMPLETE only when every task is closed, nothing stands recorded not built without
 a decision, no boundary was asserted without one, and every machine-checked plan item is present.
-A run that meets all of that but has a page whose LAST built task, in queue order, does not report
-`Browser checks: ≥1` (a check an earlier chunk ran does not cover a later save)
+A run that meets all of that but has a page with no `Browser checks: ≥1` after its LAST SAVE — the
+last built task, in queue order, that saved the page body (a check an earlier chunk ran does not cover
+a later save; a task that writes `Page saved: no` saved nothing, so the check before it still stands)
 reads `🟠 BUILT, NOT EXERCISED` instead, and its *Not exercised in a browser* section lists those
 pages with their `Check on stand` lines and the recorded `Browser:` answer: present it as it is — a
 page nobody opened after a save is work for the user now, not a footnote. Its *Exercised in a browser*

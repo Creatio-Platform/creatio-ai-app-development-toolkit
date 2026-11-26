@@ -196,6 +196,7 @@ const READ_LABEL = {
   pageMeta: (r) => `\`${r.pageKey}\` page metadata`,
   pageBundle: (r) => `\`${r.pageKey}\` merged bundle`,
   businessRules: (r) => `\`${r.pageKey}\` business rules`,
+  entityBusinessRules: (r) => `\`${r.pageKey}\` entity business rules`,
   reachability: (r) => `\`${r.reachabilityKey}\``,
   dashboards: () => "the dashboard migration log",
 };
@@ -210,6 +211,7 @@ const COMPOSE = {
   pageMeta: composePageMeta,
   pageBundle: composePageBundle,
   businessRules: (r, j, acc) => { acc.pageOf(r.pageKey).businessRules = j; },
+  entityBusinessRules: (r, j, acc) => { acc.pageOf(r.pageKey).entityBusinessRules = j; },
   reachability: (r, j, acc) => { acc.reachability[r.reachabilityKey] = j; },
   dashboards: composeDashboards,
 };

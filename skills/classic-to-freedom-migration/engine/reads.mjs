@@ -7,7 +7,7 @@
 // mapping recorded, so nothing downstream parses a filename.
 import fs from "node:fs";
 import path from "node:path";
-import { checklistGroups } from "./designspec.mjs";
+import { checklistGroups, ENTITY_RULES_SLOT, packageNameOf } from "./designspec.mjs";
 import { slugify } from "./tasks.mjs";
 import { renameWithRetry, tempPathFor } from "./fsatomic.mjs";
 
@@ -62,8 +62,10 @@ export const slugKey = (key) => slugify(key);
 //                    `bundle.json` (the MERGED `viewConfig`, plus `modelConfig` / `handlers` / `viewModelConfig`).
 //                    Two files because that is how they arrive: the MCP `get-page` tool returns paths, not a
 //                    bundle, so "copy the response" would have copied a list of filenames. Each is copied whole.
-//   `businessRules`— only for the keys carrying a `rule` row: the page's persisted `BusinessRule_*` schemas,
+//   `businessRules`— only for the keys carrying a page `rule` row: the page's persisted `BusinessRule_*` schemas,
 //                    invisible to a page-body read.
+//   `entityBusinessRules` — only for the keys carrying an entity-rules row: the rules persisted on the OBJECT
+//                    (`read-entity-business-rules`), which neither the page body nor the page's rules read holds.
 //   `reachability` — one per `onstand` key that is a READ: config records that live in no page body.
 //   `dashboards`   — ONE per run, when the plan moves any: `DashboardMigrationLog` is a stand table the
 //                    migration PROCESS writes, so no page read can see it and the gate has no other source.
@@ -85,13 +87,27 @@ function reachabilityWhat(key, vk) {
     // how is exactly what a repair round was spent on. Carried on the vk so the row and the gate agree.
     + (vk.query ? ` — run: ${vk.query}` : "");
 }
+// The entity-rules read, named down to its arguments: the rules a migration adds to the object live in the target
+// package, and `read-entity-business-rules` returns the whole package hierarchy, so inherited rules are included.
+function entityRulesWhat(entity, pkg) {
+  const object = entity ? "`" + entity + "`" : "the page's object";
+  const inPkg = typeof pkg === "string" && pkg ? "`" + pkg + "`" : "the run's target package";
+  return `\`read-entity-business-rules\` for ${object} (\`entity-schema-name\`) in ${inPkg} (\`package-name\`) — the rules`
+    + " persisted on the object (`{ count, rules }`), never the page's rules read";
+}
 // WHAT THE CHECKLIST WALK YIELDS, in one pass: the published page keys in order, the keys whose rules are gated,
 // the distinct on-stand keys, the evidence ids, and the dashboards the plan moves. Extracted so `readPlan` stays
 // under Sonar's cognitive-complexity budget. Two rows can share one evidence id (the quality-gate pair) and the
 // three `dashboards` rows share ONE expectation set, so both dedupe.
+// A rule row asks for the read its rules live in: the page's own, or the object's (keyed to the entity it names).
+function addRuleRead(vk, key, ruleKeys, entityRules) {
+  if (vk.slot === ENTITY_RULES_SLOT) entityRules.set(key, vk.entity || null);
+  else ruleKeys.add(key);
+}
 function walkGroups(groups) {
   const pageKeys = [];
   const ruleKeys = new Set();
+  const entityRules = new Map();
   const reach = new Map();
   const evidenceIds = [];
   const dashboards = [];
@@ -100,19 +116,20 @@ function walkGroups(groups) {
     if (!pageKeys.includes(key)) pageKeys.push(key);
     const vk = r.vk;
     if (!vk) continue;
-    if (vk.type === "rule") ruleKeys.add(key);
+    if (vk.type === "rule") addRuleRead(vk, key, ruleKeys, entityRules);
     else if (READ_VK_TYPES.has(vk.type) && vk.evidence && !reach.has(vk.evidence)) reach.set(vk.evidence, vk);
     else if (vk.type === "evidence" && vk.id && !evidenceIds.includes(vk.id)) evidenceIds.push(vk.id);
     else if (vk.type === "dashboards") addDashboards(dashboards, vk);
   }
-  return { pageKeys, ruleKeys, reach, evidenceIds, dashboards };
+  return { pageKeys, ruleKeys, entityRules, reach, evidenceIds, dashboards };
 }
 const addDashboards = (into, vk) => {
   for (const e of vk.expect || []) if (e?.id && !into.some((d) => d.id === e.id)) into.push(e);
 };
 
 export function readPlan(result, opts = {}) {
-  const { pageKeys, ruleKeys, reach, evidenceIds, dashboards } = walkGroups(checklistGroups(result, opts));
+  const { pageKeys, ruleKeys, entityRules, reach, evidenceIds, dashboards } = walkGroups(checklistGroups(result, opts));
+  const pkg = packageNameOf(opts.targetPackage, opts.createdPackage);
   const reads = [];
   const builderRecorded = [];
   const add = (kind, slug, extra) => {
@@ -138,6 +155,8 @@ export function readPlan(result, opts = {}) {
     if (vk.recordedBy === "builder") { builderRecorded.push({ reachabilityKey: key, what: vk.what || "on-stand check" }); continue; }
     add("reachability", slugKey(key), { reachabilityKey: key, what: reachabilityWhat(key, vk) });
   }
+  // Last, so the files every earlier read kind numbered keep their names in a folder cut before this read existed.
+  for (const [key, entity] of entityRules) add("entityBusinessRules", slugKey(key), { pageKey: key, what: entityRulesWhat(entity, pkg) });
   // THE PLAN VERSION, stamped the way `--split` freezes its cut and `tasks.mjs` stamps every task file. It is
   // what lets the composing half tell a read plan cut against THIS plan from one cut against an earlier draft:
   // without it, a page key added after the index was written is in no read, so nothing is opened, no problem is
@@ -264,10 +283,10 @@ export function writeReadIndex(dir, plan) {
 
 // The filename stem per kind — short, and distinct from the kind token so a folder listing reads as files
 // rather than as a schema.
-const FILE_STEM = { pageMeta: "meta", pageBundle: "bundle", businessRules: "rules", reachability: "reachability",
-  dashboards: "dashboards" };
+const FILE_STEM = { pageMeta: "meta", pageBundle: "bundle", businessRules: "rules", entityBusinessRules: "entity-rules",
+  reachability: "reachability", dashboards: "dashboards" };
 const KIND_TITLE = { pageMeta: "Pages — metadata", pageBundle: "Pages — merged bundle",
-  businessRules: "Business rules", reachability: "Reachability", dashboards: "Dashboards" };
+  businessRules: "Business rules", entityBusinessRules: "Entity business rules", reachability: "Reachability", dashboards: "Dashboards" };
 // The agent-facing artifact. It names one file per read and says the response goes in VERBATIM, because the
 // whole point is that nothing between the stand and `built.json` is retyped: the agent copies bytes, the engine
 // composes the JSON.
@@ -277,7 +296,7 @@ export function renderReadPlan(plan, dir) {
     + " Copy the WHOLE response — do not slice it, do not re-key it, do not compose any JSON yourself."
     + ` The engine composes \`built.json\` from these files and reads \`${path.posix.join(READS_DIR, READS_INDEX_FILE)}\` to find them,`
     + " so a file written under a name of your own is a file it cannot see.", ""];
-  for (const kind of ["pageMeta", "pageBundle", "businessRules", "reachability", "dashboards"]) {
+  for (const kind of ["pageMeta", "pageBundle", "businessRules", "entityBusinessRules", "reachability", "dashboards"]) {
     const rows = plan.reads.filter((r) => r.kind === kind);
     if (!rows.length) continue;
     L.push(`**${KIND_TITLE[kind]}**`, "", "| # | Key | Read | Write the response to |", "| --- | --- | --- | --- |");

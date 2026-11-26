@@ -3637,10 +3637,15 @@ function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
 
 // The page's business-rules row. A target attribute the user accepted as built another way rides in `vk.decided`
 // (attribute → `{ decision, quote }`), so `--verify` stops counting it as missing and quotes the decision instead.
-function businessRulesRow(deliverableId, label, ruleN, ruleIds, pageKey, ctx) {
+// `source` names where the rules live when they are not the page's own: an entity rule persists on the OBJECT
+// (`read-entity-business-rules`), and is matched against that read, never against the page's rules.
+function businessRulesRow(deliverableId, label, ruleN, ruleIds, pageKey, ctx, source = null) {
   const decided = rulesBuiltElsewhere(pageKey, ruleIds, ctx);
-  return { deliverableId, label: `${label} × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds, ...(decided ? { decided } : {}) } };
+  return { deliverableId, label: `${label} × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds, ...(source || {}), ...(decided ? { decided } : {}) } };
 }
+// The slot of `--built.pages[<key>]` that holds an object's entity rules, and the vk fields naming it.
+export const ENTITY_RULES_SLOT = "entityBusinessRules";
+const entityRulesSource = (entity) => ({ slot: ENTITY_RULES_SLOT, ...(entity ? { entity } : {}) });
 // The `built-elsewhere` entries that close one of `attrs` on this page, each on the user's own decision; null when
 // none does. An entry that cannot stand (another status, an orchestrator's decision) closes nothing and is reported
 // by the plan's `deliverableStatus` check instead.
@@ -3697,7 +3702,8 @@ export function checklistGroups(result, opts = {}) {
   const pageRuleIds = [...new Set((cs.pageBusinessRules || []).map((r) => r.element).filter(Boolean))];
   const entityRuleIds = [...new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute).filter(Boolean))];
   if (pageRuleN) ruleItems.push(businessRulesRow("business-rules", "Business rules", pageRuleN, pageRuleIds, pageKey, ctx));
-  if (entityRuleIds.length) ruleItems.push(businessRulesRow(ENTITY_RULES_DELIVERABLE, "Entity business rules", entityRuleIds.length, entityRuleIds, pageKey, ctx));
+  if (entityRuleIds.length) ruleItems.push(businessRulesRow(ENTITY_RULES_DELIVERABLE, "Entity business rules", entityRuleIds.length, entityRuleIds, pageKey, ctx,
+    entityRulesSource((cs.entityBusinessRules || []).find((r) => r.entity)?.entity || result.entity)));
   G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
@@ -4523,9 +4529,13 @@ function resolveOpenRules(vk, ctx) {
   // said so, distinct from MISSING), the case this ticket adds so a rule the payload cannot see is never a false ❌.
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected business rule(s)`);
   if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so none of the ${want.length} expected business rule(s) exist`, "missing"];
-  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules, elementColumnsOf(ctx.ops));
-  if (tokenSets == null) return ["⚠ verify",
-    `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
+  const onObject = vk.slot === ENTITY_RULES_SLOT;
+  const objectName = vk.entity ? " `" + esc(vk.entity) + "`" : "";
+  const slot = onObject ? ENTITY_RULES_SLOT : "businessRules";
+  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.[slot], elementColumnsOf(ctx.ops));
+  if (tokenSets == null) return ["⚠ verify", onObject
+    ? `entity business rules NOT checkable — this page entry carries no \`${slot}\` slot; run \`read-entity-business-rules\` for the object${objectName} in the target package (or record \`${slot}: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`
+    : `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
   const missing = want.filter((name) => !tokenSets.some((toks) => toks.has(name)));
   const b = want.length - missing.length;
   // A shortfall is ⚠ unverified, not ❌ MISSING — the same conservative choice `resolveFieldsByIdentity` makes for a
@@ -4534,10 +4544,11 @@ function resolveOpenRules(vk, ctx) {
   // The count the plan's label carries (`× N` rules) and the count matched here (distinct target attributes) are
   // two different numbers, and a reader shown `2/5` under `× 7` cannot tell which one is short. Name both.
   const built = tokenSets.length;
-  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built page rule (${b} of ${want.length} target attribute(s), ${built} rule(s) on the built page)`, "ok"];
+  const where = onObject ? "on the object" : "on the built page";
+  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built ${onObject ? "entity" : "page"} rule (${b} of ${want.length} target attribute(s), ${built} rule(s) ${where})`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}`;
-  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) on the built page)${miss}`, "unverified"];
+  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) ${where})${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element", "classic-extras"]);

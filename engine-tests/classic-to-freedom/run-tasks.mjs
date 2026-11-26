@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { renderFinalReport, browserChecksOf, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { renderFinalReport, browserChecksOf, savedPage, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
@@ -5887,6 +5887,33 @@ console.log("\n===== the migration result report — one artifact, computed from
   check("exercised: a page whose LAST built chunk reports no check is unexercised even though an earlier chunk checked it — the page is opened as it finally stands",
     () => lastChunkUnchecked.verdictColour === "orange" && lastChunkUnchecked.counts.unexercised === 1,
     () => lastChunkUnchecked.markdown.split("\n")[2]);
+  {
+    // THE LAST SAVE, NOT THE LAST TASK. The item mini page of a real run: its build task opened it after its save,
+    // and a later repair recorded outcomes only. The two notes are that run's own words.
+    const built = pageTask("v3-build", "child:C1", "Browser checks: 1 — 1: page-smoke edit mode on item \"Spare parts kit\": ready in 6.5 s, all fields populated");
+    const recordOnly = "Browser checks: 0 — this repair saved no page (accounting-only repair), so there was no save to check.";
+    const marked = exercisedRep([built, pageTask("v3-repair", "child:C1", `${recordOnly}\n\nPage saved: no`)], tmp("result-report-unsaved-later"));
+    const unmarked = exercisedRep([built, pageTask("v3-repair", "child:C1", recordOnly)], tmp("result-report-unsaved-unmarked"));
+    check("exercised (last save): a later task that writes `Page saved: no` leaves the check made after the page's last save standing — 🟢, quoting the saving task's check",
+      () => marked.verdictColour === "green" && marked.counts.unexercised === 0
+        && /\[Page build\]\(v3-build\.md\), 1 check: 1: page-smoke edit mode on item/.test(marked.markdown),
+      () => marked.markdown.split("\n")[2]);
+    check("exercised (last save): without the line a later task is taken to have saved, so the page stays unexercised — prose alone never excuses a check",
+      () => unmarked.verdictColour === "orange" && unmarked.counts.unexercised === 1, () => unmarked.markdown.split("\n")[2]);
+    // A check made after the last save counts whichever task made it, and a real save after it still starts over.
+    const laterCheck = exercisedRep([pageTask("lc-a", "main", "Browser checks: 0 — saved the handlers"),
+      pageTask("lc-b", "main", "Browser checks: 1 — page-smoke after the save\nPage saved: no")], tmp("result-report-later-check"));
+    const savedAgain = exercisedRep([pageTask("sa-a", "main", "Browser checks: 1 — loads clean"),
+      pageTask("sa-b", "main", "Browser checks: 0 — read only\nPage saved: no"), pageTask("sa-c", "main", "Browser checks: 0 — saved the layout")],
+    tmp("result-report-saved-again"));
+    check("exercised (last save): a check by a task that saved nothing counts for the save before it; a later real save without a check is unexercised again",
+      () => laterCheck.verdictColour === "green" && savedAgain.verdictColour === "orange" && savedAgain.counts.unexercised === 1,
+      () => [laterCheck.markdown.split("\n")[2], savedAgain.markdown.split("\n")[2]]);
+    check("exercised (last save): `Page saved: no` inside a fence or a quote is prose, and `Page saved: yes` is a save",
+      () => savedPage("```\nPage saved: no\n```") && savedPage("> Page saved: no") && savedPage("Page saved: yes")
+        && !savedPage("- **Page saved:** no") && !savedPage("Page saved: yes\nPage saved: no"),
+      () => [savedPage("```\nPage saved: no\n```"), savedPage("> Page saved: no"), savedPage("- **Page saved:** no")]);
+  }
   {
     // A whole-run build is ONE artifact in the browser verdict, whatever pages it saved: its single
     // `Browser checks: N` line decides all of them at once, as one check line decides one page's last chunk.
@@ -12671,6 +12698,14 @@ console.log("\n===== a decision closing a rule attribute is not drift =====");
   check("decided: a rule row's `decided` attributes leave its task's rowsDigest unchanged, while a changed rule set moves it",
     () => rowsDigest([rule]) === rowsDigest([decided]) && rowsDigest([rule]) !== rowsDigest([renamed]),
     () => [rowsDigest([rule]), rowsDigest([decided]), rowsDigest([renamed])]);
+  // Where a rule row's rules are read says how it is verified, not what is built: a task cut before the row named
+  // its read slot must not read as drifted. Another vk's `entity` is what it checks, so it still moves the digest.
+  const onObject = { ...rule, vk: { ...rule.vk, slot: "entityBusinessRules", entity: "MbContract" } };
+  const related = { label: "Related list Items", vk: { type: "relatedpage", entity: "Item", evidence: "relatedPage:Item" } };
+  const relatedElsewhere = { ...related, vk: { ...related.vk, entity: "OtherItem" } };
+  check("decided: a rule row's read slot and object leave its rowsDigest unchanged; a RelatedPage row's entity still moves it",
+    () => rowsDigest([rule]) === rowsDigest([onObject]) && rowsDigest([related]) !== rowsDigest([relatedElsewhere]),
+    () => [rowsDigest([rule]), rowsDigest([onObject]), rowsDigest([related]), rowsDigest([relatedElsewhere])]);
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
