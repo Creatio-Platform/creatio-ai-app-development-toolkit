@@ -53,36 +53,37 @@ function keyToken(p) {
   return name === "type" && p.value?.type === "Literal" ? `type=${p.value.value}` : name;
 }
 
+// The tag of a node that is not a value read, and the children its shape goes on with.
+function tagOf(n) {
+  switch (n.type) {
+    case "CallExpression": case "NewExpression": {
+      const { key, base } = calleeKey(n.callee);
+      return [`${n.type === "NewExpression" ? "new" : "call"} ${key}`, base ? [base, ...n.arguments] : n.arguments];
+    }
+    case "Property": {
+      const value = n.shorthand ? { type: "Identifier" } : n.value;
+      return ["key " + keyToken(n), n.computed ? [n.key, value] : [value]];
+    }
+    case "VariableDeclarator": return ["decl B", [n.init]];
+    case "FunctionDeclaration": case "FunctionExpression": case "ArrowFunctionExpression": return [n.async ? "fn async" : "fn", [n.body]];
+    case "CatchClause": return ["catch", [n.body]];
+    default:
+      return [n.type + (typeof n.operator === "string" ? " " + n.operator : "") + (n.type === "VariableDeclaration" ? " " + n.kind : ""),
+        childNodesOf(n)];
+  }
+}
+
 // The value shape of one node, as tokens pushed on `out`; returns the number of nodes it counted.
 function valueShape(n, out, depth = 0) {
   if (!n) { out.push("_"); return 0; }
   if (depth > MAX_DEPTH) { out.push("?"); return 1; }
   if (isValueRead(n)) { out.push("V"); return 1; }
-  const at = depth + 1;
-  // A tag, the shapes of the given children, and the close.
-  const node = (tag, children) => {
-    out.push("(" + tag);
-    let count = 1;
-    for (const c of children) count += valueShape(c, out, at);
-    out.push(")");
-    return count;
-  };
-  switch (n.type) {
-    case "CallExpression": case "NewExpression": {
-      const { key, base } = calleeKey(n.callee);
-      return node(`${n.type === "NewExpression" ? "new" : "call"} ${key}`, base ? [base, ...n.arguments] : n.arguments);
-    }
-    case "Property": {
-      const value = n.shorthand ? { type: "Identifier" } : n.value;
-      return node("key " + keyToken(n), n.computed ? [n.key, value] : [value]);
-    }
-    case "VariableDeclarator": return node("decl B", [n.init]);
-    case "FunctionDeclaration": case "FunctionExpression": case "ArrowFunctionExpression": return node(n.async ? "fn async" : "fn", [n.body]);
-    case "CatchClause": return node("catch", [n.body]);
-    default:
-      return node(n.type + (typeof n.operator === "string" ? " " + n.operator : "") + (n.type === "VariableDeclaration" ? " " + n.kind : ""),
-        childNodesOf(n));
-  }
+  const [tag, children] = tagOf(n);
+  out.push("(" + tag);
+  let count = 1;
+  for (const c of children) count += valueShape(c, out, depth + 1);
+  out.push(")");
+  return count;
 }
 
 // The statement lists of one module worth comparing: the body of each function (an expression body is one
@@ -147,12 +148,9 @@ function windowsOf(m, ids) {
   return out;
 }
 
-const within = (inner, outer) => inner.from >= outer.from && inner.to <= outer.to;
-
-// The near-copies between modules, largest first: `{ copy, original }`, each a run of statements with its module,
-// function and lines. A smaller run inside a reported one is not reported again, and a function whose exact copy
-// `isExactCopy(fnA, fnB)` already reports is left to that check.
-export function nearCopies(modules, isExactCopy) {
+// Every pair of runs with one value shape in two different modules, largest first: `{ copy, original }`, the
+// original being the first run of that shape.
+function matchesOf(modules) {
   const ids = new Map();
   const byKey = new Map();
   for (const m of modules) {
@@ -165,14 +163,22 @@ export function nearCopies(modules, isExactCopy) {
   for (const [original, ...rest] of byKey.values()) {
     for (const w of rest) if (w.module !== original.module) matches.push({ copy: w, original });
   }
-  matches.sort((a, b) => b.copy.count - a.copy.count || a.copy.from - b.copy.from);
+  return matches.sort((a, b) => b.copy.count - a.copy.count || a.copy.from - b.copy.from);
+}
+
+const within = (inner, outer) => inner.from >= outer.from && inner.to <= outer.to;
+const coveredBy = (match, r) => r.copy.module === match.copy.module && r.original.module === match.original.module
+  && within(match.copy, r.copy) && within(match.original, r.original);
+
+// The near-copies between modules, largest first: `{ copy, original }`, each a run of statements with its module,
+// function and lines. A smaller run inside a reported one is not reported again, and a function whose exact copy
+// `isExactCopy(fnA, fnB)` already reports is left to that check.
+export function nearCopies(modules, isExactCopy) {
   const reported = [];
-  for (const match of matches) {
+  for (const match of matchesOf(modules)) {
     const { copy, original } = match;
     if (copy.whole && original.whole && isExactCopy(copy.fn, original.fn)) continue;
-    const covered = reported.some((r) => r.copy.module === copy.module && r.original.module === original.module
-      && within(copy, r.copy) && within(original, r.original));
-    if (!covered) reported.push(match);
+    if (!reported.some((r) => coveredBy(match, r))) reported.push(match);
   }
   return reported;
 }

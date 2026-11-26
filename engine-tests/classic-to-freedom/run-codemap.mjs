@@ -234,8 +234,8 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
   check("CLI `--modules`, one page: an unparseable imported module is printed as unreadable and makes the exit 2",
     () => rb.status === 2 && /UsrBroken/.test(rb.stdout) && !/TypeError/.test(rb.stderr), () => ({ status: rb.status, out: rb.stdout, err: rb.stderr }));
 }
-// NEAR-COPIES IN THE MAP. A benchmark page's map read clean although its module held the shared module's query
-// function with the path made a parameter, and constants the shared module already declares.
+// NEAR-COPIES IN THE MAP. A page's map flags its module's code that is the shared module's code with a value made a
+// parameter, and a constant its module declares again although the shared module declares it.
 {
   const v3dir = path.join(here, "fixtures", "module-lint-v3");
   const returnPage = { schemaName: "UsrDemoV3App_DemoReturnNoteFormPage", args: "(sdk, returnNote)",
@@ -251,7 +251,7 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
   const pageFile = path.join(dir, "return-note.json");
   fs.writeFileSync(pageFile, JSON.stringify({ page: { schemaName: returnPage.schemaName }, bundle: returnPage }));
   const r = run(pageFile, "--modules", v3dir);
-  check("CLI `--modules`, one page: a near-copy makes the exit 2 — the map no longer reads clean",
+  check("CLI `--modules`, one page: a near-copy makes the exit 2",
     () => r.status === 2 && /sendDataServiceQuery/.test(r.stdout), () => ({ status: r.status, err: r.stderr }));
 }
 fs.rmSync(dir, { recursive: true, force: true });

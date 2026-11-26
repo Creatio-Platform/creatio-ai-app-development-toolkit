@@ -753,9 +753,11 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
       () => nearIn(twoModules(open, open.replace("crt.OpenPageRequest", "usr.OpenPreviewRequest"))).length === 0);
     check("near-copy: the same request with only another schema name IS a copy",
       () => nearIn(twoModules(open, open.replace("\"UsrX\"", "\"UsrY\""))).length === 1);
-    const small = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.A\", $context: request.$context }); }";
-    check("near-copy: a run below the size floor (one plain request) is not reported",
-      () => nearIn(twoModules(small, small.replace("crt.A", "crt.B"))).length === 0);
+    // The same request with only another value, once below the size floor and once above it (the open-page pair).
+    const small = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.A\", schemaName: \"UsrX\", $context: request.$context }); }";
+    check("near-copy: the same small request with another value is below the size floor and is not reported",
+      () => nearIn(twoModules(small, small.replace("\"UsrX\"", "\"UsrY\""))).length === 0
+        && nearIn(twoModules(open, open.replace("\"UsrX\"", "\"UsrY\""))).length === 1);
     const sharedUpdate = "async function updateEach(entity, values, ids) { const model = await sdk.Model.create(entity); let failed = 0;"
       + " for (const id of ids) { try { await model.update(values, [{ type: \"primaryColumnValue\", value: id }]); } catch (e) { failed++; } } return { total: ids.length, failed }; }";
     const viaShared = twoModules("function close(ids) { return shared.updateEach(\"UsrContract\", { UsrStatus: 1 }, ids); }",
