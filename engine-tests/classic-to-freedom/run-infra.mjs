@@ -271,7 +271,10 @@ const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards", "wit
   // Each inherited detail is also a `detail-inherited` decision, which the ⚠ Confirm worklist carries as its row.
   "inheritedDetails",
   // Likewise each unchecked template detail is a `detail-inheritance-unchecked` decision with its own ⚠ Confirm row.
-  "inheritanceUnchecked"]);
+  "inheritanceUnchecked",
+  // Pages that write data when opened: not a build row but a rule for HOW a page is checked. It reaches every build
+  // task through the task set's run header (`dataWritingBlock` in tasks.mjs), not through a checklist row.
+  "writesOnOpen"]);
 const fieldsOfReturn = (startsAt) => {
   const at = mapperSrc.indexOf(startsAt);
   const m = at < 0 ? null : /\n {2}return \{([\s\S]*?)\n {2}\};/.exec(mapperSrc.slice(at));

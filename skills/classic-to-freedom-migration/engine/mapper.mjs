@@ -618,6 +618,8 @@ export function mapToFreedom(eff, opts = {}) {
   const handlerStubs = _rl.handlerStubs;
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
+  // the page writes data while it opens: the plan names it and every browser check keeps to edit mode
+  const dataWritesOnOpen = writesOnOpen(payloadMethods);
 
   // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
   // (messages / mixins / the full define() dep list) ----
@@ -638,6 +640,7 @@ export function mapToFreedom(eff, opts = {}) {
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, standardMethodsFiltered, needsDecision,
+    writesOnOpen: dataWritesOnOpen,
     ruleSourceCount: payloadRules.length, // # of declarative page/entity rule DEFINITIONS considered (before mapping) — lets a caller detect "rules existed but none mapped into Logic"
     // resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
@@ -2334,6 +2337,57 @@ function buildCallerIndex(methods) {
     }
   }
   return idx;
+}
+
+// ---------------------------------------------------------------------------
+// PAGES THAT WRITE DATA WHEN THEY OPEN. A Classic page whose open
+// hook reaches a data-writing call — the counter idiom `postSysSettingsValue
+// ("XLastNumber", next)` that assigns the next number, an insert / update
+// query, the number generator, a save — changes the stand every time anything
+// opens it. A browser check opens pages, so on the benchmark Contracts page the
+// consent probe and one builder consumed 2 contract numbers and nobody was told.
+// The walk starts at the hooks the platform runs while the page opens and
+// follows `this.<method>` calls through the page's own methods, so a helper one
+// hop away (`onEntityInitialized → mbAssignNumber`) is found where it writes.
+// ---------------------------------------------------------------------------
+const OPEN_HOOKS = ["init", "onEntityInitialized", "onRender"];
+
+// One entry per method that writes and is reached from an open hook: `{ hook, path, method, writes, addModeOnly }`,
+// `path` the call chain from the hook to the method. A write is add-mode only when the code proves it: the write, or a
+// call on its path, sits inside an add-mode branch (`addModeOnlyCalls` / `addModeOnly` of the facts). A method is
+// listed once, and a path that reaches it OUTSIDE add mode wins over one inside it: "every open" is the label that
+// keeps a check from opening the page, so it is never lost to the path the walk happened to take first.
+export function writesOnOpen(methods) {
+  const byName = new Map((methods || []).filter((m) => m?.facts).map((m) => [m.name, m]));
+  const found = new Map();
+  const visited = new Set();
+  for (const hook of OPEN_HOOKS) if (byName.has(hook)) walkFromHook(hook, byName, found, visited);
+  return [...found.values()];
+}
+// Breadth-first from one hook, each method once per mode (`visited` is shared across hooks): a method already reached
+// outside add mode has nothing left to tell. The array iterator sees the entries pushed while it runs.
+function walkFromHook(hook, byName, found, visited) {
+  const queue = [{ pathTo: [hook], addMode: false }];
+  for (const { pathTo, addMode } of queue) {
+    const name = pathTo.at(-1);
+    if (visited.has(`${name}|false`) || visited.has(`${name}|${addMode}`)) continue;
+    visited.add(`${name}|${addMode}`);
+    const f = byName.get(name).facts;
+    keepWrites(found, { hook, path: pathTo, method: name, addMode, writes: f.dataWrites || [] });
+    const guarded = new Set(f.addModeOnlyCalls || []);
+    for (const c of f.calls) {
+      const next = internalCallTarget(c);
+      if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addMode || guarded.has(c) });
+    }
+  }
+}
+// Keep one entry per method: the first one found, replaced only by a path that makes it write on every open.
+function keepWrites(found, { hook, path, method, addMode, writes }) {
+  if (!writes.length) return;
+  const ws = writes.map((w) => ({ call: w.call, target: w.target, addModeOnly: addMode || w.addModeOnly === true }));
+  const entry = { hook, path, method, writes: ws, addModeOnly: ws.every((w) => w.addModeOnly) };
+  const prev = found.get(method);
+  if (!prev || (prev.addModeOnly && !entry.addModeOnly)) found.set(method, entry);
 }
 
 // Walk callers upward until something ANSWERS what starts the chain: a caller

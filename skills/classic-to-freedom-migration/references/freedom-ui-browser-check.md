@@ -15,7 +15,11 @@ The `Browser:` line the orchestrator recorded with the user before the first pag
 builder's prompt quotes it:
 
 - **`page-smoke`** — clio `page-smoke` opens a Freedom **form** page headless, waits for it to be ready and
-  returns its `buttons`, its `fields` (`required`, `readonly`, `value`, `error`) and its `consoleErrors`. That is
+  returns its `buttons`, its `fields` (`required`, `readonly`, `value`, `error`) and its `consoleErrors`. Pass
+  `record-id` — the `Id` of one existing record of the page's entity, read first with clio `odata-read` (top 1, `Id`
+  only) — to open it in edit mode; without it the page opens in ADD mode, which on a page that writes data when it
+  opens (the plan's **Pages that write data when opened**) consumes a number or a counter. A page that list marks as
+  writing *every time it opens* is not opened at all unless its task file says the user agreed to the check. That is
   the render check and the state of each rule-driven field in one call, with no browser surface and no approval
   prompt, so a builder can run it. It is read-only by default; `click` presses one button and is a WRITE (Save
   can create a record), and its reply reports the toasts, dialogs and records the click produced. It cannot open

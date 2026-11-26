@@ -716,8 +716,27 @@ const CALL_KIND_RX = [
   ["refresh", /(?:^|\.)refreshFields$|(?:^|\.)updateDetail(?:s)?$|(?:^|\.)reloadEntity$|(?:^|\.)reloadGridData$|(?:^|\.)loadEntity$/],
   ["feature-toggle", /getIsFeatureEnabled/],
   ["mixin-call", /(?:^|\.)mixins\./],
+  // A call that CHANGES stand data by itself, wherever it runs: a system-setting write (the classic counter idiom
+  // `postSysSettingsValue("XLastNumber", next)`), an insert / update / delete query, or the platform's number
+  // generator. Recorded in `dataWrites` together with every `save`, and read by `writesOnOpen` in mapper.mjs: a page that reaches one of these while it opens
+  // consumes data every time a browser check opens it. Not `BatchQuery`: it is a container, the usual way a page batches
+  // its READS on open, and a batch that writes is still found through the insert / update / delete query added to it.
+  ["data-write", /(?:^|\.)post(?:Personal)?SysSettingsValue$|(?:^|\.)(?:InsertQuery|UpdateQuery|DeleteQuery)$|(?:^|\.)getIncrement(?:Code|Number|Value)\w*$/],
 ];
 const classifyCall = (p) => CALL_KIND_RX.filter(([, rx]) => rx.test(p)).map(([kind]) => kind);
+
+// What a data-writing call writes, from its arguments: the first string argument (the system setting a
+// `postSysSettingsValue` writes; `arg`, null for a class factory) or the `rootSchemaName` of a query's config object.
+// null when no static reading names it; the call itself is still recorded.
+function dataWriteTarget(node, arg) {
+  if (arg) return arg;
+  for (const a of node.arguments || []) {
+    if (a?.type !== "ObjectExpression") continue;
+    const p = a.properties.find((x) => staticPropKey(x) === "rootSchemaName");
+    if (p?.value?.type === "Literal" && typeof p.value.value === "string") return p.value.value;
+  }
+  return null;
+}
 
 // Where a call's first string argument lands: `this.get("X")` reads an attribute, `this.set("X", …)` writes one,
 // `sandbox.publish/subscribe("Msg")` moves a message. A table so a new accessor is one entry, not a new branch.
@@ -733,15 +752,32 @@ const ARG_SINKS = [
 // the constructed class name is classified too: the evidence is in the argument, not in the call.
 const CLASS_FACTORY_RX = /(?:^|\.)Ext\.create$|(?:^|\.)Terrasoft\.create$/;
 
+// One data-writing call into `dataWrites`. A save writes the record too, so it joins the data writes with no target
+// (the record is the page's own). Add-mode only while EVERY occurrence of the write sits inside an add-mode branch:
+// one unguarded copy makes it a write on every open, the label that keeps a check from opening the page at all.
+function recordDataWrite(node, dataWrites, { p, arg, factory, save, guarded }) {
+  let target = null;
+  if (!save) target = dataWriteTarget(node, factory ? null : arg);
+  const write = { call: factory ? arg : p, target };
+  const key = `${write.call}\u0000${target}`;
+  dataWrites.set(key, { ...write, addModeOnly: guarded && (dataWrites.get(key)?.addModeOnly ?? true) });
+}
+
 // record ONE call/new expression into the fact sinks
-function recordCall(node, sinks) {
+function recordCall(node, sinks, guarded = false) {
   const p = calleePath(node.callee);
   if (!p) return;
   sinks.calls.add(p);
-  for (const k of classifyCall(p)) sinks.kinds.add(k);
+  (guarded ? sinks.addModeCalls : sinks.openCalls).add(p);
+  const own = classifyCall(p);
+  for (const k of own) sinks.kinds.add(k);
   const arg = firstStringArg(node);
+  const factory = !!arg && CLASS_FACTORY_RX.test(p);
+  const built = factory ? classifyCall(arg) : [];
+  for (const k of built) sinks.kinds.add(k);
+  if (own.includes("save") || own.includes("data-write") || built.includes("data-write"))
+    recordDataWrite(node, sinks.dataWrites, { p, arg, factory, save: own.includes("save"), guarded });
   if (!arg) return;
-  if (CLASS_FACTORY_RX.test(p)) for (const k of classifyCall(arg)) sinks.kinds.add(k);
   const hit = ARG_SINKS.find(([rx]) => rx.test(p));
   if (hit) sinks[hit[1]].add(arg);
 }
@@ -775,15 +811,39 @@ export function walkAstBounded(root, visit) {
 
 // Walk one method body, collecting the facts above, on the bounded walker (iterative, so a deeply nested body cannot
 // blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH).
+// THE ADD-MODE BRANCH of a body: every call that runs only when the card is new — inside the consequent of
+// `if (this.isAddMode())` (or `isNewMode` / `isCopyMode`, alone or as one operand of `&&`), the `? :` consequent, or
+// the right side of `this.isAddMode() && …`. A negated or `||` test is not one: a call reads as add-mode only when
+// the code proves it, so a doubtful case is a write on every open, the safe label.
+const ADD_MODE_TEST_RX = /^this\.(?:isAddMode|isNewMode|isCopyMode)$/;
+function isAddModeTest(t) {
+  if (t?.type === "CallExpression") return ADD_MODE_TEST_RX.test(calleePath(t.callee) || "");
+  return t?.type === "LogicalExpression" && t.operator === "&&" && (isAddModeTest(t.left) || isAddModeTest(t.right));
+}
+function addModeBranch(node) {
+  if ((node.type === "IfStatement" || node.type === "ConditionalExpression") && isAddModeTest(node.test)) return node.consequent;
+  return node.type === "LogicalExpression" && node.operator === "&&" && isAddModeTest(node.left) ? node.right : null;
+}
+function addModeCallNodes(body) {
+  const guarded = new Set();
+  walkAstBounded(body, (node) => {
+    const branch = addModeBranch(node);
+    if (branch) walkAstBounded(branch, (n) => { if (n.type === "CallExpression" || n.type === "NewExpression") guarded.add(n); });
+  });
+  return guarded;
+}
+
 function walkMethodBody(fnNode) {
   const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
-  const publishes = new Set(), subscribes = new Set();
+  const publishes = new Set(), subscribes = new Set(), dataWrites = new Map();
+  const addModeCalls = new Set(), openCalls = new Set();
+  const guarded = addModeCallNodes(fnNode.body);
   // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
   // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
   // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
   const { truncated } = walkAstBounded(fnNode.body, (node) => {
     if (node.type === "CallExpression" || node.type === "NewExpression")
-      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
+      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes, dataWrites, addModeCalls, openCalls }, guarded.has(node));
   });
   const sorted = (s) => [...s].sort(byLocale);
   // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
@@ -793,7 +853,12 @@ function walkMethodBody(fnNode) {
   return { calls: sorted(calls), kinds: sorted(kinds),
     readsAttrs: sorted(reads).filter((n) => !isRes(n)), readsResources: sorted(reads).filter(isRes),
     writesAttrs: sorted(writes),
-    publishes: sorted(publishes), subscribes: sorted(subscribes), truncated };
+    publishes: sorted(publishes), subscribes: sorted(subscribes),
+    // `{ call, target, addModeOnly }` per distinct data-writing call (CALL_KIND_RX `data-write`, and saves), so a
+    // plan can name WHAT it writes and whether only a new card runs it
+    dataWrites: [...dataWrites.keys()].sort(byLocale).map((k) => dataWrites.get(k)),
+    // the callee paths this body makes ONLY inside an add-mode branch (see `addModeCallNodes`)
+    addModeOnlyCalls: sorted(addModeCalls).filter((c) => !openCalls.has(c)), truncated };
 }
 
 // A pure passthrough override (`f: function(){ this.callParent(arguments); }`) declares NO behaviour of its own.
@@ -846,7 +911,7 @@ export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "
 function externalMethodFact(name, fn) {
   const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
   return { name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
-    writesAttrs: [], publishes: [], subscribes: [], truncated: false,
+    writesAttrs: [], publishes: [], subscribes: [], dataWrites: [], addModeOnlyCalls: [], truncated: false,
     externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false };
 }
 

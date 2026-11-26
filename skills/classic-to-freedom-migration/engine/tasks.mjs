@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -627,7 +627,7 @@ function artifactRows(groups, B) {
 // project conventions approved with that plan (the block each build and fix task file shows). ONE place, so the
 // next run-level field cannot be added to some writers and missed at others.
 const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null,
-  directives: result.directives });
+  directives: result.directives, dataWritingPages: dataWritingPages(result) });
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -1252,6 +1252,9 @@ function markersBlock() {
       + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
       + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
       + " only a call or a `Ported as` line does.",
+    "  - for every record or setting a browser check of yours created or changed (a `click` that saved,"
+      + " `click.created`, an agreed add-mode check that took a number): `Stand data changed (row N): <what> <before> →"
+      + " <after> (<page>)`, N the row whose check did it, one line per value. The migration result lists every one.",
   ];
 }
 // THE USER'S DIRECTIVES, in every task that builds or reviews a page they apply to. The file is the sub-agent's
@@ -1268,6 +1271,31 @@ function directivesBlock(task, directives) {
     ...own.map((d) => `  - \`${d.id}\` (${d.scope.map((k) => "`" + esc(k) + "`").join(", ")}): “${esc(d.quote)}” → expected: ${esc(d.expectation)}`),
     "  - Cannot follow one here? Do not build something else in its place. Say so under `## Notes`, naming the"
       + " directive: its own row stays `not-built — needs-decision` until a person decides.",
+  ];
+}
+// THE PAGES OF THIS TASK THAT WRITE DATA WHEN THEY OPEN. The task file is the builder's prompt, so the
+// rule that keeps its browser check from consuming data sits beside the rows it builds: edit mode on an existing
+// record, and an add-mode check only on the consent the user gave. A whole-run task covers every page.
+// `agreed` is the page key → `Add-mode check:` value map `addModeChecks` read off `worklog.md`: every sync re-renders
+// the file with it, so the consent reaches the builder in its own file rather than through the orchestrator's prompt.
+export function dataWritingBlock(task, pages, agreed = new Map()) {
+  const keys = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
+  const own = (pages || []).filter((p) => task.pageKey === "run" || keys.has(p.pageKey));
+  if (!own.length) return [];
+  const consent = own.filter((p) => agreed?.has(p.pageKey));
+  return [
+    "- **⚠ This task's page writes data when it opens — keep every browser check from consuming it:**",
+    ...dataWriteBullets(own, "  "),
+    "  - Open it only in EDIT mode on an existing record: `page-smoke` with `record-id`, the `Id` of one existing record"
+      + " of the page's entity that you read first (clio `odata-read` of the entity, top 1, `Id` only — never a record"
+      + " your own check created); a browser surface opens that record's own URL. Never omit `record-id`: `page-smoke`"
+      + " without it opens add mode. A page listed above as writing *every time it opens* is not opened at all.",
+    ...(consent.length
+      ? consent.map((p) => `  - The user agreed to an add-mode check of \`${esc(p.pageKey)}\` (\`worklog.md\`: “${esc(agreed.get(p.pageKey))}”):`
+        + " for that check the rule above is lifted. Read each value listed above before it, and after it write a"
+        + " `Stand data changed (row N):` line for each one under `## Notes`.")
+      : ["  - No add-mode check is agreed: no `Add-mode check:` line of `worklog.md` names this page, so the rule above holds"
+        + " for every check."]),
   ];
 }
 // An id as a code span the judge can copy as written: Markdown escapes nothing inside one, so the id is not escaped
@@ -1388,6 +1416,7 @@ export function renderTaskFile(task, set = {}) {
     ...markersBlock(),
     ...oneAgentBlock(task),
     ...directivesBlock(task, set.directives),
+    ...dataWritingBlock(task, set.dataWritingPages, set.addModeChecks),
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
     ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
     ...judgedRecordsBlock(task),
@@ -5096,6 +5125,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const unaccounted = decisionRefusal(merged, dir, opts);
   if (unaccounted) return { ...fresh, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
+  merged.addModeChecks = addModeChecks(readWorklogText(dir).text, fresh.dataWritingPages).agreed;
   // Close the clocks of everything that finished since the last pass, before the files are written. A lock another
   // process keeps is a refusal like the others above: nothing is written, and the caller re-runs.
   // A ledger file kept busy past the rename budget is a refusal too, with the difference `REFUSED_LEDGER_BUSY`
@@ -5209,16 +5239,63 @@ export function worklogBrowser(worklogText) {
 // it. The one place the engine reads it, so the start gate and the result report cannot disagree on where it is.
 // `line` is the valid `Browser:` line or null; `unread` says why worklog.md could not be read, or is null when it was.
 // The two differ for the result report: "no answer recorded" and "the answer could not be read" are different findings.
-export function readWorklogBrowserAnswer(tasksDir) {
+// The text of the `worklog.md` that belongs to the task folder `tasksDir` — the one place its location is decided —
+// with `unread` saying why it could not be read (`text` is then "").
+export function readWorklogText(tasksDir) {
   const file = path.join(path.dirname(path.resolve(tasksDir)), "worklog.md");
-  try { return { line: worklogBrowser(fs.readFileSync(file, "utf8")), unread: null }; }
+  try { return { text: fs.readFileSync(file, "utf8"), unread: null }; }
   catch (e) {
     const why = e?.code === "ENOENT" ? `no \`worklog.md\` beside the task folder (${file})` : `\`${file}\` could not be read (${e?.code || e?.message})`;
-    return { line: null, unread: why };
+    return { text: "", unread: why };
   }
+}
+// `text` rides along so a reader of another worklog line (the result report's stand-data section) reads the file once.
+export function readWorklogBrowserAnswer(tasksDir) {
+  const { text, unread } = readWorklogText(tasksDir);
+  return { line: unread ? null : worklogBrowser(text), unread, text };
 }
 // The recorded `Browser:` line alone, null for no file or no valid line: the start gate holds a page task on either.
 export const readWorklogBrowser = (tasksDir) => readWorklogBrowserAnswer(tasksDir).line;
+
+// THE STAND-DATA LINES. A builder records what its checks changed as the `Stand data changed (row N):` marker of its
+// `## Notes` (`markersBlock`); the orchestrator records what its own checks changed as `Stand data changed:` in
+// `worklog.md`, and each add-mode check the user agreed to as `Add-mode check: <page key> (user: "<their words>")`.
+export const STAND_DATA_MARKER = notesMarker("Stand data changed");
+export const STAND_DATA_FIELD = "Stand data changed:";
+export const ADD_MODE_FIELD = "Add-mode check:";
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
+// Every value of `field` in `worklogText`, in file order, read as the other worklog fields are (`plainLine`: a list
+// bullet and bold allowed). A quoted line, or one inside a code fence, is prose about the line and is skipped.
+export function worklogFieldValues(worklogText, field) {
+  const out = [];
+  let fence = null;
+  for (const line of String(worklogText || "").split(/\r?\n/)) {
+    const f = FENCE_OPEN.exec(line);
+    if (f && !fence) fence = f[1];
+    else if (f?.[1].startsWith(fence)) fence = null;
+    else if (!fence) {
+      // bold first: `plainLine` alone takes the first `*` of a leading `**` for a list bullet
+      const plain = plainLine(line.replaceAll("**", ""));
+      const value = plain.startsWith(field) ? plain.slice(field.length).trim() : "";
+      if (value) out.push(value);
+    }
+  }
+  return out;
+}
+// The add-mode checks the user agreed to. The first word of each value is the page key the plan's **Pages that write
+// data when opened** section prints; a line that names no page of that section is returned in `unknown`, never as
+// consent, so a typo or a page label cannot lift the edit-mode rule of a page the user did not name.
+export function addModeChecks(worklogText, pages) {
+  const keys = new Set((pages || []).map((p) => p.pageKey));
+  const agreed = new Map();
+  const unknown = [];
+  for (const value of worklogFieldValues(worklogText, ADD_MODE_FIELD)) {
+    const key = value.split(/\s/)[0];
+    if (keys.has(key)) agreed.set(key, value);
+    else unknown.push(value);
+  }
+  return { agreed, unknown };
+}
 
 // The answer a `Browser:` line records — `page-smoke`, `surface` or `none` — or null for no line. Every reader of the
 // line asks this, so the start gate and the result report interpret it by one rule.

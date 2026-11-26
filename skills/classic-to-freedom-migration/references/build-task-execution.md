@@ -218,7 +218,15 @@ wait for the user to ask for a UI review.
      browser surface for a list page or a data-request check when one is available; `surface` → a
      browser surface; `none` → no check, the user declined it for this run. With `page-smoke`, a
      `browser-consent-required` reply is not yours to answer: write it under `## Notes` and stop the
-     check there. Between edits the evidence is the
+     check there. A page your task file marks as **writing data when it opens** is opened only in
+     EDIT mode on an existing record: `page-smoke` with `record-id`, the `Id` of one existing record of
+     the page's entity read first (clio `odata-read`, top 1, `Id` only; never a record your own check
+     created) — without it `page-smoke` opens add mode. A page the file marks as writing *every time it
+     opens* is not opened at all. Your task file says whether the user agreed to an add-mode check of
+     the page; only then is the rule lifted for that check: read the values the file names before it
+     and write `Stand data changed (row N): <what> <before> → <after> (<page>)` under `## Notes` after
+     it. Any data a check of yours changes on any page (a `click` that saved, `click.created`) gets the
+     same line. Between edits the evidence is the
      saved schema read back with `get-page`, which also answers while a tab is frozen; any other
      question between saves is answered by that `get-page` read-back, never by opening the page.
      At most TWO browser checks per task: the second is allowed only to confirm the fix of a defect

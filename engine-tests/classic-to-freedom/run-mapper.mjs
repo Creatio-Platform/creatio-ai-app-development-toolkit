@@ -5,6 +5,7 @@ import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runLaunchedProcessesChecks } from "./run-mapper-launched-processes.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
+import { runWritesOnOpenChecks } from "./run-mapper-writes-on-open.mjs";
 import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
 import { runVerifyFalseNegativeChecks, runCaptionKeyChecks } from "./run-mapper-verify-false-negatives.mjs";
 import fs from "node:fs";
@@ -10760,6 +10761,7 @@ runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlan
 runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
+runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FIX });
 runModuleDepChecks({ check, verifyCtx, resolveVk, FIX });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
