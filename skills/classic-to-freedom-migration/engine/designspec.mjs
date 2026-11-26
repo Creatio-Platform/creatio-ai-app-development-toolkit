@@ -4529,13 +4529,10 @@ function resolveOpenRules(vk, ctx) {
   // said so, distinct from MISSING), the case this ticket adds so a rule the payload cannot see is never a false ❌.
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected business rule(s)`);
   if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so none of the ${want.length} expected business rule(s) exist`, "missing"];
-  const onObject = vk.slot === ENTITY_RULES_SLOT;
-  const objectName = vk.entity ? " `" + esc(vk.entity) + "`" : "";
-  const slot = onObject ? ENTITY_RULES_SLOT : "businessRules";
-  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.[slot], elementColumnsOf(ctx.ops));
-  if (tokenSets == null) return ["⚠ verify", onObject
-    ? `entity business rules NOT checkable — this page entry carries no \`${slot}\` slot; run \`read-entity-business-rules\` for the object${objectName} in the target package (or record \`${slot}: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`
-    : `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
+  const src = ruleSource(vk);
+  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.[src.slot], elementColumnsOf(ctx.ops));
+  if (tokenSets == null) return ["⚠ verify",
+    `${src.subject} NOT checkable — this page entry carries no \`${src.slot}\` slot; run \`${src.read}\` for ${src.target} (or record \`${src.slot}: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
   const missing = want.filter((name) => !tokenSets.some((toks) => toks.has(name)));
   const b = want.length - missing.length;
   // A shortfall is ⚠ unverified, not ❌ MISSING — the same conservative choice `resolveFieldsByIdentity` makes for a
@@ -4544,11 +4541,19 @@ function resolveOpenRules(vk, ctx) {
   // The count the plan's label carries (`× N` rules) and the count matched here (distinct target attributes) are
   // two different numbers, and a reader shown `2/5` under `× 7` cannot tell which one is short. Name both.
   const built = tokenSets.length;
-  const where = onObject ? "on the object" : "on the built page";
-  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built ${onObject ? "entity" : "page"} rule (${b} of ${want.length} target attribute(s), ${built} rule(s) ${where})`, "ok"];
+  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built ${src.kind} rule (${b} of ${want.length} target attribute(s), ${built} rule(s) ${src.where})`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}`;
-  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) ${where})${miss}`, "unverified"];
+  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) ${src.where})${miss}`, "unverified"];
+}
+// Where a rule row's rules are read, and how its verdict names that source: the page's own rules, or the object's.
+function ruleSource(vk) {
+  if (vk.slot !== ENTITY_RULES_SLOT) {
+    return { slot: "businessRules", subject: "business rules", read: "read-page-business-rules", target: "the page", kind: "page", where: "on the built page" };
+  }
+  const object = vk.entity ? " `" + esc(vk.entity) + "`" : "";
+  return { slot: ENTITY_RULES_SLOT, subject: "entity business rules", read: "read-entity-business-rules",
+    target: `the object${object} in the target package`, kind: "entity", where: "on the object" };
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element", "classic-extras"]);

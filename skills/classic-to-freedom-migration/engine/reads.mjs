@@ -296,7 +296,7 @@ export function renderReadPlan(plan, dir) {
     + " Copy the WHOLE response — do not slice it, do not re-key it, do not compose any JSON yourself."
     + ` The engine composes \`built.json\` from these files and reads \`${path.posix.join(READS_DIR, READS_INDEX_FILE)}\` to find them,`
     + " so a file written under a name of your own is a file it cannot see.", ""];
-  for (const kind of ["pageMeta", "pageBundle", "businessRules", "entityBusinessRules", "reachability", "dashboards"]) {
+  for (const kind of Object.keys(KIND_TITLE)) {
     const rows = plan.reads.filter((r) => r.kind === kind);
     if (!rows.length) continue;
     L.push(`**${KIND_TITLE[kind]}**`, "", "| # | Key | Read | Write the response to |", "| --- | --- | --- | --- |");

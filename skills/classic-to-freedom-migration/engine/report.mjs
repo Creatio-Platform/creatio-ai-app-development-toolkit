@@ -113,8 +113,11 @@ function browserExercise(tasks, declined = false) {
     const n = line?.n ?? 0;
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
     const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
-    // A save starts the page over; a task that saved nothing can only add a check to the page as it stands.
-    if (savedPage(t.notes) || !page.evidence || (n > 0 && !page.exercised)) {
+    // A save starts the page over; a task that saved nothing can only add a check to the page as it stands. The
+    // page's first task always speaks for it, saved or not, so its evidence is never empty.
+    const firstTask = !page.evidence;
+    const addsCheck = n > 0 && !page.exercised;
+    if (savedPage(t.notes) || firstTask || addsCheck) {
       page.exercised = n > 0 && !declined;
       page.evidence = { task: t, n, text: line?.text || "", reported: !!line };
     }
