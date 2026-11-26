@@ -105,9 +105,11 @@ The page's code is measured by the engine, not by you, in two kinds of blocking 
 verify table. The `Page code` row holds functions over the length limit, a helper declared twice on
 the page and requests nobody sends. The `Code quality` rows hold nested functions in a handler,
 helpers copied from another page, catch blocks that only log, a numeric `comparisonType`, sequential
-independent loads, plan codes in comments and record ids a constants module holds. Both rows also
-measure every client module the page imports, directly or through another module (a finding there is
-named `module <Name>`), so logic moved out of the page body is not out of reach. A `#quality-gates`
+independent loads, plan codes in comments, record ids a constants module holds, a handler that does
+not pass the request on (`next`), a write whose failure result the caller ignores and a read that pages
+through every row. Both rows also measure every client module the page imports, directly or through
+another module (a finding there is named `module <Name>`), so logic moved out of the page body is not
+out of reach. A `#quality-gates`
 record that calls the page clean while either row reads `⚠ verify` is not convincing; quote the row
 in `why`.
 
