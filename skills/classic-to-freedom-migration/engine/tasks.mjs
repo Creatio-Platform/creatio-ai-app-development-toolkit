@@ -512,9 +512,12 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
 // A row's Classic `texts` are left out too: they are checked against the built page, not built by a different task.
 // A rule row's `decided` attributes are closed by a person's answer, not built by the task, so an answer recorded
-// after the task closed must not read as drift and re-dispatch it.
+// after the task closed must not read as drift and re-dispatch it. Where a rule row's rules are READ (`slot`,
+// `entity`) says how it is verified, not what is built, so it is no drift either.
+const RULE_READ_ONLY_KEYS = { decided: undefined, slot: undefined, entity: undefined };
 const digestVk = (vk) => {
-  const v = vk?.texts || vk?.decided ? { ...vk, texts: undefined, decided: undefined } : vk;
+  let v = vk?.texts ? { ...vk, texts: undefined } : vk;
+  if (v?.type === "rule") v = { ...v, ...RULE_READ_ONLY_KEYS };
   return v?.type === "layout" && v.names ? { ...v, names: undefined } : v;
 };
 // A PLAN BOUNDARY is digested as a marker, not by its reason text: a row flipping between "build it" and "the plan
@@ -1256,6 +1259,9 @@ function markersBlock() {
       + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
       + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
       + " only a call or a `Ported as` line does.",
+    "  - when this task saved nothing to the page's body (it only recorded outcomes, read the stand, or changed a"
+      + " client module): `Page saved: no`. The page then stands as its last save left it, and the browser check made"
+      + " after that save still counts; leave the line out whenever you saved the page.",
     "  - for every record or setting a browser check of yours created or changed (a `click` that saved,"
       + " `click.created`, an agreed add-mode check that took a number): `Stand data changed (row N): <what> <before> →"
       + " <after> (<page>)`, N the row whose check did it, one line per value. The migration result lists every one.",

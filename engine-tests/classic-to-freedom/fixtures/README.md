@@ -35,5 +35,9 @@ Provenance (important):
   otherwise unchanged: every page has its own module and one shared module, yet functions and runs of statements
   repeat across modules with other values, and named constants are declared in several modules.
   `run-mapper-quality.mjs` asserts the near-copy and shared-constant findings.
+- `mbcontract-v3-browser/` — **real task notes** from a migration benchmark run of the synthetic `MbContract` test
+  package (no customer data): every page-writing task of the run, in queue order, with its status, its `order` and its last
+  `Browser checks:` line, and `unsaved: true` on the tasks whose notes say they saved no page. Generated from the
+  run's `build-tasks/`; `run-tasks.mjs` asserts the run's browser verdict from it, with and without `Page saved: no`.
 
 `employeescore/` was removed — no runner loaded it.

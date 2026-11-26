@@ -59,8 +59,13 @@ const markers = (notes, re) => new Map([...notesMarkers(notes, re)].map(([n, val
 // inline code are prose about the line, such as the brief's own example, and never set the count. Of the field
 // lines the LAST wins, so a builder corrects its count by writing the line again.
 const BROWSER_CHECKS = /^[\s*-]*Browser checks[\s:*]*(\d+)/i;
+// `Page saved: no` — the task saved nothing to its page's body (it recorded outcomes, read the stand, or changed a
+// client module only), so the page stands as the previous save left it. Read like the count: a field line, the
+// last one wins.
+const PAGE_SAVED = /^[\s*-]*Page saved[\s:*]*(yes|no)\b/i;
 const FENCE = /^\s*(`{3,}|~{3,})/;
-function browserChecksLine(notes) {
+// The LAST field line of `notes` matching `re` outside a fenced block, as `{ m, line }`; null when none does.
+function lastNotesLine(notes, re) {
   let found = null;
   let fence = null;
   for (const line of String(notes || "").split(/\r?\n/)) {
@@ -70,20 +75,30 @@ function browserChecksLine(notes) {
       else if (f[1].startsWith(fence)) fence = null;
       continue;
     }
-    const m = fence ? null : BROWSER_CHECKS.exec(line);
-    if (m) found = { n: Number(m[1]), text: line.slice(m[0].length).trim().replace(/^[—–-]+/, "").trim() };
+    const m = fence ? null : re.exec(line);
+    if (m) found = { m, line };
   }
   return found;
 }
+function browserChecksLine(notes) {
+  const found = lastNotesLine(notes, BROWSER_CHECKS);
+  if (!found) return null;
+  return { n: Number(found.m[1]), text: found.line.slice(found.m[0].length).trim().replace(/^[—–-]+/, "").trim() };
+}
 export const browserChecksOf = (notes) => browserChecksLine(notes)?.n ?? null;
+// Whether the task saved its page's body. Only an explicit `Page saved: no` says it did not: a task that does not
+// say so is taken to have saved, so a missing line can only ask for a check, never excuse one.
+export const savedPage = (notes) => lastNotesLine(notes, PAGE_SAVED)?.m[1].toLowerCase() !== "no";
 // The cap a task's browser checks are held to: the second only confirms a fix the first one found.
 const BROWSER_CHECK_CAP = 2;
 // A task that saved something on its page: closed `done`, or `partial` with part of it built. One closed
 // `wont-do` / `not-applicable` saved nothing, and a `postponed` one has not built yet, so neither owes a check.
 const BUILT_STATUSES = new Set([S_DONE, S_PARTIAL]);
 // WHICH BUILT PAGES A BROWSER CHECK EXERCISED. A page is the artifact its page-writing tasks write; it is exercised
-// when the LAST of them that built something, in queue order, reports a check: a page cut into chunks or repaired
-// later is opened as it finally stands, not as an earlier chunk left it. A run can be complete and still have pages
+// when a check was made after its LAST SAVE — the last of those tasks, in queue order, that built something and
+// saved the page body: a page cut into chunks or repaired later is opened as it finally stands, not as an earlier
+// chunk left it. A later task that saved nothing (`Page saved: no`) leaves the page as that save left it, so the
+// check made after the save still stands, and a check the later task made itself counts too. A run can be complete and still have pages
 // nobody opened after their last save, and those pages are what a person has to check by hand. Under
 // `Browser: none` the user declined the check for the run, so no built page counts as exercised whatever its notes
 // say. A page the recorded tool cannot open (a list page under `Browser: page-smoke` with no browser surface) is
@@ -98,8 +113,14 @@ function browserExercise(tasks, declined = false) {
     const n = line?.n ?? 0;
     if (n > BROWSER_CHECK_CAP) capBreaches.push({ task: t, n });
     const page = pages.get(t.writesTo) || { writesTo: t.writesTo, pageKey: t.pageKey, exercised: false, tasks: [] };
-    page.exercised = n > 0 && !declined;
-    page.evidence = { task: t, n, text: line?.text || "", reported: !!line };
+    // A save starts the page over; a task that saved nothing can only add a check to the page as it stands. The
+    // page's first task always speaks for it, saved or not, so its evidence is never empty.
+    const firstTask = !page.evidence;
+    const addsCheck = n > 0 && !page.exercised;
+    if (savedPage(t.notes) || firstTask || addsCheck) {
+      page.exercised = n > 0 && !declined;
+      page.evidence = { task: t, n, text: line?.text || "", reported: !!line };
+    }
     page.tasks.push(t);
     pages.set(t.writesTo, page);
   }

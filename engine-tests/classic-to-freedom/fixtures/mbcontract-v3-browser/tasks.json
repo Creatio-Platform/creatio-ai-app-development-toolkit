@@ -1,0 +1,181 @@
+{
+ "source": "migrations/mbcontract-eng103105-1126/build-tasks (toolkit c725023)",
+ "tasks": [
+  {
+   "id": "293bf3f2",
+   "file": "task-child-mbreturnnote-page-build-293bf3f2.md",
+   "pageKey": "child:MbReturnNote",
+   "writesTo": "page:child::MbReturnNotePage",
+   "status": "done",
+   "order": 3,
+   "group": "Page build",
+   "browserChecks": "Browser checks: 1 — 1: page-smoke edit mode on return note R-0001 (`0d4f6a10-0007-4b8e-9c3a-5d6e7f8a9b91`): loads in 8 s, title from the record, all 7 fields captioned and populated, Posted read-only, Return reason required at Amount 150 (C03·AC-1), MbPostButton \"Post\" enabled (C04·AC-1 positive), History panel with Refresh/Actions present; console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy).",
+   "unsaved": false
+  },
+  {
+   "id": "8d9b96db",
+   "file": "task-child-mbdeliverynote-page-build-8d9b96db.md",
+   "pageKey": "child:MbDeliveryNote",
+   "writesTo": "page:child::MbDeliveryNotePage",
+   "status": "done",
+   "order": 5,
+   "group": "Page build",
+   "browserChecks": "Browser checks: 1 — 1: page-smoke edit mode on posted delivery note D-0001 (`0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b81`): loads in 7 s, title from the record, all 6 fields captioned and populated (Name, Number, Posted, Contract, Date, Amount), Posted read-only, MbPostButton \"Post\" disabled on a posted note (C04·AC-1 negative), History panel with Collapse/Refresh/Actions present; console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy).",
+   "unsaved": false
+  },
+  {
+   "id": "ce0dc24e",
+   "file": "task-child-mbcontractitem-page-build-ce0dc24e.md",
+   "pageKey": "child:MbContractItem",
+   "writesTo": "page:child::MbContractItemPage",
+   "status": "done",
+   "order": 7,
+   "group": "Page build",
+   "browserChecks": "Browser checks: 1 — 1: page-smoke edit mode on item \"Spare parts kit\" (`0d4f6a10-0004-4b8e-9c3a-5d6e7f8a9b62`): ready in 6.5 s, title from the record, Name (required) / Active true / Quantity 3.00 / Price 150.00 / Total 450.00 read-only (C02·AC-4, stored value kept on open C02·AC-5) / Delivery date all captioned and populated, Close/Cancel/Save present; console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy).",
+   "unsaved": false
+  },
+  {
+   "id": "de6871bb",
+   "file": "task-main-page-build-from-layout-type-header-de6871bb.md",
+   "pageKey": "main",
+   "writesTo": "page:main",
+   "status": "done",
+   "order": 9,
+   "group": "Page build — from [layout-type] Header",
+   "browserChecks": "Browser checks: 1 — 1: page-smoke edit mode on contract 0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51 (\"Annual service contract\"): ready in 8.8 s, title from the record, all 11 fields captioned and populated (Customer, Contact person, dates, Approval comment, Notes), Amount and Approved read-only, MbStartApprovalButton \"Start approval\" present, console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy). Two saves followed it — grids renamed to `<Detail>Grid` so `--verify` finds them, Payments `features.rows.toolbar: false`, a named comparison constant in the module — found by my `--verify` replay, not by the browser check, so no second check was run (the cap allows one only to confirm a fix the first check found); both read back clean with get-page and the replay.",
+   "unsaved": false
+  },
+  {
+   "id": "bba395da",
+   "file": "task-main-page-build-from-business-rules-5-bba395da.md",
+   "pageKey": "main",
+   "writesTo": "page:main",
+   "status": "done",
+   "order": 10,
+   "group": "Page build — from Business rules × 5",
+   "browserChecks": "Browser checks: 2 — 1: page-smoke edit mode on 0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51 (Active, Approved): loads clean in 8.2 s, no module-load or binding errors (only platform noise: CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy), End date required, Start date read-only, Approval comment shown, Customer/End date editable, Start approval disabled; it showed Start date read-only with no explanation, fixed with tooltips; 2: page-smoke edit mode on 0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b52 (Draft, unapproved) confirms the fix save loads clean, and the opposite states: Start approval enabled, Start date editable, End date not required, Approval comment hidden. page-smoke does not list related lists; no console error came from the five lists on either load.",
+   "unsaved": false
+  },
+  {
+   "id": "main-v3-open-handlers",
+   "file": "task-main-page-build-v3-child-page-opening-d12-main-v3-open-handlers.md",
+   "pageKey": "main",
+   "writesTo": "page:main",
+   "status": "done",
+   "order": 11,
+   "group": "Page build — v3 child-page opening (D12)",
+   "browserChecks": "Browser checks: 1 — 1: page-smoke edit mode on contract 0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51 (\"Annual service contract\") after the last save: ready in 5.7 s, title from the record, all 11 fields populated, Start approval disabled as before (approved contract), so the edited module loaded and the earlier handlers still run; console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy). Row open and Add could not be exercised by page-smoke (see the Check on stand lines).",
+   "unsaved": false
+  },
+  {
+   "id": "f1f91d4b",
+   "file": "task-list-page-build-f1f91d4b.md",
+   "pageKey": "list",
+   "writesTo": "page:list",
+   "status": "done",
+   "order": 14,
+   "group": "Page build",
+   "browserChecks": "Browser checks: 1 — 1: Contracts v3 list in the browser (Chrome surface, list page is not a page-smoke form): Name column only, \"Start approval\" button present, Actions menu = Export to Excel, divider, \"Close selected contracts\" disabled with no selection and enabled with one row ticked; clicking row \"Annual service contract\" opened UsrMbContractsV3App_FormPage in edit mode on 0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51 (D12), no console errors after navigation (console capture started after the list load).",
+   "unsaved": false
+  },
+  {
+   "id": "50417ded",
+   "file": "task-repair-round1-child-mbcontractitem-not-built-other-50417ded.md",
+   "pageKey": "child:MbContractItem",
+   "writesTo": "page:child::MbContractItemPage",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — deliverables the build agent recorded as not built",
+   "browserChecks": "Browser checks: 0 — this repair saved no page (accounting-only repair), so there was no save to check. The page's last page-smoke check is in task ce0dc24e (edit mode on \"Spare parts kit\", loads clean).",
+   "unsaved": true
+  },
+  {
+   "id": "a6fb2009",
+   "file": "task-repair-round1-child-mbdeliverynote-not-built-other-a6fb2009.md",
+   "pageKey": "child:MbDeliveryNote",
+   "writesTo": "page:child::MbDeliveryNotePage",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — deliverables the build agent recorded as not built",
+   "browserChecks": "Browser checks: 0 — this repair saved nothing (page checksum unchanged from the source task, whose page-smoke on D-0001 stands); D1 is a placement question answered by get-page / list-pages / SysSchema reads, not by rendering.",
+   "unsaved": true
+  },
+  {
+   "id": "8a492730",
+   "file": "task-repair-round1-child-mbdeliverynote-unverified-other-8a492730.md",
+   "pageKey": "child:MbDeliveryNote",
+   "writesTo": "page:child::MbDeliveryNotePage",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — machine rows could not be confirmed from what was filed",
+   "browserChecks": "Browser checks: 1 — 1: page-smoke edit mode on delivery note D-0001 (`0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b81`) after the save: ready in 5.3 s, title \"Delivery of spare parts\", all 6 fields populated, Post disabled on the posted note (the shared module loaded and ran), History panel present; console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload permissions policy). Post was not clicked.",
+   "unsaved": false
+  },
+  {
+   "id": "dcc1dec7",
+   "file": "task-repair-round1-child-mbreturnnote-not-built-other-dcc1dec7.md",
+   "pageKey": "child:MbReturnNote",
+   "writesTo": "page:child::MbReturnNotePage",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — deliverables the build agent recorded as not built",
+   "browserChecks": "Browser checks: 0 — no page saved by this task; both rows are about which package holds the schemas and the earlier apps' modified dates, answered by the SysSchema read, not the running page (the page itself was smoke-checked by task 293bf3f2).",
+   "unsaved": true
+  },
+  {
+   "id": "b2960589",
+   "file": "task-repair-round1-child-mbreturnnote-unverified-other-b2960589.md",
+   "pageKey": "child:MbReturnNote",
+   "writesTo": "page:child::MbReturnNotePage",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — machine rows could not be confirmed from what was filed",
+   "browserChecks": "Browser checks: 2 — 1: page-smoke edit mode on return note R-0001 (`0d4f6a10-0007-4b8e-9c3a-5d6e7f8a9b91`): loads in 5.2 s, all 7 fields populated, Post enabled on the unposted note (module with the new imports loaded and refreshPostAvailability ran), History panel present, console only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy); 2: page-smoke edit mode on delivery note D-0001 (`0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b81`), which imports this module: loads in 5.0 s, all 6 fields populated, Post disabled on the posted note, the same platform noise only. Post was not clicked.",
+   "unsaved": false
+  },
+  {
+   "id": "c1196966",
+   "file": "task-repair-round1-list-unverified-other-c1196966.md",
+   "pageKey": "list",
+   "writesTo": "page:list",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — machine rows could not be confirmed from what was filed",
+   "browserChecks": "Browser checks: 0 — the only save was the list page's logic module; page-smoke cannot open list pages and the dispatch excludes any other browser, so the row is left as the `Check on stand` line above.",
+   "unsaved": true
+  },
+  {
+   "id": "01c6ed18",
+   "file": "task-repair-round1-main-unverified-handlers-01c6ed18.md",
+   "pageKey": "main",
+   "writesTo": "page:main",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — the handler rows could not be confirmed from what was filed",
+   "browserChecks": "",
+   "unsaved": true
+  },
+  {
+   "id": "34a8ef33",
+   "file": "task-repair-round1-main-unverified-other-34a8ef33.md",
+   "pageKey": "main",
+   "writesTo": "page:main",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — machine rows could not be confirmed from what was filed",
+   "browserChecks": "Browser checks: 3 — the dispatch asked for one per page because the shared module changed; each page was opened once, in edit mode, after the last save. 1: contract 0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51 (\"Annual service contract\") loads in 5.4 s. All 11 fields are populated. Customer and End date are editable on the Active contract, so `refreshCanEditFields` ran with the imported Closed id. Start approval is disabled on the approved contract, so the form module loaded with its new imports. 2: return note R-0001 (0d4f6a10-0007-4b8e-9c3a-5d6e7f8a9b91) loads in 5.5 s. All 7 fields are populated and Post is enabled on the unposted note. 3: delivery note D-0001 (0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b81) loads in 9.8 s. All 6 fields are populated and Post is disabled on the posted note. On all three pages the console shows only platform noise (CSP prefetch-src, 404 Translations/Custom/en-US.json, unload policy). No button was clicked.",
+   "unsaved": false
+  },
+  {
+   "id": "64048f4f",
+   "file": "task-repair-round1-main-unverified-rules-64048f4f.md",
+   "pageKey": "main",
+   "writesTo": "page:main",
+   "status": "done",
+   "order": 9007199254740990,
+   "group": "Repair round 1 — the rule rows could not be confirmed from what was filed",
+   "browserChecks": "Browser checks: 0 — no page was saved in this repair; the evidence is the read-only `read-entity-business-rules` read-back above.",
+   "unsaved": true
+  }
+ ]
+}
