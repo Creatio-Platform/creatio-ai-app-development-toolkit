@@ -310,7 +310,12 @@ function namesFromNext(own, nextName) {
 // falls into it; a loop body counts as run after itself. The first wrong `return` is kept in `walk.problem`.
 function nextPathWalk(callsNext, givesNext) {
   const walk = { problem: null };
-  const or = (a, b) => (a === null ? b : b === null ? a : a || b);
+  // Two optional states joined: null when neither path exists, else whether the call may have run on either.
+  const or = (a, b) => {
+    if (a === null) return b;
+    if (b === null) return a;
+    return a || b;
+  };
   const join = (a, b) => ({ normal: a.normal || b.normal, called: (a.normal && a.called) || (b.normal && b.called), brk: or(a.brk, b.brk) });
   const all = (list, called, depth) => {
     let brk = null;
@@ -419,8 +424,9 @@ function checkPassesOn(handler, request, page) {
   const callsNext = (node) => Boolean(node) && ownNodes(node).some((n) => n.type === "CallExpression" && isNextCall(n, nextName));
   const walk = nextPathWalk(callsNext, givesNext);
   const end = walk.run(handler.body);
-  const problem = walk.problem || (end.normal ? (end.called ? END_AFTER_NEXT : END_WITHOUT_RETURN) : null);
-  if (problem) fail(problem);
+  if (walk.problem) return fail(walk.problem);
+  if (!end.normal) return;
+  fail(end.called ? END_AFTER_NEXT : END_WITHOUT_RETURN);
 }
 
 // ---- writes ----
