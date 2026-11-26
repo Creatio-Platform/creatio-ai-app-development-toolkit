@@ -329,17 +329,19 @@ class BrowserQuestionTests(unittest.TestCase):
 
 
 class LastSaveRuleTests(unittest.TestCase):
-    """A page counts as exercised on its LAST built task's check, as the result report decides it."""
+    """A page counts as exercised on a check made after its LAST SAVE, as the result report decides it."""
 
     def test_the_builder_brief_states_the_last_save_rule(self):
         notes = flat(section(read(EXECUTION), "**Report the count.**", "\n\n"))
-        self.assertIn("only when its LAST built task, in queue order, reports a check", notes)
+        self.assertIn("only when a check was made after its LAST SAVE", notes)
         self.assertIn("every task that saves a page owes its own check after its own last save", notes)
+        self.assertIn("writes `Page saved: no` under `## Notes`", notes)
         self.assertNotIn("none of whose tasks", notes)
 
     def test_the_orchestrator_report_step_states_the_same_rule(self):
         text = flat(read(ORCHESTRATE))
-        self.assertIn("a page whose LAST built task, in queue order, does not report", text)
+        self.assertIn("a page with no `Browser checks: ≥1` after its LAST SAVE", text)
+        self.assertIn("a task that writes `Page saved: no` saved nothing", text)
         self.assertNotIn("none of whose build tasks", text)
 
 
