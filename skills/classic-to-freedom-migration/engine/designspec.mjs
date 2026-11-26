@@ -26,7 +26,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest, moduleFunctions, MODULE_SCHEMA_NAME } from "./conventions.mjs";
-import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, runQualityOf, qualityRunKey } from "./quality.mjs";
+import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES, runQualityOf, qualityRunKey, runModuleLint } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
@@ -5518,6 +5518,15 @@ const MODULE_QUALITY_RULES = new Set([QUALITY_RULES.catchLogOnly, QUALITY_RULES.
 // A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
 // `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
 // not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
+// What one Code quality row reads. A page-side rule reads the page's own lint only (null when the bundle has no code).
+// A module rule also reads the run's module record for the page — kept apart, so a module finding or an unreadable
+// module never changes a page-side row, and a page without code of its own can still own a module's findings.
+function qualityRecord(run, pageKey, rule) {
+  const page = run.get(pageKey);
+  if (!MODULE_BODY_RULES.includes(rule)) return page ? { findings: page.findings, unreadable: page.unreadable, notChecked: page.notChecked || [] } : null;
+  const mod = runModuleLint(run, pageKey);
+  return { findings: [...(page?.findings || []), ...mod.findings], unreadable: [...(page?.unreadable || []), ...mod.unreadable], notChecked: [] };
+}
 // A row's findings as one cell: the first few with their place, and how many more.
 function listQualityFindings(fs) {
   return fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
@@ -5533,15 +5542,20 @@ function moduleGapCell(gap, note, blocking, noted) {
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
-  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
-  if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
-  if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
-  const found = page.findings.filter((f) => f.rule === vk.rule
+  const run = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey);
+  const page = run.get(ctx.pageKey);
+  const rec = qualityRecord(run, ctx.pageKey, vk.rule);
+  if (!rec) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
+  if (rec.notChecked.includes(vk.rule)) {
+    return ["☐ confirm on-stand", "the page has handlers but its bundle carries no `deps` or no schema name, so its own module could not be checked — pass get-page's `bundle.json` and `meta.json` whole", "skip"];
+  }
+  if (rec.unreadable.length) return ["⚠ verify", `${rec.unreadable.map((s) => (s.startsWith("module ") ? s : "the bundle's `" + s + "`")).join(", ")} could not be parsed, so the code was not checked`, "unverified"];
+  const found = rec.findings.filter((f) => f.rule === vk.rule
     && (vk.rule !== QUALITY_RULES.handlerWithoutNext || (f.request || null) === (vk.request || null)));
   const blocking = found.filter((f) => !f.advisory);
   const noted = found.filter((f) => f.advisory);
   const note = vk.note ? vk.note + " " : "";
-  const gap = MODULE_QUALITY_RULES.has(vk.rule) ? moduleGapText(page) : null;
+  const gap = MODULE_QUALITY_RULES.has(vk.rule) || MODULE_BODY_RULES.includes(vk.rule) ? moduleGapText(page) : null;
   if (gap) return moduleGapCell(gap, vk.note, blocking, noted);
   const listed = listQualityFindings;
   if (blocking.length) {

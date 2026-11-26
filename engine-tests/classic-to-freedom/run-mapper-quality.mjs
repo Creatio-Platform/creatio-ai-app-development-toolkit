@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { lintPageQuality, lintModuleQuality, lintRunQuality, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS }
+import { lintPageQuality, lintRunQuality, lintModuleQuality, runModuleLint, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
@@ -290,11 +290,20 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     new Set([verifyRowKey("main", failingLabel)]));
   check("verify: a decision recorded on the Page code row still holds after the threshold changes (the label names no value)",
     () => !/⚠ verify/.test(pageCodeLine(decidedRaised.markdown)), () => pageCodeLine(decidedRaised.markdown));
-  const clean = renderVerify(result, opts, built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`));
+  // A page that imports its own module, filed by the read-back, with nothing in it to report: every row closes.
+  const ownModule = { UsrOrder_FormPageModule: 'define("UsrOrder_FormPageModule", [], function() { return {}; });' };
+  const cleanBuilt = Object.assign(built(`[${handler("usr.ApplyButtonClicked", "const x = 1;")}]`), { modules: ownModule });
+  Object.assign(cleanBuilt.pages.main, { schemaName: "UsrOrder_FormPage", deps: '["AbConstants", "UsrOrder_FormPageModule"]' });
+  const clean = renderVerify(result, opts, cleanBuilt);
   check("verify: a clean page closes every Code quality row ✅ (the advisory one never reads ⚠)",
     () => ROW_RULES.every((rule) => rule === R.unusedResourceString
       ? !/⚠ verify/.test(rowLine(clean.markdown, rule)) : /✅ Done/.test(rowLine(clean.markdown, rule))),
     () => clean.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
+  const unread = renderVerify(result, opts, { ...cleanBuilt, modules: undefined });
+  check("verify: a page whose own module was not filed holds the module rows, naming the module and `reads/modules/` — never a ✅ nobody earned",
+    () => MODULE_BODY_RULES.every((rule) => /⚠ verify/.test(rowLine(unread.markdown, rule)) && rowLine(unread.markdown, rule).includes("UsrOrder_FormPageModule")
+      && /reads\/modules/.test(rowLine(unread.markdown, rule))),
+    () => unread.markdown.split("\n").filter((l) => l.includes("[code-quality]")));
   // Two handlers end the chain; the plan decides that only the save does. The decision closes that handler's row,
   // and the other handler's row stays open: one decision never covers a handler it does not name.
   const chainEnded = '[{ request: "crt.SaveRecordRequest", handler: async (request) => { await save(request); return true; } },'
@@ -469,7 +478,10 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   check("verify: an unread module does not hide the page's own Page code findings",
     () => pageCodeLine(unreadAndLong.markdown).includes("UsrMissing") && /`usr\.ApplyButtonClicked` is \d+ lines/.test(pageCodeLine(unreadAndLong.markdown)),
     () => pageCodeLine(unreadAndLong.markdown));
-  const cleanModule = renderVerify(result, opts, withModules('["UsrCleanModule"]', { UsrCleanModule: 'define("UsrCleanModule", [], function() { return { x: 1 }; });' }));
+  // The page also imports its own module, so the own-module row closes too.
+  const cleanModule = renderVerify(result, opts, (() => { const b = withModules('["UsrClean_FormPageModule", "UsrCleanModule"]', {
+    UsrClean_FormPageModule: 'define("UsrClean_FormPageModule", [], function() { return {}; });',
+    UsrCleanModule: 'define("UsrCleanModule", [], function() { return { x: 1 }; });' }); b.pages.main.schemaName = "UsrClean_FormPage"; return b; })());
   check("verify: a page whose imported modules are filed and clean closes the Page code row and every blocking Code quality row",
     () => /✅ Done/.test(pageCodeLine(cleanModule.markdown)) && ROW_RULES.filter((r) => r !== R.unusedResourceString).every((r) => /✅ Done/.test(rowLine(cleanModule.markdown, r))),
     () => cleanModule.markdown.split("\n").filter((l) => l.includes("[code-quality]") || l.includes("Page code")));
@@ -487,6 +499,212 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   } finally { fs.rmSync(modDir, { recursive: true, force: true }); }
 
   // the engine stays zero-dependency: quality.mjs imports only its siblings.
+  // THE RUN'S MODULES. A benchmark run built the page modules the contract asks for and still left: two note pages
+  // with no module of their own and four handlers copied between them, the same status id and the same selection
+  // helpers declared in two modules, a wrapper the code bypassed five times, and exports nobody imports. Each is a
+  // run-wide check, fed by the module bodies the read-back files under `built.modules`.
+  {
+    const GUID = "3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+    // A page's own findings and the run's module record for it, read together the way the Code quality rows read them.
+    const lint = (...a) => { const run = lintRunQuality(...a); return new Map([...new Set([...run.keys(), ...run.modules.keys()])].map((k) => [k, {
+      findings: [...(run.get(k)?.findings || []), ...runModuleLint(run, k).findings], unreadable: [...(run.get(k)?.unreadable || []), ...runModuleLint(run, k).unreadable] }])); };
+    const thin = (arg) => handler("crt.HandleViewModelInitRequest", `await ${arg}.init(request.$context);`);
+    const copied = handler("crt.HandleViewModelAttributeChangeRequest",
+      "if (request.attributeName === \"Amount\") { const total = request.$context.Amount * 2; request.$context.Total = total; }");
+    const page = (schemaName, deps, handlers, args) => ({ schemaName, deps: JSON.stringify(deps), handlers: `[${handlers}]`, ...(args ? { args } : {}) });
+    const selected = "function selectedIds(list) { const out = []; for (const row of list || []) { if (row && row.selected) out.push(row.id); } return out; }";
+    const mod = (name, deps, args, body, exportsSrc) =>
+      `define("${name}", ${JSON.stringify(deps)}, function(${args}) {\n${body}\nreturn ${exportsSrc};\n});`;
+    const totals = mod("UsrTotals", ["@creatio-devkit/common"], "sdk",
+      "function processRequest(r) { return sdk.HandlerChainService.instance.process(r); }\nfunction sum(rows) { return rows.length; }",
+      "{ processRequest, sum }");
+    const badModules = {
+      UsrApp_FormPageModule: mod("UsrApp_FormPageModule", ["@creatio-devkit/common", "UsrTotals"], "sdk, totals",
+        `const CLOSED = "${GUID}";\n${selected}\nasync function init($context) { await sdk.HandlerChainService.instance.process({ type: "crt.LoadDataRequest", $context }); return totals.sum([CLOSED]); }`,
+        "{ init, selectedIds }"),
+      UsrApp_ListPageModule: mod("UsrApp_ListPageModule", [], "",
+        `const CLOSED_STATUS = "${GUID}";\n${selected}\nfunction init($context) { return selectedIds($context.Items).length && CLOSED_STATUS; }`,
+        "{ init }"),
+      UsrTotals: totals,
+    };
+    const goodModules = {
+      UsrApp_FormPageModule: mod("UsrApp_FormPageModule", ["UsrTotals"], "totals",
+        "async function init($context) { await totals.processRequest({ type: \"crt.LoadDataRequest\", $context }); return totals.sum([totals.CLOSED]); }",
+        "{ init }"),
+      UsrApp_ListPageModule: mod("UsrApp_ListPageModule", ["UsrTotals"], "totals",
+        "function init($context) { return totals.selectedIds($context.Items).length && totals.CLOSED; }", "{ init }"),
+      UsrTotals: mod("UsrTotals", ["@creatio-devkit/common"], "sdk",
+        `const CLOSED = "${GUID}";\n${selected}\nfunction processRequest(r) { return sdk.HandlerChainService.instance.process(r); }\nfunction sum(rows) { return rows.length; }`,
+        "{ CLOSED, selectedIds, processRequest, sum }"),
+    };
+    const pages = (noteDeps, noteHandlers, noteArgs) => ({
+      main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage"), "(formPage)"),
+      list: page("UsrApp_ListPage", ["UsrApp_ListPageModule"], thin("listPage"), "(listPage)"),
+      "child:Delivery": page("UsrApp_DeliveryPage", noteDeps("UsrApp_DeliveryPageModule"), noteHandlers("deliveryPage"), noteArgs("deliveryPage")),
+      "child:Return": page("UsrApp_ReturnPage", noteDeps("UsrApp_ReturnPageModule"), noteHandlers("returnPage"), noteArgs("returnPage")),
+    });
+    const sharedOnly = [() => ["@creatio-devkit/common", "UsrTotals"], () => copied, () => "(sdk, totals)"];
+    const bad = lint(pages(...sharedOnly), DEFAULT_QUALITY_THRESHOLDS, new Set(), badModules);
+    const goodNoteModule = (n, k = 2) => mod(n, ["UsrTotals"], "totals", `function onAmount($context) { $context.Total = $context.Amount * ${k}; }`, "{ onAmount }");
+    const good = lint(pages((m) => [m],
+      (arg) => handler("crt.HandleViewModelAttributeChangeRequest", `if (request.attributeName === "Amount") ${arg}.onAmount(request.$context);`), (arg) => `(${arg})`),
+    DEFAULT_QUALITY_THRESHOLDS, new Set(), { ...goodModules,
+      UsrApp_DeliveryPageModule: goodNoteModule("UsrApp_DeliveryPageModule"), UsrApp_ReturnPageModule: goodNoteModule("UsrApp_ReturnPageModule", 3) });
+    const at = (run) => Object.fromEntries([...run].map(([k, p]) => [k, (p?.findings || []).map((f) => f.rule + " " + f.text)]));
+    const MODULE_RULES = [R.pageWithoutModule, R.duplicateHandlerAcrossPages, R.duplicateAcrossModules, R.sharedValueInTwoModules,
+      R.unusedModuleExport, R.wrappedCallInlined];
+
+    check("modules: a page with handlers and no `<PageSchema>Module` of its own is reported, each one — a shared module alone is not its module",
+      () => count(bad.get("child:Delivery"), R.pageWithoutModule) === 1 && count(bad.get("child:Return"), R.pageWithoutModule) === 1
+        && count(bad.get("main"), R.pageWithoutModule) === 0 && count(bad.get("list"), R.pageWithoutModule) === 0,
+      () => at(bad));
+    check("modules: a handler copied verbatim from another page is reported on the copying page only",
+      () => count(bad.get("child:Return"), R.duplicateHandlerAcrossPages) === 1 && count(bad.get("child:Delivery"), R.duplicateHandlerAcrossPages) === 0,
+      () => at(bad));
+    check("modules: a function declared in two modules is reported once, on the page whose own module holds the copy, naming the original",
+      () => { const f = bad.get("list").findings.filter((x) => x.rule === R.duplicateAcrossModules);
+        return f.length === 1 && /UsrApp_FormPageModule/.test(f[0].text) && count(bad.get("main"), R.duplicateAcrossModules) === 0; },
+      () => at(bad));
+    check("modules: a record id declared in two modules is reported once — a value the run's pages share lives in one module",
+      () => { const f = [...bad.values()].flatMap((p) => p.findings.filter((x) => x.rule === R.sharedValueInTwoModules));
+        return f.length === 1 && f[0].text.includes(GUID) && /UsrApp_FormPageModule/.test(f[0].text) && /UsrApp_ListPageModule/.test(f[0].text); },
+      () => at(bad));
+    check("modules: an export no page or other module uses is reported on the module's page; an export a page calls is not",
+      () => { const f = bad.get("main").findings.filter((x) => x.rule === R.unusedModuleExport);
+        return f.length === 1 && /selectedIds/.test(f[0].text) && !/\binit\b/.test(f[0].text); },
+      () => at(bad));
+    check("modules: a call written out although a module export wraps exactly it is reported, naming the wrapper",
+      () => { const f = bad.get("main").findings.filter((x) => x.rule === R.wrappedCallInlined);
+        return f.length === 1 && /UsrTotals\.processRequest/.test(f[0].text) && /HandlerChainService\.instance\.process/.test(f[0].text); },
+      () => at(bad));
+    check("modules: the same run written the way the contract asks — own modules, one shared module, every export used — has none of the module findings",
+      () => [...good.values()].every((p) => MODULE_RULES.every((r) => count(p, r) === 0)),
+      () => at(good));
+    check("modules: without module bodies only the page-side checks run, and nothing claims a module was checked",
+      () => { const r = lint(pages(...sharedOnly));
+        return count(r.get("child:Delivery"), R.pageWithoutModule) === 1
+          && [...r.values()].every((p) => [R.duplicateAcrossModules, R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].every((x) => count(p, x) === 0)); });
+    check("modules: an unreadable module body is named, never silently skipped",
+      () => { const r = lint(pages((m) => [m], (a) => thin(a), (a) => `(${a})`), DEFAULT_QUALITY_THRESHOLDS, new Set(),
+        { ...goodModules, UsrApp_DeliveryPageModule: "define(\"UsrApp_DeliveryPageModule\", [], function() { return {", UsrApp_ReturnPageModule: goodNoteModule("UsrApp_ReturnPageModule", 3) });
+        return r.get("child:Delivery").unreadable.some((u) => /UsrApp_DeliveryPageModule/.test(u)); },
+      () => null);
+    check("modules: every module rule has its Code quality row",
+      () => MODULE_RULES.every((r) => QUALITY_ROW_RULES.some((row) => row.rule === r)));
+
+    // Through the verify table, not just the lint: the module bodies reach `runQualityOf` and the owning page's rows.
+    const verifyRoot = (mods) => ({ pages: { main: { ...page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage")),
+      parentSchemaName: "PageWithTabsFreedomTemplate", viewConfig: { items: [] }, validators: "{}", converters: "{}" } }, modules: mods });
+    const rowOf = (md, rule) => md.split("\n").find((l) => l.includes(`[code-quality] ${rule} —`)) || "";
+    const badTable = renderVerify(result, opts, verifyRoot(badModules)).markdown;
+    const goodTable = renderVerify(result, opts, verifyRoot(goodModules)).markdown;
+    check("modules (verify): with module bodies in the payload the owning page's module rows block, and the clean modules close them",
+      () => [R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].every((r) => /⚠ verify/.test(rowOf(badTable, r)) && /✅ Done/.test(rowOf(goodTable, r))),
+      () => [R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].map((r) => [rowOf(badTable, r), rowOf(goodTable, r)]));
+    const unreadableModule = renderVerify(result, opts, verifyRoot({ UsrApp_FormPageModule: "define(\"UsrApp_FormPageModule\", [], function() { return {" })).markdown;
+    check("modules (verify): an unreadable module blocks the rows module code can break — a rule about the page's handlers alone still judges them",
+      () => /⚠ verify/.test(rowOf(unreadableModule, R.unusedModuleExport)) && /⚠ verify/.test(rowOf(unreadableModule, R.catchLogOnly))
+        && /✅ Done/.test(rowOf(unreadableModule, R.nestedFunctions)),
+      () => [rowOf(unreadableModule, R.unusedModuleExport), rowOf(unreadableModule, R.catchLogOnly), rowOf(unreadableModule, R.nestedFunctions)]);
+    const codeless = renderVerify(result, opts, { pages: { main: { schemaName: "UsrApp_FormPage", deps: "[]", viewConfig: { items: [] } } }, modules: badModules }).markdown;
+    check("modules (verify): a page with no code of its own that owns a module finding keeps its page rows unchecked — never a pass",
+      () => /confirm on-stand/.test(rowOf(codeless, R.catchLogOnly)) && /⚠ verify/.test(rowOf(codeless, R.sharedValueInTwoModules)),
+      () => [rowOf(codeless, R.catchLogOnly), rowOf(codeless, R.sharedValueInTwoModules)]);
+    const noSchema = renderVerify(result, opts, { pages: { main: { handlers: `[${thin("formPage")}]`, deps: "[]" } }, modules: {} }).markdown;
+    check("modules (verify): a page with handlers and no schema name is NOT CHECKED for its own module — never a pass",
+      () => /confirm on-stand/.test(rowOf(noSchema, R.pageWithoutModule)) && /could not be checked/.test(rowOf(noSchema, R.pageWithoutModule)),
+      () => rowOf(noSchema, R.pageWithoutModule));
+
+    // Unused exports: only the run's own page modules are judged — a project module also serves pages outside the run.
+    const projectModule = mod("UsrProjectConstants", [], "", `const CLOSED = "${GUID}";`, "{ CLOSED }");
+    const withProject = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage")) }, DEFAULT_QUALITY_THRESHOLDS, new Set(),
+      { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }\nfunction spare() { return 1; }", "{ init, spare }"), UsrProjectConstants: projectModule },
+      new Set(["UsrProjectConstants"]), true);
+    check("modules: an unused export of a module the run built is reported; one of a declared project module (projectConventions) is not",
+      () => { const f = withProject.get("main").findings.filter((x) => x.rule === R.unusedModuleExport).map((x) => x.text);
+        return f.length === 1 && /spare/.test(f[0]); },
+      () => withProject.get("main").findings);
+    // A shared module can serve pages outside the run, whose imports nothing here sees: its exports are never judged.
+    const withShared = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule", "UsrShared"], thin("formPage"), "(formPage, shared)") },
+      DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"),
+        UsrShared: mod("UsrShared", [], "", `const CLOSED = "${GUID}";
+function spare() { return 1; }`, "{ CLOSED, spare }") });
+    check("modules: an unused export of a shared module the run's pages import is not reported — only a run page's own module is judged",
+      () => [...withShared.values()].every((p) => count(p, R.unusedModuleExport) === 0),
+      () => [...withShared.values()]);
+    // The binding a page names in `args` decides which module `x.export` reads from.
+    const bound = (call) => lint({ main: { ...page("UsrApp_FormPage", ["UsrApp_FormPageModule"], handler("crt.HandleViewModelInitRequest", `${call}(request.$context);`)), args: "(formPage)" } },
+      DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }") }).get("main");
+    check("modules: with the page's `args`, only a read through the module's own binding counts as a use",
+      () => count(bound("formPage.init"), R.unusedModuleExport) === 0 && count(bound("other.init"), R.unusedModuleExport) === 1,
+      () => [bound("formPage.init").findings, bound("other.init").findings]);
+    // A page handler that writes out a wrapped call is reported on the page; an unexported wrapper says to export it.
+    const hiddenTotals = mod("UsrTotals", ["@creatio-devkit/common"], "sdk", "function processRequest(r) { return sdk.HandlerChainService.instance.process(r); }", "{}");
+    const pageInlines = lint({ main: page("UsrApp_FormPage", ["@creatio-devkit/common", "UsrApp_FormPageModule", "UsrTotals"],
+      handler("crt.HandleViewModelInitRequest", "await sdk.HandlerChainService.instance.process({ type: \"crt.LoadDataRequest\", $context: request.$context });"), "(sdk, formPage, totals)") },
+    DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"), UsrTotals: hiddenTotals }).get("main");
+    check("modules: a page handler writing out a call a module function wraps is reported on the page, and an unexported wrapper says to export it",
+      () => pageInlines.findings.some((f) => f.rule === R.wrappedCallInlined && f.text.startsWith("the page calls") && /export it and call it/.test(f.text)),
+      () => pageInlines.findings);
+    check("modules: a body the bounded walk refuses is named unreadable before any other walk runs over it",
+      () => { const deep = "define(\"UsrApp_FormPageModule\", [], function() { const x = " + "[".repeat(1200) + "]".repeat(1200) + "; return {}; });";
+        const r = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage")) }, DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: deep });
+        return r.get("main").unreadable.some((u) => /UsrApp_FormPageModule/.test(u)); });
+
+    // A wrapper FORWARDS its parameters. A one-call function with fixed arguments does one specific thing: it is no
+    // wrapper of the API it calls, and other calls to that API are not "inlined" against it.
+    const fixedArg = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage"), "(formPage)") }, DEFAULT_QUALITY_THRESHOLDS, new Set(), {
+      UsrApp_FormPageModule: mod("UsrApp_FormPageModule", ["@creatio-devkit/common", "UsrStatuses"], "sdk, statuses",
+        "async function init($context) { await statuses.loadStatuses(); return sdk.HandlerChainService.instance.process({ type: \"crt.SaveRecordRequest\", $context }); }", "{ init }"),
+      UsrStatuses: mod("UsrStatuses", ["@creatio-devkit/common"], "sdk",
+        "function loadStatuses() { return sdk.HandlerChainService.instance.process({ type: \"crt.LoadDataRequest\", dataSourceName: \"StatusDS\" }); }", "{ loadStatuses }") });
+    check("modules: a one-call function with fixed arguments wraps nothing — a different call to the same API is not reported against it",
+      () => count(fixedArg.get("main"), R.wrappedCallInlined) === 0, () => fixedArg.get("main").findings);
+    const otherRoot = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage"), "(formPage)") }, DEFAULT_QUALITY_THRESHOLDS, new Set(), {
+      UsrApp_FormPageModule: mod("UsrApp_FormPageModule", ["UsrCache"], "cache", "function init(c) { return cache.store.items.get(c); }", "{ init }"),
+      UsrTotals: totals });
+    check("modules: the wrapper's root is compared by the module it names — the same path on another module's object is not its call",
+      () => count(otherRoot.get("main"), R.wrappedCallInlined) === 0, () => otherRoot.get("main").findings);
+
+    // An export used through destructuring, or by handing the module object on, is used.
+    const usedBy = (body) => lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], handler("crt.HandleViewModelInitRequest", body), "(formPage)") },
+      DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }\nfunction spare() { return 1; }", "{ init, spare }") }).get("main");
+    check("modules: an export read through destructuring (`const { init } = formPage`) is used, the one not destructured is still reported",
+      () => { const f = usedBy("const { init } = formPage; init(request.$context);").findings.filter((x) => x.rule === R.unusedModuleExport);
+        return f.length === 1 && /spare/.test(f[0].text); },
+      () => usedBy("const { init } = formPage; init(request.$context);").findings);
+    check("modules: handing the module object on whole (`helper(formPage)`) counts every export as used",
+      () => count(usedBy("helper(formPage, request.$context);"), R.unusedModuleExport) === 0,
+      () => usedBy("helper(formPage, request.$context);").findings);
+
+    // Two pages calling their OWN modules under the same local name are not copies; two pages calling the SAME module
+    // under different names are.
+    const router = (arg) => handler("crt.HandleViewModelAttributeChangeRequest", `if (request.attributeName === "Amount") await ${arg}.onAmount(request.$context, request.attributeName);`);
+    const ownSameName = lint({
+      "child:Delivery": page("UsrApp_DeliveryPage", ["UsrApp_DeliveryPageModule"], router("pageModule"), "(pageModule)"),
+      "child:Return": page("UsrApp_ReturnPage", ["UsrApp_ReturnPageModule"], router("pageModule"), "(pageModule)") });
+    const sharedTwoNames = lint({
+      "child:Delivery": page("UsrApp_DeliveryPage", ["UsrApp_DeliveryPageModule", "UsrTotals"], router("totalsA"), "(own, totalsA)"),
+      "child:Return": page("UsrApp_ReturnPage", ["UsrApp_ReturnPageModule", "UsrTotals"], router("totalsB"), "(own, totalsB)") });
+    check("modules: handlers are compared by the module they call — the same local name for two own modules is no copy, two names for one shared module is",
+      () => count(ownSameName.get("child:Return"), R.duplicateHandlerAcrossPages) === 0 && count(sharedTwoNames.get("child:Return"), R.duplicateHandlerAcrossPages) === 1,
+      () => [ownSameName.get("child:Return").findings, sharedTwoNames.get("child:Return").findings]);
+    check("modules: without the pages' `args` a thin router is not compared — its names cannot be told apart by module",
+      () => { const r = lint({ a: page("UsrA_Page", ["UsrA_PageModule"], router("pageModule")), b: page("UsrB_Page", ["UsrB_PageModule"], router("pageModule")) });
+        return count(r.get("b"), R.duplicateHandlerAcrossPages) === 0; });
+
+    // The page-side binding path of unused exports, as get-page returns it.
+    const bindingCase = (args, call) => lint({ main: page("UsrApp_FormPage", ["@creatio-devkit/common", "UsrApp_FormPageModule", "UsrOther"],
+      handler("crt.HandleViewModelInitRequest", `${call}(request.$context);`), args) }, DEFAULT_QUALITY_THRESHOLDS, new Set(),
+    { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }") }).get("main");
+    check("modules (args): an export called through the name bound to its module is used",
+      () => count(bindingCase("(sdk, formPage, other)", "formPage.init"), R.unusedModuleExport) === 0);
+    check("modules (args): the same export read through a name bound to ANOTHER module does not count — the export is reported",
+      () => count(bindingCase("(sdk, formPage, other)", "other.init"), R.unusedModuleExport) === 1);
+    check("modules (args): unparseable args fall back to any `x.init` counting as a use — nothing invented",
+      () => count(bindingCase("(sdk, [formPage])", "other.init"), R.unusedModuleExport) === 0);
+  }
+
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
   check("quality: quality.mjs imports only engine siblings (no package)",
     () => { const from = [...src.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]);

@@ -14,14 +14,13 @@
 // A literal `null` is none of the three and is a problem of its own (see `readJson`).
 import fs from "node:fs";
 import path from "node:path";
-import { READS_DIR, READS_INDEX_FILE, MODULES_DIR } from "./reads.mjs";
+import { READS_DIR, READS_INDEX_FILE, MODULES_DIR, moduleNameOf } from "./reads.mjs";
 import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
 // The client modules the built pages import: `get-page` of a module writes its source to
 // `.clio-pages/<Module>/body.js`, copied whole into `reads/modules/` as `<Module>.js`. The code rows ask for each module
 // a page imports and name the ones not filed, so the folder needs no index of its own.
-const MODULE_FILE = /^([\w.-]+)\.js$/;
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
 // together or not at all.
 export const VERIFY_FILE = "verify.md";
@@ -364,20 +363,25 @@ function mergeSideFiles(dir, built, acc, problems) {
 }
 
 // `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. A file whose name is not a
-// module name is not read; a folder or file that cannot be read is a problem, never a crash.
+// module name is not read; a folder named like a module, or a folder or file that cannot be read, is a problem, never
+// a crash.
 function readModuleSources(dir, problems) {
   const rel = path.posix.join(READS_DIR, MODULES_DIR);
   const root = path.join(dir, READS_DIR, MODULES_DIR);
   if (!fs.existsSync(root)) return null;
-  let files;
-  try { files = fs.readdirSync(root).sort((a, b) => a.localeCompare(b)); }
+  let entries;
+  try { entries = fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); }
   catch (e) { problems.push({ file: rel, what: "the client module sources", why: `not readable as a folder (${e.message})` }); return null; }
-  const modules = {};
-  for (const file of files) {
-    const name = MODULE_FILE.exec(file)?.[1];
-    if (!name || UNSAFE_KEYS.has(name)) continue;
-    try { modules[name] = fs.readFileSync(path.join(root, file), "utf8"); }
-    catch (e) { problems.push({ file: `${rel}/${file}`, what: `module \`${name}\``, why: `not readable (${e.message})` }); }
+  const modules = Object.create(null);
+  for (const entry of entries) {
+    const name = moduleNameOf(entry.name);
+    if (!name) continue;
+    if (!entry.isFile()) {
+      problems.push({ file: `${rel}/${entry.name}`, what: "a client module file", why: "is not a file — copy each module's `body.js` in as one `<Module>.js` file" });
+      continue;
+    }
+    try { modules[name] = fs.readFileSync(path.join(root, entry.name), "utf8"); }
+    catch (e) { problems.push({ file: `${rel}/${entry.name}`, what: `module \`${name}\``, why: `not readable (${e.message})` }); }
   }
   return modules;
 }
