@@ -302,6 +302,19 @@ function namesFromNext(own, nextName) {
 }
 
 
+const isTrueLiteral = (n) => n?.type === "Literal" && n.value === true;
+// A `while (true)`, `do … while (true)` or `for (;;)` loop: it goes on past itself only through `break`.
+function isEndlessLoop(st) {
+  if (st.type === "ForStatement") return !st.test || isTrueLiteral(st.test);
+  return (st.type === "WhileStatement" || st.type === "DoWhileStatement") && isTrueLiteral(st.test);
+}
+// What a loop runs before its first pass calls next: a `for` initializer or test, a `for-in/of` source, a `while` test.
+function loopHeadCallsNext(st, callsNext) {
+  if (st.type === "ForStatement") return callsNext(st.init) || callsNext(st.test);
+  if (st.type === "ForInStatement" || st.type === "ForOfStatement") return callsNext(st.right);
+  return st.type === "WhileStatement" && callsNext(st.test);
+}
+
 // Follows a handler body path by path, so a `return` is judged by whether `next.handle(…)` may have run before it on
 // its own path, not by where it is written. Each step returns `{ normal, called, brk }`: `normal` — some path completes
 // the statement and goes on, with `called` saying whether the call may have run on it; `brk` — the state of the paths
@@ -349,6 +362,21 @@ function nextPathWalk(callsNext, givesNext) {
     leaving = or(leaving, fallsThrough);
     return leaving === null ? { normal: false, called: entry, brk: null } : { normal: true, called: leaving, brk: null };
   };
+  // The body is walked from the loop's entry, and once more as if the call had already run when a pass through it can call
+  // next and go round again, so a `return` a later pass reaches after the call is judged as such. The loop goes on
+  // past itself when its test can fail (an endless `while (true)` / `for (;;)` only through `break`; a `do` loop only
+  // after a pass that completes), with the call run on any path that completed a pass.
+  const loopStep = (st, called, depth) => {
+    const entry = called || loopHeadCallsNext(st, callsNext);
+    let pass = step(st.body, entry, depth + 1);
+    if (!entry && ((pass.normal && pass.called) || pass.brk === true)) pass = step(st.body, true, depth + 1);
+    const calledOnward = (pass.normal && pass.called) || pass.brk === true;
+    if (isEndlessLoop(st)) return pass.brk === null ? { normal: false, called: entry, brk: null } : { normal: true, called: pass.brk, brk: null };
+    if (st.type === "DoWhileStatement") {
+      return pass.normal || pass.brk !== null ? { normal: true, called: calledOnward, brk: null } : { normal: false, called: entry, brk: null };
+    }
+    return { normal: true, called: entry || calledOnward, brk: null };
+  };
   const step = (st, called, depth) => {
     if (walk.problem) return { normal: false, called, brk: null };
     if (!st) return { normal: true, called, brk: null };
@@ -372,11 +400,7 @@ function nextPathWalk(callsNext, givesNext) {
       case "TryStatement": return tryStep(st, called, depth);
       case "SwitchStatement": return switchStep(st, called, depth);
       default:
-        if (LOOPS.has(st.type)) {
-          const inLoop = called || callsNext(st);
-          step(st.body, inLoop, depth + 1);
-          return { normal: true, called: inLoop, brk: null };
-        }
+        if (LOOPS.has(st.type)) return loopStep(st, called, depth);
         return { normal: true, called: called || callsNext(st), brk: null };
     }
   };

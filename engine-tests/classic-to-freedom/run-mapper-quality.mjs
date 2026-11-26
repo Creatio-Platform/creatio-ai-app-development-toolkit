@@ -92,6 +92,10 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     "async (request, next) => { try { await load(); } catch (e) { return false; } return next?.handle(request); }",
     "async (request, next) => { switch (request.mode) { case \"a\": case \"b\": return next.handle(request); default: return page.open(request); } }",
     "async (request, next) => { outer: for (const x of request.items) { if (x) { break outer; } } return next.handle(request); }",
+    "async (request, next) => { for (const item of request.items) { if (item.matches) { return next.handle(request); } } return false; }",
+    "async (request, next) => { while (true) { return next.handle(request); } }",
+    "async (request, next) => { do { return next.handle(request); } while (false); }",
+    "async (request, next) => { for (;;) { if (request.ready) { return next.handle(request); } await wait(); } }",
   ];
   const endsChain = [
     ["async (request) => { await post(request); }", /takes no `next`/],
@@ -107,6 +111,8 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     ["async (request, next) => { try { return next.handle(request); } catch (e) { return false; } }", /a `return` reached after that call does not give its result/],
     ["async (request, next) => { let r; do { r = await next.handle(request); } while (request.again); if (request.skip) { return true; } return r; }", /a `return` reached after that call does not give its result/],
     ["async (request, next) => { while (request.retry) { await next.handle(request); if (request.done) { return false; } } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { for (const item of request.items) { await next.handle(request); } if (request.skip) { return false; } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { let r; while (true) { r = await next.handle(request); if (r) { break; } } if (request.skip) { return true; } return r; }", /a `return` reached after that call does not give its result/],
     ["async (request, next) => { await next.handle(request); outer: for (const x of request.items) { if (x) { return false; } } return next.handle(request); }", /a `return` reached after that call does not give its result/],
     ["async (request, next) => { switch (request.kind) { case 1: await next.handle(request); case 2: return true; default: return next.handle(request); } return next.handle(request); }", /a `return` reached after that call does not give its result/],
     ["async (request, next) => { switch (request.kind) { case 1: await next.handle(request); case 2: return true; default: return next.handle(request); } }", /a `return` reached after that call does not give its result/],
