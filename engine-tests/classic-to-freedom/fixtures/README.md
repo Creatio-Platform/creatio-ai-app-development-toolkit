@@ -31,5 +31,9 @@ Provenance (important):
 - `module-lint-v2/` — **synthetic** client modules, reduced to what the code-quality rules read: log-only and
   comment-only catches, a bare numeric `comparisonType`, and a shared module that only another module imports.
   Names and record ids are placeholders; `run-mapper-quality.mjs` asserts the findings.
+- `module-lint-v3/` — the client modules of a benchmark run, renamed (`Demo` names, placeholder record ids) and
+  otherwise unchanged: every page has its own module and one shared module, yet functions and runs of statements
+  repeat across modules with other values, and named constants are declared in several modules.
+  `run-mapper-quality.mjs` asserts the near-copy and shared-constant findings.
 
 `employeescore/` was removed — no runner loaded it.

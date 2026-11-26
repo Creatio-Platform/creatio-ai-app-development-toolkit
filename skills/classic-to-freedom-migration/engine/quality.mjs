@@ -21,6 +21,7 @@
 // and a page carries the findings of every module it imports, directly or through another module.
 import { parseJsExpression, parseDefineModule, staticPropKey, childNodesOf, isFnNode, walkAstBounded } from "./engine.mjs";
 import { GUID_RE, bundleDeps } from "./conventions.mjs";
+import { nearCopies, literalConstantsOf } from "./nearcopy.mjs";
 
 export const QUALITY_RULES = Object.freeze({
   functionTooLong: "function-too-long",
@@ -70,8 +71,8 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.unusedResourceString, label: "resource strings in use (advisory)" },
   { rule: QUALITY_RULES.pageWithoutModule, label: "a page with handlers imports its own `<PageSchema>Module`" },
   { rule: QUALITY_RULES.duplicateHandlerAcrossPages, label: "no handler copied from another page of the run" },
-  { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function declared in two modules of the run, or in a page and a module" },
-  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id declared in two modules — a value the pages share lives in one module" },
+  { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function or run of statements in two modules of the run, also with other values, or in a page and a module" },
+  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or named constant declared in two modules — a value the pages share lives in one module" },
   { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a page's own module that no page or module uses" },
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
@@ -788,7 +789,9 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
   for (const m of parsed.filter((x) => x.error)) recordOf(m.name).unreadable.push(`module \`${m.name}\``);
   const read = parsed.filter((m) => !m.error);
   reportModuleCopies(read, byPage, report);
+  reportNearCopies(read, report);
   reportSharedValues(read, report);
+  reportSharedConstants(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
   // Only a run page's own `<PageSchema>Module`: any other module (a shared one, a declared project module) can serve
   // pages outside the run, whose imports nothing here sees.
@@ -974,6 +977,44 @@ function reportModuleCopies(read, byPage, report) {
       if (owner) page.findings.push(finding(QUALITY_RULES.duplicateAcrossModules, h.section, h.line,
         `\`${h.name}\` copies \`${owner.f.name}\` of \`${owner.m.name}\` — call the module's function`));
     }
+  }
+}
+
+// Code in one module that is code of another module with other values (nearcopy.mjs): a function, or a run of its
+// statements. An exact copy is left to `reportModuleCopies`.
+function reportNearCopies(read, report) {
+  const shapeOf = new Map(read.flatMap((m) => m.functions.map((f) => [f.fn, f.shape])));
+  const exact = (a, b) => shapeOf.has(a) && shapeOf.get(a) === shapeOf.get(b);
+  for (const { copy, original } of nearCopies(read, exact)) {
+    const what = copy.whole && original.whole
+      ? wholeFunctionAt(copy) + " is " + wholeFunctionAt(original)
+      : linesOfFunctionAt(copy) + " repeat " + linesOfFunctionAt(original);
+    report(copy.module, QUALITY_RULES.duplicateAcrossModules, copy.from,
+      `${what} with other values — keep one function in the shared module that takes those values as parameters, and call it from both`);
+  }
+}
+
+const codeName = (s) => "`" + s + "`";
+const wholeFunctionAt = (w) => `${codeName(w.fnName || "(anonymous)")} of ${codeName(w.module)} (lines ${w.from}-${w.to})`;
+const linesOfFunctionAt = (w) => `lines ${w.from}-${w.to} of ${codeName(w.fnName || "(anonymous)")} in ${codeName(w.module)}`;
+
+// A named constant (`const NAME = <literal>`) declared with the same value in two or more modules: one finding, on
+// the second module. A record id is reported by `reportSharedValues` instead.
+function reportSharedConstants(read, report) {
+  const where = new Map();
+  for (const m of read) {
+    for (const c of literalConstantsOf(m.factory.body)) {
+      if (typeof c.value === "string" && GUID_RE.test(c.value)) continue;
+      const key = `${c.name} = ${c.raw}`;
+      if (!where.has(key)) where.set(key, new Map());
+      if (!where.get(key).has(m.name)) where.get(key).set(m.name, c.line);
+    }
+  }
+  for (const [key, mods] of where) {
+    if (mods.size < 2) continue;
+    const [, second] = [...mods.keys()];
+    const list = [...mods].map(([n, line]) => `${codeName(n)} (line ${line})`).join(", ");
+    report(second, QUALITY_RULES.sharedValueInTwoModules, mods.get(second), `${codeName(key)} is declared in ${list} — keep it in the shared module and import it`);
   }
 }
 

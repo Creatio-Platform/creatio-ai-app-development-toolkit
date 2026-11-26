@@ -234,6 +234,26 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
   check("CLI `--modules`, one page: an unparseable imported module is printed as unreadable and makes the exit 2",
     () => rb.status === 2 && /UsrBroken/.test(rb.stdout) && !/TypeError/.test(rb.stderr), () => ({ status: rb.status, out: rb.stdout, err: rb.stderr }));
 }
+// NEAR-COPIES IN THE MAP. A benchmark page's map read clean although its module held the shared module's query
+// function with the path made a parameter, and constants the shared module already declares.
+{
+  const v3dir = path.join(here, "fixtures", "module-lint-v3");
+  const returnPage = { schemaName: "UsrDemoV3App_DemoReturnNoteFormPage", args: "(sdk, returnNote)",
+    deps: "[\"@creatio-devkit/common\", \"UsrDemoV3App_DemoReturnNoteFormPageModule\"]",
+    handlers: "[{ request: \"crt.HandleViewModelInitRequest\", handler: async (request, next) => { await returnNote.init(request); return next?.handle(request); } }]" };
+  const near = runModuleFindings(returnPage, "main", readModuleDir(v3dir));
+  check("one page: the map flags its module's function that is the shared module's with a value made a parameter",
+    () => near.findings.some((f) => f.rule === QUALITY_RULES.duplicateAcrossModules && /`sendDataServiceQuery`.*is `selectQuery`/.test(f.text)),
+    () => near.findings);
+  check("one page: the map flags a constant its module declares again although the shared module declares it",
+    () => near.findings.some((f) => f.rule === QUALITY_RULES.sharedValueInTwoModules && /`DATA_VALUE_TYPE_GUID = 0`/.test(f.text)),
+    () => near.findings);
+  const pageFile = path.join(dir, "return-note.json");
+  fs.writeFileSync(pageFile, JSON.stringify({ page: { schemaName: returnPage.schemaName }, bundle: returnPage }));
+  const r = run(pageFile, "--modules", v3dir);
+  check("CLI `--modules`, one page: a near-copy makes the exit 2 — the map no longer reads clean",
+    () => r.status === 2 && /sendDataServiceQuery/.test(r.stdout), () => ({ status: r.status, err: r.stderr }));
+}
 fs.rmSync(dir, { recursive: true, force: true });
 
 console.log(`\n=================\nCODE-MAP GOLDEN: ${pass} passed, ${fail} failed`);
