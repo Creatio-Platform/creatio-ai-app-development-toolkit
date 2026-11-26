@@ -1124,6 +1124,9 @@ function taskCardBlock(task, set = {}) {
       + " what the `Page code` and `Code quality` rows will hold you to: reuse a helper or a module function it lists,"
       + " never paste a second copy, and give the page its own `<PageSchema>Module`. Clear its findings on code you touched;"
       + " finding none is part of done.",
+    "- **A helper or constant two modules use lives in the shared module.** Code that does what another module's code"
+      + " does with another value is the same code: give it that value as a parameter, keep it once in the shared"
+      + " module and import it; declare a named constant there once, never again in a page module.",
     "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
       + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
       + " you write. Either way, extend the handler the map lists for the SAME feature instead of adding a second one;"

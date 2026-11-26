@@ -42,10 +42,15 @@ handler's row only, so another handler that drops `next` still opens a row of it
   pages need goes into one shared module (or the project's constants and helper modules, the task file's
   `## Project conventions`) and is imported, never declared again. Look there before writing a function; a call a
   module function already wraps is made through it.
+- **A helper or a constant two modules use lives in the shared module.** Code that does what another module's code
+  does with another value (another entity, path, column or page name) is the same code: make that value a
+  parameter, keep one function in the shared module, and call it from both. A named constant two modules declare
+  (`DATA_VALUE_TYPE_GUID = 0`, `CARD_STATE_ADD = "add"`) is declared once there and imported.
 - **Export only what a page or another module calls.** An export nobody imports is removed.
 - The module keeps no page context in module-level variables: the handler passes `request.$context` (and
   `request.scopes` when the function fires requests) on each call.
-- `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules already hold.
+- `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules already hold, and
+  flags code and named constants that repeat across modules, including a copy that differs only in its values.
 
 ## 4. Custom requests only for what the page fires
 
