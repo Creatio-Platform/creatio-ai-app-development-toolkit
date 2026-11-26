@@ -693,10 +693,14 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("build-task-execution.md's `writesTo:` rule says a page artifact includes the page's own logic module — the only place the brief defines what a task may write",
     () => /`writesTo:` names the one artifact[\s\S]{0,400}includes the page's own logic module, `<SchemaPrefix><Page>Module`/.test(read("build-task-execution.md")));
   const headings = contract.split("\n").filter((l) => l.startsWith("#"));
-  check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next`, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
-    () => /every handler calls `next`/.test(contract) && /Never in the page factory body/.test(contract)
+  check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next` and returns its result, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
+    () => /every handler takes `next`, calls `next\?\.handle\(request\)` and returns its\s+result/.test(contract) && /Never in the page factory body/.test(contract)
       && /Designer save deletes it/.test(contract) && /part of the page artifact/.test(contract)
       && /sibling-page/.test(contract) && /Copying the earlier page/.test(contract),
+    () => headings);
+  check("page-code-architecture.md requires what the runtime defects of built modules broke: a write's outcome is checked and a failure reaches the user, a bulk action counts its failures, a total is one aggregate query",
+    () => /## 6\. A write reports its outcome, and the user sees a failure/.test(contract) && /A bulk action counts its failures/.test(contract)
+      && /A total comes from the server/.test(contract) && /ESQ aggregation/.test(contract),
     () => headings);
   // manifest-conditional-inputs.md → siblingOf points here BY HEADING, and references are looked up by `grep -n '^#'`.
   check("page-code-architecture.md has the heading the siblingOf section points to, and shows an incorrect as well as a correct example",

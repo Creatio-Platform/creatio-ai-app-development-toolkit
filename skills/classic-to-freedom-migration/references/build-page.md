@@ -274,6 +274,11 @@ answer. That record does not exercise a check that throws or comes back empty, s
 in the code: the flag's default is restrictive and every `catch` and empty branch shows the message.
 Setting up a user without read rights is not required.
 
+**A handler passes the request on; a failed write reaches the user; a total is one query.** These
+hold for the page and its module alike — `./references/page-code-architecture.md` → 2, 5 and 6 has
+the rules and their examples, and `--verify` checks them in the page's Code quality rows, in the
+page's own code and in every client module it imports.
+
 **A filter test needs a positive control.** A filter, a lookup filter or a list's fixed filter is
 verified only when a record that MUST match it comes back, and — for each AC that says a record
 must NOT be shown — when an existing record that must not match does not come back. Pick the

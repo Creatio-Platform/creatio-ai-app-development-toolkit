@@ -1,0 +1,340 @@
+{
+ "name": "UsrMbContractsV2App_MbContractItemMiniPage",
+ "viewConfig": [
+  {
+   "type": "crt.FlexContainer",
+   "direction": "column",
+   "fitContent": false,
+   "items": [
+    {
+     "type": "crt.FlexContainer",
+     "color": "primary",
+     "padding": {
+      "top": "none",
+      "right": "none",
+      "bottom": "none",
+      "left": "none"
+     },
+     "fitContent": true,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "items": [
+        {
+         "type": "crt.Label",
+         "id": "ModalPageTitle",
+         "caption": "$HeaderCaption",
+         "labelType": "headline-2",
+         "labelThickness": "default",
+         "labelColor": "var(--crt-color-text-heading)",
+         "labelBackgroundColor": "transparent",
+         "labelTextAlign": "start",
+         "headingLevel": "h1",
+         "name": "PageTitle"
+        }
+       ],
+       "direction": "row",
+       "justifyContent": "start",
+       "alignItems": "center",
+       "name": "TitleContainer"
+      },
+      {
+       "type": "crt.FlexContainer",
+       "layoutConfig": {
+        "column": 1,
+        "row": 1,
+        "colSpan": 1,
+        "rowSpan": 1
+       },
+       "direction": "row",
+       "wrap": "nowrap",
+       "items": [
+        {
+         "type": "crt.Button",
+         "disabled": false,
+         "size": "medium",
+         "iconPosition": "only-icon",
+         "visible": false,
+         "icon": "open-button-icon",
+         "clicked": {
+          "request": "crt.ContinueInOtherPageRequest"
+         },
+         "caption": "#ResourceString(ContinueInOtherPageButton_caption)#",
+         "name": "ContinueInOtherPageButton"
+        },
+        {
+         "type": "crt.Button",
+         "clicked": {
+          "request": "crt.ClosePageRequest"
+         },
+         "color": "default",
+         "caption": "$Resources.Strings.CloseButton",
+         "visible": true,
+         "name": "CloseButton",
+         "iconPosition": "only-icon",
+         "icon": "close-button-icon",
+         "size": "medium",
+         "clickMode": "default"
+        }
+       ],
+       "name": "ActionButtonsContainer"
+      }
+     ],
+     "borderRadius": "none",
+     "gap": "small",
+     "direction": "row",
+     "justifyContent": "space-between",
+     "alignItems": "stretch",
+     "wrap": "nowrap",
+     "visible": true,
+     "name": "MainHeader"
+    },
+    {
+     "type": "crt.GridContainer",
+     "columns": [
+      "minmax(32px, 1fr)"
+     ],
+     "rows": "minmax(max-content, 32px)",
+     "gap": {
+      "columnGap": "large",
+      "rowGap": "none"
+     },
+     "items": [
+      {
+       "type": "crt.GridContainer",
+       "columns": [
+        "minmax(32px, 1fr)"
+       ],
+       "rows": "minmax(max-content, 32px)",
+       "gap": {
+        "columnGap": "large",
+        "rowGap": "none"
+       },
+       "fitContent": true,
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none",
+       "padding": {
+        "top": "none",
+        "right": "none",
+        "bottom": "none",
+        "left": "none"
+       },
+       "items": [
+        {
+         "type": "crt.Input",
+         "label": "$Resources.Strings.PDS_MbName",
+         "labelPosition": "above",
+         "control": "$PDS_MbName",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "name": "MbName"
+        },
+        {
+         "type": "crt.Checkbox",
+         "label": "$Resources.Strings.PDS_MbIsActive",
+         "labelPosition": "right",
+         "control": "$PDS_MbIsActive",
+         "tooltip": "#ResourceString(MbIsActive_tooltip)#",
+         "layoutConfig": {
+          "column": 1,
+          "row": 2,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "name": "MbIsActive"
+        }
+       ],
+       "layoutConfig": {
+        "column": 1,
+        "row": 1,
+        "colSpan": 1,
+        "rowSpan": 1
+       },
+       "name": "MbItemProfileContainer"
+      },
+      {
+       "type": "crt.GridContainer",
+       "columns": [
+        "minmax(32px, 1fr)",
+        "minmax(32px, 1fr)"
+       ],
+       "rows": "minmax(max-content, 32px)",
+       "gap": {
+        "columnGap": "large",
+        "rowGap": "none"
+       },
+       "fitContent": true,
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none",
+       "padding": {
+        "top": "none",
+        "right": "none",
+        "bottom": "none",
+        "left": "none"
+       },
+       "items": [
+        {
+         "type": "crt.NumberInput",
+         "label": "$Resources.Strings.PDS_MbQuantity",
+         "labelPosition": "above",
+         "control": "$PDS_MbQuantity",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "name": "MbQuantity"
+        },
+        {
+         "type": "crt.NumberInput",
+         "label": "$Resources.Strings.PDS_MbPrice",
+         "labelPosition": "above",
+         "control": "$PDS_MbPrice",
+         "format": {
+          "decimalPrecision": 2
+         },
+         "layoutConfig": {
+          "column": 2,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "name": "MbPrice"
+        },
+        {
+         "type": "crt.NumberInput",
+         "label": "$Resources.Strings.PDS_MbTotal",
+         "labelPosition": "above",
+         "control": "$PDS_MbTotal",
+         "readonly": true,
+         "tooltip": "#ResourceString(MbTotal_tooltip)#",
+         "format": {
+          "decimalPrecision": 2
+         },
+         "layoutConfig": {
+          "column": 1,
+          "row": 2,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "name": "MbTotal"
+        },
+        {
+         "type": "crt.DateTimePicker",
+         "pickerType": "datetime",
+         "label": "$Resources.Strings.PDS_MbDeliveryDate",
+         "labelPosition": "above",
+         "control": "$PDS_MbDeliveryDate",
+         "layoutConfig": {
+          "column": 2,
+          "row": 2,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "name": "MbDeliveryDate"
+        }
+       ],
+       "layoutConfig": {
+        "column": 1,
+        "row": 2,
+        "colSpan": 1,
+        "rowSpan": 1
+       },
+       "name": "MbItemHeaderContainer"
+      }
+     ],
+     "visible": true,
+     "stretch": true,
+     "fitContent": false,
+     "color": "transparent",
+     "borderRadius": "none",
+     "padding": {
+      "top": "medium",
+      "right": "none",
+      "bottom": "medium",
+      "left": "none"
+     },
+     "name": "MainContainer"
+    },
+    {
+     "type": "crt.FlexContainer",
+     "direction": "row",
+     "items": [
+      {
+       "type": "crt.Button",
+       "clicked": {
+        "request": "crt.CancelRecordChangesRequest"
+       },
+       "caption": "$Resources.Strings.CancelButton",
+       "visible": true,
+       "name": "CancelButton"
+      },
+      {
+       "type": "crt.Button",
+       "clicked": {
+        "request": "crt.SaveRecordRequest",
+        "params": {
+         "showSuccessMessage": true
+        }
+       },
+       "hotkeys": [
+        "save"
+       ],
+       "color": "primary",
+       "caption": "$Resources.Strings.SaveButton",
+       "visible": true,
+       "size": "large",
+       "iconPosition": "only-text",
+       "clickMode": "default",
+       "name": "SaveButton"
+      }
+     ],
+     "fitContent": true,
+     "visible": true,
+     "justifyContent": "end",
+     "alignItems": "stretch",
+     "wrap": "wrap",
+     "padding": {
+      "top": "12px",
+      "right": "none",
+      "bottom": "none",
+      "left": "none"
+     },
+     "name": "FooterContainer"
+    }
+   ],
+   "color": "primary",
+   "justifyContent": "start",
+   "alignItems": "stretch",
+   "wrap": "nowrap",
+   "visible": true,
+   "borderRadius": "medium",
+   "gap": "0px",
+   "padding": {
+    "top": "medium",
+    "right": "large",
+    "bottom": "large",
+    "left": "large"
+   },
+   "layoutConfig": {
+    "width": 420
+   },
+   "styles": {
+    "border": "none"
+   },
+   "name": "Main"
+  }
+ ],
+ "handlers": "[\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelInitRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait itemPage.setNewItemActive(request.$context);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelInitRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait itemPage.markPageReady(request.$context);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t},\n\t\t\t{\n\t\t\t\trequest: \"crt.HandleViewModelAttributeChangeRequest\",\n\t\t\t\thandler: async (request, next) => {\n\t\t\t\t\tif (!itemPage.isTotalSource(request.attributeName)) {\n\t\t\t\t\t\treturn next?.handle(request);\n\t\t\t\t\t}\n\t\t\t\t\tconst result = await next?.handle(request);\n\t\t\t\t\tawait itemPage.recalculateTotal(request.$context, request.attributeName, request.value, request.silent);\n\t\t\t\t\treturn result;\n\t\t\t\t}\n\t\t\t}\n\t\t]",
+ "deps": "[\"UsrMbContractsV2App_MbContractItemMiniPageModule\"]",
+ "args": "(itemPage)",
+ "validators": "{}",
+ "converters": "{}"
+}
