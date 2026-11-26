@@ -51,7 +51,7 @@ export function runModuleClosureChecks({ check, verifyCtx, resolveVk, FIX }) {
     () => noSource.map((r) => r.slice(0, 3)));
 
   // Only the functions a handler reaches count: the call of `contractAmount.recalculateContractAmount` sits in
-  // `recalculateAmount`, which stops being reached once `recalculateAmountOnItemsChange` no longer calls it.
+  // `recalculateAmount`; with the edit below `recalculateAmountOnItemsChange` does not call it, so it is not reached.
   const unreached = edit(formSrc, "await recalculateAmount(request, contractId);", "void contractId;");
   const unreachedRow = rowOf(ctxOf({ [FORM]: unreached, [AMOUNT]: amountSrc }), "mbRecalculateAmount");
   const notDefined = resolveVk(portedVk(`${AMOUNT}.notCalledAnywhere`), ctxOf(both));
