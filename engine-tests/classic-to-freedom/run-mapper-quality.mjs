@@ -749,6 +749,8 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const reload = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.LoadDataRequest\", dataSourceName: \"PDS\", config: { loadType: \"reload\", useLastLoadParameters: true }, $context: request.$context, scopes: [...request.scopes] }); }";
     check("near-copy: two requests of the same size with different API keys are not copies — a camelCase key is what the code does",
       () => nearIn(twoModules(open, reload)).length === 0, () => twoModules(open, reload));
+    check("near-copy: the same config under another request `type` is not a copy — the type names what the code does",
+      () => nearIn(twoModules(open, open.replace("crt.OpenPageRequest", "usr.OpenPreviewRequest"))).length === 0);
     check("near-copy: the same request with only another schema name IS a copy",
       () => nearIn(twoModules(open, open.replace("\"UsrX\"", "\"UsrY\""))).length === 1);
     const small = "function go(request) { return sdk.HandlerChainService.instance.process({ type: \"crt.A\", $context: request.$context }); }";

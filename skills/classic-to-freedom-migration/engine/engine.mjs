@@ -903,6 +903,10 @@ export function staticPropKey(p) {
 }
 
 export const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+// Any function node, a declaration included; and the first and last line of a node parsed with `locations`.
+export const isFunction = (n) => isFnNode(n) || n?.type === "FunctionDeclaration";
+export const lineOf = (n) => n?.loc?.start?.line ?? 0;
+export const endLineOf = (n) => n?.loc?.end?.line ?? lineOf(n);
 
 // `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is not in
 // this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the module is a

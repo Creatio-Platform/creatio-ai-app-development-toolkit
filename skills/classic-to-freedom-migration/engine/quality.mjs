@@ -19,7 +19,7 @@
 // A page's logic lives in the client modules it imports (`<Prefix><Page>Module`, shared ones beside it), so the rules
 // that hold outside a page section run over those too: the read-back files each module's source (`built.modules`),
 // and a page carries the findings of every module it imports, directly or through another module.
-import { parseJsExpression, parseDefineModule, staticPropKey, childNodesOf, isFnNode, walkAstBounded } from "./engine.mjs";
+import { parseJsExpression, parseDefineModule, staticPropKey, childNodesOf, isFnNode, isFunction, lineOf, walkAstBounded } from "./engine.mjs";
 import { GUID_RE, bundleDeps } from "./conventions.mjs";
 import { nearCopies, literalConstantsOf } from "./nearcopy.mjs";
 
@@ -106,8 +106,6 @@ export function qualityThresholdsOf(manifest) {
 // ---- walking ESTree nodes ----
 
 const childNodes = childNodesOf;
-const isFunction = (n) => isFnNode(n) || n?.type === "FunctionDeclaration";
-const lineOf = (n) => n?.loc?.start?.line ?? 0;
 const finding = (rule, section, line, text, extra = {}) => ({ rule, section, line, text, ...extra });
 
 // ---- one page ----
@@ -791,7 +789,6 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
   reportModuleCopies(read, byPage, report);
   reportNearCopies(read, report);
   reportSharedValues(read, report);
-  reportSharedConstants(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
   // Only a run page's own `<PageSchema>Module`: any other module (a shared one, a declared project module) can serve
   // pages outside the run, whose imports nothing here sees.
@@ -995,19 +992,24 @@ function reportNearCopies(read, report) {
 }
 
 const codeName = (s) => "`" + s + "`";
-const wholeFunctionAt = (w) => `${codeName(w.fnName || "(anonymous)")} of ${codeName(w.module)} (lines ${w.from}-${w.to})`;
-const linesOfFunctionAt = (w) => `lines ${w.from}-${w.to} of ${codeName(w.fnName || "(anonymous)")} in ${codeName(w.module)}`;
+const fnLabel = (w) => codeName(w.fnName || "(anonymous)");
+const wholeFunctionAt = (w) => `${fnLabel(w)} of ${codeName(w.module)} (lines ${w.from}-${w.to})`;
+const linesOfFunctionAt = (w) => `lines ${w.from}-${w.to} of ${fnLabel(w)} in ${codeName(w.module)}`;
 
-// A named constant (`const NAME = <literal>`) declared with the same value in two or more modules: one finding, on
-// the second module. A record id is reported by `reportSharedValues` instead.
-function reportSharedConstants(read, report) {
+// What one module declares that another may declare again: each record id it writes (keyed by the id), and each named
+// constant (`const NAME = <literal>`, keyed by `NAME = <literal>`; one that holds a record id is keyed by the id).
+function declaredValuesOf(m) {
+  const constants = literalConstantsOf(m.factory.body).filter((c) => !(typeof c.value === "string" && GUID_RE.test(c.value)));
+  return [...m.guids.map((g) => ({ key: g.value, line: g.line })), ...constants.map((c) => ({ key: `${c.name} = ${c.raw}`, line: c.line }))];
+}
+
+// A record id or a named constant declared in two or more modules: one finding, on the record of the second module.
+function reportSharedValues(read, report) {
   const where = new Map();
   for (const m of read) {
-    for (const c of literalConstantsOf(m.factory.body)) {
-      if (typeof c.value === "string" && GUID_RE.test(c.value)) continue;
-      const key = `${c.name} = ${c.raw}`;
-      if (!where.has(key)) where.set(key, new Map());
-      if (!where.get(key).has(m.name)) where.get(key).set(m.name, c.line);
+    for (const d of declaredValuesOf(m)) {
+      if (!where.has(d.key)) where.set(d.key, new Map());
+      if (!where.get(d.key).has(m.name)) where.get(d.key).set(m.name, d.line);
     }
   }
   for (const [key, mods] of where) {
@@ -1015,23 +1017,6 @@ function reportSharedConstants(read, report) {
     const [, second] = [...mods.keys()];
     const list = [...mods].map(([n, line]) => `${codeName(n)} (line ${line})`).join(", ");
     report(second, QUALITY_RULES.sharedValueInTwoModules, mods.get(second), `${codeName(key)} is declared in ${list} — keep it in the shared module and import it`);
-  }
-}
-
-// A record id written in two or more modules: one finding, on the record of the second module.
-function reportSharedValues(read, report) {
-  const where = new Map();
-  for (const m of read) {
-    for (const g of m.guids) {
-      if (!where.has(g.value)) where.set(g.value, new Map());
-      if (!where.get(g.value).has(m.name)) where.get(g.value).set(m.name, g.line);
-    }
-  }
-  for (const [value, mods] of where) {
-    if (mods.size < 2) continue;
-    const [, second] = [...mods.keys()];
-    const list = [...mods].map(([n, line]) => `\`${n}\` (line ${line})`).join(", ");
-    report(second, QUALITY_RULES.sharedValueInTwoModules, mods.get(second), `\`${value}\` is declared in ${list} — keep it in one module the others import`);
   }
 }
 

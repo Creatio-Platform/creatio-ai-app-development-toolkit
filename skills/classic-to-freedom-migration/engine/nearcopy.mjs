@@ -11,20 +11,17 @@
 // - a call keeps the method it calls without the variable it is called on (`contractAmount.showMessage` and
 //   `showMessage` are one call; `sdk.HandlerChainService.instance.process` keeps `HandlerChainService.instance.process`);
 // - an object key that names a column or an attribute (PascalCase: `MbIsActive`, `PDS_MbDate`) is a value too; a
-//   camelCase key is the API's (`type`, `schemaName`, `modelInitConfigs`) and is kept.
+//   camelCase key is the API's (`type`, `schemaName`, `modelInitConfigs`) and is kept, and so is the literal a `type`
+//   key holds: a `crt.OpenPageRequest` and a `crt.LoadDataRequest` are different requests whatever their keys.
 // Nothing is evaluated; the walk is bounded by depth like the other AST walks.
-import { childNodesOf, isFnNode, staticPropKey } from "./engine.mjs";
+import { childNodesOf, staticPropKey, isFunction, lineOf, endLineOf } from "./engine.mjs";
 
 // A run of statements this large is code worth one function. Smaller runs (a guard, one plain call) repeat in any
 // two modules by nature.
-export const MIN_NEAR_COPY_NODES = 18;
+const MIN_NEAR_COPY_NODES = 18;
 // The longest run of statements compared, counted in statements.
 const MAX_WINDOW_STATEMENTS = 12;
 const MAX_DEPTH = 1000;
-
-const isFunction = (n) => isFnNode(n) || n?.type === "FunctionDeclaration";
-const lineOf = (n) => n?.loc?.start?.line ?? 0;
-const endLineOf = (n) => n?.loc?.end?.line ?? lineOf(n);
 
 // A read of a value: nothing in it is called, so swapping it for another value keeps what the code does.
 function isValueRead(n, depth = 0) {
@@ -47,63 +44,45 @@ function calleeKey(callee) {
   return { key: names.join("."), base: n };
 }
 
-const isDataKey = (name) => /^[A-Z]/.test(name);
+// The token of an object key: a column or attribute name (PascalCase) is a value; an API key is kept, and a `type`
+// key keeps the request it names.
+function keyToken(p) {
+  const name = staticPropKey(p);
+  if (name == null) return "";
+  if (/^[A-Z]/.test(name)) return "K";
+  return name === "type" && p.value?.type === "Literal" ? `type=${p.value.value}` : name;
+}
 
 // The value shape of one node, as tokens pushed on `out`; returns the number of nodes it counted.
-export function valueShape(n, out, depth = 0) {
+function valueShape(n, out, depth = 0) {
   if (!n) { out.push("_"); return 0; }
   if (depth > MAX_DEPTH) { out.push("?"); return 1; }
   if (isValueRead(n)) { out.push("V"); return 1; }
   const at = depth + 1;
+  // A tag, the shapes of the given children, and the close.
+  const node = (tag, children) => {
+    out.push("(" + tag);
+    let count = 1;
+    for (const c of children) count += valueShape(c, out, at);
+    out.push(")");
+    return count;
+  };
   switch (n.type) {
     case "CallExpression": case "NewExpression": {
       const { key, base } = calleeKey(n.callee);
-      out.push(`(${n.type === "NewExpression" ? "new" : "call"} ${key}`);
-      let count = 1 + (base ? valueShape(base, out, at) : 0);
-      for (const a of n.arguments) count += valueShape(a, out, at);
-      out.push(")");
-      return count;
+      return node(`${n.type === "NewExpression" ? "new" : "call"} ${key}`, base ? [base, ...n.arguments] : n.arguments);
     }
     case "Property": {
-      const name = staticPropKey(n);
-      out.push(`(key ${name == null ? "" : (isDataKey(name) ? "K" : name)}`);
-      let count = 1 + (n.computed ? valueShape(n.key, out, at) : 0);
-      count += n.shorthand ? (out.push("V"), 1) : valueShape(n.value, out, at);
-      out.push(")");
-      return count;
+      const value = n.shorthand ? { type: "Identifier" } : n.value;
+      return node("key " + keyToken(n), n.computed ? [n.key, value] : [value]);
     }
-    case "VariableDeclarator": {
-      out.push("(decl B");
-      const count = 1 + valueShape(n.init, out, at);
-      out.push(")");
-      return count;
-    }
-    case "FunctionDeclaration": case "FunctionExpression": case "ArrowFunctionExpression": {
-      out.push(`(fn${n.async ? " async" : ""}`);
-      const count = 1 + valueShape(n.body, out, at);
-      out.push(")");
-      return count;
-    }
-    case "CatchClause": {
-      out.push("(catch");
-      const count = 1 + valueShape(n.body, out, at);
-      out.push(")");
-      return count;
-    }
-    default: {
-      out.push("(" + n.type + (typeof n.operator === "string" ? " " + n.operator : "") + (n.type === "VariableDeclaration" ? " " + n.kind : ""));
-      let count = 1;
-      for (const child of childNodesOf(n)) count += valueShape(child, out, at);
-      out.push(")");
-      return count;
-    }
+    case "VariableDeclarator": return node("decl B", [n.init]);
+    case "FunctionDeclaration": case "FunctionExpression": case "ArrowFunctionExpression": return node(n.async ? "fn async" : "fn", [n.body]);
+    case "CatchClause": return node("catch", [n.body]);
+    default:
+      return node(n.type + (typeof n.operator === "string" ? " " + n.operator : "") + (n.type === "VariableDeclaration" ? " " + n.kind : ""),
+        childNodesOf(n));
   }
-}
-
-function shapeOf(node) {
-  const out = [];
-  const count = valueShape(node, out);
-  return { shape: out.join(" "), count };
 }
 
 // The statement lists of one module worth comparing: the body of each function (an expression body is one
@@ -115,9 +94,9 @@ function statementLists(factoryBody) {
     if (!node || depth > MAX_DEPTH) return;
     if (isFunction(node)) {
       const name = node.id?.name ?? fnName;
-      const block = node.body.type === "BlockStatement";
-      lists.push({ fn: node, fnName: name, statements: block ? node.body.body : [node.body] });
-      for (const child of block ? node.body.body : [node.body]) visit(child, name, depth + 1);
+      const statements = node.body.type === "BlockStatement" ? node.body.body : [node.body];
+      lists.push({ fn: node, fnName: name, statements });
+      for (const child of statements) visit(child, name, depth + 1);
       return;
     }
     if (node.type === "BlockStatement") lists.push({ fn: null, fnName, statements: node.body });
@@ -139,20 +118,29 @@ function nameOfFunctionAt(node) {
   return null;
 }
 
-// Every run of statements of at least MIN_NEAR_COPY_NODES, keyed by its value shape.
-function windowsOf(m) {
+// Every run of statements of at least MIN_NEAR_COPY_NODES, keyed by the ids of its statements' value shapes (one id
+// per distinct shape, shared by all modules through `ids`).
+function windowsOf(m, ids) {
+  const idOf = (shape) => {
+    if (!ids.has(shape)) ids.set(shape, ids.size);
+    return ids.get(shape);
+  };
   const out = [];
   for (const list of statementLists(m.factory.body)) {
-    const shaped = list.statements.map((st) => ({ st, ...shapeOf(st) }));
+    const shaped = list.statements.map((st) => {
+      const tokens = [];
+      const count = valueShape(st, tokens);
+      return { st, count, id: idOf(tokens.join(" ")) };
+    });
     for (let i = 0; i < shaped.length; i++) {
       let count = 0;
-      const parts = [];
+      const key = [];
       for (let j = i; j < shaped.length && j - i < MAX_WINDOW_STATEMENTS; j++) {
         count += shaped[j].count;
-        parts.push(shaped[j].shape);
+        key.push(shaped[j].id);
         if (count < MIN_NEAR_COPY_NODES) continue;
         out.push({ module: m.name, fnName: list.fnName, fn: list.fn, whole: !!list.fn && i === 0 && j === shaped.length - 1,
-          from: lineOf(shaped[i].st), to: endLineOf(shaped[j].st), count, key: parts.join(" ; ") });
+          from: lineOf(shaped[i].st), to: endLineOf(shaped[j].st), count, key: key.join() });
       }
     }
   }
@@ -164,32 +152,29 @@ const within = (inner, outer) => inner.from >= outer.from && inner.to <= outer.t
 // The near-copies between modules, largest first: `{ copy, original }`, each a run of statements with its module,
 // function and lines. A smaller run inside a reported one is not reported again, and a function whose exact copy
 // `isExactCopy(fnA, fnB)` already reports is left to that check.
-export function nearCopies(modules, isExactCopy = () => false) {
+export function nearCopies(modules, isExactCopy) {
+  const ids = new Map();
   const byKey = new Map();
   for (const m of modules) {
-    for (const w of windowsOf(m)) {
+    for (const w of windowsOf(m, ids)) {
       if (!byKey.has(w.key)) byKey.set(w.key, []);
       byKey.get(w.key).push(w);
     }
   }
   const matches = [];
-  for (const group of byKey.values()) {
-    const original = group[0];
-    for (const w of group.slice(1)) if (w.module !== original.module) matches.push({ copy: w, original });
+  for (const [original, ...rest] of byKey.values()) {
+    for (const w of rest) if (w.module !== original.module) matches.push({ copy: w, original });
   }
   matches.sort((a, b) => b.copy.count - a.copy.count || a.copy.from - b.copy.from);
   const reported = [];
-  const out = [];
   for (const match of matches) {
     const { copy, original } = match;
     if (copy.whole && original.whole && isExactCopy(copy.fn, original.fn)) continue;
     const covered = reported.some((r) => r.copy.module === copy.module && r.original.module === original.module
       && within(copy, r.copy) && within(original, r.original));
-    if (covered) continue;
-    reported.push(match);
-    out.push(match);
+    if (!covered) reported.push(match);
   }
-  return out;
+  return reported;
 }
 
 // One module-level constant per name: `const NAME = <literal>` at the top of the module factory.
