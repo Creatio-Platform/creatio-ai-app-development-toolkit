@@ -60,6 +60,34 @@ export function runModuleClosureChecks({ check, verifyCtx, resolveVk, FIX }) {
       && [unreachedRow[2], notDefined[1]].every((t) => /is not among the page's `define\(\)` deps, and no function a handler reaches in the modules they import calls/.test(t)),
     () => [unreachedRow, notDefined]);
 
+  // A call the walk reaches is not a definition: FormPageModule calls `contractAmount.notDefinedHere(…)` on the
+  // reached path, and with ContractAmountModule filed (it defines no such function) the row reads ⚠; with that
+  // module not filed, the call is all there is to read and it holds.
+  const callsUndefined = edit(formSrc, "const outcome = await contractAmount.recalculateContractAmount(contractId);",
+    "const outcome = await contractAmount.recalculateContractAmount(contractId);\n\t\tawait contractAmount.notDefinedHere(contractId);");
+  const undefinedFiled = resolveVk(portedVk(`${AMOUNT}.notDefinedHere`), ctxOf({ [FORM]: callsUndefined, [AMOUNT]: amountSrc }));
+  const undefinedUnfiled = resolveVk(portedVk(`${AMOUNT}.notDefinedHere`), ctxOf({ [FORM]: callsUndefined }));
+  check("module closure: a function the reached path calls but the filed module does not define reads ⚠; with that module's source not filed the call holds",
+    () => undefinedFiled[0] === "⚠ verify" && undefinedUnfiled[0] === "✅ Done",
+    () => [undefinedFiled, undefinedUnfiled]);
+
+  // A module's own function is followed when a function of it calls it as `this.fn(…)`, never as `other.fn(…)`.
+  const viaThis = edit(formSrc, "await recalculateAmount(request, contractId);", "await this.recalculateAmount(request, contractId);");
+  const viaOther = edit(formSrc, "await recalculateAmount(request, contractId);", "await other.recalculateAmount(request, contractId);");
+  const thisRow = rowOf(ctxOf({ [FORM]: viaThis, [AMOUNT]: amountSrc }), "mbRecalculateAmount");
+  const otherRow = rowOf(ctxOf({ [FORM]: viaOther, [AMOUNT]: amountSrc }), "mbRecalculateAmount");
+  check("module closure: a module function called as `this.recalculateAmount(…)` is followed and the row reads ✅; called as `other.recalculateAmount(…)` it is not, and the row reads ⚠",
+    () => thisRow[1] === "✅ Done" && otherRow[1] === "⚠ verify",
+    () => [thisRow, otherRow]);
+
+  // A `Ported as` function of a module the page DOES import, reached only through that module's own functions, names
+  // the module's file when its source is not filed.
+  const inDeps = resolveVk(portedVk(`${FORM}.recalculateAmount`), ctxOf({}));
+  check("module closure: a Ported-as function of a module in the page's deps, reached only inside that module, reads ⚠ naming `reads/modules/UsrMbContractsV3App_FormPageModule.js` when no source is filed, and ✅ when it is",
+    () => inDeps[0] === "⚠ verify" && inDeps[1].includes(`add it as \`reads/modules/${FORM}.js\``)
+      && resolveVk(portedVk(`${FORM}.recalculateAmount`), ctxOf(both))[0] === "✅ Done",
+    () => inDeps);
+
   // An import cycle: ContractAmountModule imports FormPageModule back and calls into it. Each `Module.fn` is walked
   // once, so a symbol nothing reaches still answers ⚠, and the recorded chain still closes its row.
   const cyclic = edit(edit(amountSrc, 'define("UsrMbContractsV3App_ContractAmountModule", ["@creatio-devkit/common"], function(sdk) {',

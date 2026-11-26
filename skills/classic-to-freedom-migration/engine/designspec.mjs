@@ -4369,11 +4369,13 @@ function functionBodiesOf(ctx, call) {
   const shape = moduleShapeOf(ctx, call.module);
   return { shape, bodies: shape?.functions.get(call.fn) || [] };
 }
-// The calls `bodies` make: to the functions of their own `module`, and through the module's imports to others.
+// The calls `bodies` make: to the functions of their own `module` (bare, or as `this.fn(…)` from a method of the
+// module's returned object; `other.fn(…)` is another object's method), and through the module's imports to others.
+const calledOwn = (code, fn) => calledIn(code, fn, true) || calledIn(code, `this.${fn}`, true);
 function calleesOf(shape, module, bodies) {
   if (!shape) return [];
   return (bodies || []).map(codeOnly).flatMap((code) => [
-    ...[...shape.functions.keys()].filter((fn) => calledIn(code, fn, true)).map((fn) => ({ module, fn, via: null })),
+    ...[...shape.functions.keys()].filter((fn) => calledOwn(code, fn)).map((fn) => ({ module, fn, via: null })),
     ...moduleCallsIn(code, shape.imports),
   ]);
 }
@@ -5281,16 +5283,18 @@ function moduleFunctionVerdict(sym, [, module, fn], ctx, code) {
   const via = ctx.aliases.has(module) ? [module, alias].filter(Boolean).find((name) => calledIn(code, `${name}.${fn}`, true)) : null;
   if (via === module) return { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` };
   if (via) return { ok: true, text: `a handler calls \`${esc(alias)}.${esc(fn)}\` (\`${esc(alias)}\` is module \`${esc(module)}\` in the page's \`define()\`)` };
-  const walk = walkModuleCalls(ctx, moduleCallsIn(code, ctx.aliases), (m, f) => m === module && f === fn);
+  // A call reached on the way holds only where the module defines the function, or where its source is not filed and
+  // the call is all there is to read: a filed module without `fn` shows the symbol is not there.
+  const walk = walkModuleCalls(ctx, moduleCallsIn(code, ctx.aliases), (m, f, bodies) => m === module && f === fn && (bodies === undefined || bodies.length > 0));
   if (walk.hit) return { ok: true, text: `a handler calls ${callPathText(walk.path)}` };
+  const unfiled = walk.missing.length ? `; ${unfiledModuleText(walk.missing[0])}` : "";
   if (!ctx.aliases.has(module)) {
-    const why = walk.missing.length ? `; ${unfiledModuleText(walk.missing[0])}` : "";
-    return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps, and no function a handler reaches in the modules they import calls \`${esc(sym)}\`${why}` };
+    return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps, and no function a handler reaches in the modules they import calls \`${esc(sym)}\`${unfiled}` };
   }
   if (!alias) {
-    return { ok: false, text: `no handler calls \`${esc(sym)}\`, and the page entry carries no \`args\` (its \`define()\` parameters) naming the module's local name — pass get-page's bundle whole` };
+    return { ok: false, text: `no handler calls \`${esc(sym)}\`, and the page entry carries no \`args\` (its \`define()\` parameters) naming the module's local name — pass get-page's bundle whole${unfiled}` };
   }
-  return { ok: false, text: `no handler calls \`${esc(sym)}\` or \`${esc(alias)}.${esc(fn)}\`` };
+  return { ok: false, text: `no handler calls \`${esc(sym)}\` or \`${esc(alias)}.${esc(fn)}\`${unfiled}` };
 }
 // One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
 // the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
