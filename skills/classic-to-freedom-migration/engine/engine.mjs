@@ -554,6 +554,9 @@ function findFactoryReturn(factory) {
   return null;
 }
 
+// An array literal's elements by position: a string literal's value, null for any other element (or a hole).
+export const stringSlots = (arrayNode) => arrayNode.elements.map((el) => (el?.type === "Literal" && typeof el.value === "string" ? el.value : null));
+
 // A `define("Name", [deps], function (…) { … return {…}; })` body as AST nodes — the one reader of the AMD shell,
 // shared by `parseSchema` (a page) and the project-conventions GUID index (a constants module). Nothing is
 // evaluated. Returns `{ error, deps }` on a body it cannot read (`deps` is what it read before failing), else
@@ -568,11 +571,11 @@ export function parseDefineModule(src, { locations = false, onComment } = {}) {
   const call = findDefineCall(ast);
   if (!call) return { error: "no define() call found", deps: [] };
   const depsNode = call.arguments.find((a) => a.type === "ArrayExpression");
-  const deps = depsNode ? depsNode.elements.filter((el) => el?.type === "Literal" && typeof el.value === "string").map((el) => el.value) : [];
+  const depSlots = depsNode ? stringSlots(depsNode) : [];
+  const deps = depSlots.filter((d) => d != null);
   const factory = call.arguments.find((a) => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
   const name = call.arguments[0]?.type === "Literal" && typeof call.arguments[0].value === "string" ? call.arguments[0].value : null;
   if (!factory) return { error: "define() has no factory function", deps, name };
-  const depSlots = depsNode ? depsNode.elements.map((el) => (el?.type === "Literal" && typeof el.value === "string" ? el.value : null)) : [];
   return { error: null, deps, depSlots, name, factory, returned: findFactoryReturn(factory) };
 }
 

@@ -33,7 +33,7 @@ export function runModuleClosureChecks({ check, verifyCtx, resolveVk, FIX }) {
   // As recorded: `mbRecalculateAmount` names `ContractAmountModule.recalculateContractAmount`, which the page reaches
   // only through `contractPage.recalculateAmountOnItemsChange` -> `recalculateAmount` -> `contractAmount.…`.
   const recorded = rows(ctxOf(both));
-  const amountRow = recorded.find((r) => r[0] === "mbRecalculateAmount");
+  const amountRow = rowOf(ctxOf(both), "mbRecalculateAmount");
   check("module closure (recorded v3): all 8 handler rows of the form page read ✅ with both module sources filed — the module the page does not import itself is reached through the one it does",
     () => recorded.length === 8 && recorded.every((r) => r[1] === "✅ Done"),
     () => recorded.map((r) => r.slice(0, 3)));
@@ -44,7 +44,7 @@ export function runModuleClosureChecks({ check, verifyCtx, resolveVk, FIX }) {
   // The chain is read from the module that holds the call: without FormPageModule's source no module-to-module step
   // can be seen, and the row says which file to add. The page's own calls still hold.
   const noSource = rows(ctxOf({}));
-  const noSourceRow = noSource.find((r) => r[0] === "mbRecalculateAmount");
+  const noSourceRow = rowOf(ctxOf({}), "mbRecalculateAmount");
   check("module closure: without the filed module sources only `mbRecalculateAmount` reads ⚠, naming `reads/modules/UsrMbContractsV3App_FormPageModule.js`; the 7 rows the page reaches itself stay ✅",
     () => noSourceRow[1] === "⚠ verify" && noSourceRow[2].includes(`add it as \`reads/modules/${FORM}.js\``)
       && noSource.filter((r) => r[0] !== "mbRecalculateAmount").every((r) => r[1] === "✅ Done"),

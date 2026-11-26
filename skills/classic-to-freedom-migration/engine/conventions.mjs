@@ -26,7 +26,7 @@
 //
 // Pure: no I/O. migrate.mjs resolves the facts once per run (`conventionFacts`) and gates `--plan` on their issues;
 // designspec.mjs renders and verifies; tasks.mjs copies the block into every task file.
-import { parseDefineModule, parseJsExpression, staticPropKey, walkAstBounded } from "./engine.mjs";
+import { parseDefineModule, parseJsExpression, staticPropKey, stringSlots, walkAstBounded } from "./engine.mjs";
 
 // The namespace every Creatio page defaulted to before a project said otherwise.
 export const DEFAULT_REQUEST_PREFIX = "usr";
@@ -358,17 +358,17 @@ export const MODULE_SCHEMA_NAME = /^[A-Za-z_]\w*$/;
 // bundle carried no `deps`.
 export function moduleAliases(entry) {
   const slots = depSlots(entry?.deps);
-  if (!slots) return null;
-  const args = bundleArgs(entry) || [];
-  return new Map(slots.map((d, i) => [d, args[i] ?? null]).filter(([d]) => d != null));
+  return slots && pairSlots(slots, bundleArgs(entry) || []);
 }
+// `slots[i]` -> `names[i]` (null where there is no name), a null slot left out without shifting the rest.
+const pairSlots = (slots, names) => new Map(slots.map((d, i) => [d, names[i] ?? null]).filter(([d]) => d != null));
 // The `deps` slots in order, a slot that is no string null; null when the bundle carried no `deps` or its source is
 // not an array literal (then no position can be trusted).
 function depSlots(v) {
   if (v == null) return null;
   if (Array.isArray(v)) return v.map((x) => (typeof x === "string" ? x : null));
   const node = parseJsExpression(v);
-  return node?.type === "ArrayExpression" ? node.elements.map((el) => (isStringLiteral(el) ? el.value : null)) : null;
+  return node?.type === "ArrayExpression" ? stringSlots(node) : null;
 }
 // WHAT A CLIENT MODULE DEFINES AND IMPORTS. `functions`: by name, each `function name(…)`, `const name = function /
 // arrow`, and `name: function / arrow` property, with its source. A property whose value is another name
@@ -380,8 +380,7 @@ export function moduleShape(src) {
   const text = String(src ?? "");
   const mod = parseDefineModule(text);
   if (mod.error) return null;
-  const params = mod.factory.params.map(paramName);
-  const imports = new Map(mod.depSlots.map((d, i) => [d, params[i] ?? null]).filter(([d]) => d != null));
+  const imports = pairSlots(mod.depSlots, mod.factory.params.map(paramName));
   const fns = new Map();
   const add = (name, body) => { if (name) fns.set(name, [...(fns.get(name) || []), body]); };
   walkAstBounded(mod.factory, (n) => {

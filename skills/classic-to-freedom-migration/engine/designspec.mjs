@@ -4330,7 +4330,6 @@ function moduleCallsIn(code, imports) {
 // What each filed module defines and imports, parsed once per payload; null for a module that does not parse.
 const MODULE_SHAPES = new WeakMap();
 function moduleShapeOf(ctx, module) {
-  if (!ctx.modules.has(module)) return undefined;
   if (!MODULE_SHAPES.has(ctx.modules)) MODULE_SHAPES.set(ctx.modules, new Map());
   const cache = MODULE_SHAPES.get(ctx.modules);
   if (!cache.has(module)) cache.set(module, moduleShape(ctx.modules.get(module)));
@@ -4356,9 +4355,10 @@ function walkModuleCalls(ctx, starts, visit) {
   for (const call of starts) enqueue(call, null);
   for (const key of queue) {
     const { call } = from.get(key);
-    const shape = moduleShapeOf(ctx, call.module);
-    if (shape === undefined) missing.add(call.module);
-    const bodies = shape ? shape.functions.get(call.fn) || [] : undefined;
+    const filed = ctx.modules.has(call.module);
+    if (!filed) missing.add(call.module);
+    const shape = filed ? moduleShapeOf(ctx, call.module) : null;
+    const bodies = filed ? shape?.functions.get(call.fn) || [] : undefined;
     if (visit(call.module, call.fn, bodies)) return { hit: true, path: callPath(from, key), missing: [...missing] };
     for (const code of (bodies || []).map(codeOnly)) {
       for (const fn of shape.functions.keys()) if (calledIn(code, fn, true)) enqueue({ module: call.module, fn, via: null }, key);
