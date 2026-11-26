@@ -82,18 +82,44 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     "async (request, next) => { try { await before(); } finally { return next?.handle(request); } }",
     "async (request, next) => { switch (request.kind) { case 1: case 2: return next.handle(request); default: return next.handle(request); } }",
     "(request, next) => { return next.handle(request).then((r) => r); }",
+    "async (request, next) => { if (await isLocked(request)) { await showLocked(request); return true; } return next?.handle(request); }",
+    "async (request, next) => { const child = page.childOf(request); if (child) { return page.openChild(request, child); } return next?.handle(request); }",
+    "async (request, next) => { if (!request.value) { return; } return next?.handle(request); }",
+    "async (request, next) => { if (!request.value) { return next?.handle(request); } else { return page.open(request); } }",
+    "async (request, next) => { const r = await next.handle(request); switch (request.kind) { case 1: log(); case 2: return r; default: return r; } }",
+    "async (request, next) => { let result; switch (request.kind) { case 1: if (request.value) { result = await next.handle(request); break; } return true; default: result = await next.handle(request); } return result; }",
+    "async (request, next) => { try { const r = await next.handle(request); return r; } finally { cleanup(); } }",
+    "async (request, next) => { try { await load(); } catch (e) { return false; } return next?.handle(request); }",
+    "async (request, next) => { switch (request.mode) { case \"a\": case \"b\": return next.handle(request); default: return page.open(request); } }",
+    "async (request, next) => { outer: for (const x of request.items) { if (x) { break outer; } } return next.handle(request); }",
+    "async (request, next) => { for (const item of request.items) { if (item.matches) { return next.handle(request); } } return false; }",
+    "async (request, next) => { while (true) { return next.handle(request); } }",
+    "async (request, next) => { do { return next.handle(request); } while (false); }",
+    "async (request, next) => { for (;;) { if (request.ready) { return next.handle(request); } await wait(); } }",
   ];
   const endsChain = [
     ["async (request) => { await post(request); }", /takes no `next`/],
     ["async (request, next) => { await post(request); }", /never calls/],
-    ["async (request, next) => { await next?.handle(request); await post(request); }", /does not return its result/],
-    ["async (request, next) => { const r = await next?.handle(request); return true; }", /does not return its result/],
+    ["async (request, next) => { await next?.handle(request); await post(request); }", /no `return` gives its result/],
+    ["async (request, next) => { const r = await next?.handle(request); return true; }", /no `return` gives its result/],
+    ["(request, next) => next.handle(request) && true", /no `return` gives its result/],
     ["async (request, next) => { [1].forEach(() => next.handle(request)); return null; }", /never calls/],
     ["(request, next) => post(request)", /never calls/],
-    ["async (request, next) => { if (await isLocked(request)) { await showLocked(request); return true; } return next?.handle(request); }", /does not return its result/],
-    ["async (request, next) => { const r = await next.handle(request); if (r) return; return r; }", /does not return its result/],
-    ["async (request, next) => { const r = await next.handle(request); if (r) { return r; } }", /does not return its result/],
-    ["async (request, next) => { switch (request.kind) { case 1: return next.handle(request); case 2: return next.handle(request); } }", /does not return its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (r) return; return r; }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { if (request.value) { return next?.handle(request); } }", /can reach its end without a `return`, which ends the chain/],
+    ["async (request, next) => { switch (request.kind) { case 1: return next.handle(request); case 2: return next.handle(request); } }", /can reach its end without a `return`, which ends the chain/],
+    ["async (request, next) => { try { return next.handle(request); } catch (e) { return false; } }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { let r; do { r = await next.handle(request); } while (request.again); if (request.skip) { return true; } return r; }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { while (request.retry) { await next.handle(request); if (request.done) { return false; } } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { for (const item of request.items) { await next.handle(request); } if (request.skip) { return false; } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { let r; while (true) { r = await next.handle(request); if (r) { break; } } if (request.skip) { return true; } return r; }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { await next.handle(request); outer: for (const x of request.items) { if (x) { return false; } } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { switch (request.kind) { case 1: await next.handle(request); case 2: return true; default: return next.handle(request); } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { switch (request.kind) { case 1: await next.handle(request); case 2: return true; default: return next.handle(request); } }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (!r) { return false; } return r; }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { await next.handle(request); switch (request.kind) { case 1: return true; default: return next.handle(request); } }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { for (const x of request.items) { if (x) { return false; } await next.handle(request); } return next.handle(request); }", /a `return` reached after that call does not give its result/],
+    ["async (request, next) => { const r = await next.handle(request); if (r) { return r; } }", /can reach its end after that call without a `return`/],
   ];
   const chainOf = (fn) => lintPageQuality({ handlers: `[{ request: "usr.Post", handler: ${fn} }]` }).findings.filter((f) => f.rule === R.handlerWithoutNext);
   check("quality: a handler that calls next.handle(request) and returns its result passes the request on",
@@ -131,7 +157,8 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
   // A real built page and its modules, as a migration run built them: every runtime defect the build contract
   // forbids is found at its line — a Post handler that ends the chain, totals and counts paged in the browser, bulk
   // actions and numbering that only log a failure, and a recalculation whose failure the caller drops.
-  const v2 = (f) => fs.readFileSync(path.join(FIX, "client-modules-v2", f), "utf8");
+  const fixtureIn = (dir) => (f) => fs.readFileSync(path.join(FIX, dir, f), "utf8");
+  const v2 = fixtureIn("client-modules-v2");
   const at = (page, rule) => page.findings.filter((f) => f.rule === rule && !f.advisory).map((f) => f.line);
   const v2Post = lintPageQuality({ handlers: v2("UsrMbContractsV2App_MbDeliveryNoteFormPage.handlers.js") });
   const v2Totals = lintModuleQuality("UsrMbContractsV2DocumentTotals", v2("UsrMbContractsV2DocumentTotals.js"));
@@ -150,6 +177,20 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     () => [v2Post, v2Totals, v2Form, v2List].every((p) => p.unreadable.length === 0)
       && v2Expected.every(([, got, want]) => got.join() === want.join()),
     () => v2Expected.filter(([, got, want]) => got.join() !== want.join()));
+
+  // The next run of the same package: the record and list pages stop the chain on purpose when a record opens its own
+  // page, before the request is handed on, and the return-note module was saved with a bare comparisonType before
+  // the gate's repair round rewrote it.
+  const v3 = fixtureIn("client-modules-v3");
+  const v3Form = lintPageQuality({ handlers: v3("UsrMbContractsV3App_FormPage.handlers.js") });
+  const v3List = lintPageQuality({ handlers: v3("UsrMbContractsV3App_ListPage.handlers.js") });
+  const v3ReturnNote = lintModuleQuality("UsrMbContractsV3App_MbReturnNoteFormPageModule", v3("UsrMbContractsV3App_MbReturnNoteFormPageModule.js"));
+  check("quality: a handler that returns before calling next (the record opens its own page) and returns next.handle(request) on every other path keeps the chain",
+    () => [v3Form, v3List].every((p) => p.unreadable.length === 0 && count(p, R.handlerWithoutNext) === 0),
+    () => [v3Form.findings, v3List.findings]);
+  check("quality: the return-note module as saved before the repair — its bare comparisonType is found at its line",
+    () => v3ReturnNote.unreadable.length === 0 && at(v3ReturnNote, R.numericComparisonType).join() === "20",
+    () => v3ReturnNote.findings);
 
   const measured = lintPageQuality(pageOf(handler("usr.Long", lines(61))));
   check("quality: a long function's finding states the measured length and the limit",

@@ -22,7 +22,10 @@ The chain has one rule: **every handler takes `next`, calls `next?.handle(reques
 result**. That holds for a custom request too (`<prefix>.<Name>Request`, a button's `clicked`): another
 handler for the same request — a replacing schema, a later feature — runs only when this one passes it on.
 A handler that skips `next`, or calls it and drops its result, silently ends the chain for every handler
-after it and for whoever fired the request.
+after it and for whoever fired the request. One shape is not a dropped result: an explicit `return` reached before
+`next?.handle(request)` runs, on a path the plan stops on purpose (`if (childPage) { return
+openChildPage(request, childPage); } return next?.handle(request);`). A `return` reached after the call has run
+must still give its result.
 
 A handler ends the chain only when the plan says so: a decision that names the handler and why it
 replaces the platform behaviour (for example a save that must not reach the platform save). Each page
