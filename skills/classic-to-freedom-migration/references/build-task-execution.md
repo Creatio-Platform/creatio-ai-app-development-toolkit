@@ -48,7 +48,9 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    question"; without the second the user is sent to your notes to find the check.
    **A `Handler — …` row ported under another name gets a third line:** `Ported as (row N): <symbol>` — the
    request type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or
-   `Module.function` from a module the page lists in its `define()` deps; several symbols go in as code spans.
+   `Module.function` from a module the page lists in its `define()` deps (write the module's schema name, even
+   where the page calls it through its factory parameter, as in `contractPage.refreshCanEditFields(…)`); several
+   symbols go in as code spans.
    `--verify` closes the row only when the built page reaches the symbol: the request is sent by a handler or an
    element, the function is called. **Never add a function named after the Classic method to close the row** —
    a definition no handler calls ports nothing, and `--verify` leaves the row open and says so.
@@ -145,7 +147,8 @@ you.
 - Your `writesTo:` names the one artifact you may write. Write that artifact and no other: reaching
   into another task's artifact is how two sub-agents write the same schema. A page artifact
   (`page:<…>`) includes the page's own logic module, `<SchemaPrefix><Page>Module`
-  (`./references/page-code-architecture.md`): the page's tasks write both, one at a time.
+  (`./references/page-code-architecture.md`, which the module follows as the page does): the page's
+  tasks write both, one at a time.
 - **Re-check for an existing Freedom artifact before every create** — an app, a section, a page, a
   rule — a second run over the same folder must not duplicate one that is already there.
 

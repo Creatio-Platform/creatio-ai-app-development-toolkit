@@ -557,7 +557,8 @@ function findFactoryReturn(factory) {
 // A `define("Name", [deps], function (…) { … return {…}; })` body as AST nodes — the one reader of the AMD shell,
 // shared by `parseSchema` (a page) and the project-conventions GUID index (a constants module). Nothing is
 // evaluated. Returns `{ error, deps }` on a body it cannot read (`deps` is what it read before failing), else
-// `{ error: null, deps, factory, returned }` (`returned` may be null). `locations` adds line spans to the nodes.
+// `{ error: null, deps, factory, returned }` (`returned` may be null). `locations` adds line spans to the nodes;
+// `onComment` receives every comment, as acorn reports it.
 export function parseDefineModule(src, { locations = false, onComment } = {}) {
   const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   let ast;

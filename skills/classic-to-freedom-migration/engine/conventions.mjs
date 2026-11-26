@@ -26,7 +26,7 @@
 //
 // Pure: no I/O. migrate.mjs resolves the facts once per run (`conventionFacts`) and gates `--plan` on their issues;
 // designspec.mjs renders and verifies; tasks.mjs copies the block into every task file.
-import { parseDefineModule, parseJsExpression, staticPropKey } from "./engine.mjs";
+import { parseDefineModule, parseJsExpression, staticPropKey, walkAstBounded } from "./engine.mjs";
 
 // The namespace every Creatio page defaulted to before a project said otherwise.
 export const DEFAULT_REQUEST_PREFIX = "usr";
@@ -330,6 +330,86 @@ export function bundleDeps(entry) {
   return [...text.slice(open + 1, close).matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
 }
 const isStringLiteral = (n) => n?.type === "Literal" && typeof n.value === "string";
+// get-page's `bundle.args`: the page's `define()` factory parameters in deps order, as source (`(contractPage)`,
+// `(sdk, mbDocumentTotals)`) or an array. Source is PARSED as a parameter list, so a destructured or defaulted
+// parameter (`({ sdk, http }, xPage)`, `(sdk = { a: 1, b: 2 }, xPage)`) is still one slot. A slot that names no
+// plain identifier stays null, so the positions still line up with the deps. null when the bundle did not carry them
+// or the source is not a parameter list.
+const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+const paramName = (p) => {
+  if (p?.type === "Identifier") return p.name;
+  return p?.type === "AssignmentPattern" && p.left?.type === "Identifier" ? p.left.name : null;
+};
+export function bundleArgs(entry) {
+  const v = entry?.args;
+  if (v == null) return null;
+  if (Array.isArray(v)) return v.map((a) => (IDENT_RE.test(String(a).trim()) ? String(a).trim() : null));
+  const text = String(v).trim();
+  const params = text.startsWith("(") ? text : "(" + text + ")";
+  const fn = parseJsExpression(`function ${params} {}`);
+  return fn?.type === "FunctionExpression" ? fn.params.map(paramName) : null;
+}
+// A dependency a `reads/modules/<schema>.js` file can exist for: a schema name. An npm-scoped package
+// (`@creatio-devkit/common`) is the platform's, never a module the build wrote.
+export const MODULE_SCHEMA_NAME = /^[A-Za-z_]\w*$/;
+// The local name each `define()` dependency goes by on the page: `deps[i]` -> `args[i]`, null where the page gave it
+// none (or the bundle carried no `args`). Paired by POSITION: a deps slot that is no string literal keeps its place
+// and is left out of the map, so it cannot shift a later dependency onto the parameter before it. null when the
+// bundle carried no `deps`.
+export function moduleAliases(entry) {
+  const slots = depSlots(entry?.deps);
+  if (!slots) return null;
+  const args = bundleArgs(entry) || [];
+  return new Map(slots.map((d, i) => [d, args[i] ?? null]).filter(([d]) => d != null));
+}
+// The `deps` slots in order, a slot that is no string null; null when the bundle carried no `deps` or its source is
+// not an array literal (then no position can be trusted).
+function depSlots(v) {
+  if (v == null) return null;
+  if (Array.isArray(v)) return v.map((x) => (typeof x === "string" ? x : null));
+  const node = parseJsExpression(v);
+  return node?.type === "ArrayExpression" ? node.elements.map((el) => (isStringLiteral(el) ? el.value : null)) : null;
+}
+// THE FUNCTIONS A CLIENT MODULE DEFINES, by name: each `function name(…)`, `const name = function / arrow`, and
+// `name: function / arrow` property, with its source and its code (strings and comments blanked) for call matching.
+// A property whose value is another name (`startApproval: start`, or the shorthand `{ startApproval }`) is kept as a
+// call of that name, so an export reaches the function behind it. null when the source is not a `define()` module.
+const isFunctionNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+export function moduleFunctions(src) {
+  const text = String(src ?? "");
+  const mod = parseDefineModule(text);
+  if (mod.error) return null;
+  const fns = new Map();
+  const add = (name, body) => { if (name) fns.set(name, [...(fns.get(name) || []), body]); };
+  walkAstBounded(mod.factory, (n) => {
+    if (n.type === "FunctionDeclaration") add(n.id?.name, text.slice(n.start, n.end));
+    else if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isFunctionNode(n.init)) add(n.id.name, text.slice(n.init.start, n.init.end));
+    else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) add(staticPropKey(n), text.slice(n.value.start, n.value.end));
+    else if (n.type === "Property" && !n.computed && n.value?.type === "Identifier") add(staticPropKey(n), `${n.value.name}()`);
+  });
+  return fns;
+}
+// The request a parsed handler entry answers (`{ request: "<name>", handler: … }`), or null.
+function entryRequest(el) {
+  if (el?.type !== "ObjectExpression") return null;
+  const req = el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value;
+  return isStringLiteral(req) ? req.value : null;
+}
+// Each request the page's handlers answer -> the source of every top-level entry that answers it, in order. null
+// when the handlers are not source that parses as an array: a text over-read here would credit a request some other
+// handler sends.
+export function handlerEntriesByRequest(src) {
+  if (typeof src !== "string") return null;
+  const node = parseJsExpression(src);
+  if (node?.type !== "ArrayExpression") return null;
+  const out = new Map();
+  for (const el of node.elements) {
+    const request = entryRequest(el);
+    // `parseJsExpression` reads the text wrapped in `(`, so every node offset is one past the source's own.
+    if (request != null) out.set(request, [...(out.get(request) || []), src.slice(el.start - 1, el.end - 1)]);
+  }
+  return out;
+}
 // The custom names a built page DECLARES, per kind: the request of each handler entry, validator and converter
 // registrations. A request a handler body only dispatches (`next?.handle({ request: "pkg.X" })`) or a button only
 // fires belongs to whoever declares its handler, so it is not read. The whole result is null when the bundle carries
@@ -351,9 +431,7 @@ function handlerRequests(v) {
   if (Array.isArray(v)) return v.map((h) => (isObj(h) && typeof h.request === "string" ? h.request : null)).filter(Boolean);
   const node = parseJsExpression(v);
   if (node?.type !== "ArrayExpression") return [...String(v).matchAll(/"?\brequest"?\s*:\s*["']([^"']+)["']/g)].map((m) => m[1]);
-  return node.elements.filter((el) => el?.type === "ObjectExpression")
-    .map((el) => el.properties.find((p) => p.type === "Property" && staticPropKey(p) === "request")?.value)
-    .filter(isStringLiteral).map((n) => n.value);
+  return node.elements.map(entryRequest).filter((r) => r != null);
 }
 // The keys of a validators/converters registration object: `{ "ab.Positive": { … } }`, a name of any number of
 // segments (`ab.Order.Approve`). Source that does not parse is read as text, every quoted dotted key in it.
