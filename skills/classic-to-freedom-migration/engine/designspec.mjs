@@ -3791,11 +3791,10 @@ function spliceDirectiveRows(groups, directives, ctx) {
       directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d)), ctx);
     if (!add.rows.length) continue;
     const at = gates.get(key);
-    const gate = at === undefined ? add : groups[at];
-    const rows = [...(at === undefined ? [] : gate.rows), ...add.rows];
+    const gate = at === undefined ? undefined : groups[at];
+    const rows = [...(gate?.rows || []), ...add.rows];
     const ordered = [...rows.filter(isFiledGateRow), ...rows.filter((r) => !isFiledGateRow(r))];
-    if (at === undefined) groups.push({ ...add, rows: ordered });
-    else groups[at] = { ...gate, rows: ordered };
+    groups[at ?? groups.length] = { ...(gate || add), rows: ordered };
   }
 }
 // The page keys a set of groups publishes, in emission order — what a directive's `Scope:` may name.

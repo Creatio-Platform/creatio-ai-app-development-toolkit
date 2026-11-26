@@ -12340,8 +12340,8 @@ console.log("\n===== project conventions: every writer of a task file carries th
     () => planGaps(runD));
   check("directives (plan): a run without directives renders no section and no directive row",
     () => !/### User directives/.test(RUN.plan) && !GROUPS.some((g) => g.rows.some((r) => r.directive)));
+  const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
   {
-    const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
     const g = checklistGroups(runMigration(MANIFEST, { decisionRecords: everyPage }), OPTS);
     const ids = new Set(g.flatMap((x) => x.rows.filter((r) => r.directive).map((r) => r.id)));
     const keys = new Set(g.map((x) => x.pageKey));
@@ -12350,7 +12350,6 @@ console.log("\n===== project conventions: every writer of a task file carries th
   }
   {
     // Sub-page groups are the objects the result tree keeps, so a second render must not see the first one's pairs.
-    const everyPage = parseDecisionRecords("## D1 — t\n- Kind: directive\n- Decided by: user\n- Quote: q\n- Scope: run\n- Expectation: e");
     const run = runMigration(MANIFEST2, { decisionRecords: everyPage });
     const pairsPerPage = (groups) => {
       const by = new Map(groups.map((g) => [g.pageKey, []]));
