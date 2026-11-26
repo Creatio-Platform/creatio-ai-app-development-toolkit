@@ -1,0 +1,37 @@
+﻿{
+  "Descriptor": {
+    "UId": "ea6a28a7-a9b6-4b94-b0e4-7e4bb5de1e4b",
+    "Name": "MbMigrationBench",
+    "ModifiedOnUtc": "\/Date(1795500095000)\/",
+    "Maintainer": "Customer",
+    "Description": "Synthetic Classic UI app used to benchmark Classic to Freedom UI migrations.",
+    "DependsOn": [
+      {
+        "UId": "06d9ef10-51d8-122c-8933-9212e84236c9",
+        "PackageVersion": "7.8.0",
+        "Name": "CrtBase"
+      },
+      {
+        "UId": "29996b0e-2b19-27a8-dab4-67fbc00db573",
+        "PackageVersion": "7.8.0",
+        "Name": "CrtProcessDesigner"
+      },
+      {
+        "UId": "422cc048-65aa-8f90-e8ed-7fa6d5ab06b1",
+        "PackageVersion": "7.8.0",
+        "Name": "CrtNUI"
+      },
+      {
+        "UId": "e7052dfc-0e33-c838-b00e-78ddcc004690",
+        "PackageVersion": "7.8.0",
+        "Name": "CrtWizards7x"
+      },
+      {
+        "UId": "f4ba33cf-5a6c-ccc0-f401-cb6bb16c1039",
+        "PackageVersion": "7.8.0",
+        "Name": "CrtUIPlatform7x",
+        "Type": 1
+      }
+    ]
+  }
+}

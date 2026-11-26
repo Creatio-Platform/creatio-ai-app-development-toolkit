@@ -1,0 +1,8 @@
+{
+  "Packages": [
+    "MbMigrationBench"
+  ],
+  "ApplicationVersion": "10.2.959",
+  "IgnorePackages": [],
+  "ExternalPackages": []
+}

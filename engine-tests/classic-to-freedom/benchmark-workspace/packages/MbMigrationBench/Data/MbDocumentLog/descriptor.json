@@ -1,0 +1,42 @@
+﻿{
+  "Descriptor": {
+    "UId": "bb1bda85-bbfe-4d48-9324-a631e6372911",
+    "Name": "MbDocumentLog",
+    "ModifiedOnUtc": "\/Date(1795500766000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "8ca3c5e9-3877-4290-86f5-22831c256a0e",
+      "Name": "MbDocumentLog"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "25a802c9-1632-4dec-9705-ed32d2a69d6a",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbRecordId",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "5d697923-4c61-4271-a18e-0f399e7058c5",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbName",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "7d98be4d-e023-4ad6-a306-00e1f77a0f11",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbEntityName",
+        "DataTypeValueUId": "325a73b8-0f47-44a0-8412-7606f78003ac"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      }
+    ]
+  }
+}

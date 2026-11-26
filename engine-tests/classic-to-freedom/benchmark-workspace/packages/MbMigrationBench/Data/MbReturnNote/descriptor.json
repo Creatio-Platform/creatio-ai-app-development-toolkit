@@ -1,0 +1,70 @@
+﻿{
+  "Descriptor": {
+    "UId": "83b970fb-a5b6-47e0-a46f-f351bca5875b",
+    "Name": "MbReturnNote",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "05fbe3c8-335f-461d-90ae-f67ee8c02152",
+      "Name": "MbReturnNote"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "1912e2ac-0cb3-4ca6-a772-d072d270bf60",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbReason",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "1b701d62-6858-4ebc-bd64-f0be88b78889",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbContract",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "8df10fd8-7805-40e1-97fd-64f1b6355cdc",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbAmount",
+        "DataTypeValueUId": "969093e2-2b4e-463b-883a-3d3b8c61f0cd"
+      },
+      {
+        "ColumnUId": "8e7cb1ed-95b0-43a6-817c-7b5805fa9a5c",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbNumber",
+        "DataTypeValueUId": "325a73b8-0f47-44a0-8412-7606f78003ac"
+      },
+      {
+        "ColumnUId": "a1a460d0-93e1-4079-8bed-ea076be7b20f",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbName",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "cb534dcd-fc97-46c8-985b-37fb19627ff3",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbDate",
+        "DataTypeValueUId": "d21e9ef4-c064-4012-b286-fa1a8171da44"
+      },
+      {
+        "ColumnUId": "eaeca512-3e7f-41f0-b664-8cc2b7a878c7",
+        "IsForceUpdate": true,
+        "IsKey": false,
+        "ColumnName": "MbIsPosted",
+        "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"
+      }
+    ]
+  }
+}

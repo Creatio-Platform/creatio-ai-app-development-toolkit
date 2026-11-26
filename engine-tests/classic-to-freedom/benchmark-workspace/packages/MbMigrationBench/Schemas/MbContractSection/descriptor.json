@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "c82aaf3e-3302-5ef1-9805-687c7b6f1c2e",
+    "Name": "MbContractSection",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "7912fb69-4fee-429f-8b23-93943c35d66d",
+      "Name": "BaseSectionV2"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Contracts section",
+    "DependsOn": []
+  }
+}

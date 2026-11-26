@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Contract payment" />
+			<Item Name="Columns.MbAmount.Caption" Value="Amount" />
+			<Item Name="Columns.MbContract.Caption" Value="Contract" />
+			<Item Name="Columns.MbDate.Caption" Value="Payment date" />
+			<Item Name="Columns.MbName.Caption" Value="Name" />
+			<Item Name="EventsProcessSchema.Caption" Value="Business process" />
+		</Items>
+	</Group>
+</Resources>

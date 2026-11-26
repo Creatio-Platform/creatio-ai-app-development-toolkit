@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "a2d9df40-00f3-4853-b2ac-56fdd6fe06c6",
+    "Name": "MbDeliveryNote",
+    "ModifiedOnUtc": "\/Date(1795500247000)\/",
+    "Parent": {
+      "UId": "1bab9dcf-17d5-49f8-9536-8e0064f1dce0",
+      "Name": "BaseEntity"
+    },
+    "ManagerName": "EntitySchemaManager",
+    "Caption": "Delivery note",
+    "DependsOn": []
+  }
+}

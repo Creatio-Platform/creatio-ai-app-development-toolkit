@@ -1,0 +1,10 @@
+= MetaData.Schema.UId "3018314e-02f3-5723-9313-35726b9c2066"
+= MetaData.Schema.A2 "MbContractPaymentDetail"
+= MetaData.Schema.A5 "19b416dd-744b-5355-a1a4-fb5994b66d5a"
++ MetaData.Schema.B2 {
+  "UId": "6c4d93b0-6489-52f2-bdec-b7bc65a244db",
+  "A2": "Caption",
+  "A3": "3018314e-02f3-5723-9313-35726b9c2066",
+  "A4": "3018314e-02f3-5723-9313-35726b9c2066",
+  "A5": "19b416dd-744b-5355-a1a4-fb5994b66d5a"
+}

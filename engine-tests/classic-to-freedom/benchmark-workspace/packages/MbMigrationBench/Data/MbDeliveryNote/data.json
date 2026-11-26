@@ -1,0 +1,70 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b81"
+        },
+        {
+          "SchemaColumnUId": "27cb1c14-c8ec-45ac-91a7-102706f763fe",
+          "Value": 450.00
+        },
+        {
+          "SchemaColumnUId": "56a8f13f-fd15-48fa-8b4d-44206499aa46",
+          "Value": "\/Date(1773964800000+0100)\/"
+        },
+        {
+          "SchemaColumnUId": "9eca472a-c998-46c8-9f31-f1639ca893d5",
+          "Value": true
+        },
+        {
+          "SchemaColumnUId": "f8a0e1ec-0fdc-4620-85a8-c71a6156e699",
+          "Value": "D-0001"
+        },
+        {
+          "SchemaColumnUId": "faa32eee-9bf7-46c8-8909-249228371ae5",
+          "Value": "Delivery of spare parts"
+        },
+        {
+          "SchemaColumnUId": "faa63a5b-1f19-414e-a756-af280cf1b8e8",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        }
+      ]
+    },
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "0d4f6a10-0006-4b8e-9c3a-5d6e7f8a9b82"
+        },
+        {
+          "SchemaColumnUId": "27cb1c14-c8ec-45ac-91a7-102706f763fe",
+          "Value": 300.00
+        },
+        {
+          "SchemaColumnUId": "56a8f13f-fd15-48fa-8b4d-44206499aa46",
+          "Value": "\/Date(1777593600000+0200)\/"
+        },
+        {
+          "SchemaColumnUId": "9eca472a-c998-46c8-9f31-f1639ca893d5",
+          "Value": false
+        },
+        {
+          "SchemaColumnUId": "f8a0e1ec-0fdc-4620-85a8-c71a6156e699",
+          "Value": "D-0002"
+        },
+        {
+          "SchemaColumnUId": "faa32eee-9bf7-46c8-8909-249228371ae5",
+          "Value": "Delivery of consumables"
+        },
+        {
+          "SchemaColumnUId": "faa63a5b-1f19-414e-a756-af280cf1b8e8",
+          "Value": "0d4f6a10-0003-4b8e-9c3a-5d6e7f8a9b51",
+          "DisplayValue": "Annual service contract"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+﻿{
+  "Descriptor": {
+    "UId": "555ec18d-c44c-52dd-889d-e4fe513a247f",
+    "Name": "MbApproveContractProcess",
+    "ModifiedOnUtc": "\/Date(1795600000000)\/",
+    "ManagerName": "ProcessSchemaManager",
+    "Caption": "Approve contract"
+  }
+}

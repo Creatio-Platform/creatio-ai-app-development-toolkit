@@ -1,0 +1,24 @@
+= MetaData.Schema.UId "1fd5e329-6e7c-580f-94cd-df21344b5754"
+= MetaData.Schema.A2 "MbReturnNotePage"
+= MetaData.Schema.A5 "81c523ce-cdf5-58d7-9f9e-4aebbf47d0e1"
++ MetaData.Schema.B2 {
+  "UId": "cba09e03-8c30-5038-8471-987298d44c61",
+  "A2": "MbAlreadyPostedMessage",
+  "A3": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+  "A4": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+  "A5": "81c523ce-cdf5-58d7-9f9e-4aebbf47d0e1"
+}
++ MetaData.Schema.B2 {
+  "UId": "97125d8f-8de0-50c6-befc-47e79d08fbc6",
+  "A2": "MbPostButtonCaption",
+  "A3": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+  "A4": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+  "A5": "81c523ce-cdf5-58d7-9f9e-4aebbf47d0e1"
+}
++ MetaData.Schema.B2 {
+  "UId": "2d084633-30bf-5af7-9c50-64b71cad4206",
+  "A2": "MbPostFailedMessage",
+  "A3": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+  "A4": "1fd5e329-6e7c-580f-94cd-df21344b5754",
+  "A5": "81c523ce-cdf5-58d7-9f9e-4aebbf47d0e1"
+}

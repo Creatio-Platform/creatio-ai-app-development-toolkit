@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "3dcde15b-507f-5d9a-b8d7-f636cd6b9e9d",
+    "Name": "MbApproveContractProcessPage",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "21620f25-166f-42f1-8b4d-224a959040a3",
+      "Name": "BasePageProcessTemplate"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Approve contract (process page)",
+    "DependsOn": []
+  }
+}

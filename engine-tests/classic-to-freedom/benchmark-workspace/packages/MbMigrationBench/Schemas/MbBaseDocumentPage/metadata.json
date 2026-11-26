@@ -1,0 +1,10 @@
+= MetaData.Schema.UId "221a75e8-fcf0-59e8-9884-be048a186a77"
+= MetaData.Schema.A2 "MbBaseDocumentPage"
+= MetaData.Schema.A5 "2a238e89-9b7c-5d35-a7c7-b4720b171c85"
++ MetaData.Schema.B2 {
+  "UId": "7554e35f-7461-5019-ae8a-2bc6a213aa14",
+  "A2": "MbHistoryTabCaption",
+  "A3": "221a75e8-fcf0-59e8-9884-be048a186a77",
+  "A4": "221a75e8-fcf0-59e8-9884-be048a186a77",
+  "A5": "2a238e89-9b7c-5d35-a7c7-b4720b171c85"
+}

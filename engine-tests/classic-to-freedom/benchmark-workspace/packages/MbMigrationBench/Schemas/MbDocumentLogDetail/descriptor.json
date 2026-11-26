@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "57894beb-66c8-5585-b05f-69f8ef75c9d6",
+    "Name": "MbDocumentLogDetail",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "01eb38ee-668a-42f0-999d-c2534f979089",
+      "Name": "BaseGridDetailV2"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "History",
+    "DependsOn": []
+  }
+}

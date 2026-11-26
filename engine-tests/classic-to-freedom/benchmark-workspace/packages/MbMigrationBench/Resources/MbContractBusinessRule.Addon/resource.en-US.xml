@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="AddonConfig.Rules.53897cff-ef1b-5dec-8d6a-3f54408c8ad8.Caption" Value="Approval comment required when approved" />
+		</Items>
+	</Group>
+</Resources>

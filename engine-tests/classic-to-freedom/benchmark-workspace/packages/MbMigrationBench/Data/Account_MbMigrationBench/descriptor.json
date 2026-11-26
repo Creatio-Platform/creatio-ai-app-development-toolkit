@@ -1,0 +1,28 @@
+﻿{
+  "Descriptor": {
+    "UId": "e9497c0d-f03f-4dd5-a5db-f483ff409cf7",
+    "Name": "Account_MbMigrationBench",
+    "ModifiedOnUtc": "\/Date(1795500763000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "25d7c1ab-1de0-4501-b402-02e0e5a72d6e",
+      "Name": "Account"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "7c81a01e-f59b-47df-830c-8e830f1bf889",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "Name",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      }
+    ]
+  }
+}

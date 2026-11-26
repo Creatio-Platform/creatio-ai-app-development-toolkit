@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "95e87706-5645-59e0-9c7f-927f9d25366a",
+    "Name": "MbDeliveryNoteDetail",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "01eb38ee-668a-42f0-999d-c2534f979089",
+      "Name": "BaseGridDetailV2"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Delivery notes",
+    "DependsOn": []
+  }
+}

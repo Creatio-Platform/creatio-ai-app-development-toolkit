@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Contract" />
+			<Item Name="Columns.MbAccount.Caption" Value="Customer" />
+			<Item Name="Columns.MbAmount.Caption" Value="Amount" />
+			<Item Name="Columns.MbApprovalComment.Caption" Value="Approval comment" />
+			<Item Name="Columns.MbApproved.Caption" Value="Approved" />
+			<Item Name="Columns.MbContact.Caption" Value="Contact person" />
+			<Item Name="Columns.MbEndDate.Caption" Value="End date" />
+			<Item Name="Columns.MbName.Caption" Value="Name" />
+			<Item Name="Columns.MbNotes.Caption" Value="Notes" />
+			<Item Name="Columns.MbNumber.Caption" Value="Number" />
+			<Item Name="Columns.MbStartDate.Caption" Value="Start date" />
+			<Item Name="Columns.MbStatus.Caption" Value="Status" />
+			<Item Name="EventsProcessSchema.Caption" Value="Business process" />
+		</Items>
+	</Group>
+</Resources>

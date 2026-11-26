@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "8b2d3d89-6842-5967-9571-e52a9c216ac8",
+    "Name": "MbContractPage",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "221a75e8-fcf0-59e8-9884-be048a186a77",
+      "Name": "MbBaseDocumentPage"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Contract edit page",
+    "DependsOn": []
+  }
+}

@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "06d430c7-8352-5f10-a630-25f8b3fa58ef",
+    "Name": "MbReturnNoteDetail",
+    "ModifiedOnUtc": "\/Date(1795500000000)\/",
+    "Parent": {
+      "UId": "01eb38ee-668a-42f0-999d-c2534f979089",
+      "Name": "BaseGridDetailV2"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Return notes",
+    "DependsOn": []
+  }
+}

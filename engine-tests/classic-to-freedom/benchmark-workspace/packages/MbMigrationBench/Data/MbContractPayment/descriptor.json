@@ -1,0 +1,49 @@
+﻿{
+  "Descriptor": {
+    "UId": "8e9ba863-4c54-43eb-83ac-d136d1597778",
+    "Name": "MbContractPayment",
+    "ModifiedOnUtc": "\/Date(1795500765000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "de502810-9fb0-4a9a-9d4e-7d75bc005f26",
+      "Name": "MbContractPayment"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "10d1b01f-4cda-421b-a120-00abe4a1e18b",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbName",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "1480d03f-ec2b-4ea8-8124-34e2d8db5f85",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbContract",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "65adb888-b31f-40b6-828b-fb3655b5258f",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbAmount",
+        "DataTypeValueUId": "969093e2-2b4e-463b-883a-3d3b8c61f0cd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "d9d29998-dc75-4427-9ee2-9f125154e422",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbDate",
+        "DataTypeValueUId": "d21e9ef4-c064-4012-b286-fa1a8171da44"
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+﻿{
+  "Descriptor": {
+    "UId": "1e3e7ad5-afb2-4ded-98fd-e751dc090e54",
+    "Name": "MbContractItem",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "1da69ae3-b526-47b4-aab9-8036034b51db",
+      "Name": "MbContractItem"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "002e7bea-7d69-425f-a88b-9d534a2d258a",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbContract",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "45c0e70a-fd59-4f55-a7ba-42bc9ff0afb4",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbPrice",
+        "DataTypeValueUId": "969093e2-2b4e-463b-883a-3d3b8c61f0cd"
+      },
+      {
+        "ColumnUId": "70a03217-15c1-4dc5-b4c3-f03eab7070ed",
+        "IsForceUpdate": true,
+        "IsKey": false,
+        "ColumnName": "MbIsActive",
+        "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"
+      },
+      {
+        "ColumnUId": "7ff3a8e5-4c21-44aa-861a-3751ecd51e35",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbTotal",
+        "DataTypeValueUId": "969093e2-2b4e-463b-883a-3d3b8c61f0cd"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "d4f99846-34c4-40e1-927a-06044ee2aec3",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbDeliveryDate",
+        "DataTypeValueUId": "d21e9ef4-c064-4012-b286-fa1a8171da44"
+      },
+      {
+        "ColumnUId": "e08149d3-d45c-4b2f-9990-ac6953f7c318",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbName",
+        "DataTypeValueUId": "ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd"
+      },
+      {
+        "ColumnUId": "f91795e5-1e3d-436e-8443-a3814931da1d",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "MbQuantity",
+        "DataTypeValueUId": "5cc8060d-6d10-4773-89fc-8c12d6f659a6"
+      }
+    ]
+  }
+}

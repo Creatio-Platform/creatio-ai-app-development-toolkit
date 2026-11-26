@@ -1,0 +1,32 @@
+﻿{
+  "PackageData": [
+    {
+      "Row": [
+        {
+          "SchemaColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+          "Value": "1ecb7434-6403-4f45-9d93-f6892f156a4d"
+        },
+        {
+          "SchemaColumnUId": "13aad544-ec30-4e76-a373-f0cff3202e24",
+          "Value": "MbContractLastNumber"
+        },
+        {
+          "SchemaColumnUId": "64fadca1-ab7c-4471-9d25-68599acc729b",
+          "Value": false
+        },
+        {
+          "SchemaColumnUId": "764cd95a-59b3-4060-b17f-2797d5c76aaa",
+          "Value": false
+        },
+        {
+          "SchemaColumnUId": "eb971f1a-dd41-4668-99aa-1f2a6b61a1b9",
+          "Value": true
+        },
+        {
+          "SchemaColumnUId": "f7960a8a-1fd4-41d2-997a-fd78ea60075f",
+          "Value": "Integer"
+        }
+      ]
+    }
+  ]
+}

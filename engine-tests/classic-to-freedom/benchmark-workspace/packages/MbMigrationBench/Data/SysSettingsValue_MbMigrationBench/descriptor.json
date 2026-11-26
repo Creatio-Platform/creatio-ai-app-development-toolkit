@@ -1,0 +1,77 @@
+﻿{
+  "Descriptor": {
+    "UId": "36dd34cd-ab6c-4a2e-bec0-39ca2cda792b",
+    "Name": "SysSettingsValue_MbMigrationBench",
+    "ModifiedOnUtc": "\/Date(1795531220000)\/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "951b2bbb-0ba3-4049-9a29-b5d4c0b6d50f",
+      "Name": "SysSettingsValue"
+    },
+    "Columns": [
+      {
+        "ColumnUId": "0fde6f1e-22c5-48c7-9c89-6f0031e270de",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "SysSettings",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "297f4697-d071-4be2-8509-9090c07dfe18",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "BooleanValue",
+        "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"
+      },
+      {
+        "ColumnUId": "55472376-a4dd-40da-86c6-975ce4b898fa",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "IsDef",
+        "DataTypeValueUId": "90b65bf8-0ffc-4141-8779-2420877af907"
+      },
+      {
+        "ColumnUId": "8f1984bb-7bef-4220-9b49-9a12d0ebcd68",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "SysAdminUnit",
+        "DataTypeValueUId": "b295071f-7ea9-4e62-8d1a-919bf3732ff2"
+      },
+      {
+        "ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+        "IsForceUpdate": false,
+        "IsKey": true,
+        "ColumnName": "Id",
+        "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"
+      },
+      {
+        "ColumnUId": "af6013ce-7387-4619-b4f4-30c4276fcfac",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "TextValue",
+        "DataTypeValueUId": "c0f04627-4620-4bc0-84e5-9419dc8516b1"
+      },
+      {
+        "ColumnUId": "b1ffd2d8-2bd3-4c46-b9c0-782afb0996c0",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "FloatValue",
+        "DataTypeValueUId": "5cc8060d-6d10-4773-89fc-8c12d6f659a6"
+      },
+      {
+        "ColumnUId": "b36bfa07-34c7-45b1-a2ee-39e653034ba0",
+        "IsForceUpdate": true,
+        "IsKey": false,
+        "ColumnName": "IntegerValue",
+        "DataTypeValueUId": "6b6b74e2-820d-490e-a017-2b73d4ccf2b0"
+      },
+      {
+        "ColumnUId": "f1bc0b27-2c46-4cae-ad23-3b8940587d4f",
+        "IsForceUpdate": false,
+        "IsKey": false,
+        "ColumnName": "Position",
+        "DataTypeValueUId": "6b6b74e2-820d-490e-a017-2b73d4ccf2b0"
+      }
+    ]
+  }
+}

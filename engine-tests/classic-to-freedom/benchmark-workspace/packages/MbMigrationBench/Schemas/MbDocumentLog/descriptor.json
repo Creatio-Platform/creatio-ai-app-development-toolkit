@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "8ca3c5e9-3877-4290-86f5-22831c256a0e",
+    "Name": "MbDocumentLog",
+    "ModifiedOnUtc": "\/Date(1795500253000)\/",
+    "Parent": {
+      "UId": "1bab9dcf-17d5-49f8-9536-8e0064f1dce0",
+      "Name": "BaseEntity"
+    },
+    "ManagerName": "EntitySchemaManager",
+    "Caption": "Document log",
+    "DependsOn": []
+  }
+}

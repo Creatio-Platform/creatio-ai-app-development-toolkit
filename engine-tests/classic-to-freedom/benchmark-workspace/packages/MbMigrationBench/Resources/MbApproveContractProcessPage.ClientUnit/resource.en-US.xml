@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resources Culture="en-US">
+	<Group Type="String">
+		<Items>
+			<Item Name="Caption" Value="Approve contract (process page)" />
+			<Item Name="LocalizableStrings.MbApproveButtonCaption.Value" Value="Approve" />
+			<Item Name="LocalizableStrings.MbCommentCaption.Value" Value="Approval comment" />
+		</Items>
+	</Group>
+</Resources>

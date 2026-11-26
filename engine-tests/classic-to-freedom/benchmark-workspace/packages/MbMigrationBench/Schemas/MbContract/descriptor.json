@@ -1,0 +1,14 @@
+﻿{
+  "Descriptor": {
+    "UId": "5f6085a3-ddc6-4188-8a62-41506172b401",
+    "Name": "MbContract",
+    "ModifiedOnUtc": "\/Date(1795500234000)\/",
+    "Parent": {
+      "UId": "1bab9dcf-17d5-49f8-9536-8e0064f1dce0",
+      "Name": "BaseEntity"
+    },
+    "ManagerName": "EntitySchemaManager",
+    "Caption": "Contract",
+    "DependsOn": []
+  }
+}
