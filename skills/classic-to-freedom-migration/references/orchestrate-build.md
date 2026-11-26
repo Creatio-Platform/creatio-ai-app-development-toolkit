@@ -536,7 +536,8 @@ its own verdict, so:
 - **The read plan first.** Run `node engine/migrate.mjs <manifest> --reads <migration-folder>`. It
   writes `reads/index.json` and prints one row per read the gate needs: two files per published page
   key (`meta.json` and `bundle.json` from `.clio-pages/<schema>/`), the rule reads for the pages
-  whose rules are gated, and every on-stand check — each with the exact file it goes into. Derive
+  whose rules are gated, and every on-stand check — each with the exact file it goes into — and asks
+  for the source of every client module the built pages import, under `reads/modules/`. Derive
   that list yourself and a page the checklist gates is a page nobody reads, which the gate then
   reports as "not checked" rather than as a gap.
 - **The read-back** is one sub-agent with stand access but NO write access, handed
