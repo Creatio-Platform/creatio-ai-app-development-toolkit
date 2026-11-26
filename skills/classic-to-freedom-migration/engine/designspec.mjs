@@ -3779,18 +3779,22 @@ function directiveRows(pageKey, d) {
 // the next n unclaimed), so the page's last writer claims the first `1 + N` rows (the design pass's filed row and
 // one per directive) and the review claims the rest. Interleaved pairs could not be cut by a group claim at all.
 // "Filed" is `isFiledGateRow`, the same test the split counts the claim with.
+// The splice REPLACES a page's gate group with a copy and never writes into it: a sub-page's groups are the
+// objects its tree node keeps (`pageRows`) and hands to every render, so rows written into them would pile up
+// one directive pair per render.
 function spliceDirectiveRows(groups, directives, ctx) {
   if (!directives?.length) return;
-  const gates = new Map(groups.filter((g) => (g.baseTitle || g.title) === "Quality gates").map((g) => [g.pageKey, g]));
+  const gates = new Map();
+  groups.forEach((g, i) => { if ((g.baseTitle || g.title) === "Quality gates") gates.set(g.pageKey, i); });
   for (const key of publishedPageKeys(groups)) {
     const add = pageGroup(key, "Quality gates",
       directives.filter((d) => directiveCovers(d, key)).flatMap((d) => directiveRows(key, d)), ctx);
     if (!add.rows.length) continue;
-    const gate = gates.get(key);
+    const at = gates.get(key);
+    const gate = at === undefined ? undefined : groups[at];
     const rows = [...(gate?.rows || []), ...add.rows];
     const ordered = [...rows.filter(isFiledGateRow), ...rows.filter((r) => !isFiledGateRow(r))];
-    if (gate) gate.rows = ordered;
-    else groups.push({ ...add, rows: ordered });
+    groups[at ?? groups.length] = { ...(gate || add), rows: ordered };
   }
 }
 // The page keys a set of groups publishes, in emission order — what a directive's `Scope:` may name.
