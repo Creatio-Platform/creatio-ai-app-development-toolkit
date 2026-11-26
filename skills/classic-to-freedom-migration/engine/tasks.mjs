@@ -1248,7 +1248,8 @@ function markersBlock() {
       + " can follow without reading the rest of your notes.",
     "  - for every `Handler — …` row you ported under another name: `Ported as (row N): <symbol>` — the request"
       + " type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or `Module.function`"
-      + " (the module's schema name, also when the page calls it through its `define()` parameter)"
+      + " (the module's schema name, also when the page calls it through its `define()` parameter, and also for a"
+      + " module that one of the page's modules imports)"
       + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
       + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
       + " only a call or a `Ported as` line does.",
