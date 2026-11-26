@@ -783,7 +783,9 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
     return byPage.modules.get(key);
   };
   const report = (moduleName, rule, line, text) => recordOf(moduleName).findings.push(finding(rule, `module ${moduleName}`, line, text));
-  const parsed = Object.entries(modules).filter(([, src]) => typeof src === "string").map(([name, src]) => moduleFacts(name, src));
+  // By name, so which of two copies is the original does not depend on the order the caller listed the modules in.
+  const parsed = Object.entries(modules).filter(([, src]) => typeof src === "string")
+    .sort(([a], [b]) => a.localeCompare(b)).map(([name, src]) => moduleFacts(name, src));
   for (const m of parsed.filter((x) => x.error)) recordOf(m.name).unreadable.push(`module \`${m.name}\``);
   const read = parsed.filter((m) => !m.error);
   reportModuleCopies(read, byPage, report);
