@@ -218,6 +218,21 @@ check("a page the file does not hold exits 1 naming it", () => r7.status === 1 &
     () => rm.status === 2 && /page-without-module/.test(rm.stdout) && /shared-value-in-two-modules/.test(rm.stdout), () => rm.stdout + rm.stderr);
   check("CLI `--modules` without a folder exits 1 and says what it needs",
     () => { const r = run(pageFile, "--modules"); return r.status === 1 && /--modules/.test(r.stderr); });
+
+  // One page in hand, an imported module that does not parse: the map names it unreadable and exits 2.
+  const bdir = path.join(dir, "broken-modules");
+  fs.mkdirSync(bdir, { recursive: true });
+  fs.writeFileSync(path.join(bdir, "UsrA_NotePageModule.js"), "define(\"UsrA_NotePageModule\", [\"UsrBroken\"], function(broken) { function init(c) { return c; } return { init }; });");
+  fs.writeFileSync(path.join(bdir, "UsrBroken.js"), "define(\"UsrBroken\", [], function() { return { ; });");
+  const brokenPage = { ...notePage, deps: "[\"UsrA_NotePageModule\"]", handlers: notePage.handlers.replace("shared.go", "notePage.init"), args: "(notePage)" };
+  const broken = runModuleFindings(brokenPage, "main", readModuleDir(bdir));
+  check("one page: an imported module that does not parse is reported unreadable, not a crash",
+    () => broken.findings.some((f) => f.rule === "unreadable" && /UsrBroken/.test(f.text)), () => broken.findings);
+  const brokenFile = path.join(dir, "broken.json");
+  fs.writeFileSync(brokenFile, JSON.stringify({ page: { schemaName: "UsrA_NotePage" }, bundle: brokenPage }));
+  const rb = run(brokenFile, "--modules", bdir);
+  check("CLI `--modules`, one page: an unparseable imported module is printed as unreadable and makes the exit 2",
+    () => rb.status === 2 && /UsrBroken/.test(rb.stdout) && !/TypeError/.test(rb.stderr), () => ({ status: rb.status, out: rb.stdout, err: rb.stderr }));
 }
 fs.rmSync(dir, { recursive: true, force: true });
 

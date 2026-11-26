@@ -183,7 +183,9 @@ function importClosure(entry, modules) {
   const reach = new Set(bundleDeps(entry) || []);
   if (typeof entry?.schemaName === "string") reach.add(entry.schemaName + "Module");
   for (const name of reach) {
-    if (typeof modules[name] === "string") for (const dep of parseDefineModule(modules[name]).deps) reach.add(dep);
+    const parsed = typeof modules[name] === "string" ? parseDefineModule(modules[name]) : null;
+    // An unreadable module adds no imports; lintRunQuality reports it.
+    if (parsed && !parsed.error) for (const dep of parsed.deps || []) reach.add(dep);
   }
   return reach;
 }
