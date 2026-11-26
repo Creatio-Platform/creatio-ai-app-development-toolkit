@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { analyzePageCode, renderCodeMap, findingCount, findingPhrases, codeMapRoot }
+import { analyzePageCode, renderCodeMap, findingCount, findingPhrases, codeMapRoot, runModuleFindings, readModuleDir }
   from "../../skills/classic-to-freedom-migration/engine/codemap.mjs";
 import { QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS } from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 
@@ -172,6 +172,68 @@ const r6 = run(built, "--page");
 check("`--page` without a key exits 1 instead of silently reading another page", () => r6.status === 1 && /needs a page key/.test(r6.stderr));
 const r7 = run(built, "--page", "nope");
 check("a page the file does not hold exits 1 naming it", () => r7.status === 1 && /`nope`/.test(r7.stderr), () => r7.stderr);
+
+// THE RUN'S MODULES in the map. A benchmark run left two pages with no module of their own and a status id in two
+// modules although the page map of every page was clean; the map now shows what the module checks find, and says
+// when it could not look.
+{
+  const mdir = path.join(dir, "modules");
+  fs.mkdirSync(path.join(mdir, "UsrShared"), { recursive: true });
+  const GUID = "3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+  fs.writeFileSync(path.join(mdir, "UsrA_FormPageModule.js"), `define("UsrA_FormPageModule", [], function() { const S = "${GUID}"; function init(c) { return S && c; } function spare() { return 1; } return { init, spare }; });`);
+  fs.writeFileSync(path.join(mdir, "UsrShared", "body.js"), `define("UsrShared", [], function() { const CLOSED = "${GUID}"; return { CLOSED }; });`);
+  fs.writeFileSync(path.join(mdir, "UsrA_ListPage.js"), "define(\"UsrA_ListPage\", [], function() { return { handlers: /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/ }; });");
+  const mods = readModuleDir(mdir);
+  check("readModuleDir: reads `<Module>.js` and `<Module>/body.js` (the .clio-pages layout) and leaves page bodies out",
+    () => Object.keys(mods).sort((a, b) => a.localeCompare(b)).join() === "UsrA_FormPageModule,UsrShared", () => Object.keys(mods));
+  const notePage = { schemaName: "UsrA_NotePage", deps: "[\"UsrShared\"]", handlers: "[{ request: \"crt.HandleViewModelInitRequest\", handler: async (request, next) => { await shared.go(request.$context); return next?.handle(request); } }]" };
+  check("codeMapRoot: a saved get-page response keeps the page's schema name beside the bundle — the own-module check needs it",
+    () => codeMapRoot(JSON.stringify({ page: { schemaName: "UsrA_NotePage" }, bundle: { handlers: "[]" } })).schemaName === "UsrA_NotePage");
+  const single = runModuleFindings(notePage, "main", mods);
+  check("one page: the map reports the page's missing own module and the id in two modules, and leaves unused exports to the whole run",
+    () => single.findings.some((f) => f.rule === QUALITY_RULES.pageWithoutModule) && single.findings.some((f) => f.rule === QUALITY_RULES.sharedValueInTwoModules)
+      && !single.findings.some((f) => f.rule === QUALITY_RULES.unusedModuleExport) && single.wholeRun === false,
+    () => single);
+  const whole = runModuleFindings({ pages: { main: { schemaName: "UsrA_FormPage", deps: "[\"UsrA_FormPageModule\"]", handlers: "[{ request: \"crt.HandleViewModelInitRequest\", handler: async (request, next) => { await formPage.init(request.$context); return next?.handle(request); } }]" } } }, "main", mods);
+  check("whole run (built.json): an export nobody uses is reported in a run page's own module, never in a shared module pages outside the run may import",
+    () => whole.findings.filter((f) => f.rule === QUALITY_RULES.unusedModuleExport).map((f) => /spare|CLOSED/.exec(f.text)?.[0]).join() === "spare",
+    () => whole.findings);
+  // One page in hand: two modules the page neither owns nor imports are not the builder's to fix.
+  fs.writeFileSync(path.join(mdir, "UsrOtherA.js"), `define("UsrOtherA", [], function() { const X = "7b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a4b"; return { X }; });`);
+  fs.writeFileSync(path.join(mdir, "UsrOtherB.js"), `define("UsrOtherB", [], function() { const Y = "7b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a4b"; return { Y }; });`);
+  const scoped = runModuleFindings(notePage, "main", readModuleDir(mdir));
+  check("one page: a duplicate between two modules the page does not reach is left out of its map",
+    () => !scoped.findings.some((f) => /UsrOther/.test(f.text)) && scoped.findings.some((f) => f.rule === QUALITY_RULES.sharedValueInTwoModules),
+    () => scoped.findings);
+  check("one page with no findings does not claim every export is used — it did not look",
+    () => !/every export is used/.test(renderCodeMap(analyzePageCode(notePage.handlers), "main", esc, { modules: 1, findings: [], wholeRun: false }))
+      && /every export is used/.test(renderCodeMap(analyzePageCode(notePage.handlers), "main", esc, { modules: 1, findings: [], wholeRun: true })));
+  const noMods = renderCodeMap(analyzePageCode(notePage.handlers), "main", esc, null);
+  check("without module bodies the map says the modules were NOT checked, never 'no findings'",
+    () => /## The run's modules/.test(noMods) && /Not checked/.test(noMods), () => noMods);
+  const pageFile = path.join(dir, "note.json");
+  fs.writeFileSync(pageFile, JSON.stringify({ page: { schemaName: "UsrA_NotePage" }, bundle: notePage }));
+  const rm = run(pageFile, "--modules", mdir);
+  check("CLI `--modules <dir>`: the module findings are printed and make the exit 2",
+    () => rm.status === 2 && /page-without-module/.test(rm.stdout) && /shared-value-in-two-modules/.test(rm.stdout), () => rm.stdout + rm.stderr);
+  check("CLI `--modules` without a folder exits 1 and says what it needs",
+    () => { const r = run(pageFile, "--modules"); return r.status === 1 && /--modules/.test(r.stderr); });
+
+  // One page in hand, an imported module that does not parse: the map names it unreadable and exits 2.
+  const bdir = path.join(dir, "broken-modules");
+  fs.mkdirSync(bdir, { recursive: true });
+  fs.writeFileSync(path.join(bdir, "UsrA_NotePageModule.js"), "define(\"UsrA_NotePageModule\", [\"UsrBroken\"], function(broken) { function init(c) { return c; } return { init }; });");
+  fs.writeFileSync(path.join(bdir, "UsrBroken.js"), "define(\"UsrBroken\", [], function() { return { ; });");
+  const brokenPage = { ...notePage, deps: "[\"UsrA_NotePageModule\"]", handlers: notePage.handlers.replace("shared.go", "notePage.init"), args: "(notePage)" };
+  const broken = runModuleFindings(brokenPage, "main", readModuleDir(bdir));
+  check("one page: an imported module that does not parse is reported unreadable, not a crash",
+    () => broken.findings.some((f) => f.rule === "unreadable" && /UsrBroken/.test(f.text)), () => broken.findings);
+  const brokenFile = path.join(dir, "broken.json");
+  fs.writeFileSync(brokenFile, JSON.stringify({ page: { schemaName: "UsrA_NotePage" }, bundle: brokenPage }));
+  const rb = run(brokenFile, "--modules", bdir);
+  check("CLI `--modules`, one page: an unparseable imported module is printed as unreadable and makes the exit 2",
+    () => rb.status === 2 && /UsrBroken/.test(rb.stdout) && !/TypeError/.test(rb.stderr), () => ({ status: rb.status, out: rb.stdout, err: rb.stderr }));
+}
 fs.rmSync(dir, { recursive: true, force: true });
 
 console.log(`\n=================\nCODE-MAP GOLDEN: ${pass} passed, ${fail} failed`);

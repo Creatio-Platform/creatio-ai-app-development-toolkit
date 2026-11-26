@@ -15878,6 +15878,42 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   }
 }
 {
+  // THE RUN'S CLIENT MODULES. The read-back copies each imported module's body into `reads/modules/`, beside the
+  // indexed reads: the folder needs no index entry, because the code rows name every import whose source is not filed.
+  const plan = readPlan(lpRun, checklistOpts(LP_MANIFEST));
+  check("read plan: no indexed `modules` read — the module folder is filled as the read plan's prose says",
+    () => !plan.reads.some((r) => r.kind === "modules"), () => plan.reads.map((r) => r.kind));
+  const compose = (files) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_mod_"));
+    fs.mkdirSync(path.join(d, "reads"), { recursive: true });
+    fs.writeFileSync(path.join(d, "reads", "index.json"), JSON.stringify({ version: 1, reads: [] }));
+    if (files) {
+      fs.mkdirSync(path.join(d, "reads", "modules"));
+      for (const [n, body] of Object.entries(files)) {
+        if (body === null) fs.mkdirSync(path.join(d, "reads", "modules", n));
+        else fs.writeFileSync(path.join(d, "reads", "modules", n), body);
+      }
+    }
+    try { return assembleBuilt(d); } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  };
+  const modProblems = (r) => r.problems.filter((p) => /^reads\/modules/.test(p.file));
+  const filled = compose({ "UsrApp_FormPageModule.js": "define(\"UsrApp_FormPageModule\", [], function() { return {}; });", "notes.txt": "x" });
+  check("compose: every `<Module>.js` in the folder lands in `built.modules` as source text; a file named otherwise is not read",
+    () => Object.keys(filled.built.modules).join() === "UsrApp_FormPageModule" && /define/.test(filled.built.modules.UsrApp_FormPageModule)
+      && modProblems(filled).length === 0,
+    () => filled);
+  const empty = compose({});
+  check("compose: an EMPTY folder is no problem, and `built.modules` is an empty map",
+    () => modProblems(empty).length === 0 && Object.keys(empty.built.modules).length === 0, () => empty);
+  const odd = compose({ "Folder.js": null, "__proto__.js": "x" });
+  check("compose: a folder named like a module is reported and a prototype name is skipped, never read or crashed on",
+    () => modProblems(odd).some((p) => /Folder\.js/.test(p.file) && /not a file/.test(p.why)) && !modProblems(odd).some((p) => /__proto__/.test(p.file))
+      && Object.keys(odd.built.modules).length === 0, () => odd);
+  const missing = compose(null);
+  check("compose: a MISSING folder leaves `built.modules` absent — the code rows then name each import as not filed",
+    () => modProblems(missing).length === 0 && !missing.built?.modules, () => missing);
+}
+{
   // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what step 7.5
   // (`references/orchestrate-build.md`) and SKILL.md step 8 tell the orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
   // report replaces the table as the artifact, and the repair round reads the same open rows. An unread page

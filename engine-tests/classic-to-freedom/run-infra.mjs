@@ -691,7 +691,12 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("build-page.md points a builder at the contract — the brief a builder opens first names the one that shapes its code",
     () => read("build-page.md").includes("`./references/page-code-architecture.md`"));
   check("build-task-execution.md's `writesTo:` rule says a page artifact includes the page's own logic module — the only place the brief defines what a task may write",
-    () => /`writesTo:` names the one artifact[\s\S]{0,400}includes the page's own logic module, `<SchemaPrefix><Page>Module`/.test(read("build-task-execution.md")));
+    () => /`writesTo:` names the one artifact[\s\S]{0,400}includes the page's own logic module, `<PageSchema>Module`/.test(read("build-task-execution.md")));
+  // The benchmark run's three gaps, each a rule the builder is told before the Code quality rows hold it to it.
+  check("page-code-architecture.md: every page with handlers has its own `<PageSchema>Module`, what pages share lives in one module, and only what is called is exported",
+    () => /Every page that has handlers has its own module/.test(contract) && contract.includes("`<PageSchema>Module`")
+      && /What the run's pages share lives in one module/.test(contract) && /Export only what a page or another module calls/.test(contract)
+      && /--modules \.clio-pages/.test(contract));
   const headings = contract.split("\n").filter((l) => l.startsWith("#"));
   check("page-code-architecture.md keeps the measured rules: several handlers per request run as a chain so each calls `next` and returns its result, no helper in the page factory body (a Designer save deletes it), the module is part of the page artifact, and a sibling page is never a copy",
     () => /every handler takes `next`, calls `next\?\.handle\(request\)` and returns its\s+result/.test(contract) && /Never in the page factory body/.test(contract)
