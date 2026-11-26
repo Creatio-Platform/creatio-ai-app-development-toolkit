@@ -734,10 +734,11 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
       () => reports(/^lines 53-57 of `readSelectedContractIds` .* repeat lines 251-255 of `readSelectedItemIds`/), () => near);
     check("near-copy: each pair is reported once — the runs inside a reported one are not reported again",
       () => near.length === 7 && near.every((t) => /keep one function in the shared module/.test(t)), () => near);
+    const byText = (a, b) => a.localeCompare(b);
     const reversed = Object.fromEntries(Object.entries(v3).reverse());
     const reversedFindings = runFindings(Object.fromEntries(Object.keys(reversed).filter((n) => n !== SHARED).map((n) => [n, pageFor(n)])), reversed);
     check("near-copy: the modules listed in the reverse order give the same findings — which copy is the original does not depend on that order",
-      () => JSON.stringify(reversedFindings.map((f) => f.text).sort()) === JSON.stringify(v3Findings.map((f) => f.text).sort()),
+      () => JSON.stringify(reversedFindings.map((f) => f.text).sort(byText)) === JSON.stringify(v3Findings.map((f) => f.text).sort(byText)),
       () => reversedFindings.map((f) => f.text));
     const constNames = consts.map((t) => /^`(\w+) = /.exec(t)?.[1]).sort((a, b) => a.localeCompare(b));
     check("shared constants: a named constant declared with the same value in several modules is reported once, naming every module",
