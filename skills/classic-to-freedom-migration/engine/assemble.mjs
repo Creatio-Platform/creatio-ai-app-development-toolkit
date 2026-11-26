@@ -14,10 +14,14 @@
 // A literal `null` is none of the three and is a problem of its own (see `readJson`).
 import fs from "node:fs";
 import path from "node:path";
-import { READS_DIR, READS_INDEX_FILE } from "./reads.mjs";
-import { GUID_RE, bundleDeps, MODULE_SCHEMA_NAME } from "./conventions.mjs";
+import { READS_DIR, READS_INDEX_FILE, MODULES_DIR } from "./reads.mjs";
+import { GUID_RE } from "./conventions.mjs";
 
 export const BUILT_FILE = "built.json";
+// The client modules the built pages import: `get-page` of a module writes its source to
+// `.clio-pages/<Module>/body.js`, copied whole into `reads/modules/` as `<Module>.js`. The code rows ask for each module
+// a page imports and name the ones not filed, so the folder needs no index of its own.
+const MODULE_FILE = /^([\w.-]+)\.js$/;
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
 // together or not at all.
 export const VERIFY_FILE = "verify.md";
@@ -35,11 +39,6 @@ export const RECORDED_FILE = "recorded.json";
 // A process page's process side (process-page.mjs): `processSteps` (describe-business-process of each re-pointed
 // step) and `processStandCheck` (the buttons pressed from the process step). Neither is a page read.
 export const PROCESS_FILE = "process.json";
-// The custom client modules the built pages import: `get-page` of each module, its `.clio-pages/<schema>/body.js`
-// copied whole to `modules/<schema>.js`. Optional and not a read of the plan, because the modules are the build's
-// choice: `--verify` reads one only to follow a request a page handler hands to it (`built.modules`).
-export const MODULES_DIR = "modules";
-const MODULE_FILE = new RegExp(String.raw`^(${MODULE_SCHEMA_NAME.source.slice(1, -1)})\.js$`);
 // The provenance field's shape (defined once, in conventions.mjs): the drop-sweep here applies the same test the
 // payload guard will. migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export { GUID_RE };
@@ -360,23 +359,27 @@ function mergeSideFiles(dir, built, acc, problems) {
   }
   const proc = readSideFile(dir, PROCESS_FILE, problems, "the process steps and stand check");
   for (const key of ["processSteps", "processStandCheck"]) if (proc?.[key] != null) built[key] = proc[key];
-  const modules = readModules(dir, problems);
+  const modules = readModuleSources(dir, problems);
   if (modules) built.modules = modules;
 }
-function readModules(dir, problems) {
-  const full = path.join(dir, MODULES_DIR);
-  if (!fs.existsSync(full)) return null;
+
+// `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. A file whose name is not a
+// module name is not read; a folder or file that cannot be read is a problem, never a crash.
+function readModuleSources(dir, problems) {
+  const rel = path.posix.join(READS_DIR, MODULES_DIR);
+  const root = path.join(dir, READS_DIR, MODULES_DIR);
+  if (!fs.existsSync(root)) return null;
   let files;
-  try { files = fs.readdirSync(full).sort(); }
-  catch (e) { problems.push({ file: MODULES_DIR, what: "the client module sources", why: `not readable as a folder (${e.message})` }); return null; }
-  const out = {};
-  for (const f of files) {
-    const m = MODULE_FILE.exec(f);
-    if (!m || UNSAFE_KEYS.has(m[1])) continue;
-    try { out[m[1]] = fs.readFileSync(path.join(full, f), "utf8"); }
-    catch (e) { problems.push({ file: `${MODULES_DIR}/${f}`, what: `module \`${m[1]}\``, why: `not readable (${e.message})` }); }
+  try { files = fs.readdirSync(root).sort((a, b) => a.localeCompare(b)); }
+  catch (e) { problems.push({ file: rel, what: "the client module sources", why: `not readable as a folder (${e.message})` }); return null; }
+  const modules = {};
+  for (const file of files) {
+    const name = MODULE_FILE.exec(file)?.[1];
+    if (!name || UNSAFE_KEYS.has(name)) continue;
+    try { modules[name] = fs.readFileSync(path.join(root, file), "utf8"); }
+    catch (e) { problems.push({ file: `${rel}/${file}`, what: `module \`${name}\``, why: `not readable (${e.message})` }); }
   }
-  return Object.keys(out).length ? out : null;
+  return modules;
 }
 
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload
@@ -441,32 +444,9 @@ export function assembleBuilt(dir, expect = null) {
   mergeSideFiles(dir, built, acc, problems);
   const claims = decisionClaims(dir, index.evidenceIds, problems);
   if (claims) built.decisionClaims = claims;
-  return { built, problems, notes: unreadModuleNotes(pages, built.modules) };
+  return { built, problems };
 }
 
-// THE MODULE BODIES NOBODY COPIED. A built page that imports a client module (a schema-named `define()` dependency)
-// whose `modules/<schema>.js` is not beside the run. A NOTE, not a problem: no row is unread because of it, and most
-// rows never need a module's source, so it neither fails the gate nor stops repair tasks. It says, once and by name,
-// which file to add before a row that follows a request into the module can close.
-function unreadModuleNotes(pages, modules) {
-  const notes = [];
-  for (const [pageKey, entry] of Object.entries(pages)) {
-    for (const module of (entry && bundleDeps(entry)) || []) {
-      if (MODULE_SCHEMA_NAME.test(module) && !modules?.[module]) notes.push({ pageKey, module });
-    }
-  }
-  return notes;
-}
-// The notes as lines: stderr and the top of the verify artifact both carry them.
-export function moduleNoteLines(notes) {
-  if (!notes?.length) return [];
-  const fileOf = (m) => "`" + MODULES_DIR + "/" + m + ".js`";
-  const importOf = (n) => "`" + n.pageKey + "` → `" + n.module + "`";
-  const list = [...new Set(notes.map((n) => n.module))].map(fileOf).join(", ");
-  const imports = notes.map(importOf).join(", ");
-  return [`> ⚠ **Client module sources not copied:** ${list}. A built page imports each (${imports}),`
-    + " so a row that follows a request into it stays open. `get-page` each module and copy its `body.js` there whole.", ""];
-}
 
 // Writes the composed payload beside the run — never a temp dir, which cannot be re-checked once the session
 // ends.

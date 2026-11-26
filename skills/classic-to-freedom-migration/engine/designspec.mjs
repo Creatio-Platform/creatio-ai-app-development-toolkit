@@ -163,16 +163,17 @@ const addModeText = (am) => {
   return add + (rows ? ` — ${rows}` : "");
 };
 // The removed Classic row actions the Freedom rows must drop. Edit is left out: a Freedom related-list row has no
-// separate Edit action — it opens on click, and keeps doing so — so a removed Classic Edit asks nothing of the rows.
-// The one place this rule lives; the plan decision and the Layout note both read it.
-export const freedomRowActionsToDrop = (removed = []) => removed.filter((a) => a !== "Edit");
+// separate Edit action — it opens on click — so a removed Classic Edit asks nothing of the rows. Open is dropped when
+// a Classic row opens nothing. The one place this rule lives; the plan decision, the Layout note and the Detail
+// features rows read it.
+export const freedomRowActionsToDrop = (removed = [], opensNothing = false) => [...(opensNothing ? ["Open"] : []), ...removed.filter((a) => a !== "Edit")];
 
 // A detail's row-action overrides (from migrate.mjs detection) → a short ⚠ note naming what the Freedom rows must not
 // offer, or that an override could not be read and must be checked by hand.
 function rowActionsNote(am) {
-  const drop = freedomRowActionsToDrop(am?.rowActionsRemoved);
+  const drop = freedomRowActionsToDrop(am?.rowActionsRemoved, am?.rowsOpenNothing);
   const notes = [];
-  if (drop.length) notes.push(`⚠ no row ${drop.map(esc).join("/")} (keep open-on-click)`);
+  if (drop.length) notes.push(`⚠ no row ${drop.map(esc).join("/")}${am?.rowsOpenNothing ? " (rows open nothing — links off)" : " (keep open-on-click)"}`);
   if (am?.rowActionsUnreadable?.length) notes.push("⚠ row-action override unread — check by hand");
   return notes.join(" · ");
 }
@@ -1199,7 +1200,7 @@ function detailMenuRows(name, menu) {
 }
 function detailFilterRow(name, q) {
   const cols = q.columns.length ? ` on ${q.columns.map((c) => "`" + esc(c) + "`").join(", ")}` : "";
-  const kept = q.persisted ? "; kept in the user's profile (⚠ Confirm `[detail-filter-persistence]`)" : "";
+  const kept = q.persisted ? "; kept in the user's profile, as `crt.QuickFilter` keeps it by default (⚠ Confirm `[detail-filter-persistence]`)" : "";
   return [name, `Quick filter (${q.kind}) \`${esc(q.attribute)}\``, `\`getFilters\` reads \`${esc(q.attribute)}\`${cols}${kept}`,
     `\`${LIST_FILTER_TYPE}\` \`${esc(q.element)}\` bound to the list's \`filterAttributes\`; any literal filter of the same \`getFilters\` stays a data-source filter`];
 }
@@ -1219,6 +1220,7 @@ export function detailFeatureRows(cs) {
     if (f.multiSelect === "conditional") rows.push([name, "Multi-select", "conditional (`isMultiSelectVisible` overridden)", "⚠ carry the condition as Freedom state"]);
     if (f.rowStyling) rows.push([name, "Row styling", "`prepareResponseCollectionItem` sets `customStyle`", "⚠ no declarative analog — decide: a conditional row style, or Won't do"]);
     if (f.summaries) rows.push([name, "Summaries", "summary module", summariesTarget(f.summariesDirective)]);
+    rows.push(...detailRowSettingRows(name, d));
   }
   if (cs.summaryBar) rows.push([esc(cs.summaryBar.container), "Summaries", "labels in a summary container of the page", summariesTarget(cs.summaryBar.directive)]);
   for (const d of cs.inheritedDetails || []) {
@@ -1226,6 +1228,36 @@ export function detailFeatureRows(cs) {
   }
   for (const name of cs.inheritanceUnchecked || []) {
     rows.push([esc(name), "Inherited detail", "declared by a template layer whose `pkg` names no package", "⚠ inheritance NOT checked — supply the layer's package to tell a customer or vendor layer from the platform"]);
+  }
+  return rows;
+}
+// The row settings of a related list: which row actions remain, whether a row opens, and the order rows load in.
+// Each is a plan row and a `--verify` row, because a builder that starts from the standard grid loses all three.
+const ROW_ACTION_REQUEST = { Open: "crt.UpdateRecordRequest", Copy: "crt.CopyRecordRequest", Delete: "crt.DeleteRecordRequest" };
+// The Freedom row actions a detail leaves out (`freedomRowActionsToDrop`), the requests their toolbar items send, and
+// whether no action is left, so the list shows no row toolbar at all.
+function droppedRowActions(d) {
+  const names = freedomRowActionsToDrop(d.addMode?.rowActionsRemoved, d.addMode?.rowsOpenNothing).filter((a) => ROW_ACTION_REQUEST[a]);
+  return { names, requests: names.map((a) => ROW_ACTION_REQUEST[a]), noToolbar: names.length === Object.keys(ROW_ACTION_REQUEST).length };
+}
+function detailRowSettingRows(name, d) {
+  const rows = [];
+  const dropped = droppedRowActions(d);
+  if (dropped.names.length) {
+    rows.push([name, "Row actions", `${dropped.names.join(", ")} not offered on a row`,
+      dropped.noToolbar ? "`rowToolbarItems: []` and `features.rows.toolbar: false` — no row toolbar" : `\`rowToolbarItems\` without ${dropped.names.join(", ")}`]);
+  }
+  if (d.addMode?.rowsOpenNothing) rows.push([name, "Row links", "a click on a row opens nothing (`editRecord` switched off)", "`features.cells.disableLinks: true`"]);
+  const s = d.features?.sort;
+  if (s) {
+    const order = s.direction === "desc" ? "descending" : "ascending";
+    const locked = s.locked ? "; the user cannot re-sort (`IsSortable` off)" : "";
+    const target = s.column
+      ? `the list's \`sortingConfig.default\`: \`[{ columnName: "${esc(s.column)}", direction: "${s.direction}" }]\``
+      : "⚠ read the sort column in the Classic body, then set the list's `sortingConfig.default`";
+    // the re-sort lock has no Freedom setting the engine knows, so the row says it is neither carried nor checked
+    const lockNote = s.locked ? " · the re-sort lock is not carried or checked — keep the default column sorting" : "";
+    rows.push([name, "Sort", `${s.column ? "`" + esc(s.column) + "` " : "column not read, "}${order}${locked}`, target + lockNote]);
   }
   return rows;
 }
@@ -3147,7 +3179,35 @@ function qualityGateRows(pageKey) {
 // The label names the threshold KEY, never its value, so a decision recorded on the row survives a changed limit.
 function pageCodeRows(opts) {
   return [{ deliverableId: "page-code", label: "Page code — no function longer than `maxFunctionLines`, no helper declared twice on the page, no request declared but never sent",
-    vk: { type: "pagecode", thresholds: opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS } }];
+    vk: { type: "pagecode", ...qualityRunOf(opts) } }];
+}
+// What the Page code and Code quality rows measure the run against, and the one cache key of that measurement, so
+// both kinds of row read the same lint of the run.
+function qualityRunOf(opts) {
+  const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
+  const constantsGuids = opts.constantsGuids || [];
+  const externalModules = externalModulesOf(opts);
+  return { thresholds, constantsGuids, externalModules, runKey: qualityRunKey(thresholds, constantsGuids, externalModules) };
+}
+// The modules the code rows do not follow into: the project's declared helper and constants modules, existing code
+// the run did not write. Every other module a built page imports is read back and held to the same rules.
+function externalModulesOf(opts) {
+  const c = opts.projectConventions;
+  return [...new Set([...(c?.helperModules || []), ...(c?.constantsModules || [])].filter((m) => typeof m === "string"))];
+}
+// What a page's imported modules owe the code rows: a module the read-back did not file cannot be measured.
+const MODULE_READ_HINT = "`get-page` each one and copy its `.clio-pages/<Module>/body.js` to `reads/modules/<Module>.js`, then re-run"
+  + " — a module that is existing project code, not written by this run, goes in `projectConventions.helperModules` instead";
+const moduleList = (names) => names.map((n) => "`" + esc(n) + "`").join(", ");
+// What a page's imported modules leave unmeasured: one not filed, or one filed that does not parse. Null when neither.
+function moduleGapText(run) {
+  const parts = [];
+  if (run?.unreadModules?.length) parts.push(`imports ${moduleList(run.unreadModules)}, whose source the read-back did not file — ${MODULE_READ_HINT}`);
+  if (run?.unparsedModules?.length) {
+    parts.push(`${run.unparsedModules.map((n) => "`reads/modules/" + esc(n) + ".js`").join(", ")} does not parse, so that module and the`
+      + " modules it imports were not measured — re-copy the module's `.clio-pages/<Module>/body.js` whole, then re-run");
+  }
+  return parts.length ? parts.join("; ") : null;
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -4194,7 +4254,7 @@ function relayedRequest(request, ctx) {
   return hit ? { ok: true, text: hit.via + hit.text } : { ok: false, text: hits.find((h) => h.text)?.text || "" };
 }
 // What one handler entry does with `request`: sends it, or calls a module function that sends it. Only a
-// dependency a `modules/<schema>.js` file can exist for is followed (never `@creatio-devkit/common`), so a miss can
+// dependency a `reads/modules/<schema>.js` file can exist for is followed (never `@creatio-devkit/common`), so a miss can
 // only name a file that can be added.
 function relayFromHandler(body, request, ctx) {
   if (typeSent(withoutComments(body), request)) return { ok: true, text: `sends \`${esc(request)}\`` };
@@ -4208,7 +4268,7 @@ function relayFromHandler(body, request, ctx) {
     if (fn) return { ok: true, text: `calls \`${esc(m.via)}.${esc(fn)}\` in module \`${esc(m.module)}\`, which sends \`${esc(request)}\`` };
   }
   const unread = called.find((m) => !ctx.modules.has(m.module));
-  return { ok: false, text: unread ? `a handler calls module \`${esc(unread.module)}\`, whose source the payload does not carry — add it as \`modules/${esc(unread.module)}.js\`` : "" };
+  return { ok: false, text: unread ? `a handler calls module \`${esc(unread.module)}\`, whose source the read-back did not file — add it as \`reads/modules/${esc(unread.module)}.js\`` : "" };
 }
 // The members of `name` that `code` calls (`name.fn(…)`), `name` not itself a member of something else.
 const calledMembers = (code, name) => [...code.matchAll(new RegExp(String.raw`${NOT_IN_WORD}${NOT_A_MEMBER}${reEsc(name)}\s*\.\s*(${IDENT})\s*\(`, "g"))].map((m) => m[1]);
@@ -4518,7 +4578,7 @@ const sameUId = (a, b) => typeof a === "string" && typeof b === "string" && a.to
 // Whether an add-on entry opens the built child page: by UId when both sides carry one, by name otherwise.
 const opensChild = (p, child) => (child.uid && p.pageSchemaUId ? sameUId(p.pageSchemaUId, child.uid) : p.pageSchemaName === child.name);
 // The add-on as read, or a ⚠/❌ verdict when the read cannot answer. Own fn for Sonar CC 15.
-function relatedPageRead(vk, v) {
+function relatedPageRead(vk, v, ctx) {
   const how = vk.query ? ` — run ${vk.query} and copy the response verbatim` : "";
   if (v === undefined || v === null) return { verdict: ["⚠ verify", `the RelatedPage add-on for \`${esc(vk.entity)}\` was not read${how}`, "unverified", "verifier"] };
   if (v === false) return { verdict: ["❌ MISSING", `no RelatedPage add-on for \`${esc(vk.entity)}\` (built.reachability.${vk.evidence} = false) — the related list opens nothing built here`, "missing"] };
@@ -4529,11 +4589,12 @@ function relatedPageRead(vk, v) {
   const readPkg = typeof v.packageName === "string" ? v.packageName : "";
   // `get-related-page-addon` always echoes the package it read, so a read with no `packageName` cannot prove the
   // add-on sits in the target package: it stays unverified instead of closing on the page match alone.
+  const want = packageNameOf(vk.package, ctx?.createdPackage);
   if (vk.package && !readPkg) {
-    return { verdict: ["⚠ verify", `the add-on read carries no \`packageName\`, so it cannot confirm the add-on is in \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
+    return { verdict: ["⚠ verify", `the add-on read carries no \`packageName\`, so it cannot confirm the add-on is in \`${esc(want)}\`${how}`, "unverified", "verifier"] };
   }
-  if (vk.package && readPkg !== vk.package) {
-    return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(vk.package)}\`${how}`, "unverified", "verifier"] };
+  if (vk.package && readPkg !== want) {
+    return { verdict: ["⚠ verify", `the add-on was read from \`${esc(readPkg)}\`, the plan targets \`${esc(want)}\`${how}`, "unverified", "verifier"] };
   }
   return { pages: generalRelatedPages(v.pages) };
 }
@@ -4547,7 +4608,7 @@ function wiredChildSchema(vk, root) {
   return { verdict: ["⚠ verify", `the built child page \`${esc(vk.childKey || "?")}\` reports no \`schemaName\` — read it with \`get-page\` so the binding can be matched against it`, "unverified", "verifier"] };
 }
 function resolveRelatedPageVk(vk, ctx) {
-  const read = relatedPageRead(vk, reachabilityValue(ctx.root, vk.evidence));
+  const read = relatedPageRead(vk, reachabilityValue(ctx.root, vk.evidence), ctx);
   if (read.verdict) return read.verdict;
   const opens = read.pages.find((p) => p.isDefault === true);
   if (!opens) {
@@ -4591,7 +4652,7 @@ function resolveDashboardsVk(vk, ctx) {
   }
   if (vk.check === "migrated") return resolveDashboardsMigrated(expect, byId);
   if (vk.check === "partials") return resolveDashboardsPartials(expect, byId);
-  return resolveDashboardsDelivery(expect, byId);
+  return resolveDashboardsDelivery(expect, byId, ctx);
 }
 function resolveDashboardsMigrated(expect, byId) {
   const bad = expect.filter((e) => !DASH_EXISTS.has(dashStatus(byId.get(e.id))));
@@ -4612,25 +4673,47 @@ function resolveDashboardsPartials(expect, byId) {
   }
   return ["✅ Done", `${partial.length} partial outcome(s), each put to the user and accepted`, "ok"];
 }
-function resolveDashboardsDelivery(expect, byId) {
-  const wrong = expect.filter((e) => String(byId.get(e.id).package || "") !== e.pkg);
+// A packaged dashboard is compared against the package NAME (`packageNameOf`), like a built page; a stand-only one
+// (`pkg: ""`) has no package to resolve and stays as planned.
+function resolveDashboardsDelivery(expect, byId, ctx) {
+  const plannedPkg = (e) => (e.pkg ? packageNameOf(e.pkg, ctx?.createdPackage) : "");
+  const wrong = expect.filter((e) => String(byId.get(e.id).package || "") !== plannedPkg(e));
   if (wrong.length) {
-    return ["❌ MISSING", wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(e.pkg || "no package (user-level)")}`).join("; "), "missing"];
+    return ["❌ MISSING", wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(plannedPkg(e) || "no package (user-level)")}`).join("; "), "missing"];
   }
   const packaged = expect.filter((e) => e.pkg).length;
   return ["✅ Done", `${packaged} packaged and ${expect.length - packaged} user-level, each where the plan said`, "ok"];
 }
 const VK_DASHBOARDS = new Set(["dashboards"]);
 const VK_ONSTAND = new Set(["onstand"]);
+// THE TARGET PACKAGE AS A PACKAGE NAME. A built page and a RelatedPage add-on report a package NAME, but a new-app run
+// plans before its package exists, so the plan may carry a note beside the name:
+// `UsrOrdersApp (primary package of the new app; created by create-app)`. Compared literally, every page built in
+// `UsrOrdersApp` would read MISSING and every add-on read from it unconfirmed. Two sources, in order:
+//   1. `created` — the package create-app actually made (`manifest.createdApp.primaryPackage`), recorded after
+//      scaffolding and kept out of the plan version, so recording it sends no approved plan back for re-approval;
+//   2. the planned value read as a name followed by an optional note — `Name (note)` or `Name — note`.
+// A planned value that does not open with a name in that shape is returned as written: a plan that names no
+// package still fails the comparison instead of having one guessed for it. The plan's rows keep the value as
+// approved, so a task cut before create-app ran does not read as changed once it has.
+const PACKAGE_NAME = /^[A-Za-z_]\w*$/;
+const NAMED_WITH_NOTE = /^`?([A-Za-z_]\w*)`?\s*(?:\(.*\)|[—–-]\s.*)?$/s;
+export function packageNameOf(planned, created = null) {
+  if (typeof created === "string" && PACKAGE_NAME.test(created.trim())) return created.trim();
+  if (typeof planned !== "string") return planned;
+  const named = NAMED_WITH_NOTE.exec(planned.trim());
+  return named ? named[1] : planned;
+}
 // PACKAGE PLACEMENT — the built page's own package, read off THIS page's entry. A page saved into the wrong
 // package is built and invisible to the customer's app; nothing in its body shows that, so `get-page`'s page
 // metadata (`packageName`) is the source. The row only exists when the plan named a target package.
 function resolvePlacementVk(vk, ctx) {
   if (vk.type !== "placement") return unknownVk();
   const pkg = entryObject(ctx.page)?.packageName;
-  if (pkg == null || pkg === "") return ["⚠ verify", `built-page package not reported — confirm the page lives in \`${esc(vk.exp)}\``, "unverified"];
-  if (pkg === vk.exp) return ["✅ Done", `built in \`${esc(vk.exp)}\``, "ok"];
-  return ["❌ MISSING", `built in \`${esc(String(pkg))}\` but the plan targets \`${esc(vk.exp)}\``, "missing"];
+  const want = packageNameOf(vk.exp, ctx.createdPackage);
+  if (pkg == null || pkg === "") return ["⚠ verify", `built-page package not reported — confirm the page lives in \`${esc(want)}\``, "unverified"];
+  if (pkg === want) return ["✅ Done", `built in \`${esc(want)}\``, "ok"];
+  return ["❌ MISSING", `built in \`${esc(String(pkg))}\` but the plan targets \`${esc(want)}\``, "missing"];
 }
 // THE ENTITY BINDING — read off THIS page's entry, exactly like the package. The two failures it separates are
 // different facts and must read differently: a page bound to the WRONG object is a built page that migrates
@@ -4701,7 +4784,7 @@ function resolveEvidenceCombinedVk(vk, ctx) {
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
-  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
+  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier", { unjudged: vk.id }];
 }
 // the FILED half in isolation: did the verifier file a complete record? Deliberately silent about the
 // judge (that is the other row's question) — reusing `resolveEvidenceCombinedVk`'s wording would have this row's
@@ -4752,7 +4835,7 @@ function resolveEvidenceJudgedPart(vk, ctx) {
       + " not by a verdict", "unverified", "verifier"];
   }
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
-  return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
+  return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier", { unjudged: vk.id }];
 }
 // Does the record RAISE a finding — one it did not fix, which someone therefore has to own? Only `findingsRaised`
 // answers that: `findings` is the pass's own record of what it looked at and settled, and a pass that fixed what it
@@ -4822,16 +4905,25 @@ function resolveListColumnsVk(vk, ctx) {
 // The machine rows of the Detail features block: each detail quick filter must be a `crt.QuickFilter` under the name
 // the plan published, each field Classic made read-only must be built read-only, and a related list whose Classic
 // row actions changed must declare its row toolbar. Every other row of the block is a decision or a build note.
+const sortedListItem = (l) => "`" + esc(l.name) + "` (" + esc(l.column || "column not read") + " " + l.direction + ")";
 function detailFeatureCheckRows(cs) {
   const rows = [];
+  const toolbarLists = [], unlinked = [], sorted = [];
   for (const d of (cs.details || []).filter(placed)) {
     for (const q of d.features?.quickFilters || []) {
       rows.push({ deliverableId: `detail-filter:${q.element}`, label: `Detail quick filter \`${esc(q.element)}\` (${esc(q.kind)}, \`${esc(q.attribute)}\`) on ${detailName(d)}`,
         vk: { type: "detailfilter", n: 1, names: [q.element] } });
     }
+    const name = d.element || d.detailSchema;
+    const dropped = droppedRowActions(d);
+    if (dropped.names.length || d.addMode?.rowActionsRemoved?.length || d.addMode?.customAction) toolbarLists.push({ name, drop: dropped.requests, noToolbar: dropped.noToolbar });
+    if (d.addMode?.rowsOpenNothing) unlinked.push({ name });
+    if (d.features?.sort) sorted.push({ name, column: d.features.sort.column, direction: d.features.sort.direction });
   }
-  const toolbars = (cs.details || []).filter((d) => placed(d) && (d.addMode?.rowActionsRemoved?.length || d.addMode?.customAction)).map((d) => d.element || d.detailSchema);
-  if (toolbars.length) rows.push({ deliverableId: "detail-row-toolbar", label: `Related lists with changed row actions declare \`rowToolbarItems\`: ${toolbars.map((n) => "`" + esc(n) + "`").join(", ")}`, vk: { type: "rowtoolbar", n: toolbars.length, names: toolbars } });
+  const quoted = (lists) => lists.map((l) => "`" + esc(l.name) + "`").join(", ");
+  if (toolbarLists.length) rows.push({ deliverableId: "detail-row-toolbar", label: `Related lists with changed row actions declare \`rowToolbarItems\` without the actions Classic did not offer: ${quoted(toolbarLists)}`, vk: { type: "rowtoolbar", n: toolbarLists.length, names: toolbarLists.map((l) => l.name), lists: toolbarLists } });
+  if (unlinked.length) rows.push({ deliverableId: "detail-row-links", label: `Related lists whose rows open nothing set \`features.cells.disableLinks: true\`: ${quoted(unlinked)}`, vk: { type: "rowlinks", n: unlinked.length, lists: unlinked } });
+  if (sorted.length) rows.push({ deliverableId: "detail-sort", label: `Related lists keep Classic's row order in \`sortingConfig.default\`: ${sorted.map(sortedListItem).join(", ")}`, vk: { type: "listsort", n: sorted.length, lists: sorted } });
   const readOnly = (cs.viewConfigDiff || []).filter((o) => isField(o) && o.values?.readOnlyStatic).map((o) => o.name);
   if (readOnly.length) rows.push({ deliverableId: "fields-readonly-static", label: `Fields read-only in Classic built read-only × ${readOnly.length}`, vk: { type: "readonly", n: readOnly.length, names: readOnly } });
   return rows;
@@ -4864,17 +4956,52 @@ function gridNamedAfter(ops, n) {
   return found.length ? { grid: found[0] } : {};
 }
 const ambiguousGrids = (w) => esc(String(w.n)) + " (" + w.ambiguous.map((g) => esc(g)).join(", ") + ")";
-function resolveRowToolbarVk(vk, ctx) {
-  if (ctx.entryAbsent) return absentEntry(ctx, "the related lists' row toolbars");
-  const want = (vk.names || []).map((n) => ({ n, ...gridNamedAfter(ctx.ops, n) }));
-  const bare = want.filter((w) => w.grid && !w.grid.rowToolbar).map((w) => w.n);
-  if (bare.length) return ["❌ MISSING", `${bare.map((n) => esc(String(n))).join(", ")} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones`, "missing"];
-  const ambiguous = want.filter((w) => w.ambiguous);
-  if (ambiguous.length) return ["⚠ verify", `more than one grid is named after ${ambiguous.map(ambiguousGrids).join("; ")} — confirm the related list's \`rowToolbarItems\` on the stand`, "unverified"];
-  const unfound = want.filter((w) => !w.grid).map((w) => w.n);
-  if (unfound.length) return ["⚠ verify", `no grid named after ${unfound.map((n) => esc(String(n))).join(", ")} on the built page — confirm its \`rowToolbarItems\` on the stand`, "unverified"];
-  return ["✅ Done", `${want.length} list(s) declare \`rowToolbarItems\`, matched by name`, "ok"];
+// One check over the related lists a vk names (`lists`, or the older `names`): each list's grid is found by name
+// (`gridNamedAfter`), and `gapOf(grid, list, ctx)` returns `{ missing }` for a setting the grid lacks, `{ unverified }`
+// when it cannot tell, or null when the grid matches Classic. A list that is missing or ambiguous on the built page stays unverified, never Done.
+function resolveDetailGridVk(vk, ctx, what, gapOf) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the related lists' ${what}`);
+  const lists = vk.lists || (vk.names || []).map((name) => ({ name }));
+  const missing = [];
+  const unverified = [];
+  for (const l of lists) {
+    const found = gridNamedAfter(ctx.ops, l.name);
+    const gap = found.grid ? gapOf(found.grid, l, ctx) : null;
+    if (found.ambiguous) unverified.push(`more than one grid is named after ${ambiguousGrids({ n: l.name, ambiguous: found.ambiguous })}`);
+    else if (!found.grid) unverified.push(`no grid named after ${esc(String(l.name))} on the built page`);
+    else if (gap?.missing) missing.push(gap.missing);
+    else if (gap?.unverified) unverified.push(gap.unverified);
+  }
+  if (missing.length) return ["❌ MISSING", missing.join("; "), "missing"];
+  if (unverified.length) return ["⚠ verify", `${unverified.join("; ")} — confirm the ${what} on the stand`, "unverified"];
+  return ["✅ Done", `${lists.length} list(s): ${what} as Classic had, matched by name`, "ok"];
 }
+// A related list whose Classic row actions changed declares its row toolbar, without any action Classic did not offer
+// (a request among `drop`), and with no toolbar shown when no action remains (`features.rows.toolbar: false`).
+function rowToolbarGap(grid, l) {
+  const n = esc(String(l.name));
+  if (!grid.rowToolbar) return { missing: `${n} built without \`rowToolbarItems\` — a list with changed row actions shows the standard ones` };
+  const offered = (l.drop || []).filter((r) => (grid.rowToolbarRequests || []).includes(r));
+  if (offered.length) return { missing: `${n} still offers ${offered.map((r) => "`" + esc(r) + "`").join(", ")} — Classic did not offer it on a row` };
+  return l.noToolbar && grid.rowToolbarOff !== true ? { missing: `${n} shows a row toolbar with no action left (\`features.rows.toolbar\` is not \`false\`)` } : null;
+}
+const resolveRowToolbarVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "row toolbars", rowToolbarGap);
+// A related list whose rows open nothing does not link its primary column (`features.cells.disableLinks: true`).
+const resolveRowLinksVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "row links", (grid, l) => (grid.linksDisabled === true ? null
+  : { missing: `${esc(String(l.name))} built with row links — Classic rows open nothing; set \`features.cells.disableLinks: true\`` }));
+// A related list keeps Classic's row order: the attribute its grid binds (`items: "$X"`) carries
+// `modelConfig.sortingConfig.default` with the same column first, in the same direction.
+function listSortGap(grid, l, ctx) {
+  const n = esc(String(l.name));
+  if (!l.column) return { unverified: `${n}: the Classic sort column was not read` };
+  const attr = typeof grid.items === "string" ? grid.items.replace(/^\$/, "") : null;
+  if (!ctx.vmAttributes || !attr) return { unverified: `${n}: the built page's view-model attributes were not reported` };
+  const first = ctx.vmAttributes[attr]?.modelConfig?.sortingConfig?.default?.[0];
+  if (first && first.columnName === l.column && String(first.direction || "").toLowerCase() === l.direction) return null;
+  const actual = first ? `by \`${esc(String(first.columnName))}\` ${esc(String(first.direction))}` : "in the default order";
+  return { missing: `${n} loads ${actual}, not \`${esc(l.column)}\` ${l.direction} — set the list's \`sortingConfig.default\`` };
+}
+const resolveListSortVk = (vk, ctx) => resolveDetailGridVk(vk, ctx, "sort order", listSortGap);
 // A filter row needs BOTH halves: the element name AND `crt.QuickFilter`. Name alone closed on any component that
 // happened to carry the name — and the control IS the deliverable here, which is why the unit publishes the type.
 // The same check serves the list page's filter bar and a related list's quick filter on the form page; only the words
@@ -5150,14 +5277,25 @@ export function resolvePageCodeVk(vk, ctx) {
     return ["☐ confirm on-stand", "handlers not provided — pass the page's get-page `bundle` (handlers and viewConfig) to auto-check this", "skip"];
   }
   // One row per page, so one analysis per page; the cell is escaped where the table is rendered.
-  const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey),
-    vk.thresholds || DEFAULT_QUALITY_THRESHOLDS, sections);
+  const thresholds = vk.thresholds || DEFAULT_QUALITY_THRESHOLDS;
+  const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey), thresholds, sections);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
+  // The functions of the modules the page imports are the page's code too, held to the same length limit.
+  const run = runQualityOf(ctx.root, thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
+  a.findings.push(...moduleLengthFindings(run));
+  // A module not measured holds the row; the page's own findings are still listed beside it.
+  const gap = moduleGapText(run);
+  if (gap) return ["⚠ verify", [gap, ...findingPhrases(a)].join("; "), "unverified"];
   if (!findingCount(a)) {
     const sends = a.sendsChecked ? "every declared request is sent" : "requests sent from the view not checked (no viewConfig in the payload)";
     return ["✅ Done", `${a.handlers.length} handler(s): none over ${a.maxFunctionLines} lines, no helper declared twice, ${sends}`, "ok"];
   }
   return ["⚠ verify", `${findingPhrases(a).join("; ")} — fix the code (run \`engine/codemap.mjs\` on the saved get-page response to see the map), or record a \`D<N>\` decision for a deliberate exception (a request sent only from a module outside the built pages is one)`, "unverified"];
+}
+// The over-limit functions of a page's imported modules, as `Page code` findings named `Module › function`.
+function moduleLengthFindings(run) {
+  return (run?.findings || []).filter((f) => f.rule === QUALITY_RULES.functionTooLong && f.module)
+    .map((f) => ({ rule: f.rule, where: `${f.module} › ${f.name || "line " + f.line}`, lines: f.value, limit: f.limit }));
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
@@ -5327,33 +5465,48 @@ function codeQualityGroups(planGroups, opts) {
 // The code-quality rows of one page, one per rule. The thresholds and the constants modules' record ids travel in
 // the row itself, so the resolver needs nothing but the built root.
 function codeQualityRows(opts) {
-  const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
-  const constantsGuids = opts.constantsGuids || [];
-  const runKey = qualityRunKey(thresholds, constantsGuids);
+  const run = qualityRunOf(opts);
   // A rule whose check needs something the run did not record says so on its own row.
   const notes = { [QUALITY_RULES.guidLiteral]: opts.projectConventions ? "" : "the constants-module check was skipped: the run recorded no `projectConventions`." };
   return QUALITY_ROW_RULES.map(({ rule, label }) => ({
     deliverableId: `quality:${rule}`,
     label: `[code-quality] ${rule} — ${label}`,
-    vk: { type: "quality", rule, thresholds, constantsGuids, runKey, note: notes[rule] || "" },
+    vk: { type: "quality", rule, ...run, note: notes[rule] || "" },
   }));
 }
 const QUALITY_LISTED = 5;
+// The Code quality rules a client module's code can break. A module not measured holds these rows only: the rules about
+// a page's handlers and resources (nested functions, helpers copied between pages, unused strings) read no module.
+const MODULE_QUALITY_RULES = new Set([QUALITY_RULES.catchLogOnly, QUALITY_RULES.numericComparisonType,
+  QUALITY_RULES.sequentialAwaits, QUALITY_RULES.guidLiteral, QUALITY_RULES.planCodeInComment]);
 // A blocking finding is the BUILDER's to fix — or the user's to accept, by a decision or a raised threshold in
 // `manifest.qualityThresholds` — never a pass. An advisory one is noted. A page that was not read, or is reported
 // not built, has no code to measure: the page's own rows already block on that, so these rows only say so.
+// A row's findings as one cell: the first few with their place, and how many more.
+function listQualityFindings(fs) {
+  return fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
+    + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
+}
+// A module not measured holds the row, and what the measured code already shows is listed beside it, with the row's note.
+function moduleGapCell(gap, note, blocking, noted) {
+  const parts = [gap, note || "",
+    blocking.length ? `${blocking.length} finding(s) in the code measured so far: ${listQualityFindings(blocking)}` : "",
+    noted.length ? `${noted.length} noted, not blocking: ${listQualityFindings(noted)}` : ""];
+  return ["⚠ verify", parts.filter(Boolean).join("; "), "unverified"];
+}
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
-  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.runKey).get(ctx.pageKey);
+  const page = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
   if (!page) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];
   if (page.unreadable.length) return ["⚠ verify", `the bundle's ${page.unreadable.map((s) => "`" + s + "`").join(", ")} could not be parsed, so the page's code was not checked`, "unverified"];
   const found = page.findings.filter((f) => f.rule === vk.rule);
-  const listed = (fs) => fs.slice(0, QUALITY_LISTED).map((f) => `${f.section}${f.line ? " line " + f.line : ""}: ${esc(f.text)}`).join("; ")
-    + (fs.length > QUALITY_LISTED ? `; and ${fs.length - QUALITY_LISTED} more` : "");
   const blocking = found.filter((f) => !f.advisory);
   const noted = found.filter((f) => f.advisory);
   const note = vk.note ? vk.note + " " : "";
+  const gap = MODULE_QUALITY_RULES.has(vk.rule) ? moduleGapText(page) : null;
+  if (gap) return moduleGapCell(gap, vk.note, blocking, noted);
+  const listed = listQualityFindings;
   if (blocking.length) {
     return ["⚠ verify", `${blocking.length} finding(s): ${listed(blocking)} — fix the code, or record a decision (\`--decide D<N>\`) that accepts it${blocking.some((f) => f.limit != null) ? ", or raise the limit in `manifest.qualityThresholds`" : ""}`, "unverified"];
   }
@@ -5401,7 +5554,7 @@ export function resolveModuleDepVk(vk, ctx) {
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
-const VK_BY_TYPE = new Map([["detailfilter", (vk, ctx) => resolveQuickFilterVk(vk, ctx, "detail")], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk],
+const VK_BY_TYPE = new Map([["detailfilter", (vk, ctx) => resolveQuickFilterVk(vk, ctx, "detail")], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk], ["rowlinks", resolveRowLinksVk], ["listsort", resolveListSortVk],
   ["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk],
   ...PROCESS_VK_RESOLVERS.map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, { absentEntry, esc })])]);
@@ -5455,6 +5608,14 @@ function opRequest(o) { return firstString(o.request, o.clicked?.request, o.valu
 // component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
 // never the children array); a FIELD keeps `bound` (the column identity the fields row reads). Extracted so
 // walkViewConfig stays under Sonar's cognitive-complexity ceiling.
+// A grid's row settings: a declared `rowToolbarItems` and the requests its items send, the row toolbar switched off,
+// and the primary-column links switched off.
+function gridRowSettings(props) {
+  const items = Array.isArray(props.rowToolbarItems) ? props.rowToolbarItems : null;
+  const f = props.features || {};
+  return { ...(items ? { rowToolbar: true, rowToolbarRequests: items.map((i) => i?.clicked?.request).filter(Boolean) } : {}),
+    ...(f.rows?.toolbar === false ? { rowToolbarOff: true } : {}), ...(f.cells?.disableLinks === true ? { linksDisabled: true } : {}) };
+}
 function pushWalkNode(node, out) {
   const cols = columnsOf(node);
   const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
@@ -5465,9 +5626,8 @@ function pushWalkNode(node, out) {
   // `readonly` (either spelling) and a declared `rowToolbarItems` are what the Detail features rows measure.
   const props = { ...node.values, ...node };
   const readonly = props.readonly === true || props.readOnly === true;
-  const rowToolbar = Array.isArray(props.rowToolbarItems);
   out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}),
-    ...(caption ? { caption } : {}), ...(request ? { request } : {}), ...(node.visible === false ? { visible: false } : {}), ...(readonly ? { readonly } : {}), ...(rowToolbar ? { rowToolbar } : {}) });
+    ...(caption ? { caption } : {}), ...(request ? { request } : {}), ...(node.visible === false ? { visible: false } : {}), ...(readonly ? { readonly } : {}), ...gridRowSettings(props) });
 }
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
@@ -5645,10 +5805,13 @@ export function verifyCtx(root, pageKey, reconcileMode = null) {
   // too); `vmAttrs` are `bundle.viewModelConfig.attributes` keys. Both OPTIONAL: absent ⇒ that row is not checkable.
   let handlersSrc = null;
   if (entry?.handlers != null) handlersSrc = typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers);
-  const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
+  const vmAttributes = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? entry.viewModelConfig.attributes : null;
+  const vmAttrs = vmAttributes ? new Set(Object.keys(vmAttributes)) : null;
   const aliases = moduleAliases(entry);
   return {
     pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
+    // the view-model attributes themselves, for a related list's sort order
+    vmAttributes,
     // The page's SCHEMA_DEPS and custom names (get-page's `bundle.deps` / `handlers` / `validators` / `converters`),
     // read for the project-conventions rows; null when the bundle did not carry them.
     deps: aliases && [...aliases.keys()],
@@ -5685,10 +5848,11 @@ function moduleSourcesOf(root) {
   }
   return MODULE_SOURCES.get(root);
 }
-function verifyCtxFactory(root, reconcileMode = null) {
+// `createdPackage` is the run's, not a page's: every page and add-on is compared against the package create-app made.
+function verifyCtxFactory(root, reconcileMode = null, createdPackage = null) {
   const cache = new Map();
   return (pageKey) => {
-    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey, reconcileMode));
+    if (!cache.has(pageKey)) cache.set(pageKey, { ...verifyCtx(root, pageKey, reconcileMode), createdPackage });
     return cache.get(pageKey);
   };
 }
@@ -5787,20 +5951,35 @@ function builtStringsOf(page) {
   }
   return out;
 }
-// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is absent
-// in every culture; a payload with no `resources` is `unread`.
-function textMismatches(texts, ctx) {
+// THE KEY THE PAGE BUILT THE CAPTION UNDER. The plan names a resource key derived from the Classic one, but the page
+// may keep the text under the key its element is built with (`<Element>ExpansionPanel_title` for a related list's
+// `<Detail>_Caption`). One built key stands in for one plan key, and only when it carries the plan's text in EVERY
+// culture the plan lists: a key the plan expects for another text, a key already standing in for another caption,
+// and a key matching in some cultures only are other strings that happen to share words, not this caption.
+function substituteKey(built, t, taken) {
+  const cultures = Object.entries(t.cultures || {});
+  if (!cultures.length) return null;
+  return Object.keys(built).find((k) => !taken.has(k)
+    && cultures.every(([culture, want]) => built[k]?.[culture] === want)) || null;
+}
+// A row's Classic texts against the built page, culture by culture. A key the built page does not carry is matched
+// through `substituteKey`, and absent in every culture when no key stands in for it; a payload with no `resources`
+// is `unread`. A key the page does carry is compared by text: the same key with other words is a changed caption.
+export function textMismatches(texts, ctx) {
   const built = builtStringsOf(ctx.page);
-  const differ = [], absent = [];
-  if (!built) return { differ, absent, unread: true };
+  const differ = [], absent = [], substituted = [];
+  if (!built) return { differ, absent, substituted, unread: true };
+  const taken = new Set((texts || []).map((t) => t.key));
   for (const t of texts || []) {
-    const got = built[t.key] || {};
+    const own = built[t.key];
+    const sub = own ? null : substituteKey(built, t, taken);
+    if (sub) { taken.add(sub); substituted.push(`\`${t.key}\` as \`${sub}\``); continue; }
     for (const [culture, want] of Object.entries(t.cultures || {})) {
-      if (typeof got[culture] !== "string") absent.push(`\`${t.key}\` ${culture}`);
-      else if (got[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${got[culture]}" ≠ Classic "${want}"`);
+      if (typeof own?.[culture] !== "string") absent.push(`\`${t.key}\` ${culture}`);
+      else if (own[culture] !== want) differ.push(`\`${t.key}\` ${culture} "${own[culture]}" ≠ Classic "${want}"`);
     }
   }
-  return { differ, absent };
+  return { differ, absent, substituted };
 }
 // A text that differs from Classic in any culture fails the row; a Classic culture the built page does not carry
 // leaves a passing row unverified, and so does a built page read without its strings. Rows already MISSING or not
@@ -5808,10 +5987,11 @@ function textMismatches(texts, ctx) {
 function withTextCheck(verdict, vk, ctx) {
   const [, ev, outcome] = verdict;
   if (!vk?.texts?.length || (outcome !== "ok" && outcome !== "unverified")) return verdict;
-  const { differ, absent, unread } = textMismatches(vk.texts, ctx);
+  const { differ, absent, substituted, unread } = textMismatches(vk.texts, ctx);
   if (unread && outcome === "ok") return ["⚠ verify", `${ev}; built page carries no \`resources\` to compare ${vk.texts.length} Classic text(s) against`, "unverified", ...verdict.slice(3)];
   if (differ.length) return ["❌ MISSING", `${ev}; built text differs from Classic: ${differ.join("; ")}`, "missing", ...verdict.slice(3)];
   if (absent.length && outcome === "ok") return ["⚠ verify", `${ev}; built page has no text in ${absent.join(", ")}`, "unverified", ...verdict.slice(3)];
+  if (substituted.length) return [verdict[0], `${ev}; caption text kept under the page's own key: ${substituted.join(", ")}`, ...verdict.slice(2)];
   return verdict;
 }
 function rowKindOf(r, outcome) {
@@ -5827,8 +6007,9 @@ const verifyRowOwner = (o) => (o === "verifier" ? "verifier" : "builder");
 // double loop stays under Sonar's cognitive-complexity ceiling.
 function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
   const key = r.pageKey || g.pageKey || "main";
-  const [mark, ev, outcome, owner] = resolveRowKinds(r, ctxFor, key);
-  const idPart = r.id ? { id: r.id } : {};
+  const [mark, ev, outcome, owner, reason] = resolveRowKinds(r, ctxFor, key);
+  // A filed record still waiting for its verdict names that record, so its repair goes to a judge by id.
+  const idPart = { ...(r.id ? { id: r.id } : {}), ...(reason?.unjudged ? { unjudgedRecord: reason.unjudged } : {}) };
   // The open-row record carries the SAME cells the reader sees, plus the row number and the evidence id — so a
   // caller repairing from the JSON and a human reading the table look at one text, not a paraphrase.
   tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, owner: verifyRowOwner(owner), ...idPart }, owner);
@@ -5894,7 +6075,7 @@ function withPortedAs(r, page, portedAs) {
 }
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
-  const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null);
+  const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null, opts.createdPackage || null);
   const tally = verifyTally();
   // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
   // of the run, the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is

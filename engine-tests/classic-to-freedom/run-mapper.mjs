@@ -5,6 +5,7 @@ import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
 import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
+import { runVerifyFalseNegativeChecks, runCaptionKeyChecks } from "./run-mapper-verify-false-negatives.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -13372,6 +13373,7 @@ const n2TreeManifest = (titleA, titleB) => ({
       return run.changeSet.resources.GeneralInfoTabCaption === "General information"
         && run.changeSet.resourceCultures.GeneralInfoTabCaption["en-US"] === "General information" && row.includes("✅");
     });
+  runCaptionKeyChecks({ check, runMigration, checklistOpts, renderVerify, verifyCtx, coTextsManifest, FIX });
   // A folded child page and a mini page check their own texts in every culture, like the typed page.
   {
     const m = coTextsManifest();
@@ -16683,6 +16685,9 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
       && lineDrifts(multi, [at("Card action — Run report", false)]).length === 1
       && itemsOf("| — | — | **Won't do** — none |").length === 0);
 }
+
+runVerifyFalseNegativeChecks({ check, runMigration, runMigrate, checklistOpts, checklistGroups, renderVerify, resolveVk, resolveRuleVk,
+  verifyCtx, parseDecisionRecords, verifyManifest, DIR });
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

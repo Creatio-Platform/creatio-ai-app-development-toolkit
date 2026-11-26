@@ -7,7 +7,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assembleBuilt, MODULES_DIR, moduleNoteLines } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
+import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
+import { READS_DIR, MODULES_DIR } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { bundleArgs } from "../../skills/classic-to-freedom-migration/engine/conventions.mjs";
 
 export function runModuleDepChecks({ check, verifyCtx, resolveVk, FIX }) {
@@ -73,7 +74,7 @@ export function runModuleDepChecks({ check, verifyCtx, resolveVk, FIX }) {
     modules: { [MODULE]: moduleSrc.replaceAll("crt.RunBusinessProcessRequest", "crt.ShowDialogRequest") } }, "main"));
   check("module deps (recorded v2): the Start approval card action reads ✅ through the button's request, its handler and the module function it calls, which sends `crt.RunBusinessProcessRequest`; without the module's source it reads ⚠ naming the file to add, and a module that does not send it closes nothing",
     () => card[0] === "✅ Done" && /`MbStartApprovalButton` fires `mb\.MbStartApprovalButtonClicked`, whose handler calls `contractPage\.startApproval` in module `UsrMbContractsV2App_FormPageModule`, which sends `crt\.RunBusinessProcessRequest`/.test(card[1])
-      && cardNoModule[0] === "⚠ verify" && /add it as `modules\/UsrMbContractsV2App_FormPageModule\.js`/.test(cardNoModule[1])
+      && cardNoModule[0] === "⚠ verify" && /add it as `reads\/modules\/UsrMbContractsV2App_FormPageModule\.js`/.test(cardNoModule[1])
       && cardNoSend[0] === "⚠ verify" && !/add it as/.test(cardNoSend[1]),
     () => [card, cardNoModule, cardNoSend]);
 
@@ -99,7 +100,7 @@ export function runModuleDepChecks({ check, verifyCtx, resolveVk, FIX }) {
   check("module deps: only the module functions the handler calls count — `startApproval` closes the row through the helper it calls, `refresh` does not although the module sends the request elsewhere; a call through the platform's `sdk` is never named as a module file to add",
     () => viaHelper[0] === "✅ Done" && /calls `xPage\.startApproval` in module `UsrX_FormPageModule`/.test(viaHelper[1])
       && viaOther[0] === "⚠ verify" && viaExport[0] === "✅ Done"
-      && noSource[0] === "⚠ verify" && /add it as `modules\/UsrX_FormPageModule\.js`/.test(noSource[1]) && !/@creatio-devkit/.test(noSource[1]),
+      && noSource[0] === "⚠ verify" && /add it as `reads\/modules\/UsrX_FormPageModule\.js`/.test(noSource[1]) && !/@creatio-devkit/.test(noSource[1]),
     () => [viaHelper, viaOther, viaExport, noSource]);
 
   // The Save button fires `crt.SaveRecordRequest`, and the page's Save handler calls `contractPage.refreshStartApprovalEnabled`.
@@ -166,26 +167,27 @@ export function runModuleDepChecks({ check, verifyCtx, resolveVk, FIX }) {
       return assembleBuilt(asDir);
     } finally { fs.rmSync(asDir, { recursive: true, force: true }); }
   };
+  const MOD_DIR = `${READS_DIR}/${MODULES_DIR}`;
   const full = assembled((w, dir) => {
-    fs.mkdirSync(path.join(dir, MODULES_DIR));
-    w(`${MODULES_DIR}/${MODULE}.js`, moduleSrc);
-    w(`${MODULES_DIR}/__proto__.js`, "define('x', [], function() { return {}; });");
-    w(`${MODULES_DIR}/notes.txt`, "not a module");
+    fs.mkdirSync(path.join(dir, READS_DIR, MODULES_DIR));
+    w(`${MOD_DIR}/${MODULE}.js`, moduleSrc);
+    w(`${MOD_DIR}/__proto__.js`, "define('x', [], function() { return {}; });");
+    w(`${MOD_DIR}/notes.txt`, "not a module");
   });
   const vctx = verifyCtx(full.built, "main");
-  check("module deps via assembleBuilt: the bundle's `args` reach built.json, `modules/<schema>.js` becomes `built.modules` (an unsafe key or a non-.js file is skipped), no module note is left, and the recorded page then closes every handler row and the card action",
-    () => full.built.pages.main.args === bundle.args && Object.keys(full.built.modules || {}).join() === MODULE && !full.problems.length && !full.notes.length
+  check("module deps via assembleBuilt: the bundle's `args` reach built.json, `reads/modules/<Module>.js` becomes `built.modules` (an unsafe key or a non-.js file is skipped), and the recorded page then closes every handler row and the card action",
+    () => full.built.pages.main.args === bundle.args && Object.keys(full.built.modules || {}).join() === MODULE && !full.problems.length
       && rows(vctx).every((r) => r[1] === "✅ Done") && resolveVk(cardVk, vctx)[0] === "✅ Done",
-    () => ({ args: full.built.pages?.main?.args, modules: Object.keys(full.built.modules || {}), problems: full.problems, notes: full.notes }));
+    () => ({ args: full.built.pages?.main?.args, modules: Object.keys(full.built.modules || {}), problems: full.problems }));
 
-  // A run whose orchestrator never copied the module bodies is named once, as a note — never a read problem, which
-  // would fail the gate and stop repair tasks for a source most rows never need. `modules` as a FILE is a problem
-  // and an answer, never a crash.
+  // A read-back that filed no module body is no read problem: the card action stays open and names the file to add.
+  // `reads/modules` as a FILE is a problem and an answer, never a crash.
   const uncopied = assembled(() => {});
-  const asFile = assembled((w) => w(MODULES_DIR, "not a folder"));
-  check("module deps via assembleBuilt: a page importing a client module whose body was not copied gets a note naming `modules/<schema>.js` (not a problem); `modules` that is a file is a problem, not a crash",
-    () => !uncopied.problems.length && uncopied.notes.length === 1 && uncopied.notes[0].module === MODULE
-      && /`modules\/UsrMbContractsV2App_FormPageModule\.js`/.test(moduleNoteLines(uncopied.notes)[0])
-      && asFile.built && asFile.problems.some((p) => p.file === MODULES_DIR && /not readable as a folder/.test(p.why)),
-    () => ({ uncopied: [uncopied.problems, uncopied.notes], asFile: asFile.problems }));
+  const uncopiedCard = uncopied.built && resolveVk(cardVk, verifyCtx(uncopied.built, "main"));
+  const asFile = assembled((w) => w(MOD_DIR, "not a folder"));
+  check("module deps via assembleBuilt: with no module body filed the Run-process card action reads ⚠ naming `reads/modules/<Module>.js` (not a read problem); `reads/modules` that is a file is a problem, not a crash",
+    () => !uncopied.problems.length && !uncopied.built.modules && uncopiedCard[0] === "⚠ verify"
+      && /`reads\/modules\/UsrMbContractsV2App_FormPageModule\.js`/.test(uncopiedCard[1])
+      && asFile.built && asFile.problems.some((p) => p.file === MOD_DIR && /not readable as a folder/.test(p.why)),
+    () => ({ uncopied: [uncopied.problems, uncopiedCard], asFile: asFile.problems }));
 }

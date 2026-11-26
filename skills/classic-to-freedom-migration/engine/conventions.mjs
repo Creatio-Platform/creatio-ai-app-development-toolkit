@@ -349,7 +349,7 @@ export function bundleArgs(entry) {
   const fn = parseJsExpression(`function ${params} {}`);
   return fn?.type === "FunctionExpression" ? fn.params.map(paramName) : null;
 }
-// A dependency a `modules/<schema>.js` file can exist for: a schema name. An npm-scoped package
+// A dependency a `reads/modules/<schema>.js` file can exist for: a schema name. An npm-scoped package
 // (`@creatio-devkit/common`) is the platform's, never a module the build wrote.
 export const MODULE_SCHEMA_NAME = /^[A-Za-z_]\w*$/;
 // The local name each `define()` dependency goes by on the page: `deps[i]` -> `args[i]`, null where the page gave it

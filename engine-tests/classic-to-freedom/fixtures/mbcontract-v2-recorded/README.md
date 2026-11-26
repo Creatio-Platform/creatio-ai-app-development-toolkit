@@ -35,4 +35,4 @@ handler calls `contractPage.refreshStartApprovalEnabled`, which sends nothing.
   page's own name for the module.
 - The Run-process card action is ✅ through the Start approval button, its handler and the module
   function it calls. Without that button it is ⚠: the Save button's handler is never credited.
-- It is ⚠ without the module source, naming `modules/<schema>.js`.
+- It is ⚠ without the module source, naming `reads/modules/<Module>.js`.

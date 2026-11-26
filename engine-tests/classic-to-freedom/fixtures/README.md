@@ -23,4 +23,8 @@ Provenance (important):
   `Related lists — N expected`) with a `built` cell on the main page's Fields row and a `wont-do (D3)` cell on its
   Related lists row. `run-tasks.mjs` copies it and never edits it in place.
 
+- `module-lint-v2/` — **synthetic** client modules, reduced to what the code-quality rules read: log-only and
+  comment-only catches, a bare numeric `comparisonType`, and a shared module that only another module imports.
+  Names and record ids are placeholders; `run-mapper-quality.mjs` asserts the findings.
+
 `employeescore/` was removed — no runner loaded it.

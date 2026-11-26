@@ -511,8 +511,10 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // A layout row's field `names` are left out, so moving fields between tabs while every tab keeps its field count
 // does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
 // A row's Classic `texts` are left out too: they are checked against the built page, not built by a different task.
+// A rule row's `decided` attributes are closed by a person's answer, not built by the task, so an answer recorded
+// after the task closed must not read as drift and re-dispatch it.
 const digestVk = (vk) => {
-  const v = vk?.texts ? { ...vk, texts: undefined } : vk;
+  const v = vk?.texts || vk?.decided ? { ...vk, texts: undefined, decided: undefined } : vk;
   return v?.type === "layout" && v.names ? { ...v, names: undefined } : v;
 };
 // A PLAN BOUNDARY is digested as a marker, not by its reason text: a row flipping between "build it" and "the plan
@@ -676,7 +678,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
   const chunks = small
     ? small.flatMap((b) => chunksOf(b, { ...B, chunk: Infinity }))
     : [refs, ...ordered].flatMap((b) => chunksOf(b, B));
-  const tasks = chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) }));
+  const tasks = withJudgedRecords(chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) })), groups);
   return {
     entity: result.entity || null,
     ...runHeader(result),
@@ -687,6 +689,38 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
     budget: B,
     tasks: withDependencies(tasks),
   };
+}
+
+// THE RECORDS EACH REVIEW RULES ON. An evidence row is closed by a builder's record AND a judge's verdict, and the
+// row itself sits in the page's build task, so the review task's own rows name only the design pass. A judge handed
+// that file alone rules on the design pass and leaves every other record of the page `null`, which the final
+// verify reports as NOT judged. Every review task therefore carries the evidence ids of the pages it judges — all
+// pages for the collapsed run's single review — and its file lists them.
+function evidenceIdsByPage(groups) {
+  const byPage = new Map();
+  for (const g of groups) {
+    for (const r of g.rows || []) {
+      if (r.vk?.type !== "evidence" || !r.vk.id) continue;
+      const key = r.pageKey || g.pageKey || "main";
+      if (!byPage.has(key)) byPage.set(key, new Set());
+      byPage.get(key).add(r.vk.id);
+    }
+  }
+  return byPage;
+}
+// The records of `pages`, in page order, as the `judgedRecords` field — absent when the pages publish none.
+const judgedRecordsOf = (byPage, pages) => {
+  const ids = [...new Set(pages)].flatMap((k) => [...(byPage.get(k) || [])]);
+  return ids.length ? { judgedRecords: ids } : {};
+};
+function withJudgedRecords(tasks, groups) {
+  const byPage = evidenceIdsByPage(groups);
+  return tasks.map((t) => {
+    if (!String(t.artifact || "").startsWith("review:")) return t;
+    // The collapsed run's single review judges every page; a per-page review, the pages its rows come from.
+    const pages = t.reviewsArtifacts?.length ? [...byPage.keys()] : [t.pageKey, ...t.rows.map((r) => r.pageKey)];
+    return { ...t, ...judgedRecordsOf(byPage, pages) };
+  });
 }
 
 // A RUN TOO SMALL TO SPLIT. Returns the two buckets it collapses to — everything that writes, then everything
@@ -1234,6 +1268,21 @@ function directivesBlock(task, directives) {
       + " directive: its own row stays `not-built — needs-decision` until a person decides.",
   ];
 }
+// An id as a code span the judge can copy as written: Markdown escapes nothing inside one, so the id is not escaped
+// either; one holding a backtick gets the longer fence. A line break would end the list item, so it is a space.
+const idSpan = (id) => {
+  const s = String(id).replace(/\s+/g, " ");
+  return s.includes("`") ? `\`\` ${s} \`\`` : `\`${s}\``;
+};
+// The review's worklist: every record of its pages, by the id the judge files its verdict under.
+function judgedRecordsBlock(task) {
+  if (!task.judgedRecords?.length) return [];
+  return [
+    `- **Records you rule on — ${task.judgedRecords.length}, every one of them.** A verdict for each id below goes`
+      + " into `judge.json`; an id left `null` is a row the final report calls NOT judged, so the run cannot close.",
+    ...task.judgedRecords.map((id) => `  - ${idSpan(id)}`),
+  ];
+}
 function outcomeBlock(repair = false) {
   // THE RENDERED FILE IS THE SUB-AGENT'S PROMPT, so it names the field the engine actually reads. `status:`
   // is the engine's output and a word typed there is discarded and reported; `declared:` is the agent's only
@@ -1292,6 +1341,34 @@ function outcomeBlock(repair = false) {
   ];
 }
 
+// The opening paragraph of a task file: a judge round, a repair round, or a plan task.
+function taskBanner(task) {
+  if (task.kind === REPAIR_KIND && task.cause === UNJUDGED_CAUSE) return [
+    `> JUDGE — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. Each row below has an evidence record a`,
+    "> builder filed and no verdict: `--verify` reads it as NOT judged. You are the independent judge, read-only:",
+    "> rule on every record listed under **Records you rule on** by the judge brief's rules, then record each row",
+    "> `built` once its verdict is filed, whichever way you ruled. Build nothing and write nothing on the stand.",
+  ];
+  if (task.kind === REPAIR_KIND) return [
+    // WHERE THE ROWS CAME FROM decides the first move: a row `--verify` could not find may be built and unrecorded,
+    // a row the previous agent wrote down as not built is one somebody already tried and stopped at.
+    `> REPAIR — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. ${String(task.cause).startsWith("not-built:")
+      ? "These rows were recorded as NOT BUILT by the agent that built the page — read what it wrote in the"
+        + "\n> table below before you start."
+      : "These rows were left OPEN by a `--verify`\n> run against the page as it is NOW."}`
+      + " They are not new plan work, and the plan has not changed. Fix exactly",
+    "> these rows on the page this task names. If a row is open because the plan is WRONG rather than the build,",
+    "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
+    "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
+  ];
+  return [
+    "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
+    "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
+    "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
+    "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
+    "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+  ];
+}
 export function renderTaskFile(task, set = {}) {
   const naNote = task.naRows ? `, ${task.naRows} plan-boundary` : "";
   const conventions = conventionsTaskLines(set.projectConventions, cell);
@@ -1300,24 +1377,7 @@ export function renderTaskFile(task, set = {}) {
     "",
     `# ${task.step ?? task.order}. ${task.pageKey} · ${task.group}`,
     "",
-    ...(task.kind === REPAIR_KIND ? [
-      // WHERE THE ROWS CAME FROM decides the first move: a row `--verify` could not find may be built and unrecorded,
-      // a row the previous agent wrote down as not built is one somebody already tried and stopped at.
-      `> REPAIR — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. ${String(task.cause).startsWith("not-built:")
-        ? "These rows were recorded as NOT BUILT by the agent that built the page — read what it wrote in the"
-          + "\n> table below before you start."
-        : "These rows were left OPEN by a `--verify`\n> run against the page as it is NOW."}`
-        + " They are not new plan work, and the plan has not changed. Fix exactly",
-      "> these rows on the page this task names. If a row is open because the plan is WRONG rather than the build,",
-      "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
-      "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
-    ] : [
-      "> One task of an APPROVED migration plan, and while it runs you OWN this page's code. Build the rows listed",
-      "> here. Any code already on the page is yours to refactor — reuse or merge a helper defined twice, split a",
-      "> handler that grew too long, move shared code to one place — so the page's `Page code` row passes. A plan",
-      "> deliverable outside your rows (layout, fields, components) is not yours to change, and one that looks wrong",
-      "> is a proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
-    ]),
+    ...taskBanner(task),
     "",
     `- **Page key:** \`${task.pageKey}\``,
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
@@ -1328,6 +1388,7 @@ export function renderTaskFile(task, set = {}) {
     ...directivesBlock(task, set.directives),
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
     ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
+    ...judgedRecordsBlock(task),
     // The card stays last before the deliverables: `refreshTaskCard` re-renders from its heading to them.
     ...taskCardBlock(task, set),
     "",
@@ -2635,6 +2696,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   }
 
   const subjectOf = splitSubjects(resolved.items);
+  const recordsByPage = evidenceIdsByPage(groups);
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
       label: r.label, groupTitle: r.group, vk: r.vk, na: r.na, ...statusFields(r),
@@ -2661,6 +2723,9 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       reviewsArtifacts: [...new Set(srcRows.filter((r) => r.groupTitle === REVIEW_GROUP && !isFiledGateRow(r))
         .map((r) => `page:${identity.get(r.rowPageKey) || r.rowPageKey}`))],
       wiresArtifacts: wiredArtifacts(srcRows, identity),
+      // A split item judges the pages whose review rows it carries, so it rules on every record of those pages.
+      ...judgedRecordsOf(recordsByPage, srcRows.filter((r) => r.groupTitle === REVIEW_GROUP && !isFiledGateRow(r))
+        .map((r) => r.rowPageKey)),
       order: i + 2,                       // the reference cache keeps position 1
       phase: DEFAULT_PHASE,
       origin: TASK_ORIGIN_ENGINE,
@@ -2739,7 +2804,12 @@ const CAUSE_KINDS = [
   [/template\s*→/i, "template"],
   [/^Card action/i, "card-actions"],
 ];
+// AN EVIDENCE RECORD NOBODY JUDGED is not build work: the record is filed and only the verdict is missing, and a
+// builder may not rule on its own record. `--verify` names such a record on its open row (`unjudgedRecord`), the
+// row gets a cause of its own, and its round is a read-only review handed to a judge.
+export const UNJUDGED_CAUSE = "unverified:unjudged";
 function causeOf(row) {
+  if (row.unjudgedRecord) return UNJUDGED_CAUSE;
   const label = String(row.deliverable || "");
   const kind = CAUSE_KINDS.find(([re]) => re.test(label))?.[1] || "other";
   const outcome = row.outcome === "unverified" || row.outcome === O_NOT_BUILT ? row.outcome : "missing";
@@ -2760,6 +2830,7 @@ const CAUSE_TEXT = {
   "unverified:template": "the template row could not be confirmed from what was filed",
   "unverified:card-actions": "the card-action rows could not be confirmed from what was filed",
   "unverified:other": "machine rows could not be confirmed from what was filed",
+  [UNJUDGED_CAUSE]: "evidence records nobody judged",
   "not-built:fields": "fields the build agent recorded as not built",
   "not-built:handlers": "handlers the build agent recorded as not built",
   "not-built:rules": "business rules the build agent recorded as not built",
@@ -2885,40 +2956,45 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
         parked.push({ pageKey, cause, rows: rows.length, rounds: REPAIR_ROUND_CAP });
         continue;
       }
-      const round = next.round;
-      const identityKey = identity.get(pageKey) || pageKey;
-      const artifact = `page:${identityKey}`;
-      const srcRows = rows.map((r) => ({
-        label: r.deliverable, groupTitle: `Repair — ${causeText(cause)}`,
-        vk: r.outcome === "missing" ? { type: "repair" } : null, na: null,
-        weight: B.row, status: r.status, evidence: r.evidence,
-      }));
-      chunkRows(srcRows, B).forEach((chunkSrc, i) => {
-        const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
-      const suffix = i ? `#${i + 1}` : "";
-        const t = {
-          id, pageKey, artifact, writesTo: writesToOf(artifact),
-          anchor: `repair-${cause}-round${round}${suffix}`,
-          kind: REPAIR_KIND, cause, repairRound: round,
-          group: `Repair round ${round} — ${causeText(cause)}`,
-          title: `Repair round ${round} — ${causeText(cause)}`,
-          groups: [...new Set(chunkSrc.map((r) => r.groupTitle))],
-          order: Number.MAX_SAFE_INTEGER - 1, phase: DEFAULT_PHASE,
-          origin: TASK_ORIGIN_ENGINE, status: S_TODO,
-          rows: chunkSrc.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? "repair" : null, na: null,
-            status: r.status, evidence: r.evidence })),
-          weight: chunkSrc.reduce((a, r) => a + r.weight, 0),
-          gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
-          rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
-          covers: chunkSrc.map((r) => coverKey(r.label)),
-        };
-        const nameSlug = slugify(`${pageKey}-${cause}`);
-        t.file = `task-repair-round${round}-${nameSlug}-${id}.md`;
-        tasks.push(t);
-      });
+      tasks.push(...repairRoundTasks({ pageKey, identityKey: identity.get(pageKey) || pageKey, cause, rows, round: next.round, B }));
     }
   }
   return { tasks, parked, pending };
+}
+// One repair round over the open rows of one (page, cause), cut into chunks by the budget. A round over records
+// nobody judged is a read-only review handed to a judge; every other round writes the page.
+function repairRoundTasks({ pageKey, identityKey, cause, rows, round, B }) {
+  const judging = cause === UNJUDGED_CAUSE;
+  const artifact = judging ? `review:${identityKey}` : `page:${identityKey}`;
+  const srcRows = rows.map((r) => ({
+    label: r.deliverable, groupTitle: `Repair — ${causeText(cause)}`,
+    vk: r.outcome === "missing" ? { type: "repair" } : null, na: null,
+    weight: B.row, status: r.status, evidence: r.evidence, unjudgedRecord: r.unjudgedRecord,
+  }));
+  return chunkRows(srcRows, B).map((chunkSrc, i) => {
+    const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
+    const suffix = i ? `#${i + 1}` : "";
+    const t = {
+      id, pageKey, artifact, writesTo: writesToOf(artifact),
+      anchor: `repair-${cause}-round${round}${suffix}`,
+      kind: REPAIR_KIND, cause, repairRound: round,
+      group: `Repair round ${round} — ${causeText(cause)}`,
+      title: `Repair round ${round} — ${causeText(cause)}`,
+      groups: [...new Set(chunkSrc.map((r) => r.groupTitle))],
+      order: Number.MAX_SAFE_INTEGER - 1, phase: DEFAULT_PHASE,
+      origin: TASK_ORIGIN_ENGINE, status: S_TODO,
+      rows: chunkSrc.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? "repair" : null, na: null,
+        status: r.status, evidence: r.evidence })),
+      weight: chunkSrc.reduce((a, r) => a + r.weight, 0),
+      gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
+      rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
+      covers: chunkSrc.map((r) => coverKey(r.label)),
+      ...(judging ? { judgedRecords: chunkSrc.map((r) => r.unjudgedRecord) } : {}),
+    };
+    const nameSlug = slugify(`${pageKey}-${cause}`);
+    t.file = `task-repair-round${round}-${nameSlug}-${id}.md`;
+    return t;
+  });
 }
 
 // ---8<--- I/O ---8<---
