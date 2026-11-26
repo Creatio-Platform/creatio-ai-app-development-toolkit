@@ -25,7 +25,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions
   // Both constants are NAMES this file renders; neither is a property value.
   STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // the feature -> crt.* gate types, from the ONE shared table, and a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, withheldFeatureId, withheldIds, ENTITY_RULES_DELIVERABLE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
-import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest, moduleFunctions, MODULE_SCHEMA_NAME } from "./conventions.mjs";
+import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest, moduleShape, MODULE_SCHEMA_NAME } from "./conventions.mjs";
 import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES, runQualityOf, qualityRunKey, runModuleLint } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
 import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
@@ -4294,11 +4294,11 @@ function resolveRequestCardActionVk(vk, ctx) {
   return ["⚠ verify", `no built element fires \`${esc(vk.request)}\`${why} — wire the action to that request, or confirm it is built`, "unverified"];
 }
 // A request fired one step removed: a built element fires a custom page request, and that request's handler sends the
-// platform request — itself, or through a module the page imports in its `define()` deps whose source the payload
-// carries (`--built.modules`). In the module only the functions the handler calls count, and the module's own
-// functions they call in turn: a module that sends the request from some other function does not close the row.
-// `text` on a miss names a module the handler calls whose source is not in the payload, so the reader knows what to
-// add.
+// platform request — itself, or through a module the page imports in its `define()` deps, followed through the
+// modules THAT module imports, whose sources the payload carries (`--built.modules`). Only the module functions the
+// handler calls count, and the functions they call in turn (see `walkModuleCalls`): a module that sends the request
+// from some other function does not close the row. `text` on a miss names a module on the way whose source is not in
+// the payload, so the reader knows what to add.
 function relayedRequest(request, ctx) {
   // One parse of the page's handlers, shared by every card-action row of the page.
   if (ctx._handlerEntries === undefined) ctx._handlerEntries = handlerEntriesByRequest(ctx.handlersSrc);
@@ -4317,44 +4317,80 @@ function relayedRequest(request, ctx) {
 // only name a file that can be added.
 function relayFromHandler(body, request, ctx) {
   if (typeSent(withoutComments(body), request)) return { ok: true, text: `sends \`${esc(request)}\`` };
-  const code = codeOnly(body);
-  const called = [...(ctx.aliases || [])].filter(([module]) => MODULE_SCHEMA_NAME.test(module)).map(([module, alias]) => {
-    const via = [alias, module].find((name) => name && calledMembers(code, name).length);
-    return { module, via, fns: via ? calledMembers(code, via) : [] };
-  }).filter((m) => m.via);
-  for (const m of called) {
-    const fn = ctx.modules.has(m.module) ? m.fns.find((f) => moduleFunctionSends(ctx, m.module, f, request)) : null;
-    if (fn) return { ok: true, text: `calls \`${esc(m.via)}.${esc(fn)}\` in module \`${esc(m.module)}\`, which sends \`${esc(request)}\`` };
-  }
-  const unread = called.find((m) => !ctx.modules.has(m.module));
-  return { ok: false, text: unread ? `a handler calls module \`${esc(unread.module)}\`, whose source the read-back did not file — add it as \`reads/modules/${esc(unread.module)}.js\`` : "" };
+  const walk = walkModuleCalls(ctx, moduleCallsIn(codeOnly(body), ctx.aliases), (_m, _fn, bodies) => bodies?.some((b) => typeSent(b, request)));
+  if (walk.hit) return { ok: true, text: `calls ${callPathText(walk.path)}, which sends \`${esc(request)}\`` };
+  return { ok: false, text: walk.missing.length ? unfiledModuleText(walk.missing[0]) : "" };
 }
+const unfiledModuleText = (module) => `a handler reaches module \`${esc(module)}\`, whose source the read-back did not file — add it as \`reads/modules/${esc(module)}.js\``;
 // The members of `name` that `code` calls (`name.fn(…)`), `name` not itself a member of something else.
 const calledMembers = (code, name) => [...code.matchAll(new RegExp(String.raw`${NOT_IN_WORD}${NOT_A_MEMBER}${reEsc(name)}\s*\.\s*(${IDENT})\s*\(`, "g"))].map((m) => m[1]);
-// Whether module function `fn` sends `request`, itself or through the module's own functions it calls. Each module's
-// functions are parsed once per payload; a module that does not parse, or a name it does not define, sends nothing.
-const MODULE_FUNCTIONS = new WeakMap();
-function moduleFunctionsOf(ctx, module) {
-  if (!MODULE_FUNCTIONS.has(ctx.modules)) MODULE_FUNCTIONS.set(ctx.modules, new Map());
-  const cache = MODULE_FUNCTIONS.get(ctx.modules);
-  if (!cache.has(module)) cache.set(module, moduleFunctions(ctx.modules.get(module)));
+// The module functions `code` calls through `imports` (dependency -> local name: a page's `ctx.aliases`, or a
+// module's own `imports`), as `{ module, fn, via }`, `via` the spelling used (the local name or the schema name). Only
+// a dependency a `reads/modules/<schema>.js` file can exist for is followed (never `@creatio-devkit/common`).
+function moduleCallsIn(code, imports) {
+  return [...(imports || [])].filter(([module]) => MODULE_SCHEMA_NAME.test(module)).flatMap(([module, alias]) =>
+    [alias, module].filter(Boolean).flatMap((via) => calledMembers(code, via).map((fn) => ({ module, fn, via }))));
+}
+// What each filed module defines and imports, parsed once per payload; null for a module that does not parse.
+const MODULE_SHAPES = new WeakMap();
+function moduleShapeOf(ctx, module) {
+  if (!MODULE_SHAPES.has(ctx.modules)) MODULE_SHAPES.set(ctx.modules, new Map());
+  const cache = MODULE_SHAPES.get(ctx.modules);
+  if (!cache.has(module)) cache.set(module, moduleShape(ctx.modules.get(module)));
   return cache.get(module);
 }
-function moduleFunctionSends(ctx, module, fn, request) {
-  const fns = moduleFunctionsOf(ctx, module);
-  if (!fns) return false;
-  // `seen` grows while it is walked: a function reached from one already seen is checked in turn.
-  const seen = new Set([fn]);
-  for (const name of seen) {
-    const bodies = fns.get(name) || [];
-    if (bodies.some((body) => typeSent(body, request))) return true;
-    for (const body of bodies) addCallees(codeOnly(body), fns, seen);
+// THE MODULE FUNCTIONS A PAGE'S CALLS REACH, page -> module -> module. From the `starts` (calls a handler makes), each
+// function's bodies lead on to the module's own functions it calls and to the functions of the modules the module
+// imports that it calls through their local names. Each `Module.fn` is walked once, so an import cycle (A imports B,
+// B imports A) ends. `visit(module, fn, bodies)` is asked of every function reached (`bodies` undefined when the
+// module's source is not filed, empty when the module does not define `fn`); the first truthy answer ends the walk.
+// Returns `{ hit, path, missing }`: `path` the calls from a start to the hit, `missing` the modules reached whose
+// source the payload does not carry.
+function walkModuleCalls(ctx, starts, visit) {
+  const from = new Map();
+  const missing = new Set();
+  const queue = [];
+  const enqueue = (call, prev) => {
+    const key = `${call.module}.${call.fn}`;
+    if (from.has(key)) return;
+    from.set(key, { call, prev });
+    queue.push(key);
+  };
+  for (const call of starts) enqueue(call, null);
+  for (const key of queue) {
+    const { call } = from.get(key);
+    if (!ctx.modules.has(call.module)) missing.add(call.module);
+    const { shape, bodies } = functionBodiesOf(ctx, call);
+    if (visit(call.module, call.fn, bodies)) return { hit: true, path: callPath(from, key), missing: [...missing] };
+    for (const next of calleesOf(shape, call.module, bodies)) enqueue(next, key);
   }
-  return false;
+  return { hit: false, path: [], missing: [...missing] };
 }
-// The module functions `code` calls, added to `seen`.
-function addCallees(code, fns, seen) {
-  for (const other of fns.keys()) if (!seen.has(other) && calledIn(code, other)) seen.add(other);
+// The module's shape and the bodies of `call.fn` in it: `bodies` undefined when the module's source is not filed,
+// empty when the module does not parse or does not define the function.
+function functionBodiesOf(ctx, call) {
+  if (!ctx.modules.has(call.module)) return { shape: null, bodies: undefined };
+  const shape = moduleShapeOf(ctx, call.module);
+  return { shape, bodies: shape?.functions.get(call.fn) || [] };
+}
+// The calls `bodies` make: to the functions of their own `module` (bare, or as `this.fn(…)` from a method of the
+// module's returned object; `other.fn(…)` is another object's method), and through the module's imports to others.
+const calledOwn = (code, fn) => calledIn(code, fn, true) || calledIn(code, `this.${fn}`, true);
+function calleesOf(shape, module, bodies) {
+  if (!shape) return [];
+  return (bodies || []).map(codeOnly).flatMap((code) => [
+    ...[...shape.functions.keys()].filter((fn) => calledOwn(code, fn)).map((fn) => ({ module, fn, via: null })),
+    ...moduleCallsIn(code, shape.imports),
+  ]);
+}
+function callPath(from, key) {
+  const path = [];
+  for (let k = key; k; k = from.get(k).prev) path.unshift(from.get(k).call);
+  return path;
+}
+// `contractPage.recalculateAmountOnItemsChange` in module `M` → `recalculateAmount` → `contractAmount.recalc…` in module `N`
+function callPathText(path) {
+  return path.map((c) => (c.via ? `\`${esc(c.via)}.${esc(c.fn)}\` in module \`${esc(c.module)}\`` : `\`${esc(c.fn)}\``)).join(" → ");
 }
 // A custom `getActions` item is Done only when a built element identifies the action: its name, its caption (the
 // raw binding or the resolved text) or its `clicked.request` contains the action name, compared as lowercase letters
@@ -5241,19 +5277,28 @@ function pageFunctionVerdict(code, sym) {
 // A dotted symbol that is not a request: a module function, reached when the page declares the module in its
 // `define()` deps (`--built.pages[<key>].deps`, get-page's `bundle.deps`, source or array) and a handler calls it —
 // as `Module.fn(…)`, or through the name the page's factory gives the module (`bundle.args`: `contractPage.fn(…)`
-// for `define(…, ["Module"], function(contractPage) …)`). The module's own source is not read.
+// for `define(…, ["Module"], function(contractPage) …)`). Past a handler's own calls it is reached through the filed
+// module sources (`--built.modules`): a module function a called one calls, in its own module or in a module that
+// module imports, page -> module -> module (`walkModuleCalls`).
 function moduleFunctionVerdict(sym, [, module, fn], ctx, code) {
   if (!ctx.aliases) return { ok: false, text: `\`${esc(sym)}\` is not a request the page sends, and the page entry carries no \`deps\` (its \`define()\` dependencies) to check it as a module function` };
-  if (!ctx.aliases.has(module)) return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps` };
   const alias = ctx.aliases.get(module);
   // One rule for both spellings: a call of the module's own member, never `x.Module.fn(…)` / `x.contractPage.fn(…)`.
-  const via = [module, alias].filter(Boolean).find((name) => calledIn(code, `${name}.${fn}`, true));
+  const via = ctx.aliases.has(module) ? [module, alias].filter(Boolean).find((name) => calledIn(code, `${name}.${fn}`, true)) : null;
   if (via === module) return { ok: true, text: `a handler calls \`${esc(sym)}\` from module \`${esc(module)}\`` };
   if (via) return { ok: true, text: `a handler calls \`${esc(alias)}.${esc(fn)}\` (\`${esc(alias)}\` is module \`${esc(module)}\` in the page's \`define()\`)` };
-  if (!alias) {
-    return { ok: false, text: `no handler calls \`${esc(sym)}\`, and the page entry carries no \`args\` (its \`define()\` parameters) naming the module's local name — pass get-page's bundle whole` };
+  // A call reached on the way holds only where the module defines the function, or where its source is not filed and
+  // the call is all there is to read: a filed module without `fn` shows the symbol is not there.
+  const walk = walkModuleCalls(ctx, moduleCallsIn(code, ctx.aliases), (m, f, bodies) => m === module && f === fn && (bodies === undefined || bodies.length > 0));
+  if (walk.hit) return { ok: true, text: `a handler calls ${callPathText(walk.path)}` };
+  const unfiled = walk.missing.length ? `; ${unfiledModuleText(walk.missing[0])}` : "";
+  if (!ctx.aliases.has(module)) {
+    return { ok: false, text: `module \`${esc(module)}\` is not among the page's \`define()\` deps, and no function a handler reaches in the modules they import calls \`${esc(sym)}\`${unfiled}` };
   }
-  return { ok: false, text: `no handler calls \`${esc(sym)}\` or \`${esc(alias)}.${esc(fn)}\`` };
+  if (!alias) {
+    return { ok: false, text: `no handler calls \`${esc(sym)}\`, and the page entry carries no \`args\` (its \`define()\` parameters) naming the module's local name — pass get-page's bundle whole${unfiled}` };
+  }
+  return { ok: false, text: `no handler calls \`${esc(sym)}\` or \`${esc(alias)}.${esc(fn)}\`${unfiled}` };
 }
 // One `Ported as (row N): <symbol>` claim against the built page: `{ ok, text }`. A symbol counts only when it is on
 // the page AND something reaches it — a request some handler or element sends, a page function a handler calls,
