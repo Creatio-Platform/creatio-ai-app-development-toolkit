@@ -28,6 +28,11 @@ Provenance (important):
   page's `handlers` section. It is kept as built, defects included — a Post handler that ends the chain, totals and
   counts paged in the browser, bulk actions and numbering that only log a failure, a dropped recalculation result —
   and `run-mapper-quality.mjs` asserts that the code-quality lint finds each one at its line. Do not tidy it.
+- `client-modules-v3/` — **real built Freedom code** from the next benchmark run of the same `MbContract` package
+  (no customer data): the record and list pages' `handlers` sections, whose `crt.UpdateRecordRequest` handlers return
+  before calling `next` when a record opens its own page, and the return-note client module as saved before the
+  gate's repair round (a bare numeric `comparisonType`). `run-mapper-quality.mjs` asserts the chain is kept and the
+  module's finding is found at its line. Do not tidy it.
 - `module-lint-v2/` — **synthetic** client modules, reduced to what the code-quality rules read: log-only and
   comment-only catches, a bare numeric `comparisonType`, and a shared module that only another module imports.
   Names and record ids are placeholders; `run-mapper-quality.mjs` asserts the findings.

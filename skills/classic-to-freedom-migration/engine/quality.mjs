@@ -329,19 +329,23 @@ function nextParamName(handler) {
   return id?.type === "Identifier" ? id.name : null;
 }
 
-// A handler passes the request on: it takes `next`, calls `next.handle(…)` and returns what that call gives on EVERY
-// path (directly, or through a variable it assigned the call to; an arrow's expression body is what it returns; a
-// bare `return;` or running off the end returns nothing). Anything else ends the chain for the handlers after it on
-// that path; a handler meant to end it is accepted by a plan decision on the row.
+const NO_RETURN_OF_NEXT = "calls `next.handle(request)` but no `return` gives its result";
+
+// A handler passes the request on: it takes `next`, calls `next.handle(…)` and returns what that call gives (directly,
+// or through a variable it assigned the call to; an arrow's expression body is what it returns), from every `return`
+// written after the first `next.handle(…)` call, and it never runs off its end. A `return` written before that call
+// is a deliberate stop, taken before the request is handed on
+// (`if (child) { return openChild(request, child); } return next?.handle(request);`). Anything else ends the chain or
+// drops its result; a handler meant to end it is accepted by a plan decision on the row.
 function checkPassesOn(handler, request, page) {
   const fail = (why) => page.findings.push(finding(QUALITY_RULES.handlerWithoutNext, "handlers", lineOf(handler),
     `${request ? "`" + request + "`" : "a handler"} ${why}`, { request: request || null }));
   const nextName = nextParamName(handler);
   if (!nextName) return fail("takes no `next`, so the handlers after it never run");
   const own = ownNodes(handler.body);
-  if (!own.some((n) => n.type === "CallExpression" && isNextCall(n, nextName))) {
-    return fail("never calls `next.handle(request)`, so the handlers after it never run");
-  }
+  const nextCalls = own.filter((n) => n.type === "CallExpression" && isNextCall(n, nextName));
+  if (!nextCalls.length) return fail("never calls `next.handle(request)`, so the handlers after it never run");
+  const firstNextCall = Math.min(...nextCalls.map((n) => n.start));
   const fromNext = namesFromNext(own, nextName);
   // The result itself, a variable holding it, or a call chained on it (`next.handle(request).then(…)`).
   const givesNext = (value, depth = 0) => {
@@ -350,10 +354,19 @@ function checkPassesOn(handler, request, page) {
     return depth < 50 && v?.type === "CallExpression" && v.callee.type === "MemberExpression" && !v.callee.computed
       && givesNext(v.callee.object, depth + 1);
   };
-  const passesOn = handler.body.type === "BlockStatement"
-    ? endsInReturn(handler.body) && own.every((n) => n.type !== "ReturnStatement" || (n.argument && givesNext(n.argument)))
-    : givesNext(handler.body);
-  if (!passesOn) fail("calls `next.handle(request)` but does not return its result");
+  if (handler.body.type !== "BlockStatement") {
+    if (!givesNext(handler.body)) fail(NO_RETURN_OF_NEXT);
+    return;
+  }
+  const returns = own.filter((n) => n.type === "ReturnStatement");
+  const gives = (r) => Boolean(r.argument && givesNext(r.argument));
+  if (!returns.some(gives)) return fail(NO_RETURN_OF_NEXT);
+  if (returns.some((r) => r.start > firstNextCall && !gives(r))) {
+    return fail("calls `next.handle(request)` but a `return` after that call does not give its result");
+  }
+  if (!endsInReturn(handler.body)) {
+    fail("calls `next.handle(request)` but can reach its end without a `return`, which drops the result on that path");
+  }
 }
 
 // ---- writes ----
