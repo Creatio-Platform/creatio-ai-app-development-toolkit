@@ -4,6 +4,7 @@ import { runConventionsChecks } from "./run-mapper-conventions.mjs";
 import { runDetailFeaturesChecks } from "./run-mapper-detail-features.mjs";
 import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
+import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
 import { runVerifyFalseNegativeChecks, runCaptionKeyChecks } from "./run-mapper-verify-false-negatives.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -10757,6 +10758,7 @@ runConventionsChecks({ check, runMigration, runMigrate, renderVerify, checklistO
 runDetailFeaturesChecks({ check, runMigration, CLEAN_SEED, FULL_SIGNALS, docPlanMeta });
 runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
+runModuleDepChecks({ check, verifyCtx, resolveVk, FIX });
 
 /* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
@@ -15894,16 +15896,16 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   };
   const modProblems = (r) => r.problems.filter((p) => /^reads\/modules/.test(p.file));
   const filled = compose({ "UsrApp_FormPageModule.js": "define(\"UsrApp_FormPageModule\", [], function() { return {}; });", "notes.txt": "x" });
-  check("compose: every `<Module>.js` in the folder lands in `built.modules` as source text; a file named otherwise is a problem",
+  check("compose: every `<Module>.js` in the folder lands in `built.modules` as source text; a file named otherwise is not read",
     () => Object.keys(filled.built.modules).join() === "UsrApp_FormPageModule" && /define/.test(filled.built.modules.UsrApp_FormPageModule)
-      && modProblems(filled).some((p) => /notes\.txt/.test(p.file)),
+      && modProblems(filled).length === 0,
     () => filled);
   const empty = compose({});
   check("compose: an EMPTY folder is no problem, and `built.modules` is an empty map",
     () => modProblems(empty).length === 0 && Object.keys(empty.built.modules).length === 0, () => empty);
   const odd = compose({ "Folder.js": null, "__proto__.js": "x" });
-  check("compose: a folder named like a module and a prototype name are reported, never read or crashed on",
-    () => modProblems(odd).some((p) => /Folder\.js/.test(p.file) && /not a file/.test(p.why)) && modProblems(odd).some((p) => /__proto__/.test(p.file))
+  check("compose: a folder named like a module is reported and a prototype name is skipped, never read or crashed on",
+    () => modProblems(odd).some((p) => /Folder\.js/.test(p.file) && /not a file/.test(p.why)) && !modProblems(odd).some((p) => /__proto__/.test(p.file))
       && Object.keys(odd.built.modules).length === 0, () => odd);
   const missing = compose(null);
   check("compose: a MISSING folder leaves `built.modules` absent — the code rows then name each import as not filed",

@@ -1,0 +1,133 @@
+{
+ "pages": {
+  "main": {
+   "bundle": "bundle-main.json",
+   "handlers": [
+    {
+     "method": "onDetailChanged",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.isItemsChangeReload",
+      "UsrMbContractsV2App_FormPageModule.recalculateAmount"
+     ]
+    },
+    {
+     "method": "mbRecalculateAmount",
+     "parent": "onDetailChanged",
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.recalculateAmount"
+     ]
+    },
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.isAddMode",
+      "UsrMbContractsV2App_FormPageModule.setDraftStatus",
+      "UsrMbContractsV2App_FormPageModule.refreshCanEditFields"
+     ]
+    },
+    {
+     "method": "mbAssignNumber",
+     "parent": "onEntityInitialized",
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.assignNextContractNumber"
+     ]
+    },
+    {
+     "method": "mbIsStartApprovalEnabled",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.refreshStartApprovalEnabled"
+     ]
+    },
+    {
+     "method": "mbStartApproval",
+     "parent": null,
+     "portedAs": [
+      "mb.MbStartApprovalButtonClicked",
+      "UsrMbContractsV2App_FormPageModule.startApproval"
+     ]
+    },
+    {
+     "method": "mbOnStatusChanged",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.updateCanEditFields"
+     ]
+    },
+    {
+     "method": "mbUpdateCanEditFields",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_FormPageModule.refreshCanEditFields",
+      "UsrMbContractsV2App_FormPageModule.updateCanEditFields"
+     ]
+    }
+   ],
+   "cardActions": [
+    {
+     "label": "Card action — RunProcess",
+     "request": "crt.RunBusinessProcessRequest"
+    }
+   ]
+  },
+  "list": {
+   "bundle": "bundle-list.json",
+   "handlers": [
+    {
+     "method": "mbCloseSelected",
+     "parent": null,
+     "portedAs": [
+      "mb.CloseSelectedClicked",
+      "UsrMbContractsV2App_ListPageModule.closeSelectedContracts"
+     ]
+    }
+   ]
+  },
+  "child:MbContractItem": {
+   "bundle": "bundle-child-mbcontractitem.json",
+   "handlers": [
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_MbContractItemMiniPageModule.setNewItemActive"
+     ]
+    },
+    {
+     "method": "mbCalculateTotal",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2App_MbContractItemMiniPageModule.recalculateTotal",
+      "UsrMbContractsV2App_MbContractItemMiniPageModule.markPageReady"
+     ]
+    }
+   ]
+  },
+  "child:MbDeliveryNote": {
+   "bundle": "bundle-child-mbdeliverynote.json",
+   "handlers": [
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2DocumentTotals.setNewDocumentDate"
+     ]
+    }
+   ]
+  },
+  "child:MbReturnNote": {
+   "bundle": "bundle-child-mbreturnnote.json",
+   "handlers": [
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV2DocumentTotals.setNewDocumentDate"
+     ]
+    }
+   ]
+  }
+ }
+}

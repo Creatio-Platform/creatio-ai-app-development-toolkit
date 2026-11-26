@@ -54,7 +54,8 @@ const metaPage = (j) => (j && typeof j === "object" && j.page && typeof j.page =
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 const META_FIELDS = ["schemaName", "schemaUId", "packageName", "packageUId", "parentSchemaName"];
-const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources", "deps", "validators", "converters"];
+// `args` beside `deps`: the local name each dependency goes by, which a handler's `contractPage.fn(…)` call is read through.
+const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources", "deps", "args", "validators", "converters"];
 
 // The entity the page's PRIMARY data source is bound to, for `--verify`'s entity row. `modelConfig` names the
 // primary source; that source's config names the entity. Derived rather than asked of the agent — "read two
@@ -361,18 +362,26 @@ function mergeSideFiles(dir, built, acc, problems) {
   if (modules) built.modules = modules;
 }
 
-// `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. An entry that is not a
-// `<Module>.js` file is reported, never read: the module it should hold then reads as not filed.
+// `{ moduleName: source }` from `reads/modules/*.js`, or null when the folder is absent. A file whose name is not a
+// module name is not read; a folder named like a module, or a folder or file that cannot be read, is a problem, never
+// a crash.
 function readModuleSources(dir, problems) {
+  const rel = path.posix.join(READS_DIR, MODULES_DIR);
   const root = path.join(dir, READS_DIR, MODULES_DIR);
   if (!fs.existsSync(root)) return null;
+  let entries;
+  try { entries = fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); }
+  catch (e) { problems.push({ file: rel, what: "the client module sources", why: `not readable as a folder (${e.message})` }); return null; }
   const modules = Object.create(null);
-  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const entry of entries) {
     const name = moduleNameOf(entry.name);
-    const problem = !entry.isFile() ? "is not a file — copy each module's `body.js` in as one `<Module>.js` file"
-      : (!name && "is not named `<Module>.js` — name it after the module's schema");
-    if (problem) { problems.push({ file: path.posix.join(READS_DIR, MODULES_DIR, entry.name), what: "a client module file", why: problem }); continue; }
-    modules[name] = fs.readFileSync(path.join(root, entry.name), "utf8");
+    if (!name) continue;
+    if (!entry.isFile()) {
+      problems.push({ file: `${rel}/${entry.name}`, what: "a client module file", why: "is not a file — copy each module's `body.js` in as one `<Module>.js` file" });
+      continue;
+    }
+    try { modules[name] = fs.readFileSync(path.join(root, entry.name), "utf8"); }
+    catch (e) { problems.push({ file: `${rel}/${entry.name}`, what: `module \`${name}\``, why: `not readable (${e.message})` }); }
   }
   return modules;
 }
@@ -441,6 +450,7 @@ export function assembleBuilt(dir, expect = null) {
   if (claims) built.decisionClaims = claims;
   return { built, problems };
 }
+
 
 // Writes the composed payload beside the run — never a temp dir, which cannot be re-checked once the session
 // ends.

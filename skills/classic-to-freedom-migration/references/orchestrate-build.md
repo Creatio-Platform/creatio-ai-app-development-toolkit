@@ -640,6 +640,15 @@ user approved and run the stand check yourself — both act on the user's proces
 what `describe-business-process` returns for each re-pointed step and the outcome of every button you pressed into
 `<migration-folder>/process.json`, as `./process-page.md` → *Verify* shows. Without it the process rows stay open.
 
+**A page that imports a custom client module** (its `define()` deps name a module the build created, such as
+`UsrX_FormPageModule`): the read-back files its source as `reads/modules/<module>.js` (see *The read plan first*), and
+`--verify --from` reads that folder as `built.modules`. Besides the code rows, a module's source is followed for a
+request a page handler hands to the module (a Run-process card action whose button's handler calls
+`contractPage.startApproval(…)`, which sends `crt.RunBusinessProcessRequest`): only the module functions the handler
+calls, and the module's own functions they call, count. Without the file, that row stays open and names the file
+to add. A `Ported as` record that names a module function needs no module file: the page's `deps` and `args` are
+enough.
+
 **A folder of `done` task files is not a completion report — and neither is the machine table
 alone.** The task statuses are how the step-7 orchestrator schedules work and how a killed session
 resumes; they are recorded by the sub-agents that did the work, so a run closed on them alone would
@@ -783,8 +792,9 @@ card-actions row are machine-checked (a handler is matched by the build agent's 
 symbol when it wrote one — a request the page sends, a function a handler calls — else by a CALL of
 the method name or of the caller it was folded under, or a branch on its Classic trigger attribute;
 a function that only carries the Classic name and is never called matches nothing. A `Module.function`
-symbol is checked against the page entry's optional `"deps"`: the `define()` dependency list of the
-page's `body.js`; a tab by the plan's caption words
+symbol is checked against the page entry's optional `"deps"` and `"args"` (get-page's `bundle.deps` and
+`bundle.args`: the page's `define()` dependencies and the names its factory gives them), and is reached by a call
+of `Module.function` or of `<the module's name in args>.function`; a tab by the plan's caption words
 against the built tab's caption/name — resolved through `bundle.resources` when the entry carries
 them — or, when no caption matches, by holding exactly the fields the plan puts on that tab and no
 other field — among containers whose type or name contains `Tab`, a `crt.TabContainer` or a direct
