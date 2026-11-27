@@ -6307,6 +6307,11 @@ function resolvePremiseVk(vk, ctx) {
   }
   return ["⚠ verify", `no judge ruling under \`${esc(vk.id)}\` — a judge reads ${esc(vk.source)} and rules whether the statement holds`, "unverified", "verifier"];
 }
+const isPremiseRow = (r) => r.vk?.type === "premise";
+// The record id a row publishes — an evidence row's or a premise's — or null.
+const publishedRecordId = (r) => ((r.vk?.type === "evidence" || isPremiseRow(r)) && r.vk.id) || null;
+// A task's recorded decision closes plan rows; a premise is no plan row and closes only on the judge's ruling.
+const closedByTaskDecision = (r, page, decidedKeys) => !isPremiseRow(r) && !!decidedKeys?.has(verifyRowKey(page, r.label));
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null, opts.createdPackage || null);
@@ -6342,14 +6347,13 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
       // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
       // evidence id is one the run publishes, and an evidence record under it is not an orphan.
-      const premise = r.vk?.type === "premise";
-      if ((r.vk?.type === "evidence" || premise) && r.vk.id) derivedEvidenceIds.add(r.vk.id);
-      // a task's recorded decision closes plan rows; a premise is no plan row and closes only on the judge's ruling
-      if (!premise && decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
+      const evidenceId = publishedRecordId(r);
+      if (evidenceId) derivedEvidenceIds.add(evidenceId);
+      if (closedByTaskDecision(r, rowPage, decidedKeys)) {
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;
       }
-      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, premise ? premiseTally : tally, ++n);
+      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, isPremiseRow(r) ? premiseTally : tally, ++n);
       rows.push(row);
       L.push(tableLine);
     }

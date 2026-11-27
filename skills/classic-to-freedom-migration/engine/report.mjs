@@ -861,7 +861,7 @@ function gateReasons(result, gates) {
 // drop as its label (`Dropped:`, `Not ported here …`) or names Classic — "dropped the stale import" is not one.
 export const CHECKED_MARKER = notesMarker("Checked");
 const DROP_WORDS = /\b(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
-const DROP_LABEL = /^[\s*>+-]*\**\s{0,3}(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
+const DROP_LABEL = /^[\s*>+-]*(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
 const NEGATED_DROP =/\b(?:nothing|none|no)\b[^.;:]{0,40}\b(?:dropped|not ported|won'?t[\s-]do)\b/i;
 // "no Freedom (list) equivalent" and "Freedom has no …": two small patterns, either one is the claim
 const NO_FREEDOM_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b/i;
