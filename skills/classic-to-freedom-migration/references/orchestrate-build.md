@@ -592,7 +592,10 @@ its own verdict, so:
   record does not claim itself. `findings` carries no such demand: a pass that fixed what it found
   owes nobody a decision. A pass that found nothing leaves both lists empty.
 - **The judge** is a THIRD context, handed `./references/judge-brief.md`: it rules on each
-  `evidence[<id>]` record and must be able to say no.
+  `evidence[<id>]` record and must be able to say no. It also rules on every `premise:D<N>` row the
+  verify table lists under **Decision premises** — a question that told the user a Classic fact —
+  against the `Classic source:` the entry cites. No task carries those ids: hand them to the judge
+  yourself, and ask a question again when its premise is ruled false.
 
 Neither is a build task and neither writes to the stand. Run them once every task is closed or
 parked, then step 8.

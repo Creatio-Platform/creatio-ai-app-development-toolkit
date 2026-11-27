@@ -28,7 +28,7 @@ import { LIST_GRID, LIST_FILTER_TYPE, SECRET_TYPE_LABELS, FEATURE_UNAVAILABLE, w
 import { conventionsPlanLines, bundleCustomNames, foreignNames, prefixesOf, NAME_KINDS, moduleAliases, handlerEntriesByRequest, moduleShape, MODULE_SCHEMA_NAME } from "./conventions.mjs";
 import { QUALITY_ROW_RULES, QUALITY_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES, runQualityOf, qualityRunKey, runModuleLint } from "./quality.mjs";
 import { render as renderDiagnosticsBlock, normalize as normalizeDiagnostics } from "./diagnostics.mjs"; // the `### Run diagnostics` block, one format for chat, worklog and plan
-import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision } from "./directives.mjs";
+import { DIRECTIVE_REQUIRES, DIRECTIVE_FILED, DIRECTIVE_JUDGED, directiveRowId, directiveCovers, RUN_SCOPE, userDecision, premiseId } from "./directives.mjs";
 import { isFiledGateRow } from "./split.mjs";
 import { processPagePlanLines, processPageRows, PROCESS_VK_RESOLVERS } from "./process-page.mjs";
 import { launchedProcessesPlanLines, launchedProcessesRows, launchedProcessNames, LAUNCHED_VK_RESOLVERS } from "./launched-processes.mjs";
@@ -1190,11 +1190,43 @@ function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
 // The kind of a summaries question; a directive that answers it removes it and records itself on the surface.
 export const SUMMARIES_KIND = "detail-summaries";
 const MENU_ITEM_FREEDOM = "hide it on the Freedom list's menu";
-function detailMenuRows(name, menu) {
+// THE DETAIL FEATURES ONLY A PERSON CAN SETTLE. A row colour, a per-row lock, an extra tools-menu item (bulk edit
+// among them) and a conditional multi-select have no one Freedom setting the engine can name, so each is a ⚠ Confirm
+// item of its own (`detail-feature`): its checklist row lands in a build task, and it closes only by being built or
+// by a person's recorded decision. A builder never drops one on the claim that Freedom has no equivalent.
+// `feature` is the Feature cell of its plan row; the item is `<detail> · <feature>`, the detail named like every other
+// related-list question.
+export const DETAIL_FEATURE_KIND = "detail-feature";
+const detailQuestionLabel = (d) => {
+  const base = d.caption || d.detailSchema || d.entity || "detail";
+  return d.caption && d.entity ? `${base} · ${d.entity}` : base;
+};
+export const detailFeatureItem = (d, feature) => `${detailQuestionLabel(d)} · ${feature}`;
+const CHECK_FIRST = "check the Freedom list's settings first (`get-component-info` on the list component) and name what was checked";
+export function detailFeatureQuestions(d) {
+  const f = d.features;
+  if (!f) return [];
+  const label = detailQuestionLabel(d);
+  const out = (f.toolsMenu?.added || []).map((item) => ({ feature: `Tools menu: + ${item}`,
+    reason: `Detail '${label}' offers the tools-menu item '${item}' in Classic. Decide: build it as a custom list action, or Won't do — ${CHECK_FIRST}` }));
+  if (f.multiSelect === "conditional") out.push({ feature: "Multi-select",
+    reason: `Detail '${label}' turns multi-select on or off by a condition in Classic (\`isMultiSelectVisible\` overridden). Decide: carry the condition as Freedom state, or Won't do` });
+  if (f.rowStyling) out.push({ feature: "Row styling",
+    reason: `Detail '${label}' colours rows by their data in Classic (\`prepareResponseCollectionItem\` sets \`customStyle\`). Decide: build a conditional row style, or Won't do — ${CHECK_FIRST}` });
+  if (f.rowLock?.length) out.push({ feature: "Row lock",
+    reason: `Detail '${label}' enables or disables ${f.rowLock.join(", ")} row by row in Classic, from each row's data. Decide: build the same per-row lock on the Freedom list, or Won't do — ${CHECK_FIRST}` });
+  return out;
+}
+// The Freedom cell of a plan row that waits on its ⚠ Confirm item; an unplaced detail's questions wait for the
+// approval to build it, so its rows name no item yet.
+const awaitsDecision = (d, feature, what) => (d.unplaced
+  ? `⚠ ${what} — decided once the detail is approved`
+  : `⚠ ${what} — decide in ⚠ Confirm \`[${DETAIL_FEATURE_KIND}] ${esc(detailFeatureItem(d, feature))}\``);
+function detailMenuRows(name, menu, d) {
   const rows = [];
   for (const item of menu.removed) rows.push([name, `Tools menu: ${esc(item)}`, "removed (its getter returns nothing)", MENU_ITEM_FREEDOM]);
   for (const item of menu.hidden) rows.push([name, `Tools menu: ${esc(item)}`, "hidden (its visibility member returns `false`)", MENU_ITEM_FREEDOM]);
-  for (const item of menu.added) rows.push([name, `Tools menu: + ${esc(item)}`, "added by the detail", "⚠ build as a custom list action, or Won't do"]);
+  for (const item of menu.added) rows.push([name, `Tools menu: + ${esc(item)}`, "added by the detail", awaitsDecision(d, `Tools menu: + ${item}`, "build as a custom list action, or Won't do")]);
   if (menu.unreadable) rows.push([name, "Tools menu", "`addToolsButtonMenuItems` overridden in a form the engine cannot read", "⚠ read that Classic member and build the same menu"]);
   if (!rows.length) rows.push([name, "Tools menu", "standard (`BaseGridDetailV2`)", "kept — the Freedom list's standard menu"]);
   return rows;
@@ -1216,10 +1248,11 @@ export function detailFeatureRows(cs) {
     const name = detailName(d);
     const f = d.features;
     if (!f) { rows.push([name, "—", "detail schema not bundled — what users can do with it is unknown", "⚠ bundle the detail schema (`manifest.detailSchemas`)"]); continue; }
-    rows.push(...detailMenuRows(name, f.toolsMenu), ...f.quickFilters.map((q) => detailFilterRow(name, q)));
+    rows.push(...detailMenuRows(name, f.toolsMenu, d), ...f.quickFilters.map((q) => detailFilterRow(name, q)));
     if (f.multiSelect === "off") rows.push([name, "Multi-select", "switched off (`isMultiSelectVisible`)", "build the list without multi-select"]);
-    if (f.multiSelect === "conditional") rows.push([name, "Multi-select", "conditional (`isMultiSelectVisible` overridden)", "⚠ carry the condition as Freedom state"]);
-    if (f.rowStyling) rows.push([name, "Row styling", "`prepareResponseCollectionItem` sets `customStyle`", "⚠ no declarative analog — decide: a conditional row style, or Won't do"]);
+    if (f.multiSelect === "conditional") rows.push([name, "Multi-select", "conditional (`isMultiSelectVisible` overridden)", awaitsDecision(d, "Multi-select", "carry the condition as Freedom state, or Won't do")]);
+    if (f.rowStyling) rows.push([name, "Row styling", "`prepareResponseCollectionItem` sets `customStyle`", awaitsDecision(d, "Row styling", "a conditional row style, or Won't do")]);
+    if (f.rowLock?.length) rows.push([name, "Row lock", `enabled row by row: ${f.rowLock.join(", ")}`, awaitsDecision(d, "Row lock", "the same per-row lock on the Freedom list, or Won't do")]);
     if (f.summaries) rows.push([name, "Summaries", "summary module", summariesTarget(f.summariesDirective)]);
     rows.push(...detailRowSettingRows(name, d));
   }
@@ -5037,7 +5070,21 @@ function detailFeatureCheckRows(cs) {
   if (sorted.length) rows.push({ deliverableId: "detail-sort", label: `Related lists keep Classic's row order in \`sortingConfig.default\`: ${sorted.map(sortedListItem).join(", ")}`, vk: { type: "listsort", n: sorted.length, lists: sorted } });
   const readOnly = (cs.viewConfigDiff || []).filter((o) => isField(o) && o.values?.readOnlyStatic).map((o) => o.name);
   if (readOnly.length) rows.push({ deliverableId: "fields-readonly-static", label: `Fields read-only in Classic built read-only × ${readOnly.length}`, vk: { type: "readonly", n: readOnly.length, names: readOnly } });
-  return rows;
+  return [...rows, ...unroutedDetailFeatureRows(cs)];
+}
+// A plan row that asks for a decision must reach a builder or a person: its ⚠ Confirm item is what becomes a task
+// row, and what a recorded decision closes. A ⚠ decide row whose item is missing from the page's questions would
+// leave the feature with no task row and no decision, so it is a row of its own that `--verify` never passes.
+function unroutedDetailFeatureRows(cs) {
+  const asked = new Set((cs.needsDecision || []).filter((n) => n.kind === DETAIL_FEATURE_KIND).map((n) => n.item));
+  return (cs.details || []).filter((d) => !d.unplaced).flatMap((d) => detailFeatureQuestions(d)
+    .map((q) => detailFeatureItem(d, q.feature)).filter((item) => !asked.has(item))
+    .map((item) => ({ deliverableId: `unrouted:${DETAIL_FEATURE_KIND}:${item}`, label: `Plan row \`${esc(item)}\` asks for a decision but has no ⚠ Confirm item`,
+      vk: { type: "unrouted", item } })));
+}
+// An unrouted plan row is never built and never decided, so nothing on a built page closes it.
+function resolveUnroutedVk(vk) {
+  return ["❌ MISSING", `the plan row \`${esc(vk.item)}\` was left without a task row or a recorded decision — re-run the plan so it reaches ⚠ Confirm, then build it or record the person's decision`, "missing"];
 }
 // A field Classic made read-only must be read-only on the built page. A field that is absent is the Fields row's
 // failure, not this one's, so it reads unverified here.
@@ -5708,6 +5755,7 @@ const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCou
 const VK_BY_TYPE = new Map([["detailfilter", (vk, ctx) => resolveQuickFilterVk(vk, ctx, "detail")], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk], ["rowlinks", resolveRowLinksVk], ["listsort", resolveListSortVk],
   ["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk],
+  ["unrouted", resolveUnroutedVk], ["premise", resolvePremiseVk],
   ...[...PROCESS_VK_RESOLVERS, ...LAUNCHED_VK_RESOLVERS].map(([t, fn]) => [t, (vk, ctx) => fn(vk, ctx, { absentEntry, esc })])]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
@@ -6224,6 +6272,27 @@ function withPortedAs(r, page, portedAs) {
   const syms = r.vk?.type === "handler" ? portedAs?.get(verifyRowKey(page, r.label)) : null;
   return syms?.length ? { ...r, vk: { ...r.vk, portedAs: syms } } : r;
 }
+// DECISION PREMISES (see `premisesOf`). Each question that told the user a fact about the Classic page is held to a
+// judge's ruling on that fact, read against the Classic source the entry cites. The rows are the run's, not a page's:
+// no build task owns them, so they are checked here and never cut into the task folder.
+function premiseGroups(result, opts) {
+  const rows = (result.premises || []).map((p) => ({ deliverableId: premiseId(p.id),
+    label: `Decision \`${esc(p.id)}\` — the question stated a Classic fact: “${esc(p.asked)}”. Classic source: ${p.source ? esc(p.source) : "none cited"}`,
+    vk: { type: "premise", id: premiseId(p.id), decision: p.id, source: p.source } }));
+  return rows.length ? [pageGroup("main", "Decision premises", rows, opts)] : [];
+}
+// A premise closes only on a judge's ruling that the Classic source bears the statement out. A false premise is a
+// MISSING row: the answer rests on a fact that does not hold, so the question is asked again with the fact corrected.
+function resolvePremiseVk(vk, ctx) {
+  if (!vk.source) return ["❌ MISSING", `\`${esc(vk.decision)}\` states a Classic fact but cites no \`Classic source:\` — add the Classic read it comes from`, "missing"];
+  const verdict = ctx.root?.judge?.[vk.id];
+  const why = verdict?.why ? ` — ${esc(String(verdict.why))}` : "";
+  if (verdict?.convincing === true) return ["✅ Done", `the judge checked the statement against ${esc(vk.source)} and found it true${why}`, "ok"];
+  if (verdict?.convincing === false) {
+    return ["❌ MISSING", `the judge found the statement FALSE against ${esc(vk.source)}${why} — ask \`${esc(vk.decision)}\` again with the Classic fact corrected, and record the new answer`, "missing"];
+  }
+  return ["⚠ verify", `no judge ruling under \`${esc(vk.id)}\` — a judge reads ${esc(vk.source)} and rules whether the statement holds`, "unverified", "verifier"];
+}
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null, opts.createdPackage || null);
@@ -6233,7 +6302,8 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const planGroups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
-  const groups = [...planGroups, ...codeQualityGroups(planGroups, opts, root)];
+  const premises = !opts.scopePageKey || opts.scopePageKey === "main" ? premiseGroups(result, opts) : [];
+  const groups = [...planGroups, ...codeQualityGroups(planGroups, opts, root), ...premises];
   const L = []; let n = 0;
   // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
@@ -6254,7 +6324,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
       // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
       // evidence id is one the run publishes, and an evidence record under it is not an orphan.
-      if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
+      if ((r.vk?.type === "evidence" || r.vk?.type === "premise") && r.vk.id) derivedEvidenceIds.add(r.vk.id);
       if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;

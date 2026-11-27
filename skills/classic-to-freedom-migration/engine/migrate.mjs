@@ -66,8 +66,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
+  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, DETAIL_FEATURE_KIND, detailFeatureItem, detailFeatureQuestions } from "./designspec.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes, premisesOf } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
@@ -1514,6 +1514,7 @@ export function attachDetailFeatureDecisions(changeSet) {
         reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. \`crt.QuickFilter\` does the same: the platform saves its value per user in the page's schema profile (\`get-component-info crt.QuickFilter\`), so the built filter keeps it with no code. Recommended: keep (platform default) — nothing to build. Only "reset on every visit" needs code, which clears the value the platform saved` });
     }
     if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
+    for (const q of detailFeatureQuestions(d)) changeSet.needsDecision.push({ kind: DETAIL_FEATURE_KIND, item: detailFeatureItem(d, q.feature), reason: q.reason });
   }
   const bar = pageSummaryBar(changeSet.viewConfigDiff);
   changeSet.summaryBar = bar;
@@ -2337,10 +2338,28 @@ function toolsMenuDeviations(body, spans) {
   const override = lastMemberCode(body, "addToolsButtonMenuItems", spans);
   const added = override ? [...new Set([...override.code.matchAll(/\bthis\.(get\w{1,60}MenuItem)\s{0,5}\(/g)].map((m) => m[1]))]
     .filter((g) => !STANDARD_MENU_GETTERS.has(g)) : [];
-  // Group editing ("Edit selected records") comes from a mixin, not from a getter: its presence adds the item. The
-  // mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so the raw text is read.
-  if (/\bRecordsGroupEditing\b/.test(body)) added.push("Edit selected records");
+  // Group editing ("Edit selected records") comes from a mixin, or from code that rebuilds the item around the
+  // platform's `editSelectedRecords` action (a member named after it, such as `reAddEditSelectedRecordsMenuItem`,
+  // counts too): either one adds the item. The mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so
+  // the raw text is read.
+  if (/\b(?:RecordsGroupEditing|\w{0,40}[eE]ditSelectedRecords\w{0,40})\b/.test(body) && !added.includes(BULK_EDIT_ITEM)) added.push(BULK_EDIT_ITEM);
   return { removed, hidden, added, unreadable: override === null };
+}
+// The tools-menu item that edits every selected row at once.
+export const BULK_EDIT_ITEM = "Edit selected records";
+
+// PER-ROW LOCKS: the row actions a detail enables or disables row by row, from the row's own data (an order status, a
+// right). A row-action getter overridden to bind its `Enabled` is one; so is an `onActiveRowChange` override that sets
+// state when the user moves to another row. A getter switched off removes the action for every row: that is the
+// `Row actions` row, not a lock. The members found, in a stable order; empty when the detail locks no row.
+const ACTIVE_ROW_HOOK = "onActiveRowChange";
+const SETS_STATE = /\bthis\.(?:set\s{0,5}\(|\$\w{1,80}\s{0,5}=(?!=))/;
+function rowLockMembers(body, spans) {
+  const locked = ROW_ACTION_GETTERS
+    .filter(([, g]) => !switchedOff(body, g, spans) && /\bEnabled\b/.test(lastMemberCode(body, g, spans)?.code || ""))
+    .map(([action, g]) => `${action} (\`${g}\`)`);
+  if (SETS_STATE.test(lastMemberCode(body, ACTIVE_ROW_HOOK, spans)?.code || "")) locked.push(`the active row (\`${ACTIVE_ROW_HOOK}\`)`);
+  return locked;
 }
 
 // Multi-select as the detail declares it: `off` when `isMultiSelectVisible` is switched off, `conditional` for any
@@ -2524,6 +2543,7 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
     multiSelect: multiSelectMode(text, spans),
     rowStyling: !!styling && /\bcustomStyle\b/.test(styling.code),
+    rowLock: rowLockMembers(text, spans),
     summaries,
   };
 }
@@ -3680,6 +3700,8 @@ export function runMigration(manifest, opts = {}) {
   // them: a directive changes what the plan builds.
   const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
   out.directives = directivesOf(decisionRecords);
+  // The questions that state a Classic fact: `--verify` holds each to a judge's ruling on its premise.
+  out.premises = premisesOf(decisionRecords);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds, out.directives);
   out.translationsMissing = translationsMissing(manifest);
