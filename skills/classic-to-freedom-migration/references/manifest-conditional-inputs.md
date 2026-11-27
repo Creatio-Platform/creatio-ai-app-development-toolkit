@@ -186,6 +186,29 @@ schema order (F1), a lower or same-layer one means the base element is missing f
 A `remove` that carries `properties` is not this case: it patches an element, so on a name nothing in
 the supplied chain defines it stays `correctness` and blocks.
 
+## Related-list behaviour — what `detailSchemas` bodies must carry
+
+Classic replacing schemas are read PER-LAYER (not merged like Freedom's full hierarchy), and behaviour that
+governs the related list — **read-only** (`getAddRecordButtonVisible: return false`, the system-maintained
+stage-history pattern), a disabled or custom add, fixed list filters — is often declared in a BASE layer while the
+customer's top override only tweaks columns. A top-only `body` misses it, and the detail is wrongly shown as
+add/edit/delete; so supply the whole chain as `bodies`.
+
+The same scan finds what users do with each row, and makes each a *Detail features* plan row and a ⚠ Confirm
+question (`detail-feature`) that a build task owns until it is built or a person decides it:
+
+- **row colour** — `prepareResponseCollectionItem` sets `customStyle` (*Row styling*);
+- **per-row lock** — a row-action getter (`getCopyRecordMenuItem`, `getEditRecordMenuItem`,
+  `getDeleteRecordMenuItem`) that binds `Enabled` to the row's data rather than to the selection, or an
+  `onActiveRowChange` that sets state (*Row lock*);
+- **bulk edit** — the `RecordsGroupEditing` mixin, or code built around `editSelectedRecords`
+  (*Tools menu: + Edit selected records*).
+
+When that behaviour lives in a mixin the detail mixes in (an order-status mixin that re-adds "Edit selected
+records"), add the mixin's body to `bodies` too. A related list you analyse by hand instead (a main-page detail
+with no bundled schema) owes the same rows in the plan's *Adjustments*, each asked with `AskUserQuestion`, never
+left to a builder to drop.
+
 ## Texts — the page and its details carry localizable strings
 
 - **`resourceStrings` (page) and `detailSchemas.<Detail>.resourceStrings`** — the same strings as

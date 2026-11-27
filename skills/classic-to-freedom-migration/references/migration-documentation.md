@@ -299,6 +299,14 @@ without them is a plain decision and reads exactly as before.
   builder.
 - **`Kind: answer`** — the user's reply to a question you asked, an answer outside the offered options
   included. It needs `Quote:` and `Asked:`.
+- **`Classic source:`** — the Classic read a question's statement about the Classic page comes from (the
+  `reads/` file, the schema member, the `customizations-*` section). A question that tells the user what Classic
+  does (*"these fields are not on the card, in Classic either"*) steers the answer, and a false one closes a
+  feature the user still had. So read the fact in the source BEFORE you ask, and record the line on the entry:
+  an `Asked:` that mentions Classic without it makes the plan and `--verify` incomplete. `--verify` lists each
+  such question under **Decision premises** (`premise:D<N>`) and closes it only on a judge's ruling that the
+  source bears the statement out (`./references/judge-brief.md`); a premise ruled false is asked again with the
+  fact corrected.
 - **`Decided by: user`** always needs `Quote:` — the user's words, not your summary of them. A choice the user
   did not state in words is yours: record it `Decided by: orchestrator`. Never fold your own addition into the
   user's entry; it is a new question before the build, or its own orchestrator entry.

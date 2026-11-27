@@ -850,6 +850,59 @@ function gateReasons(result, gates) {
 // engine writes that outcome only from `r.na`. One with rows the plan did NOT mark that way is a person's
 // decision written as a plan fact, so it has to cite a recorded decision and must not leave plan rows
 // unaccounted while the run reads COMPLETE.
+// A CLASSIC FEATURE A BUILDER DROPPED ON ITS OWN SAY-SO. Only a person drops a feature, through a recorded `D<N>`;
+// a builder leaves the row `not-built — needs-decision`. So a `## Notes` entry that drops one (`Dropped:`, `won't do`,
+// `not ported`) is an unanswered question the result must not pass over, unless it cites a decision ABOUT that
+// feature: one that resolves and whose title shares a word with the entry — citing an unrelated `D<N>` authorises
+// nothing. A claim that Freedom has no equivalent is the same unless the entry names its row and that row has a
+// `Checked (row N)` line saying what was checked. An entry is a bullet with the lines wrapped under it. The question
+// and check entries themselves are not drops (a question names its options), and neither is a negated one
+// ("nothing was dropped"). A drop word counts only in an entry about the plan: one that names a row, opens with the
+// drop as its label (`Dropped:`, `Not ported here …`) or names Classic — "dropped the stale import" is not one.
+export const CHECKED_MARKER = notesMarker("Checked");
+const DROP_WORDS = /\b(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
+const DROP_LABEL = /^[\s*>+-]*(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
+const NEGATED_DROP =/\b(?:nothing|none|no)\b[^.;:]{0,40}\b(?:dropped|not ported|won'?t[\s-]do)\b/i;
+// "no Freedom (list) equivalent" and "Freedom has no …": two small patterns, either one is the claim
+const NO_FREEDOM_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b/i;
+const FREEDOM_HAS_NO = /\bfreedom\s(?:has|offers|provides)\sno\b/i;
+const NO_EQUIVALENT = { test: (s) => NO_FREEDOM_EQUIVALENT.test(s) || FREEDOM_HAS_NO.test(s) };
+const ROW_REF = /\brow\s(\d+)\b/i;
+// A wrapped line is indented and opens no bullet, numbered item, quote or heading of its own.
+const CONTINUATION = /^\s+(?![-*+>#]|\d+[.)]\s)\S/;
+function noteEntries(notes) {
+  const entries = [];
+  for (const raw of String(notes || "").split(/\r?\n/)) {
+    if (CONTINUATION.test(raw) && entries.length) entries[entries.length - 1] += " " + raw.trim();
+    else if (raw.trim()) entries.push(raw.trim());
+  }
+  return entries;
+}
+const TERM = /[\p{L}\d]{4,}/gu;
+const terms = (s) => new Set(String(s || "").toLowerCase().match(TERM) || []);
+const coversEntry = (entry, decision) => { const t = terms(entry); return [...terms(decision.title)].some((w) => t.has(w)); };
+function unauthorisedDrops(task, decisions) {
+  let checked = null;
+  const isChecked = (row) => {
+    if (!row) return false;
+    checked ??= notesMarkers(task.notes, CHECKED_MARKER);
+    return checked.has(Number(row[1]));
+  };
+  const out = [];
+  for (const entry of noteEntries(task.notes)) {
+    if (DECISION_MARKER.test(entry) || CHECKED_MARKER.test(entry)) continue;
+    const aboutPlan = ROW_REF.test(entry) || DROP_LABEL.test(entry) || /\bclassic\b/i.test(entry);
+    const dropped = (DROP_WORDS.test(entry) && !NEGATED_DROP.test(entry) && aboutPlan) || (NO_EQUIVALENT.test(entry) && !isChecked(ROW_REF.exec(entry)));
+    if (dropped && !decisionRefs(entry, decisions).resolved.some((d) => coversEntry(entry, d))) out.push(entry);
+  }
+  return out;
+}
+export function builderDropReasons(tasks, decisions) {
+  const found = tasks.flatMap((t) => unauthorisedDrops(t, decisions).map((line) => `${esc(t.file)}: “${brief(line, 160)}”`));
+  if (!found.length) return [];
+  return [`${plural(found.length, "note line")} where a builder dropped a Classic feature, or said Freedom has no equivalent,`
+    + ` with no recorded decision and no \`Checked (row N)\` line — leave the row \`not-built — needs-decision\` and ask the person: ${found.slice(0, 4).join(" · ")}${found.length > 4 ? " · …" : ""}`];
+}
 function naUnbackedReasons(tasks, decisions) {
   const naUnbacked = tasks.filter((t) => t.status === S_NOT_APPLICABLE
     && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
@@ -926,7 +979,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
   if (ledgerRefused) reasons.unshift(ledgerRefused);
-  reasons.push(...naUnbackedReasons(tasks, decisions), ...gateReasons(result, gates));
+  reasons.push(...naUnbackedReasons(tasks, decisions), ...builderDropReasons(tasks, decisions), ...gateReasons(result, gates));
   // Postponed rows are a DEBT with a destination — not a real miss and not a done row — so the verdict can tell
   // "the machine has nothing left to do, the person has a debt" from "someone still has work here".
   const postponedRows = collectPostponedRows(tasks);

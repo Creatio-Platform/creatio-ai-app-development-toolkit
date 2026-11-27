@@ -45,4 +45,10 @@ Provenance (important):
   `Browser checks:` line, and `unsaved: true` on the tasks whose notes say they saved no page. Generated from the
   run's `build-tasks/`; `run-tasks.mjs` asserts the run's browser verdict from it, with and without `Page saved: no`.
 
+- `silent-drops/` — **synthetic**, hand-written after the shape of a customer retest (no customer data, placeholder
+  names): a related list that colours rows and locks Copy/Delete per row (`ProductHistoryDetail.js`), one that re-adds
+  "Edit selected records" (`ProductsDetail.js`), a `decisions.md` whose question states a Classic fact with no source,
+  and a builder's `## Notes` that drop features on their own say-so. `run-mapper-silent-drops.mjs` asserts each one
+  reaches a plan row, a ⚠ Confirm item, a judged premise or a blocking report reason.
+
 `employeescore/` was removed — no runner loaded it.

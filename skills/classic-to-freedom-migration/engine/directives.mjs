@@ -10,6 +10,8 @@
 //   - Expectation: <one statement a judge can check on the built page>
 //   - Closes: `<pageKey>#business-rule:<Attribute>`[, …]   (an answer only: the rule attributes the user accepted as
 //     built another way after the plan was approved — see `closedRuleAttributes`)
+//   - Classic source: <the Classic read a statement of the question rests on: a `reads/` file, a schema and member,
+//     a `customizations-*` section>   (required when `Asked:` states a fact about the Classic page — see `premisesOf`)
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
@@ -59,6 +61,7 @@ const FIELD_OF = new Map([
   ["scope", "scope"],
   ["expectation", "expectation"],
   ["closes", "closes"],
+  ["classic source", "classicSource"],
 ]);
 // The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
 // entries and the same titles.
@@ -262,9 +265,28 @@ function directiveIssues(r, pageKeys) {
   return out;
 }
 
+// DECISION PREMISES. A question that tells the user what the Classic page does ("these fields are not on the card,
+// in Classic either") steers the answer: a false statement there closes a feature the user never knowingly gave up.
+// So a question that states a Classic fact names the Classic read it rests on (`Classic source:`), and a judge who
+// did not ask it reads that source and rules on the statement (`judge["premise:D<N>"]`). The statement is found by
+// the word "Classic" in the question, in the languages the questions are asked in.
+const STATES_CLASSIC_FACT = /\bclassic\b|класичн|классическ|klasyczn/i;
+export const premiseId = (id) => `premise:${id}`;
+const statesClassicFact = (f) => STATES_CLASSIC_FACT.test(f?.asked || "");
+// The entries whose question states a Classic fact, each with the question and the source it cites.
+export function premisesOf(records) {
+  return (records || []).filter((r) => statesClassicFact(r.fields))
+    .map((r) => ({ id: r.id, title: r.title, asked: r.fields.asked, source: r.fields.classicSource || "" }));
+}
+function premiseIssues(r) {
+  if (!statesClassicFact(r.fields) || !blank(r.fields.classicSource)) return [];
+  return ["`Asked:` states a fact about the Classic page, so it needs `Classic source:` — the Classic read the statement"
+    + " comes from (a `reads/` file, a schema and member, a `customizations-*` section); a judge checks the statement against it"];
+}
+
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r), ...premiseIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }

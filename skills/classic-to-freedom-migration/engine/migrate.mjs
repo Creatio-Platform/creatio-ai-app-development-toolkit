@@ -66,8 +66,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
+  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, DETAIL_FEATURE_KIND, detailFeatureItem, detailFeatureQuestions, detailLabel } from "./designspec.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes, premisesOf } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
@@ -1471,13 +1471,6 @@ function addModeGuidance(am) {
   return g;
 }
 
-// A detail's label for the worklist. The caption alone is NOT an identity — the stock related-list caption is shared
-// by every detail built on that base schema, so several rows on one page would be indistinguishable. Qualify with
-// the child entity, the same pair the Layout table identifies it by.
-function detailLabel(d) {
-  const base = d.caption || d.detailSchema || d.entity || "detail";
-  return d.caption && d.entity ? `${base} · ${d.entity}` : base;
-}
 
 // Exported for the golden suite. The rendered plan proves the end-to-end path (a real `runMigration` covers the
 // openCard branch), but each add-mode combination needs its own assertion and driving them through a full run
@@ -1514,6 +1507,7 @@ export function attachDetailFeatureDecisions(changeSet) {
         reason: `Detail '${label}' keeps its '${q.attribute}' quick filter in the user's profile in Classic, so a user finds it as they left it. \`crt.QuickFilter\` does the same: the platform saves its value per user in the page's schema profile (\`get-component-info crt.QuickFilter\`), so the built filter keeps it with no code. Recommended: keep (platform default) — nothing to build. Only "reset on every visit" needs code, which clears the value the platform saved` });
     }
     if (f.summaries) changeSet.needsDecision.push(summariesDecision(`Detail '${label}'`, label));
+    for (const q of detailFeatureQuestions(d)) changeSet.needsDecision.push({ kind: DETAIL_FEATURE_KIND, item: detailFeatureItem(d, q.feature), reason: q.reason });
   }
   const bar = pageSummaryBar(changeSet.viewConfigDiff);
   changeSet.summaryBar = bar;
@@ -2327,6 +2321,8 @@ function switchedOff(body, name, spans, starts) {
   return getterReturnsNothing(body, name, spans, { orFalse: true, starts }) === true;
 }
 
+// The tools-menu item that edits every selected row at once.
+export const BULK_EDIT_ITEM = "Edit selected records";
 // The tools-menu deviations from the standard `BaseGridDetailV2` menu: items removed (a getter switched off), items
 // hidden (a visibility member switched off), items an `addToolsButtonMenuItems` override adds, and whether that
 // override could not be read. No deviation at all is the standard menu, kept.
@@ -2337,10 +2333,56 @@ function toolsMenuDeviations(body, spans) {
   const override = lastMemberCode(body, "addToolsButtonMenuItems", spans);
   const added = override ? [...new Set([...override.code.matchAll(/\bthis\.(get\w{1,60}MenuItem)\s{0,5}\(/g)].map((m) => m[1]))]
     .filter((g) => !STANDARD_MENU_GETTERS.has(g)) : [];
-  // Group editing ("Edit selected records") comes from a mixin, not from a getter: its presence adds the item. The
-  // mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so the raw text is read.
-  if (/\bRecordsGroupEditing\b/.test(body)) added.push("Edit selected records");
-  return { removed, hidden, added, unreadable: override === null };
+  // Group editing ("Edit selected records") comes from a mixin, or from code that rebuilds the item around the
+  // platform's `editSelectedRecords` action (a member named after it, such as `reAddEditSelectedRecordsMenuItem`,
+  // counts too): either one adds the item. The mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so
+  // the raw text is read.
+  // one item, one row: a getter named after the action is the same item the bulk-edit entry names
+  const items = offersBulkEdit(body, spans) ? [...added.filter((g) => !/EditSelectedRecords/i.test(g)), BULK_EDIT_ITEM] : added;
+  return { removed, hidden, added: items, unreadable: override === null };
+}
+// Bulk edit is offered when the detail mixes in `RecordsGroupEditing` or names the `editSelectedRecords` action in its
+// code or a binding — never in a comment — and no member named after the action is switched off.
+const BULK_EDIT_NAME = /\b(?:RecordsGroupEditing\b|\w{0,40}[eE]ditSelectedRecords)/;
+const BULK_EDIT_MEMBER = /\b(\w{0,40}[eE]ditSelectedRecords\w{0,40})\s{0,5}:/g;
+function withoutComments(text, spans) {
+  let out = "", from = 0;
+  for (const [open, close] of spans) {
+    if (text[open] !== "/") continue;
+    out += text.slice(from, open) + " ";
+    from = close + 1;
+  }
+  return out + text.slice(from);
+}
+function offersBulkEdit(body, spans) {
+  if (!BULK_EDIT_NAME.test(withoutComments(body, spans))) return false;
+  const members = [...new Set([...codeOnly(body).matchAll(BULK_EDIT_MEMBER)].map((m) => m[1]))];
+  return !members.some((name) => switchedOff(body, name, spans));
+}
+
+// PER-ROW LOCKS: the row actions a detail enables or disables row by row, from the row's own data (an order status, a
+// right). A row-action getter overridden to bind its `Enabled` to an attribute other than the selection state the
+// standard menu binds is one. An `onActiveRowChange` override joins it when it sets one of those bound attributes as
+// the user moves to another row; on its own, or setting anything else, it is no lock. A getter switched off removes
+// the action for every row: that is the `Row actions` row, not a lock. Each lock is `{ action, member }` — the action
+// in the user's words, the Classic member that does it — in a stable order; empty when the detail locks no row.
+const ACTIVE_ROW_HOOK = "onActiveRowChange";
+const ENABLED_BINDING = /\bEnabled\s{0,5}:\s{0,5}\{\s{0,5}bindTo\s{0,5}:\s{0,5}["'](\w{1,80})["']/g;
+const SELECTION_BINDINGS = new Set(["isSingleSelected", "isAnySelected", "isEnabled", "getEditRecordButtonEnabled"]);
+const SETS_ATTRIBUTE = /\bthis\.(?:set\s{0,5}\(\s{0,5}["'](\w{1,80})["']|\$(\w{1,80})\s{0,5}=(?!=))/g;
+function rowLockMembers(body, spans) {
+  const bound = new Map();
+  for (const [action, g] of ROW_ACTION_GETTERS) {
+    if (switchedOff(body, g, spans)) continue;
+    const attrs = [...(lastMemberCode(body, g, spans, { raw: true })?.code || "").matchAll(ENABLED_BINDING)]
+      .map((m) => m[1]).filter((a) => !SELECTION_BINDINGS.has(a));
+    if (attrs.length) bound.set(action, { member: g, attrs });
+  }
+  const locked = [...bound].map(([action, { member }]) => ({ action, member }));
+  const boundAttrs = new Set([...bound.values()].flatMap((b) => b.attrs));
+  const hookSets = [...(lastMemberCode(body, ACTIVE_ROW_HOOK, spans, { raw: true })?.code || "").matchAll(SETS_ATTRIBUTE)].map((m) => m[1] || m[2]);
+  if (hookSets.some((a) => boundAttrs.has(a))) locked.push({ action: "the actions on the selected row", member: ACTIVE_ROW_HOOK });
+  return locked;
 }
 
 // Multi-select as the detail declares it: `off` when `isMultiSelectVisible` is switched off, `conditional` for any
@@ -2524,6 +2566,7 @@ export function scanDetailFeatures(body, spans = literalSpans(String(body || "")
     quickFilters: (filters || classifyDetailFilters(text, spans)).quickFilters,
     multiSelect: multiSelectMode(text, spans),
     rowStyling: !!styling && /\bcustomStyle\b/.test(styling.code),
+    rowLock: rowLockMembers(text, spans),
     summaries,
   };
 }
@@ -3680,6 +3723,8 @@ export function runMigration(manifest, opts = {}) {
   // them: a directive changes what the plan builds.
   const decisionRecords = opts.scopeSchema ? [] : (opts.decisionRecords || []);
   out.directives = directivesOf(decisionRecords);
+  // The questions that state a Classic fact: `--verify` holds each to a judge's ruling on its premise.
+  out.premises = premisesOf(decisionRecords);
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf, out.recordIds, out.directives);
   out.translationsMissing = translationsMissing(manifest);

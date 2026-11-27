@@ -1249,6 +1249,9 @@ function markersBlock() {
     "  - for every `not-built — needs-decision` row: `Decision needed (row N): <the question, and the options a"
       + " person can choose between — 1-3 sentences>`. Not why you stopped (that goes in the prose) — WHAT is being"
       + " decided.",
+    "  - whenever you say Freedom has no equivalent of a Classic feature: `Checked (row N): <the component(s) or"
+      + " `get-guidance` item(s) you checked, and what they offer>`. A claim of no equivalent that names nothing checked"
+      + " is not a reason, and the migration result names it.",
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
@@ -1343,6 +1346,12 @@ function outcomeBlock(repair = false) {
       + " your `## Notes` (`Decision needed (row N): …` — see below) and leave the row `not-built —"
       + " needs-decision`. The developer then runs `--decide D<N> --wont-do` / `--postponed --to"
       + " <destination>`, which fills the row's Outcome cell for you, or `--decide D<N> --build`, which re-opens the row for a builder.",
+    "- **A Classic feature is never yours to drop either.** No row, Outcome or note of yours says a Classic feature is"
+      + " `dropped`, `won't do` or `not ported` on your own say-so. A feature you do not build is its row's"
+      + " `not-built — needs-decision` with a `Decision needed` line; a feature you find with no row of its own is a"
+      + " `Decision needed (row N)` question against the row of the area it belongs to (its related list, its field),"
+      + " never a line that drops it. A note that drops one without naming the person's `D<N>` keeps the run from"
+      + " completing.",
   ];
   if (repair) {
     return [

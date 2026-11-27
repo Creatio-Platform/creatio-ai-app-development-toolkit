@@ -619,6 +619,10 @@ check("taskFileName: the file name carries the id as well as a slug — non-Lati
 console.log("\n===== the task FILE: rendered, and read back =====");
 const SAMPLE = taskAt(SET, "child:C1", DRIFT_GROUP);
 const SAMPLE_TEXT = renderTaskFile(SAMPLE, SET);
+check("renderTaskFile: a builder is told a Classic feature is never its to drop, and that a no-equivalent claim names what it checked in `Checked (row N)`",
+  () => SAMPLE_TEXT.includes("**A Classic feature is never yours to drop either.**") && SAMPLE_TEXT.includes("`Checked (row N): <the component(s) or")
+    && /without naming the person's `D<N>` keeps the run from\s+completing/.test(SAMPLE_TEXT.replace(/\s+/g, " ")),
+  () => SAMPLE_TEXT.slice(0, 4000));
 check("renderTaskFile: the front matter carries the identity and the recorded state the next run reads back — id, status, origin, pageKey, group, order, rowsDigest",
   () => {
     const { meta, malformed } = parseTaskFile(SAMPLE_TEXT);

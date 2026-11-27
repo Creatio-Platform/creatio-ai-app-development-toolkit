@@ -130,6 +130,18 @@ in `why`.
   stays open and its deliverable is routed like any other unbuilt row rather than closing on a
   verdict nobody could check.
 
+## Decision premises
+
+A question the user answered may have told them a fact about the Classic page ("these fields are not
+on the card, in Classic either"). Each such `decisions.md` entry names the Classic read it rests on in
+`Classic source:`, and the verify table lists it under **Decision premises** with the id
+`premise:D<N>`. Rule on it in `judge.json` under that id: open the cited source, find the statement of
+`Asked:` in it, and write `convincing: true` only when the source shows the statement holds, quoting
+the line that shows it in `why`. A statement the source contradicts, or does not mention, is
+`convincing: false` with the line that contradicts it (or "the source does not show it") in `why`:
+the row is then `❌ MISSING` and the question is asked again with the fact corrected. You rule on the
+premise only, never on the answer the user gave.
+
 ## What your verdict does in the final report
 
 The orchestrator's closing command
