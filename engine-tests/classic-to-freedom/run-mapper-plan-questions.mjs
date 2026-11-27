@@ -73,6 +73,11 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
     () => of(undefined, { derived: [addOnly] }).open.join() === "data-on-open:main"
       && /which is no page that writes data when opened/.test(problems([{ id: "data-on-open:list", answer: "D9" }]).join()),
     () => problems([{ id: "data-on-open:list", answer: "D9" }]));
+  const badEngineAnswer = of([{ id: "data-on-open:main", answer: "yes" }], { derived: [addOnly] });
+  check("plan questions: an entry for the engine's question that cannot stand is reported once, as that problem, not also as open",
+    () => badEngineAnswer.open.length === 0 && badEngineAnswer.issues.length === 1
+      && badEngineAnswer.issues[0].key === "data-on-open:main" && /must be a D<N>/.test(badEngineAnswer.issues[0].problem),
+    () => badEngineAnswer);
   check("plan questions: every kind has a label the plan prints",
     () => Object.keys(PLAN_QUESTION_KINDS).join() === "behaviour,outside-package,object-wide,data-on-open");
 
@@ -182,6 +187,11 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
       && askedAfter("## D1 — a\n- Kind: answer\n- Approved by: user\n## D2 — b\n- Kind: answer\n").approved === false
       && askedAfter("## D1 — a\n- Approved by: user\n## Note\n- Plan version: plan-1\n## D2 — b\n- Kind: answer\n").questions.length === 0
       && askedAfter("## D1 — a\n- Kind: answer\n## Plan approval\n- Approved by: user\n- Plan version: plan-1").approved === true);
+  const APPROVAL = "## Plan approval\n- Approved by: user\n- Plan version: plan-1\n";
+  check("questions after approval: an entry re-headed after the approval keeps the place it was first recorded, and a directive given after it is no question",
+    () => askedAfter(`## D1 — a\n- Kind: answer\n${APPROVAL}## D1 — a, amended\n- Kind: answer\n`).questions.length === 0
+      && askedAfter(`${APPROVAL}## D2 — b\n- Kind: answer\n## D2 — b, amended\n- Kind: answer\n`).questions.map((q) => q.id).join() === "D2"
+      && askedAfter(`${APPROVAL}## D3 — c\n- Kind: directive\n- Decided by: user\n`).questions.length === 0);
   check("questions after approval: an answer a plan question names is not a build question, wherever the log records it",
     () => questionsAfterApproval(parseDecisionLog(afterText), ["D4", "D10"]).questions.map((q) => q.id).join() === "D5,D6,D7,D8,D9"
       && questionsAfterApproval(parseDecisionLog(afterText), ["D4", "D10"]).missed.join() === "D5,D6,D7,D8,D9");

@@ -136,7 +136,9 @@ export function parseDecisionLog(text) {
       entry = new Set();
     }
     if (h) {
-      cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {}, afterApproval: approved };
+      // A later heading for the same id amends the entry; it was decided where it was first recorded.
+      const first = byId.get(`D${h[1]}`);
+      cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {}, afterApproval: first ? first.afterApproval : approved };
       byId.delete(cur.id);
       byId.set(cur.id, cur);
       continue;

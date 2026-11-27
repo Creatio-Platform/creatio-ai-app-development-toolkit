@@ -61,7 +61,9 @@ export function planQuestionsOf({ entries, derived = [], opts = {} } = {}) {
     const problem = q.answer && answerProblem(q.answer, opts);
     if (problem) issues.push({ key: q.id, problem });
   }
-  const open = opts.decisionsOptional ? [] : questions.filter((q) => !q.answer).map((q) => q.id);
+  // A question whose entry cannot stand is reported once, as that problem, never also as open.
+  const invalid = new Set(issues.map((x) => x.key));
+  const open = opts.decisionsOptional ? [] : questions.filter((q) => !q.answer && !invalid.has(q.id)).map((q) => q.id);
   return { questions, open, issues };
 }
 // One manifest entry as a question: the engine's own question (`base`) keeps its kind, text and pages, and the
