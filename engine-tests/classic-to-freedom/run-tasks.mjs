@@ -5035,6 +5035,27 @@ check("a row the cap has EXHAUSTED fails the gate instead of passing as schedule
   fs.rmSync(d, { recursive: true, force: true });
 }
 
+{
+  // The scheduler and the coverage read ONE attempt rule: after the cap's rounds over row 1, a row of the same kind
+  // recorded later gets a round of its own, and the coverage reads row 1 parked and the new row open — the round the
+  // cap writes and the residual the index shows agree.
+  const { d, tgt, fp } = partialFolder("cap-per-row-agrees", [1], ["child:G1", "Page build"]);
+  for (let r = 1; r <= REPAIR_ROUND_CAP; r++) {
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    for (const t of res.written) runRepair(d, t.id, r % 2 ? NOT_BUILT_BLOCKED_ALT : NOT_BUILT_BLOCKED);
+  }
+  fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED));
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(nextMin()) });
+  const res = syncRepairDir(d, RUN, {}, OPTS);
+  const residuals = backAt(res.set, tgt.id).rows.map((r) => r.residual);
+  check("round cap per row: after the cap's rounds over row 1, row 2 of the same kind gets its own round while row 1 is parked, and the coverage reads row 1 parked and row 2 open",
+    () => res.written.length === 1 && res.written[0].rows.length === 1 && res.written[0].rows[0].label === tgt.rows[1].label
+      && res.parked.length === 1 && res.parked[0].rows === 1 && !residuals[0] && residuals[1] === "open",
+    () => ({ written: res.written.map((t) => `${t.cause} r${t.repairRound}: ${t.rows.map((r) => r.label.slice(0, 40)).join(" / ")}`),
+      parked: res.parked, residuals }));
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 check("a newly recorded cause gets its OWN round rather than waiting behind another cause's open one — the cap counts the KIND, but an `unverified:fields` round still open must not hold a `not-built:fields` row unroutable while the gate names it and tells the user to run `--route`, which would write nothing",
   () => {
     const openOther = [{ file: "task-repair-round1-main-unverified-fields-x.md", notes: "", malformed: null,

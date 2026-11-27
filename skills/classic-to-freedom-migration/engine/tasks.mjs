@@ -2289,13 +2289,14 @@ function repairCoverage(tasks) {
     const prev = latest.get(key);
     if (!prev || round > prev.round || (round === prev.round && state === "open")) latest.set(key, { round, state });
   };
-  // The attempted rounds of each (page, kind of row), counted per row by `attemptsOn` — the rule `nextRound` spends
-  // the cap by, so a row reads `parked` exactly when no further round would be written for it.
+  // What each round spent, by `capAttempt` — the rule `nextRound` spends the cap by, so a row reads `parked`
+  // exactly when no further round would be written for it.
   const attempts = new Map();
   for (const t of tasks || []) {
-    if (t.kind !== REPAIR_KIND || !ROUND_ATTEMPTED.has(t.status) || decidedRound(t)) continue;
+    if (t.kind !== REPAIR_KIND) continue;
+    const spent = capAttempt(t.status, decidedRound(t), t.covers);
     const k = capKey(t.pageKey, t.cause);
-    attempts.set(k, [...(attempts.get(k) || []), t.covers?.length ? new Set(t.covers) : null]);
+    if (spent !== undefined) attempts.set(k, [...(attempts.get(k) || []), spent]);
   }
   const spentOn = (t, c) => attemptsOn(attempts.get(capKey(t.pageKey, t.cause)), c);
   for (const t of tasks || []) {
@@ -3011,10 +3012,10 @@ function repairRounds(existing) {
     const decisionClosed = closedByDecision(e.meta, rows, e.outcomes);
     const capk = capKey(e.meta.pageKey, e.meta.cause);
     const prevCap = rounds.get(capk);
+    const spent = capAttempt(status, decisionClosed, String(e.meta.covers || "").split(/\s+/));
     rounds.set(capk, {
       round: Math.max(prevCap?.round || 0, n),
-      // Each attempt with the rows it covered: the cap is spent per ROW (see `nextRound`).
-      attempts: [...(prevCap?.attempts || []), ...(decisionClosed ? [] : [coversOf(e.meta)])],
+      attempts: [...(prevCap?.attempts || []), ...(spent === undefined ? [] : [spent])],
       status: !prevCap || n >= prevCap.round ? status : prevCap.status,
     });
     const ownKey = `${e.meta.pageKey} ${e.meta.cause || ""}`;
@@ -3055,7 +3056,14 @@ function nextRound(cap, own, rows) {
   const parked = rows.filter((r) => spent(r) >= REPAIR_ROUND_CAP);
   return { round, parked, live: rows.filter((r) => !parked.includes(r)) };
 }
-const coversOf = (meta) => (meta?.covers ? new Set(String(meta.covers).split(/\s+/).filter(Boolean)) : null);
+// WHAT ONE REPAIR ROUND SPENT OF THE CAP, the one rule both the scheduler (`repairRounds`) and the coverage
+// (`repairCoverage`) read: nothing (`undefined`) for a round not run yet or one a person closed by decision; else
+// the rows its `covers` names, or every row of its kind (`null`) for a round file that records no `covers`.
+function capAttempt(status, decided, covers) {
+  if (!ROUND_ATTEMPTED.has(status) || decided) return undefined;
+  const rows = (covers || []).filter(Boolean);
+  return rows.length ? new Set(rows) : null;
+}
 const attemptsOn = (attempts, cover) => (attempts || []).filter((covers) => !covers || covers.has(cover)).length;
 
 // A row the VERIFIER owns is not a build defect: nobody filed the record. It still needs a task, and the cause
