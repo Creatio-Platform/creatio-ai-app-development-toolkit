@@ -674,6 +674,18 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     check("modules: an unused export of a shared module without the run's app prefix is not reported — only the run's own modules are judged",
       () => [...withShared.values()].every((p) => count(p, R.unusedModuleExport) === 0),
       () => [...withShared.values()]);
+    // The widened unused-export check: an app-prefixed project module stays exempt, a namespace-only prefix names no app.
+    const exportsModule = (name) => mod(name, [], "", "function spare() { return 1; }", "{ spare }");
+    const prefixed = (schema, extra, external) => lint({ main: page(schema, [schema + "Module"], thin("formPage")) }, DEFAULT_QUALITY_THRESHOLDS, new Set(),
+      { [schema + "Module"]: mod(schema + "Module", [], "", "function init(c) { return c; }", "{ init }"), ...extra }, external, true);
+    const unusedIn = (r, name) => [...r.values()].flatMap((p) => p.findings).filter((f) => f.rule === R.unusedModuleExport && f.text.includes(name)).length;
+    const withPrefixed = prefixed("UsrApp_FormPage", { UsrApp_ProjectConstants: exportsModule("UsrApp_ProjectConstants"),
+      UsrApp_SharedModule: exportsModule("UsrApp_SharedModule") }, new Set(["UsrApp_ProjectConstants"]));
+    check("unused exports: an app-prefixed module declared in projectConventions stays exempt; the app's own shared module is judged",
+      () => unusedIn(withPrefixed, "UsrApp_ProjectConstants") === 0 && unusedIn(withPrefixed, "UsrApp_SharedModule") === 1, () => [...withPrefixed.values()]);
+    const namespaceOnly = prefixed("Usr_FormPage", { Usr_OtherModule: exportsModule("Usr_OtherModule") }, new Set());
+    check("unused exports: a prefix that is only the namespace (`Usr_`) names no app — a module of that prefix is not judged",
+      () => unusedIn(namespaceOnly, "Usr_OtherModule") === 0, () => [...namespaceOnly.values()]);
     // The binding a page names in `args` decides which module `x.export` reads from.
     const bound = (call) => lint({ main: { ...page("UsrApp_FormPage", ["UsrApp_FormPageModule"], handler("crt.HandleViewModelInitRequest", `${call}(request.$context);`)), args: "(formPage)" } },
       DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }") }).get("main");
@@ -847,14 +859,33 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const tiny = (name, attr) => `function ${name}(attributeName) { return attributeName === ${attr}; }`;
     check("near-copy: a whole function below the whole-function floor (one comparison) is not reported",
       () => nearIn(twoModules(tiny("isSelectionChange", "\"A\""), tiny("isItemsSelectionChange", "\"B\""))).length === 0);
-    const avail = (test) => `async function refresh($context) { const selection = await $context.Selection; const any = selection?.type === "all" || ${test}; await $context.set("UsrDisabled", !any); }`;
-    check("near-copy: a test against another number than zero is a different test, not `x` — `x > 1` is not `Boolean(x)`",
-      () => nearIn(twoModules(avail("Boolean(selection?.selected?.length)"), avail("(selection?.selected?.length || 0) > 0"))).length === 1
-        && nearIn(twoModules(avail("Boolean(selection?.selected?.length)"), avail("selection?.selected?.length > 1"))).length === 0);
+    const avail = (test) => `async function refresh($context) { const selection = await $context.Selection; const any = selection?.type === "all" || (${test}); await $context.set("UsrDisabled", !any); }`;
+    const sameAsBoolean = (test) => nearIn(twoModules(avail("Boolean(selection?.selected?.length)"), avail(test))).length;
+    const sel = "selection?.selected?.length";
+    for (const test of [`(${sel} || 0) > 0`, `!!${sel}`, `${sel} ?? 0`, `${sel} !== 0`, `${sel} != 0`, `${sel} > 0`]) {
+      check(`near-copy: \`${test}\` is the same test of whether the value is set as \`Boolean(…)\``, () => sameAsBoolean(test) === 1);
+    }
+    for (const test of [`${sel} > 1`, `!${sel}`, `${sel} >= 0`, `${sel} || 5`]) {
+      check(`near-copy: \`${test}\` is a different test, not \`Boolean(…)\``, () => sameAsBoolean(test) === 0);
+    }
     const renamed = twoModules("const SUM = 2; const LOG_SOURCE = \"UsrLogDS\";", "const AGGREGATION_SUM = 2; const HISTORY_SOURCE = \"UsrLogDS\";");
     check("shared values: a number under another name is not reported (a small number means nothing without its name); a string of the same kind is",
       () => { const t = renamed.filter((f) => f.rule === R.sharedValueInTwoModules).map((f) => f.text);
         return t.length === 1 && /`LOG_SOURCE = "UsrLogDS"` .* as `HISTORY_SOURCE`/.test(t[0]); }, () => renamed);
+    const valuesOf = (a, b) => twoModules(a, b).filter((f) => f.rule === R.sharedValueInTwoModules).map((f) => f.text);
+    check("shared values: a camelCase name has a kind too — `historyDataSource` and `noteHistoryDataSource` are one data source",
+      () => valuesOf("const historyDataSource = \"UsrLogDS\";", "const noteHistoryDataSource = \"UsrLogDS\";").length === 1);
+    check("shared values: a constant named only with underscores is keyed by its name and never stops the lint",
+      () => valuesOf("const _ = \"UsrLogDS\";", "const __ = \"UsrLogDS\";").length === 0
+        && valuesOf("const _ = \"UsrLogDS\";", "const _ = \"UsrLogDS\";").length === 1);
+    check("shared values: a list of numbers keeps its name — `[1, 2]` under two names is not one value, and `[1, 2]` is never `[\"1\", \"2\"]`",
+      () => valuesOf("const STEPS = [1, 2];", "const TYPES = [1, 2];").length === 0
+        && valuesOf("const STEPS = [1, 2];", "const STEPS = [1, 2];").length === 1
+        && valuesOf("const KEYS = [\"1\", \"2\"];", "const IDS = [1, 2];").length === 0);
+    const guidList = valuesOf("const CLOSED = [\"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\", \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5c\"];",
+      "const DONE = [\"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\", \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5c\"];");
+    check("shared values: a list of record ids is reported by the record-id check, once per id — not a second time as a list",
+      () => guidList.length === 2 && guidList.every((t) => /^`3a8b2f10/.test(t)), () => guidList);
   }
 
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
