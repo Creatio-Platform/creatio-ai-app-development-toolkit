@@ -177,6 +177,22 @@ console.log("\n===== E3: `--decide --build` re-opens only the decided rows =====
   fs.rmSync(base, { recursive: true, force: true });
 }
 
+console.log("\n===== E11: an Outcome written after a stray empty column =====");
+{
+  const { base, dir } = closedFolder("e11");
+  const t = readTaskDir(dir).find((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+  const fp = taskFilePath(dir, t.id);
+  // Row 1 as a sub-agent wrote it in the retest: one empty cell, then the mark.
+  const stray = setOutcome(fs.readFileSync(fp, "utf8"), 1, "").replace(/^(\|\s*1\s*\|.*\|) {2}\|$/m, "$1 || not-built — blocked |");
+  fs.writeFileSync(fp, stray);
+  const rows = rowsOf(dir, t.id);
+  check("a mark written one cell late (`|| not-built — blocked`) is read as that mark, not as no outcome",
+    () => /\|\| not-built — blocked \|$/m.test(stray) && rows[0].outcomeKind === "not-built" && rows[0].outcomeCause === "blocked",
+    () => ({ row: stray.split("\n").find((l) => /^\|\s*1\s*\|/.test(l)), parsed: rows[0] }));
+  check("the rows around it read as before", () => rows.slice(1).every((r) => r.outcomeKind === "built"), () => rows.map((r) => r.outcome));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
 console.log("\n===== E12, E13a: the report title and the progress counters =====");
 {
   const base = tmp("e12");

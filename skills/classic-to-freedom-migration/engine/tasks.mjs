@@ -1529,6 +1529,15 @@ function headerColumns(lines, headed = true) {
     : { label: -1, outcome: -1, at: -1, recorded: -1, evidence: -1 };
 }
 
+// The cells from the Outcome column on, with the EMPTY cells a writer typed before its mark dropped. A row
+// written as `| … | evidence || not-built — blocked |` has one cell more than its header, so the Outcome column
+// itself is blank and the mark sits in the cell after it: read at the header's position it was no outcome at
+// all, and the task stayed in progress with nothing said. A mark is never blank, so a blank cell in front of
+// one is the stray column and not part of it.
+function outcomeCells(cells) {
+  const first = cells.findIndex((c) => c.trim() !== "");
+  return first < 0 ? cells : cells.slice(first);
+}
 // The rendered table read back in ORDER, so the read-only path (`--verify`) sees the same rows and numbers the
 // sub-agent saw and can name the unbuilt deliverable.
 function tableRows(bodyLines) {
@@ -1560,7 +1569,7 @@ function tableRows(bodyLines) {
     // there while the row still parses as a validly-reasoned mark. Everything from that column up to the trailing
     // empty cell IS the outcome, so rejoining puts a typed pipe back; `uncell` undoes the escaping the engine
     // writes on its own re-render.
-    const outcome = cells.slice(col.outcome, -1).join("|");
+    const outcome = outcomeCells(cells.slice(col.outcome, -1)).join("|");
     const row = { label: uncell(cells[col.label].trim()), mark: parseOutcome(uncell(outcome.trim())) };
     // Both input cells sit before the Outcome column, so a typed pipe in the outcome cannot shift them.
     if (col.recorded > 0 && col.evidence > 0) {
