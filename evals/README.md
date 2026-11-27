@@ -5,8 +5,9 @@ developer would ask it, without naming a skill) and `graders/` (one criterion pe
 pass/fail by an LLM, plus a `tool_used` check that the expected skill fired).
 
 The `ui-*` cases measure the design judgement of `skills/creatio-ui-guidelines`: grouping by the
-user's task, record state on the first screen, column balance, metrics that answer a question,
-template choice for a thin object, and interface copy. They are text-only — the agent describes
+user's task, record state and required fields on the first screen, column balance, metrics that
+answer a question, template choice for a thin object, label position on mini pages, filter
+placement on list pages, and interface copy. They are text-only — the agent describes
 the page, it does not build it — so they do not see rendering defects.
 
 Run from the repository root:
