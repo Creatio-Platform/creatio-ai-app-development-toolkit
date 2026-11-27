@@ -2271,8 +2271,10 @@ function roundCoverage(t, spentOn) {
   const states = new Map();
   for (const c of t.covers || []) {
     const k = `${t.pageKey} ${c}`;
-    const parked = attempted && spentOn(t, c) >= REPAIR_ROUND_CAP;
-    states.set(k, closed.has(k) ? "closed" : (parked ? "parked" : "open"));
+    let state = "open";
+    if (closed.has(k)) state = "closed";
+    else if (attempted && spentOn(t, c) >= REPAIR_ROUND_CAP) state = "parked";
+    states.set(k, state);
   }
   return { round, states };
 }
@@ -2647,30 +2649,39 @@ function carryWithMovedFiledMarks(task, prev, sources, live) {
 // decision could do to clear it — six such tasks kept the retest's confirmed run NOT COMPLETE. A label that is gone
 // or now asks for something else still fails the comparison, and the warning stands.
 function recordedRowsStand(rows, prev) {
-  // The current rows under each label, in order: the n-th listing of a label in the file is its n-th row now.
+  const now = inputsByLabel(rows);
+  const recorded = now && recordedInputs(prev.table, now);
+  return !!recorded?.length && shortHash(recorded.join(" ")) === prev.meta.rowsDigest;
+}
+// The current rows' digest inputs under each label, in order, or null for a task this engine did not cut. The
+// `Page code` row is not digested, so its label maps to nothing and is skipped where the file lists it.
+function inputsByLabel(rows) {
   const now = new Map();
-  const pageCode = new Set();
   for (const r of rows || []) {
+    if (r.vk !== "pagecode" && r.digestInput === undefined) return null;
     const k = labelKey(r.label);
-    if (r.vk === "pagecode") { pageCode.add(k); continue; }
-    if (r.digestInput === undefined) return false;   // a task this engine did not cut
     if (!now.has(k)) now.set(k, []);
-    now.get(k).push(r.digestInput);
+    if (r.vk !== "pagecode") now.get(k).push(r.digestInput);
   }
+  return now;
+}
+// The recorded table read back as digest inputs: the n-th listing of a label is its n-th row now, and one listing
+// more than the plan has rows of that label is a duplicate only while all of them are one row. Null when a
+// recorded row is absent from the current plan or cannot be told apart.
+function recordedInputs(table, now) {
   const seen = new Map();
   const recorded = [];
-  for (const r of prev.table || []) {
+  for (const r of table || []) {
     const k = labelKey(r.label);
-    if (pageCode.has(k)) continue;
     const inputs = now.get(k);
-    if (!inputs) return false;                         // a recorded row absent from the current plan
+    if (!inputs) return null;
+    if (!inputs.length) continue;
     const n = seen.get(k) || 0;
     seen.set(k, n + 1);
-    // One listing more than the plan has rows of that label is a duplicate only while all of them are one row.
-    if (n >= inputs.length && inputs.some((x) => x !== inputs[0])) return false;
+    if (n >= inputs.length && inputs.some((x) => x !== inputs[0])) return null;
     recorded.push(inputs[Math.min(n, inputs.length - 1)]);
   }
-  return recorded.length > 0 && shortHash(recorded.join(" ")) === prev.meta.rowsDigest;
+  return recorded;
 }
 function carryOver(task, prev) {
   if (!prev) return task;
@@ -3047,6 +3058,17 @@ function nextRound(cap, own, rows) {
 const coversOf = (meta) => (meta?.covers ? new Set(String(meta.covers).split(/\s+/).filter(Boolean)) : null);
 const attemptsOn = (attempts, cover) => (attempts || []).filter((covers) => !covers || covers.has(cover)).length;
 
+// A row the VERIFIER owns is not a build defect: nobody filed the record. It still needs a task, and the cause
+// already says which of the two it is, so both go through the same grouping.
+function openRowsByCause(openRows) {
+  const byCause = new Map();
+  for (const row of openRows || []) {
+    const cause = causeOf(row);
+    if (!byCause.has(cause)) byCause.set(cause, []);
+    byCause.get(cause).push(row);
+  }
+  return byCause;
+}
 export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing = []) {
   const B = budgetOf(opts);
   const identity = pageIdentities(result);
@@ -3055,15 +3077,7 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
   const parked = [];
   const pending = [];
   for (const [pageKey, page] of Object.entries(verifyPages)) {
-    // A row the VERIFIER owns is not a build defect: nobody filed the record. It still needs a task, and the
-    // cause already says which of the two it is, so both go through the same grouping.
-    const byCause = new Map();
-    for (const row of page.openRows || []) {
-      const cause = causeOf(row);
-      if (!byCause.has(cause)) byCause.set(cause, []);
-      byCause.get(cause).push(row);
-    }
-    for (const [cause, rows] of byCause) {
+    for (const [cause, rows] of openRowsByCause(page.openRows)) {
       const next = nextRound(rounds.get(capKey(pageKey, cause)), openRounds.get(`${pageKey} ${cause}`), rows);
       if (next.hold === "pending") {
         pending.push({ pageKey, cause, rows: rows.length, round: next.round, status: next.status });

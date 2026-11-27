@@ -178,7 +178,7 @@ console.log("\n===== E5: a plan change keeps what it did not touch, and the roun
     () => grown && keptMarks && grown.rows.some((r) => /onAct4/.test(r.label) && !r.outcome) && grown.status === "partial",
     () => (grown ? grown.rows.map((r) => `${r.label.slice(0, 40)} = ${r.outcome}`) : set.tasks.map((t) => `${t.id}:${t.rows.length}`)));
   check("that task is NOT flagged as drifted — the rows its cells were recorded on did not change",
-    () => grown && grown.drifted === false && !/deliverables CHANGED/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8")),
+    () => grown?.drifted === false && !/deliverables CHANGED/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8")),
     () => ({ drifted: grown?.drifted, recorded: grown?.recordedDigest, now: grown?.rowsDigest }));
   const RENAMED = { ...GROWN, schemas: [{ pkg: "P", body: mainBody({ extraHandler: true }).replaceAll('"MainG"', '"MainZ"') }] };
   const renamedRun = runMigration(RENAMED);
