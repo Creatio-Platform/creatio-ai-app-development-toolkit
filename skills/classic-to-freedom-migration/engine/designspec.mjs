@@ -1194,41 +1194,50 @@ const MENU_ITEM_FREEDOM = "hide it on the Freedom list's menu";
 // among them) and a conditional multi-select have no one Freedom setting the engine can name, so each is a ⚠ Confirm
 // item of its own (`detail-feature`): its checklist row lands in a build task, and it closes only by being built or
 // by a person's recorded decision. A builder never drops one on the claim that Freedom has no equivalent.
-// `feature` is the Feature cell of its plan row; the item is `<detail> · <feature>`, the detail named like every other
-// related-list question.
+// ONE table feeds both: each entry is the plan row (`feature`, `classic`, `options`) and the question (`reason`). The
+// item is `<detail> · <feature>`, the detail named like every other related-list question (`detailLabel`).
 export const DETAIL_FEATURE_KIND = "detail-feature";
-const detailQuestionLabel = (d) => {
+// A related list's name in a question. The caption alone is NOT an identity — the stock related-list caption is
+// shared by every detail built on that base schema, so several rows on one page would be indistinguishable. Qualify
+// with the child entity, the same pair the Layout table identifies it by.
+export const detailLabel = (d) => {
   const base = d.caption || d.detailSchema || d.entity || "detail";
   return d.caption && d.entity ? `${base} · ${d.entity}` : base;
 };
-export const detailFeatureItem = (d, feature) => `${detailQuestionLabel(d)} · ${feature}`;
+export const detailFeatureItem = (d, feature) => `${detailLabel(d)} · ${feature}`;
 const CHECK_FIRST = "check the Freedom list's settings first (`get-component-info` on the list component) and name what was checked";
 export function detailFeatureQuestions(d) {
   const f = d.features;
   if (!f) return [];
-  const label = detailQuestionLabel(d);
-  const out = (f.toolsMenu?.added || []).map((item) => ({ feature: `Tools menu: + ${item}`,
+  const label = detailLabel(d);
+  const out = (f.toolsMenu?.added || []).map((item) => ({ feature: `Tools menu: + ${item}`, classic: "added by the detail",
+    options: "build as a custom list action, or Won't do",
     reason: `Detail '${label}' offers the tools-menu item '${item}' in Classic. Decide: build it as a custom list action, or Won't do — ${CHECK_FIRST}` }));
-  if (f.multiSelect === "conditional") out.push({ feature: "Multi-select",
+  if (f.multiSelect === "conditional") out.push({ feature: "Multi-select", classic: "conditional (`isMultiSelectVisible` overridden)",
+    options: "carry the condition as Freedom state, or Won't do",
     reason: `Detail '${label}' turns multi-select on or off by a condition in Classic (\`isMultiSelectVisible\` overridden). Decide: carry the condition as Freedom state, or Won't do` });
-  if (f.rowStyling) out.push({ feature: "Row styling",
+  if (f.rowStyling) out.push({ feature: "Row styling", classic: "`prepareResponseCollectionItem` sets `customStyle`",
+    options: "a conditional row style, or Won't do",
     reason: `Detail '${label}' colours rows by their data in Classic (\`prepareResponseCollectionItem\` sets \`customStyle\`). Decide: build a conditional row style, or Won't do — ${CHECK_FIRST}` });
-  if (f.rowLock?.length) out.push({ feature: "Row lock",
+  if (f.rowLock?.length) out.push({ feature: "Row lock", classic: `enabled row by row: ${f.rowLock.join(", ")}`,
+    options: "the same per-row lock on the Freedom list, or Won't do",
     reason: `Detail '${label}' enables or disables ${f.rowLock.join(", ")} row by row in Classic, from each row's data. Decide: build the same per-row lock on the Freedom list, or Won't do — ${CHECK_FIRST}` });
   return out;
 }
-// The Freedom cell of a plan row that waits on its ⚠ Confirm item; an unplaced detail's questions wait for the
-// approval to build it, so its rows name no item yet.
-const awaitsDecision = (d, feature, what) => (d.unplaced
-  ? `⚠ ${what} — decided once the detail is approved`
-  : `⚠ ${what} — decide in ⚠ Confirm \`[${DETAIL_FEATURE_KIND}] ${esc(detailFeatureItem(d, feature))}\``);
-function detailMenuRows(name, menu, d) {
+// The plan row of a question. Its Freedom cell names the ⚠ Confirm item it waits on; an unplaced detail's questions
+// wait for the approval to build it, so its rows name no item yet.
+function detailQuestionRow(name, d, q) {
+  const freedom = d.unplaced ? `⚠ ${q.options} — decided once the detail is approved`
+    : `⚠ ${q.options} — decide in ⚠ Confirm \`[${DETAIL_FEATURE_KIND}] ${esc(detailFeatureItem(d, q.feature))}\``;
+  return [name, esc(q.feature), q.classic, freedom];
+}
+function detailMenuRows(name, menu) {
   const rows = [];
   for (const item of menu.removed) rows.push([name, `Tools menu: ${esc(item)}`, "removed (its getter returns nothing)", MENU_ITEM_FREEDOM]);
   for (const item of menu.hidden) rows.push([name, `Tools menu: ${esc(item)}`, "hidden (its visibility member returns `false`)", MENU_ITEM_FREEDOM]);
-  for (const item of menu.added) rows.push([name, `Tools menu: + ${esc(item)}`, "added by the detail", awaitsDecision(d, `Tools menu: + ${item}`, "build as a custom list action, or Won't do")]);
   if (menu.unreadable) rows.push([name, "Tools menu", "`addToolsButtonMenuItems` overridden in a form the engine cannot read", "⚠ read that Classic member and build the same menu"]);
-  if (!rows.length) rows.push([name, "Tools menu", "standard (`BaseGridDetailV2`)", "kept — the Freedom list's standard menu"]);
+  // the items a detail adds are rows of their own (`detailFeatureQuestions`), so they too keep the menu from reading standard
+  if (!rows.length && !menu.added.length) rows.push([name, "Tools menu", "standard (`BaseGridDetailV2`)", "kept — the Freedom list's standard menu"]);
   return rows;
 }
 function detailFilterRow(name, q) {
@@ -1248,11 +1257,9 @@ export function detailFeatureRows(cs) {
     const name = detailName(d);
     const f = d.features;
     if (!f) { rows.push([name, "—", "detail schema not bundled — what users can do with it is unknown", "⚠ bundle the detail schema (`manifest.detailSchemas`)"]); continue; }
-    rows.push(...detailMenuRows(name, f.toolsMenu, d), ...f.quickFilters.map((q) => detailFilterRow(name, q)));
+    rows.push(...detailMenuRows(name, f.toolsMenu), ...f.quickFilters.map((q) => detailFilterRow(name, q)));
     if (f.multiSelect === "off") rows.push([name, "Multi-select", "switched off (`isMultiSelectVisible`)", "build the list without multi-select"]);
-    if (f.multiSelect === "conditional") rows.push([name, "Multi-select", "conditional (`isMultiSelectVisible` overridden)", awaitsDecision(d, "Multi-select", "carry the condition as Freedom state, or Won't do")]);
-    if (f.rowStyling) rows.push([name, "Row styling", "`prepareResponseCollectionItem` sets `customStyle`", awaitsDecision(d, "Row styling", "a conditional row style, or Won't do")]);
-    if (f.rowLock?.length) rows.push([name, "Row lock", `enabled row by row: ${f.rowLock.join(", ")}`, awaitsDecision(d, "Row lock", "the same per-row lock on the Freedom list, or Won't do")]);
+    rows.push(...detailFeatureQuestions(d).map((q) => detailQuestionRow(name, d, q)));
     if (f.summaries) rows.push([name, "Summaries", "summary module", summariesTarget(f.summariesDirective)]);
     rows.push(...detailRowSettingRows(name, d));
   }

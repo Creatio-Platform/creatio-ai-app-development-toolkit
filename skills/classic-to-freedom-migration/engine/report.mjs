@@ -860,15 +860,14 @@ const DROP_WORDS = /\b(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:bu
 const NO_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b|\bfreedom\s(?:has|offers|provides)\sno\b/i;
 const ROW_REF = /\brow\s(\d+)\b/i;
 function unauthorisedDrops(task, decisions) {
-  const checked = notesMarkers(task.notes, CHECKED_MARKER);
+  let checked = null;
+  const isChecked = (row) => !!row && (checked ??= notesMarkers(task.notes, CHECKED_MARKER)).has(Number(row[1]));
   const out = [];
   for (const raw of String(task.notes || "").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || DECISION_MARKER.test(line) || CHECKED_MARKER.test(line)) continue;
-    const decided = decisionRefs(line, decisions).resolved.length > 0;
-    const row = ROW_REF.exec(line);
-    const unchecked = NO_EQUIVALENT.test(line) && !(row && checked.has(Number(row[1])));
-    if ((DROP_WORDS.test(line) || unchecked) && !decided) out.push(line);
+    const dropped = DROP_WORDS.test(line) || (NO_EQUIVALENT.test(line) && !isChecked(ROW_REF.exec(line)));
+    if (dropped && !decisionRefs(line, decisions).resolved.length) out.push(line);
   }
   return out;
 }

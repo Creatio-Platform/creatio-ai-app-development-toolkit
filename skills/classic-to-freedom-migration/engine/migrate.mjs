@@ -66,7 +66,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, DETAIL_FEATURE_KIND, detailFeatureItem, detailFeatureQuestions } from "./designspec.mjs";
+  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, DETAIL_FEATURE_KIND, detailFeatureItem, detailFeatureQuestions, detailLabel } from "./designspec.mjs";
 import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes, premisesOf } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
@@ -1471,13 +1471,6 @@ function addModeGuidance(am) {
   return g;
 }
 
-// A detail's label for the worklist. The caption alone is NOT an identity — the stock related-list caption is shared
-// by every detail built on that base schema, so several rows on one page would be indistinguishable. Qualify with
-// the child entity, the same pair the Layout table identifies it by.
-function detailLabel(d) {
-  const base = d.caption || d.detailSchema || d.entity || "detail";
-  return d.caption && d.entity ? `${base} · ${d.entity}` : base;
-}
 
 // Exported for the golden suite. The rendered plan proves the end-to-end path (a real `runMigration` covers the
 // openCard branch), but each add-mode combination needs its own assertion and driving them through a full run
@@ -2328,6 +2321,8 @@ function switchedOff(body, name, spans, starts) {
   return getterReturnsNothing(body, name, spans, { orFalse: true, starts }) === true;
 }
 
+// The tools-menu item that edits every selected row at once.
+export const BULK_EDIT_ITEM = "Edit selected records";
 // The tools-menu deviations from the standard `BaseGridDetailV2` menu: items removed (a getter switched off), items
 // hidden (a visibility member switched off), items an `addToolsButtonMenuItems` override adds, and whether that
 // override could not be read. No deviation at all is the standard menu, kept.
@@ -2342,11 +2337,9 @@ function toolsMenuDeviations(body, spans) {
   // platform's `editSelectedRecords` action (a member named after it, such as `reAddEditSelectedRecordsMenuItem`,
   // counts too): either one adds the item. The mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so
   // the raw text is read.
-  if (/\b(?:RecordsGroupEditing|\w{0,40}[eE]ditSelectedRecords\w{0,40})\b/.test(body) && !added.includes(BULK_EDIT_ITEM)) added.push(BULK_EDIT_ITEM);
+  if (/\b(?:RecordsGroupEditing\b|\w{0,40}[eE]ditSelectedRecords)/.test(body)) added.push(BULK_EDIT_ITEM);
   return { removed, hidden, added, unreadable: override === null };
 }
-// The tools-menu item that edits every selected row at once.
-export const BULK_EDIT_ITEM = "Edit selected records";
 
 // PER-ROW LOCKS: the row actions a detail enables or disables row by row, from the row's own data (an order status, a
 // right). A row-action getter overridden to bind its `Enabled` is one; so is an `onActiveRowChange` override that sets
