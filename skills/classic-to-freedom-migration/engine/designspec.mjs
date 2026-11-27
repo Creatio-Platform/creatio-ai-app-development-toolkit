@@ -182,7 +182,8 @@ function rowActionsNote(am) {
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
 // The name a plan heading uses for the page: its entity, or for a process page (no entity) its schema name.
-const pageTitleOf = (result) => (result.processPage?.pageName ? `${result.processPage.pageName} (process page)` : result.entity || "?");
+// The name the plan and the migration result are titled by: a process page by its page, anything else by its entity.
+export const pageTitleOf = (result) => (result.processPage?.pageName ? `${result.processPage.pageName} (process page)` : result.entity || "?");
 // The form page's own label: a process page's title already says what it is.
 const pageHeadingLabel = (entity, opts) => (opts.processPage ? entity : `${entity} form page`);
 function rowsForFields(fields, regionOf, sourcePrefix = "PDS.") {

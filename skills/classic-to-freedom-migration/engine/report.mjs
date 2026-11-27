@@ -27,7 +27,7 @@
 // folder's decisions.md / plan.md; writes nothing.
 import fs from "node:fs";
 import path from "node:path";
-import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
+import { esc, planGaps, dataWritingPages, pageTitleOf } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   worklogFieldValues, addModeChecks, STAND_DATA_FIELD, STAND_DATA_MARKER,
@@ -942,7 +942,9 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     unread: exercise.exercised.length || exercise.unexercised.length ? answerRead.unread : null };
   const { unexercised } = exercise;
   const { verdict, verdictColour } = verdictOf({ complete, reasons, unexercised, postponedRows, postponedNote, manualNote, pageName });
-  const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
+  // Titled like the plan it reports on. A process page has no entity of its own, and `result.entity` there is the
+  // object its first detail lists, which titled a process page's report after a card it only opens.
+  const entity = result?.entity || result?.processPage?.pageName ? ` — ${esc(pageTitleOf(result))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);

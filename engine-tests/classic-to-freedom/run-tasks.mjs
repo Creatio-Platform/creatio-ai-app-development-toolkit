@@ -33,7 +33,7 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
+import { approvePlan, recordBrowserAnswer, setOutcome } from "./_testkit.mjs";
 import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
@@ -3231,19 +3231,8 @@ check("pageGroup: the SAME group name on two different pages yields the same `ba
   }, () => GROUPS.filter((g) => g.baseTitle === "Quality gates").map((g) => g.title));
 
 console.log("\n===== the OUTCOME column: the status is computed from the rows, not typed =====");
-// Rewrites the Outcome cell of row `n` (1-based) of a rendered task file. The agent edits this cell and nothing
-// else in the table; every test below goes through the same path a sub-agent would.
-function setOutcome(text, n, value) {
-  let seen = 0;
-  return text.split("\n").map((line) => {
-    const cells = line.split(/(?<!\\)\|/);
-    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
-    seen++;
-    if (seen !== n) return line;
-    cells[5] = ` ${value} `;
-    return cells.join("|");
-  }).join("\n");
-}
+// `setOutcome` (from `_testkit.mjs`) rewrites the Outcome cell of row `n` of a rendered task file. The agent edits
+// this cell and nothing else in the table; every test below goes through the same path a sub-agent would.
 // Hoisted: written by most checks below.
 // One task re-read through the merge, exactly as `syncTaskDir` does it: render → edit → parse → carry over.
 const reread = (task, set, edit) => {
@@ -5035,6 +5024,27 @@ check("a row the cap has EXHAUSTED fails the gate instead of passing as schedule
   fs.rmSync(d, { recursive: true, force: true });
 }
 
+{
+  // The scheduler and the coverage read ONE attempt rule: after the cap's rounds over row 1, a row of the same kind
+  // recorded later gets a round of its own, and the coverage reads row 1 parked and the new row open — the round the
+  // cap writes and the residual the index shows agree.
+  const { d, tgt, fp } = partialFolder("cap-per-row-agrees", [1], ["child:G1", "Page build"]);
+  for (let r = 1; r <= REPAIR_ROUND_CAP; r++) {
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    for (const t of res.written) runRepair(d, t.id, r % 2 ? NOT_BUILT_BLOCKED_ALT : NOT_BUILT_BLOCKED);
+  }
+  fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, NOT_BUILT_BLOCKED));
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(nextMin()) });
+  const res = syncRepairDir(d, RUN, {}, OPTS);
+  const residuals = backAt(res.set, tgt.id).rows.map((r) => r.residual);
+  check("round cap per row: after the cap's rounds over row 1, row 2 of the same kind gets its own round while row 1 is parked, and the coverage reads row 1 parked and row 2 open",
+    () => res.written.length === 1 && res.written[0].rows.length === 1 && res.written[0].rows[0].label === tgt.rows[1].label
+      && res.parked.length === 1 && res.parked[0].rows === 1 && !residuals[0] && residuals[1] === "open",
+    () => ({ written: res.written.map((t) => `${t.cause} r${t.repairRound}: ${t.rows.map((r) => r.label.slice(0, 40)).join(" / ")}`),
+      parked: res.parked, residuals }));
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 check("a newly recorded cause gets its OWN round rather than waiting behind another cause's open one — the cap counts the KIND, but an `unverified:fields` round still open must not hold a `not-built:fields` row unroutable while the gate names it and tells the user to run `--route`, which would write nothing",
   () => {
     const openOther = [{ file: "task-repair-round1-main-unverified-fields-x.md", notes: "", malformed: null,
@@ -5043,10 +5053,12 @@ check("a newly recorded cause gets its OWN round rather than waiting behind anot
     const pages = { main: { openRows: [{ deliverable: "Fields — 3 fields", outcome: "not-built",
       status: "not-built — blocked", evidence: "recorded on task-x.md, row 1" }] } };
     const opened = buildRepairTasks(RUN, pages, OPTS, openOther);
-    // The KIND still caps: three rounds on this page's field rows is three, whatever each was opened for.
+    // The KIND still caps: three rounds on THESE field rows is three, whatever each was opened for. Rounds that
+    // covered other rows of the kind do not spend this row's cap.
+    const covers = opened.tasks.find((t) => t.cause === "not-built:fields")?.covers.join(" ");
     const capped = [1, 2, 3].map((n) => ({ file: `task-repair-round${n}-main-unverified-fields-${n}.md`, notes: "", malformed: null,
       meta: { id: `rc${n}`, status: "done", origin: "engine", pageKey: "main", kind: "repair",
-        cause: "unverified:fields", repairRound: String(n), covers: "aaaa" } }));
+        cause: "unverified:fields", repairRound: String(n), covers } }));
     const atCap = buildRepairTasks(RUN, pages, OPTS, capped);
     return opened.tasks.some((t) => t.cause === "not-built:fields") && !opened.pending.length
       && !atCap.tasks.length && atCap.parked.some((p) => p.cause === "not-built:fields");
@@ -9408,9 +9420,11 @@ console.log("\n===== --verify --tasks: a refused round under a changed plan leav
   const base = tmp("index-drift");
   const dir = path.join(base, "build-tasks");
   cliTasks(["--tasks", dir], MANIFEST);
-  const analysing = readTaskDir(dir).find((t) => t.writesTo && t.rows.length >= 2);
-  const analysingPath = path.join(dir, analysing.file);
-  fs.writeFileSync(analysingPath, setOutcome(allBuilt(fs.readFileSync(analysingPath, "utf8")), 1, NOT_BUILT_BLOCKED));
+  // A closure nobody was dispatched for, on a task the CHANGED plan still queues: an orchestrator task is adopted
+  // under any cut. A plan task the change retires is an orphan, which is not the run's work and refuses nothing.
+  const added = addTasks(dir, RUN, { id: "orch-undispatched", pageKey: "main", group: "Extra", order: 3, readOnly: true,
+    deliverables: ["One thing", "Another thing"] }, checklistOpts(MANIFEST));
+  closeCells(dir, "orch-undispatched");
   cliTasks(["--tasks", dir], MANIFEST);
   const indexBefore = readIndex(dir);
   const onDisk = new Set(fs.readdirSync(dir));
@@ -9423,8 +9437,8 @@ console.log("\n===== --verify --tasks: a refused round under a changed plan leav
   const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST5);
   const report = run.stdout || "";
   check("index drift (anti-vacuity): the changed plan slices to task files the folder does not hold, and the verify under it refused its repair round",
-    () => unwritten.length > 0 && /NO REPAIR TASKS WRITTEN/.test(report),
-    () => ({ unwritten, status: run.status, report: report.slice(0, 1200), stderr: (run.stderr || "").slice(0, 600) }));
+    () => !(added.problems || []).length && unwritten.length > 0 && /NO REPAIR TASKS WRITTEN/.test(report),
+    () => ({ added: added.problems, unwritten, status: run.status, report: report.slice(0, 1200), stderr: (run.stderr || "").slice(0, 600) }));
   check("index drift: the refused round leaves index.md byte-identical and names none of the unwritten task files",
     () => readIndex(dir) === indexBefore && unwritten.every((f) => !readIndex(dir).includes(f)),
     () => ({ unwritten, index: readIndex(dir).slice(0, 1600) }));
