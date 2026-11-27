@@ -423,7 +423,11 @@ export function moduleShape(src) {
   const fns = new Map();
   const defined = new Set();
   const add = (name, body) => { if (name && body) fns.set(name, [...(fns.get(name) || []), body]); };
-  const addFunction = (name, node) => { if (name) defined.add(name); add(name, text.slice(node.start, node.end)); };
+  const addFunction = (name, node) => {
+    if (!name) return;
+    defined.add(name);
+    add(name, text.slice(node.start, node.end));
+  };
   walkAstBounded(mod.factory, (n) => {
     if (n.type === "FunctionDeclaration") addFunction(n.id?.name, n);
     else if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isFunctionNode(n.init)) addFunction(n.id.name, n.init);
