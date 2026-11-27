@@ -643,34 +643,44 @@ const OBJECT_WIDE_LABEL = {
   "related-page": (it) => `RelatedPage add-on for \`${cell(it.entity || "?")}\` — the page it names opens from every list, section and lookup of the object`,
   "mixed-navigation": (it) => `Edit card of \`${cell(it.entity || "?")}\` stays Classic in \`SysModuleEdit\` — the rebuilt page opens from the related list only`,
 };
+// The task row a verify row was built from, keyed like `verifyIndex`: by page and label, and by label alone for the
+// rows of a whole-run task, which carry no page of their own. An unreadable task file contributes nothing.
 function taskRowIndex(tasks) {
-  const out = new Map();
-  for (const t of tasks) (t.rows || []).forEach((r, i) => out.set(`${r.pageKey || t.pageKey} ${labelKey(r.label)}`, { task: t, row: r, n: i + 1 }));
-  return out;
-}
-const refsCell = (refs) => refs.resolved.map((d) => `**${cell(d.ref)}** — ${cell(d.title)}`).join("<br>");
-function objectWideItems(verifyRes, tasks, decisions) {
-  const idx = taskRowIndex(tasks);
-  const items = [];
-  for (const it of verifyRes?.objectWide?.rows || []) {
-    const src = idx.get(`${it.pageKey} ${labelKey(it.deliverable)}`);
-    const refs = decisionRefs(src?.row.outcomeReason, decisions);
-    const needsAnswer = it.kind === "mixed-navigation";
-    let approval = "the approved plan";
-    if (refs.resolved.length) approval = refsCell(refs);
-    else if (needsAnswer) approval = "⚠ no recorded answer";
-    items.push({ pageKey: it.pageKey, change: OBJECT_WIDE_LABEL[it.kind](it), status: it.status, approval, open: needsAnswer && !refs.resolved.length });
+  const byKey = new Map(), byLabel = new Map();
+  for (const t of tasks) {
+    if (t.unread) continue;
+    for (const r of t.rows || []) {
+      byKey.set(`${r.pageKey || t.pageKey} ${labelKey(r.label)}`, r);
+      if (!byLabel.has(labelKey(r.label))) byLabel.set(labelKey(r.label), r);
+    }
   }
-  for (const u of verifyRes?.objectWide?.unplanned || []) {
-    const by = u.approvedBy && decisions.has(u.approvedBy) ? `**${cell(u.approvedBy)}** — ${cell(decisions.get(u.approvedBy))}` : null;
+  return (pageKey, label) => byKey.get(`${pageKey} ${labelKey(label)}`) || byLabel.get(labelKey(label));
+}
+// The Approved-by cell: the recorded decisions a reason cites, or `fallback` — open when it is a warning.
+function approvalOf(reason, decisions, fallback) {
+  const refs = decisionRefs(reason, decisions);
+  if (refs.resolved.length) return { approval: refs.resolved.map((d) => `**${cell(d.ref)}** — ${cell(d.title)}`).join("<br>"), open: false };
+  return { approval: fallback, open: fallback.startsWith("⚠") };
+}
+function objectWideItems(verifyRes, tasks, decisions) {
+  const ow = verifyRes?.objectWide || {};
+  const items = [];
+  if (ow.rows?.length) {
+    const rowOf = taskRowIndex(tasks);
+    for (const it of ow.rows) {
+      const fallback = it.kind === "mixed-navigation" ? "⚠ no recorded answer" : "the approved plan";
+      items.push({ pageKey: it.pageKey, change: OBJECT_WIDE_LABEL[it.kind](it), status: it.status,
+        ...approvalOf(rowOf(it.pageKey, it.deliverable)?.outcomeReason, decisions, fallback) });
+    }
+  }
+  for (const u of ow.unplanned || []) {
     items.push({ pageKey: u.pageKey, change: `Entity rule \`${cell(u.name)}\` on \`${cell(u.entity)}\` — NOT in the plan`, status: "on the object",
-      approval: by || "⚠ no decision approves it", open: !by });
+      ...approvalOf(u.approvedBy, decisions, "⚠ no decision approves it") });
   }
   for (const t of tasks) {
     for (const [n, values] of notesMarkers(t.notes, OBJECT_WIDE_MARKER)) for (const v of values) {
-      const refs = decisionRefs(v, decisions);
       items.push({ pageKey: t.pageKey, change: `${cell(v)} (${where({ task: t, n })})`, status: "recorded by the builder",
-        approval: refs.resolved.length ? refsCell(refs) : "⚠ no recorded decision", open: !refs.resolved.length });
+        ...approvalOf(v, decisions, "⚠ no recorded decision") });
     }
   }
   return items;
@@ -678,7 +688,7 @@ function objectWideItems(verifyRes, tasks, decisions) {
 function objectWideSection(items, pageName) {
   if (!items.length) return [];
   const open = items.filter((it) => it.open).length;
-  const L = [`## Object-wide changes (${items.length})`, "",
+  const L = ["", `## Object-wide changes (${items.length})`, "",
     "Each of these reaches beyond the page it was built for: every page, list and lookup of the object sees it."
       + (open ? ` **${plural(open, "change")} without a recorded decision** — ask the user, record the answer, or undo the change.` : ""), "",
     "| # | Page | Change | Status | Approved by |", "| --- | --- | --- | --- | --- |"];
@@ -1017,7 +1027,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, declined, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName, declined),
-    ...(objectWide.length ? ["", ...objectWideSection(objectWide, pageName)] : []),
+    ...objectWideSection(objectWide, pageName),
     ...(carryOver.length ? ["", ...carryOver] : []),
     ...(withoutYou.length ? ["", ...withoutYou] : []),
     ...(browser.length ? ["", ...browser] : []),

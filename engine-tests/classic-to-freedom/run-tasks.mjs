@@ -12788,14 +12788,14 @@ console.log("\n===== object-wide changes: asked before the build, flagged when u
   const approvedRecords = parseDecisionRecords(approving);
   const va = renderVerify(RUN, withRecords(approving), built);
   check("object-wide: a user's `Approves:` answer naming the object and attribute accepts an unplanned rule — listed with its decision, no banner",
-    () => [...approvedEntityRules(approvedRecords)].join() === "DemoLine.InternalRequest,D48,DemoLine.Customer,D48"
+    () => JSON.stringify(approvedEntityRules(approvedRecords)) === JSON.stringify({ "DemoLine.InternalRequest": "D48", "DemoLine.Customer": "D48" })
       && va.objectWide.unplanned.every((u) => u.approvedBy === "D48") && !/that the plan does not list and no decision approves/.test(va.markdown),
     () => va.objectWide.unplanned);
   check("object-wide: `Approves:` counts only on the user's own answer and only for `entity-rule:<Entity>.<Attribute>`",
     () => {
       const orch = parseDecisionRecords("## D49 — x\n- Kind: answer\n- Decided by: orchestrator\n- Asked: q\n- Approves: `entity-rule:DemoLine.Customer`\n");
       const bad = parseDecisionRecords("## D50 — y\n- Kind: answer\n- Decided by: user\n- Asked: q\n- Quote: \"ok\"\n- Approves: `rule:Customer`\n");
-      return approvedEntityRules(orch).size === 0 && approvedEntityRules(bad).size === 0
+      return Object.keys(approvedEntityRules(orch)).length === 0 && Object.keys(approvedEntityRules(bad)).length === 0
         && provenanceIssues(orch).some((p) => /`Approves:` approves an object-wide change only on the user's own answer/.test(p.problem))
         && provenanceIssues(bad).some((p) => /names `rule:Customer`, which is not an entity rule/.test(p.problem));
     });

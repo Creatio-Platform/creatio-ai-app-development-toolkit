@@ -178,47 +178,46 @@ export const directiveCovers = (directive, pageKey) =>
 // address is read here, and only from an entry the user decided in their own words: the other statuses drop or
 // re-open a deliverable, which is a planning choice the approved plan has to show.
 const RULE_ATTRIBUTE_KEY = /^[^#\s]+#business-rule:[^\s#]+$/;
-const closesFromUser = (f) => f?.kind === KIND_ANSWER && f.decidedBy === DECIDED_BY_USER && !blank(f.quote);
-export function closedRuleAttributes(records) {
-  return (records || []).filter((r) => closesFromUser(r.fields))
-    .flatMap((r) => scopeKeys(r.fields.closes).filter((k) => RULE_ATTRIBUTE_KEY.test(k)).map((key) => ({ key, decision: r.id })));
-}
-// A `Closes:` line that closes nothing is named, never dropped: on an entry that is not the user's own answer, and
-// for each address that is not a business-rule attribute.
-function closesIssues(r) {
-  const keys = scopeKeys(r.fields?.closes);
-  if (!keys.length) return [];
-  if (!closesFromUser(r.fields)) {
-    return [`\`Closes:\` closes a rule only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
-  }
-  return keys.filter((k) => !RULE_ATTRIBUTE_KEY.test(k))
-    .map((k) => `\`Closes:\` names \`${k}\`, which is not a business-rule attribute (\`<pageKey>#business-rule:<Attribute>\`)`);
-}
-
-// THE ENTITY RULES A USER'S ANSWER APPROVES BEYOND THE PLAN, as `Map<"<Entity>.<Attribute>", "D<N>">`. An entity
-// rule reaches every page of its object, so one the plan did not list stands only on the user's own answer naming
-// the object and the attribute it governs; `--verify` flags every other rule it reads on the object.
+// THE ENTITY RULES A USER'S ANSWER APPROVES BEYOND THE PLAN (`Approves:`). An entity rule reaches every page of its
+// object, so one the plan did not list stands only on the user's own answer naming the object and the attribute it
+// governs; `--verify` flags every other rule it reads on the object.
 const ENTITY_RULE_APPROVAL = /^entity-rule:([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/;
+const closesFromUser = (f) => f?.kind === KIND_ANSWER && f.decidedBy === DECIDED_BY_USER && !blank(f.quote);
+// The address lines a user's answer may carry, each with the shape its addresses must have.
+const ANSWER_LINES = [
+  { field: "closes", label: "Closes:", acts: "closes a rule", re: RULE_ATTRIBUTE_KEY,
+    shape: "a business-rule attribute (`<pageKey>#business-rule:<Attribute>`)" },
+  { field: "approves", label: "Approves:", acts: "approves an object-wide change", re: ENTITY_RULE_APPROVAL,
+    shape: "an entity rule (`entity-rule:<Entity>.<Attribute>`)" },
+];
+// The well-formed addresses of one line across the user's own answers, as `[{ key, decision }]`, in file order.
+function userAnswerKeys(records, field, re) {
+  return (records || []).filter((r) => closesFromUser(r.fields))
+    .flatMap((r) => scopeKeys(r.fields[field]).filter((k) => re.test(k)).map((key) => ({ key, decision: r.id })));
+}
+export function closedRuleAttributes(records) {
+  return userAnswerKeys(records, "closes", RULE_ATTRIBUTE_KEY);
+}
+// `{ "<Entity>.<Attribute>": "D<N>" }`; the first answer approving an address is the one that counts.
 export function approvedEntityRules(records) {
-  const out = new Map();
-  for (const r of records || []) {
-    if (!closesFromUser(r.fields)) continue;
-    for (const k of scopeKeys(r.fields.approves)) {
-      const m = ENTITY_RULE_APPROVAL.exec(k);
-      if (m && !out.has(`${m[1]}.${m[2]}`)) out.set(`${m[1]}.${m[2]}`, r.id);
-    }
+  const out = {};
+  for (const { key, decision } of userAnswerKeys(records, "approves", ENTITY_RULE_APPROVAL)) {
+    const k = key.slice("entity-rule:".length);
+    if (!Object.hasOwn(out, k)) out[k] = decision;
   }
   return out;
 }
-// An `Approves:` line that approves nothing is named, never dropped, as a `Closes:` line is.
-function approvesIssues(r) {
-  const keys = scopeKeys(r.fields?.approves);
-  if (!keys.length) return [];
-  if (!closesFromUser(r.fields)) {
-    return [`\`Approves:\` approves an object-wide change only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
-  }
-  return keys.filter((k) => !ENTITY_RULE_APPROVAL.test(k))
-    .map((k) => `\`Approves:\` names \`${k}\`, which is not an entity rule (\`entity-rule:<Entity>.<Attribute>\`)`);
+// An address line that addresses nothing is named, never dropped: on an entry that is not the user's own answer,
+// and for each address of the wrong shape.
+function answerLineIssues(r) {
+  return ANSWER_LINES.flatMap(({ field, label, acts, re, shape }) => {
+    const keys = scopeKeys(r.fields?.[field]);
+    if (!keys.length) return [];
+    if (!closesFromUser(r.fields)) {
+      return [`\`${label}\` ${acts} only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
+    }
+    return keys.filter((k) => !re.test(k)).map((k) => `\`${label}\` names \`${k}\`, which is not ${shape}`);
+  });
 }
 // Who decided each entry, and in what words: `{ D<N>: { decidedBy, quote } }` for the entries that carry either
 // line, as a plain object so it rides on a run result the way the directives do. An entry without provenance is
@@ -293,6 +292,6 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r), ...approvesIssues(r)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...answerLineIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }

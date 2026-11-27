@@ -4544,10 +4544,13 @@ export function elementColumnsOf(ops) {
   for (const [name, cols] of seen) if (cols.size === 1) out.set(name, [...cols][0]);
   return out;
 }
+// A rules read as an array: the bare array, or `{ count, rules }`; null when the slot holds neither.
+function rulesIn(built) {
+  if (Array.isArray(built)) return built;
+  return Array.isArray(built?.rules) ? built.rules : null;
+}
 function builtRuleTokens(built, elementColumn) {
-  let rules = null;
-  if (Array.isArray(built)) rules = built;
-  else if (Array.isArray(built?.rules)) rules = built.rules;
+  const rules = rulesIn(built);
   if (rules == null) return null;
   return rules.map((r) => {
     // A rule with none of the governed keys (an unknown shape) falls back to the whole record, minus its labels —
@@ -4628,37 +4631,35 @@ function objectWideEntry(r, row) {
   const kind = objectWideKind(r);
   if (!kind) return null;
   const entity = r.vk?.entity || r.confirm?.item || null;
-  return { kind, pageKey: row.pageKey, entity, deliverable: row.deliverable, status: row.status, outcome: row.outcome,
+  return { kind, pageKey: row.pageKey, entity, deliverable: row.deliverable, status: row.status,
     ...(kind === "entity-rules" ? { attributes: [...new Set(r.vk.names || [])] } : {}) };
 }
 const ruleNameOf = (rule) => String(rule?.name || rule?.caption || "?");
-function objectRulesOf(page) {
-  const slot = entryObject(page)?.[ENTITY_RULES_SLOT];
-  if (Array.isArray(slot)) return slot;
-  return Array.isArray(slot?.rules) ? slot.rules : [];
+// Planned entity-rule attributes per object, and the pages whose entry holds that object's rules.
+function addPlannedEntityRules(planned, r, pageKey) {
+  if (objectWideKind(r) !== "entity-rules" || !r.vk.entity) return;
+  const p = planned.get(r.vk.entity) || { attrs: new Set(), pages: [] };
+  for (const n of r.vk.names || []) p.attrs.add(n);
+  p.pages.push(pageKey);
+  planned.set(r.vk.entity, p);
 }
 // The rules read off each object that govern none of the attributes the plan lists for it, each with the decision
 // that approved it, or null. The same object read on two pages is one set of rules, so a rule is listed once.
-export function unplannedEntityRules(groups, root, approvals = {}) {
-  const planned = new Map();
-  for (const g of groups) for (const r of g.rows) {
-    if (objectWideKind(r) !== "entity-rules" || !r.vk.entity) continue;
-    const p = planned.get(r.vk.entity) || { attrs: new Set(), pages: [] };
-    for (const n of r.vk.names || []) p.attrs.add(n);
-    p.pages.push(r.pageKey || g.pageKey || "main");
-    planned.set(r.vk.entity, p);
-  }
+export function unplannedEntityRules(planned, root, approvals) {
   const out = [];
   for (const [entity, p] of planned) {
     const seen = new Set();
-    for (const key of p.pages) for (const rule of objectRulesOf(root?.pages?.[key])) {
-      const name = ruleNameOf(rule);
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const tokens = builtRuleTokens([rule])[0];
-      if ([...p.attrs].some((a) => tokens.has(a))) continue;
-      const approved = [...tokens].find((t) => Object.hasOwn(approvals || {}, `${entity}.${t}`));
-      out.push({ entity, pageKey: key, name, attribute: approved || null, approvedBy: approved ? approvals[`${entity}.${approved}`] : null });
+    for (const key of p.pages) {
+      const slot = entryObject(root?.pages?.[key])?.[ENTITY_RULES_SLOT];
+      const rules = rulesIn(slot) || [];
+      (builtRuleTokens(slot) || []).forEach((tokens, i) => {
+        const name = ruleNameOf(rules[i]);
+        if (seen.has(name)) return;
+        seen.add(name);
+        for (const a of p.attrs) if (tokens.has(a)) return;
+        const approvedBy = [...tokens].map((t) => approvals?.[`${entity}.${t}`]).find(Boolean) || null;
+        out.push({ entity, pageKey: key, name, approvedBy });
+      });
     }
   }
   return out;
@@ -6143,10 +6144,11 @@ const noDeliverableIssueText = (x) => `\`${x.key}\` ${x.problem}`;
 // THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.
 // A mis-filed record blocks the run without touching a row, so a verdict computed from rows alone would read
 // positive beside the banner that blocks it.
-function verifyVerdict(missing, unverified, orphans = 0) {
+function verifyVerdict(missing, unverified, orphans = 0, unapproved = 0) {
   if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
   if (orphans > 0) return `⛔ **EVIDENCE MIS-FILED — ${orphans} record(s) filed under id(s) this run does not publish** (re-file them under the id each row names, or drop a key the plan no longer has)`;
+  if (unapproved > 0) return `⛔ **${unapproved} entity rule(s) on the object that the plan does not list and no decision approves** (ask the user, or remove the rule)`;
   return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
 }
 // The PLAN-gap banner (D12), stated separately from the build verdict so the two are never read as one condition.
@@ -6319,6 +6321,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // nothing is dropped in silence; the LIST just changes source.
   const decided = [];
   const objectWide = [];
+  const plannedRules = new Map();
   const derivedEvidenceIds = new Set();
   const peers = pageItemPeers(groups, decidedKeys);
   for (const g of groups) {
@@ -6340,6 +6343,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       L.push(tableLine);
       const ow = objectWideEntry(r, row);
       if (ow) objectWide.push(ow);
+      addPlannedEntityRules(plannedRules, r, rowPage);
     }
   }
   // A RECORD FILED WHERE THE ENGINE NEVER LOOKS IS NOT A RECORD. The ids are engine-derived and written into the
@@ -6348,10 +6352,11 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
   // every other page's id would read as an orphan of the scope rather than of the run.
   const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
-  const unplanned = unplannedEntityRules(groups, root, opts.entityRuleApprovals);
+  const unplanned = unplannedEntityRules(plannedRules, root, opts.entityRuleApprovals);
   const unapproved = unplanned.filter((u) => !u.approvedBy);
   const { missing, unverified, builderOpen, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified, orphans.length);
+  const verdict = verifyVerdict(missing, unverified, orphans.length, unapproved.length);
+  const unapprovedBanner = unplannedBanner(unapproved);
   const decidedBanner = decided.length
     ? [`> ℹ ${decided.length} plan row(s) closed by a recorded decision are OUT of this table — the task registry`
         + " is the single source of what is owed. See the migration result report's Carry-over"
@@ -6362,8 +6367,8 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
     ...decidedBanner,
     ...planGapBanner(result),
     ...orphanBanner(orphans),
-    ...unplannedBanner(unapproved),
-    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans), ...unplannedBanner(unapproved)].join("\n");
+    ...unapprovedBanner,
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans), ...unapprovedBanner].join("\n");
   return { markdown: md, missing, unverified, builderOpen,
     complete: missing === 0 && unverified === 0 && orphans.length === 0 && unapproved.length === 0, orphans, pages, rows, decided,
     objectWide: { rows: objectWide, unplanned } };

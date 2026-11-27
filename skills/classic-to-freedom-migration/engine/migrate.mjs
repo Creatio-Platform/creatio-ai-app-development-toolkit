@@ -1158,7 +1158,7 @@ export function checklistOpts(manifest, opts = {}) {
     decisionProvenance: opts.decisionProvenance || (opts.decisionRecords ? provenanceById(opts.decisionRecords) : null),
     // The entity rules beyond the plan the user approved (`Approves:` in decisions.md), `{ "<Entity>.<Attr>": "D<N>" }`:
     // `--verify` accepts an unplanned rule on the object only under one of them.
-    entityRuleApprovals: opts.entityRuleApprovals || (opts.decisionRecords ? Object.fromEntries(approvedEntityRules(opts.decisionRecords)) : null),
+    entityRuleApprovals: opts.entityRuleApprovals || (opts.decisionRecords ? approvedEntityRules(opts.decisionRecords) : null),
     decisionsOptional: opts.decisionsOptional === true,
     // Root-only, like the plan's `### Won't do` list it is printed in.
     decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
