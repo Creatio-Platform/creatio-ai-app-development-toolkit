@@ -373,10 +373,13 @@ function depSlots(v) {
 // WHAT A CLIENT MODULE DEFINES AND IMPORTS. `functions`: by name, each `function name(…)`, `const name = function /
 // arrow`, and `name: function / arrow` property, with its source. A name that only REFERS to a function is kept as a
 // call of what it refers to, so an export reaches the function behind it: a property whose value is another name
-// (`startApproval: start`, or the shorthand `{ startApproval }`) or a member of an import (`applyNewNoteDate:
-// shared.applyNewNoteDate`, a re-export), and the same as `const name = …` or `const { name } = shared`. `imports`:
-// each `define()` dependency -> the local name the module's factory gives it (null where it gives none), paired by
-// position like a page's. null when the source is not a `define()` module.
+// (`startApproval: start`, or the shorthand `{ startApproval }`), and a re-export of an import's member
+// (`applyNewNoteDate: shared.applyNewNoteDate`, `const name = shared.name`, `const { name } = shared`). A re-export
+// is read only where the module hands a name on (its top-level declarations, the properties of an object literal it
+// declares or returns there) and never under a name the module defines a function of, so a config key or a local
+// inside a function never turns a call of a real function into a call of the shared one. `imports`: each `define()`
+// dependency -> the local name the module's factory gives it (null where it gives none), paired by position like a
+// page's. null when the source is not a `define()` module.
 const isFunctionNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
 // `name` -> `name()`, `obj.name` -> `obj.name()`: the call a reference stands for; null for any other expression.
 // Only a member of one of the module's imports (`importNames`, the factory's parameters) is a re-export: a member of
@@ -392,6 +395,24 @@ function destructuredReferences(decl, importNames) {
   return decl.id.properties.filter((p) => p.type === "Property" && !p.computed && p.value?.type === "Identifier")
     .map((p) => [p.value.name, `${decl.init.name}.${staticPropKey(p)}()`]);
 }
+// `{ a: shared.a, b: start }` -> [["a", "shared.a()"]]: each property that hands an import's member on.
+function objectReexports(obj, importNames) {
+  if (obj?.type !== "ObjectExpression") return [];
+  return obj.properties.filter((p) => p.type === "Property" && !p.computed && p.value?.type === "MemberExpression")
+    .map((p) => [staticPropKey(p), referenceCall(p.value, importNames)]);
+}
+// Every re-export the factory's own statements make: a top-level `const` (a member, a destructure, or an object
+// literal's properties) and the object literal it returns. Nothing nested inside a function is read.
+function topLevelReexports(factory, importNames) {
+  const body = factory.body;
+  if (body?.type === "ObjectExpression") return objectReexports(body, importNames);
+  return (body?.body || []).flatMap((st) => {
+    if (st.type === "ReturnStatement") return objectReexports(st.argument, importNames);
+    if (st.type !== "VariableDeclaration") return [];
+    return st.declarations.flatMap((d) => [...destructuredReferences(d, importNames), ...objectReexports(d.init, importNames),
+      ...(d.id?.type === "Identifier" && d.init?.type === "MemberExpression" ? [[d.id.name, referenceCall(d.init, importNames)]] : [])]);
+  });
+}
 export function moduleShape(src) {
   const text = String(src ?? "");
   const mod = parseDefineModule(text);
@@ -400,19 +421,16 @@ export function moduleShape(src) {
   const imports = pairSlots(mod.depSlots, params);
   const importNames = new Set(params.filter(Boolean));
   const fns = new Map();
+  const defined = new Set();
   const add = (name, body) => { if (name && body) fns.set(name, [...(fns.get(name) || []), body]); };
-  const addDeclarator = (d) => {
-    for (const [name, call] of destructuredReferences(d, importNames)) add(name, call);
-    if (d.id?.type !== "Identifier") return;
-    if (isFunctionNode(d.init)) add(d.id.name, text.slice(d.init.start, d.init.end));
-    else if (d.init?.type === "MemberExpression") add(d.id.name, referenceCall(d.init, importNames));
-  };
+  const addFunction = (name, node) => { if (name) defined.add(name); add(name, text.slice(node.start, node.end)); };
   walkAstBounded(mod.factory, (n) => {
-    if (n.type === "FunctionDeclaration") add(n.id?.name, text.slice(n.start, n.end));
-    else if (n.type === "VariableDeclarator") addDeclarator(n);
-    else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) add(staticPropKey(n), text.slice(n.value.start, n.value.end));
-    else if (n.type === "Property" && !n.computed) add(staticPropKey(n), referenceCall(n.value, importNames));
+    if (n.type === "FunctionDeclaration") addFunction(n.id?.name, n);
+    else if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isFunctionNode(n.init)) addFunction(n.id.name, n.init);
+    else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) addFunction(staticPropKey(n), n.value);
+    else if (n.type === "Property" && !n.computed && n.value?.type === "Identifier") add(staticPropKey(n), `${n.value.name}()`);
   });
+  for (const [name, call] of topLevelReexports(mod.factory, importNames)) if (!defined.has(name)) add(name, call);
   return { functions: fns, imports };
 }
 // The request a parsed handler entry answers (`{ request: "<name>", handler: … }`), or null.

@@ -86,7 +86,8 @@ for the code rows, and followed for a request a page handler hands to the module
 page does not call itself — through the module functions the handler calls and the functions they call, in their
 own module or in the modules it imports (page → module → module, each function walked once, so an import cycle
 ends). A re-export (`fn: shared.fn`, `const fn = shared.fn`, `const { fn } = shared`) counts as a call of the
-function it hands on. A folder or file there that cannot be read is a read
+function it hands on, where the module hands it on at its top level (a declaration or the object it returns), not
+from inside a function. A folder or file there that cannot be read is a read
 problem. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
 `migration-result.md` under `--tasks`, where the report replaces the table. Either way the run replays offline
 with `--verify --built <that file>`.

@@ -65,17 +65,29 @@ export function runModuleReexportChecks({ check, verifyCtx, resolveVk, FIX }) {
     () => shapes.join() === ["✅ Done", "✅ Done", "⚠ verify", "⚠ verify", "✅ Done", "⚠ verify"].join(),
     () => shapes);
 
-  // A name that only holds a reference is a module function only as far as something calls it: a local alias inside
-  // a function no handler reaches, or a key of a request config, is never credited; the same local alias called from
-  // a function a handler reaches is.
+  // A re-export is read only where the module hands a name on, at its top level: a local alias or a config key inside
+  // a function is never a module function, whether or not something calls it.
   const POST = "\t\treturn shared.postNoteWithHistory(request, NOTE_ENTITY);";
   const nested = edit(src[DELIVERY], POST, "\t\tconst helper = shared.applyNewNoteDate;\n\t\tconst config = {cfg: shared.APPROVAL_PROCESS_NAME};\n" + POST);
   const nestedCalled = edit(src[DELIVERY], POST, "\t\tconst helper = shared.applyNewNoteDate;\n\t\thelper(request.$context);\n" + POST);
   const probe = (moduleSrc, name) => resolveVk(portedVk(`${DELIVERY}.${name}`), ctxOf(DN, withDelivery(moduleSrc)))[0];
   const nestedShapes = [probe(nested, "helper"), probe(nested, "cfg"), probe(nestedCalled, "helper")];
-  check("module re-exports: a local `const helper = shared.applyNewNoteDate` that nothing calls and a request-config key `cfg: shared.APPROVAL_PROCESS_NAME` read ⚠ as `Ported as` symbols; the local alias called from `postDeliveryNote`, which the Post handler reaches, reads ✅",
-    () => nestedShapes.join() === ["⚠ verify", "⚠ verify", "✅ Done"].join(),
+  check("module re-exports: a local `const helper = shared.applyNewNoteDate` and a request-config key `cfg: shared.APPROVAL_PROCESS_NAME` inside `postDeliveryNote` read ⚠ as `Ported as` symbols, and so does the local alias when `postDeliveryNote` calls it",
+    () => nestedShapes.join() === ["⚠ verify", "⚠ verify", "⚠ verify"].join(),
     () => nestedShapes);
+
+  // A config key inside a function that shares its name with a real module function does not graft the shared
+  // function onto it: the handler calls the real `startApproval`, which sends nothing, so neither the `Ported as` row
+  // naming the shared `startApprovalProcess` nor the Run-process card action reads ✅.
+  const shadowed = edit(src[DELIVERY], "\tfunction postDeliveryNote(request) {",
+    "\tfunction startApproval(request) { return request; }\n\tfunction approvalConfig() { const cfg = { startApproval: shared.startApprovalProcess }; return cfg; }\n\tfunction postDeliveryNote(request) {");
+  const shadowHandlers = { handlers: edit(entryOf(DN).handlers, "deliveryNotePage.postDeliveryNote(request)", "deliveryNotePage.startApproval(request)") };
+  const shadowCtx = ctxOf(DN, withDelivery(shadowed), shadowHandlers);
+  const shadowRows = [resolveVk(portedVk(`${SHARED}.startApprovalProcess`), shadowCtx)[0],
+    resolveVk({ type: "card", request: "crt.RunBusinessProcessRequest" }, shadowCtx)[0]];
+  check("module re-exports: a config key `startApproval: shared.startApprovalProcess` inside another function does not make the module's real `startApproval` reach the shared function: the `Ported as` row and the Run-process card action read ⚠",
+    () => shadowRows.join() === ["⚠ verify", "⚠ verify"].join(),
+    () => shadowRows);
 
   // The request-fired check follows a re-export too: the Post button fires `mb.MbPostButtonClicked`, whose handler is
   // pointed at `deliveryNotePage.startApproval`, a re-export of the shared `startApprovalProcess`, which sends
