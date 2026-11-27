@@ -12,7 +12,7 @@ import path from "node:path";
 import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { writesOnOpen } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { dataWritingPages, counterPages } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { buildTaskSet, renderTaskFile, dataWritingBlock, keptCounters } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { buildTaskSet, renderTaskFile, dataWritingBlock, keptCounters, syncTaskDir } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 
 const page = (name, methods) => `define("${name}", [], function() { return { entitySchemaName: "UsrThing", diff: [], methods: { ${methods} } }; });`;
@@ -125,4 +125,26 @@ export function runCounterOnOpenChecks({ check, runMigration, checklistOpts, CLE
         && /Not counted as a decision.*a label/.test(section),
       () => section);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const syncDir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f-counter-on-open-sync-"));
+  try { syncChecks({ check, run, dir: syncDir }); } finally { fs.rmSync(syncDir, { recursive: true, force: true }); }
+}
+
+// The decision reaches the builder through the engine: a sync reads `worklog.md` and re-renders the page's task file,
+// so the `Client counter kept:` line is checked through `syncTaskDir`, not through a hand-built map.
+function syncChecks({ check, run, dir }) {
+  const tasksDir = path.join(dir, "build-tasks");
+  const pageFile = (set) => set.tasks.filter((t) => dataWritingBlock(t, set.dataWritingPages).length)
+    .map((t) => fs.readFileSync(path.join(tasksDir, t.file), "utf8"))[0] || "";
+  const before = pageFile(syncTaskDir(tasksDir, run, {}));
+  fs.writeFileSync(path.join(dir, "worklog.md"),
+    'Client counter kept: main (user: "keep the Classic numbering")\nClient counter kept: Subscription (user: "a label, not a key")\n');
+  const after = pageFile(syncTaskDir(tasksDir, run, {}));
+  const lines = (t) => t.split("\n").filter((l) => /counter|Build rule/i.test(l));
+  check("counter-on-open: a sync with no Client counter kept line writes the build rule into the page's task file",
+    () => before !== "" && /\*\*Build rule for `main`:\*\*/.test(before) && !/The user kept the Classic counter/.test(before),
+    () => lines(before));
+  check("counter-on-open: a sync writes the worklog's Client counter kept line into the page's task file in place of the build rule, only for a page key",
+    () => /The user kept the Classic counter of `main`/.test(after) && /keep the Classic numbering/.test(after)
+      && !/Build rule for `main`/.test(after) && !/a label, not a key/.test(after),
+    () => lines(after));
 }
