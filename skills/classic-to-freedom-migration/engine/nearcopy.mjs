@@ -142,8 +142,8 @@ function nameOfFunctionAt(node) {
   return null;
 }
 
-// Every run of statements of at least MIN_NEAR_COPY_NODES (a whole function: MIN_WHOLE_FUNCTION_NODES), keyed by the ids of its statements' value shapes (one id
-// per distinct shape, shared by all modules through `ids`).
+// Every run of statements of at least MIN_NEAR_COPY_NODES (a whole function: MIN_WHOLE_FUNCTION_NODES), keyed by
+// the ids of its statements' value shapes (one id per distinct shape, shared by all modules through `ids`).
 function windowsOf(m, ids) {
   const idOf = (shape) => {
     if (!ids.has(shape)) ids.set(shape, ids.size);
@@ -156,18 +156,23 @@ function windowsOf(m, ids) {
       const count = valueShape(st, tokens);
       return { st, count, id: idOf(tokens.join(" ")) };
     });
-    for (let i = 0; i < shaped.length; i++) {
-      let count = 0;
-      const key = [];
-      for (let j = i; j < shaped.length && j - i < MAX_WINDOW_STATEMENTS; j++) {
-        count += shaped[j].count;
-        key.push(shaped[j].id);
-        const whole = !!list.fn && i === 0 && j === shaped.length - 1;
-        if (count < (whole ? MIN_WHOLE_FUNCTION_NODES : MIN_NEAR_COPY_NODES)) continue;
-        out.push({ module: m.name, fnName: list.fnName, fn: list.fn, whole,
-          from: lineOf(shaped[i].st), to: endLineOf(shaped[j].st), count, key: key.join() });
-      }
-    }
+    for (let i = 0; i < shaped.length; i++) out.push(...windowsFrom(m, list, shaped, i));
+  }
+  return out;
+}
+
+// The runs of one statement list that start at statement `i` and are large enough to compare.
+function windowsFrom(m, list, shaped, i) {
+  const out = [];
+  let count = 0;
+  const key = [];
+  for (let j = i; j < shaped.length && j - i < MAX_WINDOW_STATEMENTS; j++) {
+    count += shaped[j].count;
+    key.push(shaped[j].id);
+    const whole = !!list.fn && i === 0 && j === shaped.length - 1;
+    if (count < (whole ? MIN_WHOLE_FUNCTION_NODES : MIN_NEAR_COPY_NODES)) continue;
+    out.push({ module: m.name, fnName: list.fnName, fn: list.fn, whole,
+      from: lineOf(shaped[i].st), to: endLineOf(shaped[j].st), count, key: key.join() });
   }
   return out;
 }

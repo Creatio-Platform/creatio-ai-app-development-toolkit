@@ -1125,10 +1125,10 @@ function constantValueKey(c) {
 }
 
 // The last word of a constant's name, upper case: `NOTE_HISTORY_DATA_SOURCE` and `historyDataSource` are `SOURCE`.
-const kindOf = (name) => name.split(/_|(?=[A-Z][a-z])/).filter(Boolean).pop().toUpperCase();
+const kindOf = (name) => name.split(/_|(?=[A-Z][a-z])/).findLast(Boolean).toUpperCase();
 
-// A record id or a constant's value declared in two or more modules, also under another name: one finding, on the record of
-// the second module, naming the first declaration and every other one with the name it has there.
+// A record id or a constant's value declared in two or more modules, also under another name: one finding, on the
+// record of the second module, naming the first declaration and every other one with the name it has there.
 function reportSharedValues(read, report) {
   const where = new Map();
   for (const m of read) {
@@ -1141,7 +1141,8 @@ function reportSharedValues(read, report) {
     if (mods.size < 2) continue;
     const [first, second] = [...mods.values()];
     const [, secondModule] = [...mods.keys()];
-    const list = [...mods].map(([n, d]) => `${codeName(n)} (line ${d.line}${d.name && d.name !== first.name ? `, as ${codeName(d.name)}` : ""})`).join(", ");
+    const renamed = (d) => (d.name && d.name !== first.name ? ", as " + codeName(d.name) : "");
+    const list = [...mods].map(([n, d]) => `${codeName(n)} (line ${d.line}${renamed(d)})`).join(", ");
     report(secondModule, QUALITY_RULES.sharedValueInTwoModules, second.line,
       `${codeName(first.text)} is declared in ${list} — keep it in the shared module and import it`);
   }
