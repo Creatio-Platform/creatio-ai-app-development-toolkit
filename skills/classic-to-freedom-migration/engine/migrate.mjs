@@ -3838,6 +3838,20 @@ function valueFlagArg(argv, flag, example, onBad, noun = "a path") {
   }
   return next;
 }
+// THE PLAN'S `Adjustments` ARE THE AGENT'S, the rest of the file is the engine's. The agent appends that section
+// under the generated plan (findings, and the items decisions cite as `Adjustment N`), and `--plan --out` rewrites
+// the file on every regeneration — so the section was lost each time the plan changed and had to be appended again
+// by hand. The engine never renders a heading of that name, so the section of the file being replaced, from its
+// heading to the end, is carried under the new plan verbatim.
+const ADJUSTMENTS_HEADING = /^#{2,3}[ \t]+Adjustments\b/m;
+export function withCarriedAdjustments(plan, previous) {
+  const at = String(previous || "").search(ADJUSTMENTS_HEADING);
+  if (at < 0 || ADJUSTMENTS_HEADING.test(plan)) return plan;
+  return `${plan.trimEnd()}\n\n${previous.slice(at).trimEnd()}\n`;
+}
+function readIfExists(file) {
+  try { return fs.readFileSync(file, "utf8"); } catch { return ""; }
+}
 // Every value of a flag that may be given more than once, in the order given. `--row` is one: reading only the
 // first occurrence answered one row of `--decide D<N> --row a:1 --row a:2` and dropped the rest without a word.
 function valueFlagArgs(argv, flag, example, onBad, noun = "a path") {
@@ -5421,7 +5435,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (tasksMode) label = "build tasks";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
-    try { fs.writeFileSync(outFile, output); }
+    try { fs.writeFileSync(outFile, planMode ? withCarriedAdjustments(output, readIfExists(outFile)) : output); }
     catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
     process.stdout.write(outFileNote(label, outFile, notReady, verifyMode));
   } else {

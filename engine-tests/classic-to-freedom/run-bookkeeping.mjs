@@ -177,6 +177,30 @@ console.log("\n===== E3: `--decide --build` re-opens only the decided rows =====
   fs.rmSync(base, { recursive: true, force: true });
 }
 
+console.log("\n===== E4: regenerating the plan keeps its Adjustments =====");
+{
+  const base = tmp("e4");
+  const plan = path.join(base, "plan.md");
+  const write = (manifest) => {
+    const f = path.join(base, "m.json");
+    fs.writeFileSync(f, JSON.stringify(manifest));
+    return spawnSync(process.execPath, [MIGRATE, f, "--plan", "--out", plan], { encoding: "utf8" });
+  };
+  // The fixture plan carries ⛔ banners (exit 2, still WRITTEN): what is under test is the file, not the verdict.
+  const first = write(MANIFEST);
+  const ADJ = "## Adjustments\n\n### Decisions taken with the plan\n\n1. **Keep the Notes tab** — the user asked for it.\n";
+  fs.appendFileSync(plan, "\n" + ADJ);
+  const again = write(manifestOf({ extraField: true }));
+  const text = fs.readFileSync(plan, "utf8");
+  check("`--plan --out` over a plan the agent appended Adjustments to writes the new plan AND keeps that section verbatim",
+    () => fs.existsSync(plan) && first.status !== 1 && again.status !== 1 && text.includes("MainH") && text.endsWith(ADJ)
+      && text.split("## Adjustments").length === 2,
+    () => ({ status: [first.status, again.status], out: again.stdout.slice(0, 300), mainH: text.includes("MainH"), tail: text.slice(-120) }));
+  write(manifestOf({ extraField: true }));
+  check("a second regeneration still carries ONE copy of it", () => fs.readFileSync(plan, "utf8") === text);
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
 console.log("\n===== E11: an Outcome written after a stray empty column =====");
 {
   const { base, dir } = closedFolder("e11");
