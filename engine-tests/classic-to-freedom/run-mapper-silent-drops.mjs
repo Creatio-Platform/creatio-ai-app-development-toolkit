@@ -186,7 +186,7 @@ export function runSilentDropsChecks({ check, runMigration, CLEAN_SEED, FULL_SIG
   const decisions = new Map([["D5", "Refresh button"], ["D6", "Order status lock on product lines"]]);
   const reasons = builderDropReasons([{ file: "task-main-page-build.md", notes: read("builder-notes.md") }], decisions);
   check("silent drops (builder): a drop citing an unrelated decision, a drop citing none and a no-equivalent claim with no `Checked (row N)` each keep the run from completing",
-    () => reasons.length === 1 && /^3 note lines/.test(reasons[0]) && /see D5/.test(reasons[0]) && /Dropped/.test(reasons[0]) && /per-row lock/.test(reasons[0]),
+    () => reasons.length === 1 && reasons[0].startsWith("3 note lines") && /see D5/.test(reasons[0]) && /Dropped/.test(reasons[0]) && /per-row lock/.test(reasons[0]),
     () => reasons);
   check("silent drops (builder, anti-vacuity): a drop citing the decision about it, a negated drop, a wrapped `Decision needed` question and a claim backed by `Checked (row N)` are no drop",
     () => !/D6 task/.test(reasons[0] || "") && !/Nothing was dropped/.test(reasons[0] || "") && !/Decision needed/.test(reasons[0] || "")

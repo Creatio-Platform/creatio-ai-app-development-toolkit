@@ -863,7 +863,10 @@ export const CHECKED_MARKER = notesMarker("Checked");
 const DROP_WORDS = /\b(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
 const DROP_LABEL = /^[\s*>+-]*\**\s{0,3}(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
 const NEGATED_DROP =/\b(?:nothing|none|no)\b[^.;:]{0,40}\b(?:dropped|not ported|won'?t[\s-]do)\b/i;
-const NO_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b|\bfreedom\s(?:has|offers|provides)\sno\b/i;
+// "no Freedom (list) equivalent" and "Freedom has no …": two small patterns, either one is the claim
+const NO_FREEDOM_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b/i;
+const FREEDOM_HAS_NO = /\bfreedom\s(?:has|offers|provides)\sno\b/i;
+const NO_EQUIVALENT = { test: (s) => NO_FREEDOM_EQUIVALENT.test(s) || FREEDOM_HAS_NO.test(s) };
 const ROW_REF = /\brow\s(\d+)\b/i;
 // A wrapped line is indented and opens no bullet, numbered item, quote or heading of its own.
 const CONTINUATION = /^\s+(?![-*+>#]|\d+[.)]\s)\S/;
@@ -880,7 +883,11 @@ const terms = (s) => new Set(String(s || "").toLowerCase().match(TERM) || []);
 const coversEntry = (entry, decision) => { const t = terms(entry); return [...terms(decision.title)].some((w) => t.has(w)); };
 function unauthorisedDrops(task, decisions) {
   let checked = null;
-  const isChecked = (row) => !!row && (checked ??= notesMarkers(task.notes, CHECKED_MARKER)).has(Number(row[1]));
+  const isChecked = (row) => {
+    if (!row) return false;
+    checked ??= notesMarkers(task.notes, CHECKED_MARKER);
+    return checked.has(Number(row[1]));
+  };
   const out = [];
   for (const entry of noteEntries(task.notes)) {
     if (DECISION_MARKER.test(entry) || CHECKED_MARKER.test(entry)) continue;

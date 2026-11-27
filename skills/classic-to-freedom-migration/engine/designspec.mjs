@@ -1225,7 +1225,8 @@ export function detailFeatureQuestions(d) {
   if (f.rowStyling) out.push({ feature: "Row styling", classic: "`prepareResponseCollectionItem` sets `customStyle`",
     options: "a conditional row style, or Won't do",
     reason: `The '${label}' list shows some rows in another colour in Classic, depending on their data. Decide: colour the same rows on the Freedom list, or Won't do` });
-  if (f.rowLock?.length) out.push({ feature: "Row lock", classic: `enabled row by row: ${f.rowLock.map((l) => `${l.action} (\`${l.member}\`)`).join(", ")}`,
+  const lockedBy = (f.rowLock || []).map((l) => l.action + " (`" + l.member + "`)").join(", ");
+  if (f.rowLock?.length) out.push({ feature: "Row lock", classic: `enabled row by row: ${lockedBy}`,
     options: "the same per-row lock on the Freedom list, or Won't do",
     reason: `The '${label}' list allows ${plainList(f.rowLock.map((l) => l.action))} only on some rows in Classic, depending on each row's data. Decide: lock the same rows on the Freedom list, or Won't do` });
   return out;
