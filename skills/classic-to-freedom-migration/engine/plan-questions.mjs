@@ -54,14 +54,7 @@ export function planQuestionsOf({ entries, derived = [], opts = {} } = {}) {
     const problems = entryProblems(e, key, engineIds.has(key), seen);
     seen.add(key);
     if (problems.length) { issues.push(...problems.map((problem) => ({ key, problem }))); continue; }
-    const base = byId.get(key);
-    byId.set(key, {
-      id: key,
-      kind: base?.kind || e.kind,
-      question: base?.question || e.question.trim(),
-      pages: base?.pages || (e.pages || []).filter((p) => !blank(p)).map((p) => p.trim()),
-      answer: blank(e.answer) ? null : e.answer.trim(),
-    });
+    byId.set(key, mergedQuestion(key, e, byId.get(key)));
   }
   const questions = [...byId.values()];
   for (const q of questions) {
@@ -70,6 +63,17 @@ export function planQuestionsOf({ entries, derived = [], opts = {} } = {}) {
   }
   const open = opts.decisionsOptional ? [] : questions.filter((q) => !q.answer).map((q) => q.id);
   return { questions, open, issues };
+}
+// One manifest entry as a question: the engine's own question (`base`) keeps its kind, text and pages, and the
+// entry adds its answer.
+function mergedQuestion(key, e, base) {
+  return {
+    id: key,
+    kind: base?.kind || e.kind,
+    question: base?.question || e.question.trim(),
+    pages: base?.pages || (e.pages || []).filter((p) => !blank(p)).map((p) => p.trim()),
+    answer: blank(e.answer) ? null : e.answer.trim(),
+  };
 }
 function entryProblems(e, key, engineRaised, seen) {
   if (!e || typeof e !== "object" || Array.isArray(e)) return ["must be an object with an `id`"];

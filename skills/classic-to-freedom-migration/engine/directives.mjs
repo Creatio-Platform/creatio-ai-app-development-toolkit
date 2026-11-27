@@ -171,9 +171,16 @@ export function questionsAfterApproval({ records = [], approved = false } = {}, 
   return { approved, questions, missed: questions.filter((q) => q.planQuestion !== PLAN_QUESTION_BUILD_ONLY).map((q) => q.id) };
 }
 // `build-only — <reason>` → `{ planQuestion: "build-only", reason }`; no line → `planQuestion: null` (counted missed).
+// Read by hand, word then separator, so a long value costs one pass.
+const REASON_SEPARATORS = "—–:-";
 function planQuestionValue(raw) {
-  const m = /^`?([a-z-]+)`?\s*(?:[—–:-]+\s*)?(.*)$/i.exec(String(raw || "").trim());
-  return m ? { planQuestion: m[1].toLowerCase(), reason: m[2].trim() } : { planQuestion: null, reason: "" };
+  const s = stripTicks(String(raw || ""));
+  const word = /^[a-z-]+/i.exec(s);
+  if (!word) return { planQuestion: null, reason: "" };
+  const rest = stripTicks(s.slice(word[0].length));
+  let i = 0;
+  while (i < rest.length && REASON_SEPARATORS.includes(rest[i])) i++;
+  return { planQuestion: word[0].toLowerCase(), reason: rest.slice(i).trim() };
 }
 // A `Plan question:` line that does not classify the answer: an unknown value, or `build-only` with no reason.
 function planQuestionIssues(r) {

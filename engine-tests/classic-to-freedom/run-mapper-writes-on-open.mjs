@@ -144,8 +144,8 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
     () => run.plan.split("\n").filter((l) => /write data|MbContractLastNumber/.test(l)));
   check("writes-on-open: the page is a question before approval — `data-on-open:main` is open and listed in the plan until the user answers it",
     () => run.planQuestions.open.join() === "data-on-open:main"
-      && run.plan.split("\n").some((l) => /^\| 1 \| Opening MbContract form page as a new record changes data on the stand/.test(l)
-        && /\| Data written when the page opens \| `main` \| ⚠ open \|$/.test(l)),
+      && run.plan.split("\n").some((l) => l.startsWith("| 1 | Opening MbContract form page as a new record changes data on the stand")
+        && l.endsWith("| Data written when the page opens | `main` | ⚠ open |")),
     () => [run.planQuestions, run.plan.split("\n").filter((l) => /Questions before approval|data-on-open|Opening/.test(l))]);
   const consent = parseDecisionRecords('## D7 — Add-mode checks of the contract page allowed\n- Kind: answer\n- Decided by: user\n'
     + '- Asked: May the checks open the contract page as a new record?\n- Quote: "yes, once"\n');
@@ -153,7 +153,7 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
     { decisions: new Map([["D7", "Add-mode checks of the contract page allowed"]]), decisionRecords: consent });
   check("writes-on-open: the manifest answers the engine's question by its id — the gap closes, the plan row names the D<N>, and the plan version stays as it was",
     () => answered.planQuestions.open.length === 0 && answered.planQuestions.issues.length === 0
-      && answered.plan.split("\n").some((l) => /^\| 1 \| Opening MbContract form page/.test(l) && /\| `main` \| D7 \|$/.test(l))
+      && answered.plan.split("\n").some((l) => l.startsWith("| 1 | Opening MbContract form page") && l.endsWith("| `main` | D7 |"))
       && answered.planVersion === run.planVersion,
     () => [answered.planQuestions, answered.planVersion, run.planVersion]);
   check("writes-on-open: a plan without such a page has no such section",
