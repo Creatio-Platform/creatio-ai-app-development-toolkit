@@ -3838,6 +3838,15 @@ function valueFlagArg(argv, flag, example, onBad, noun = "a path") {
   }
   return next;
 }
+// Every value of a flag that may be given more than once, in the order given. `--row` is one: reading only the
+// first occurrence answered one row of `--decide D<N> --row a:1 --row a:2` and dropped the rest without a word.
+function valueFlagArgs(argv, flag, example, onBad, noun = "a path") {
+  const values = [];
+  argv.forEach((a, i) => {
+    if (a === flag) values.push(valueFlagArg(argv.slice(i), flag, example, onBad, noun));
+  });
+  return values;
+}
 
 // The stdout note that goes with `--out`. MODE-AWARE, because "incomplete" means two opposite things.
 //
@@ -4734,7 +4743,7 @@ function decideRefusalHelp(res, opts, migrationDir) {
 // Each branch is evaluated ONLY when it is the one taken: `opts.pages` is null whenever the decision was
 // addressed by task or by row, so reading its length up front throws on the two commonest forms.
 function decideTargetLabel(opts) {
-  if (opts.rowRef) return `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`;
+  if (opts.rowRefs?.length) return opts.rowRefs.map((r) => `row ${r.n} of ${r.taskId}`).join(", ");
   if (opts.taskId) return `task ${opts.taskId}`;
   return `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
 }
@@ -4994,7 +5003,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const toArg = valueFlagArg(argv, TO_FLAG, `${TO_FLAG} ENG-12345`, fail);
   const pagesArg = valueFlagArg(argv, PAGES_FLAG, `${PAGES_FLAG} typed:Service,typed:Product`, fail);
   const taskArg = valueFlagArg(argv, TASK_FLAG, `${TASK_FLAG} <task-id>`, fail);
-  const rowArg = valueFlagArg(argv, ROW_FLAG, `${ROW_FLAG} <task-id>:<n>`, fail);
+  const rowArgs = valueFlagArgs(argv, ROW_FLAG, `${ROW_FLAG} <task-id>:<n>`, fail);
+  const rowArg = rowArgs[0] ?? null;
   const decideMode = !!decideArg, revokeMode = !!revokeArg;
   if ((decideMode || revokeMode) && !tasksMode) fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it writes into that folder.`);
   if (decideMode && revokeMode) fail(`\`${DECIDE_FLAG}\` and \`${REVOKE_FLAG}\` are opposite operations — run them as separate commands.`);
@@ -5214,7 +5224,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       mode: decideModeOf(wontDoFlag, buildFlag), destination: toArg || null,
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
-      rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
+      rowRefs: rowArgs.length ? rowArgs.map((a) => { const at = a.lastIndexOf(":"); return at > 0 ? { taskId: a.slice(0, at), n: a.slice(at + 1) } : { taskId: a, n: Number.NaN }; }) : null };
     let res;
     try { res = runDecideMode(result, tasksDir, opts); }
     catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }

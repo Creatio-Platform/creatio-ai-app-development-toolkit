@@ -3649,7 +3649,9 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
     const startedAt = clocks[t.id]?.startedAt;
     const elapsed = startedAt ? `, running ${Math.round((new Date(now) - new Date(startedAt)) / 60000)} min` : "";
     const eta = f ? `, expected ${f.low}-${f.high} min` : "";
-    L.push(`[${Number(t.order)}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
+    // The position in the run, not `t.order`: a repair task sorts last on a sentinel order, which printed as the
+    // counter itself (`[9007199254740990/51]`).
+    L.push(`[${tasks.indexOf(t) + 1}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
   }
   const leftWeight = [...running, ...open].reduce((a, t) => a + (t.weight || 0), 0);
   const left = forecastMinutes(leftWeight, samples);
@@ -4631,9 +4633,27 @@ function decidePagesTargets(tasks, pages) {
   if (!targets.length) return { problems: [`no tasks with pageKey in {${pages.join(", ")}} in the folder`], targets: [] };
   return { targets };
 }
+// Several `--row` addressings answered by one decision: every row, one target per task, the rows in the order
+// given. One that does not resolve refuses them all, so a call never lands half its answer.
+function decideRowsTargets(tasks, rowRefs) {
+  const byTask = new Map();
+  const problems = [];
+  for (const ref of rowRefs) {
+    const one = decideRowTarget(tasks, ref);
+    problems.push(...(one.problems || []));
+    for (const { task, rowIndices } of one.targets) {
+      if (!byTask.has(task)) byTask.set(task, []);
+      const at = byTask.get(task);
+      for (const i of rowIndices) if (!at.includes(i)) at.push(i);
+    }
+  }
+  if (problems.length) return { problems, targets: [] };
+  return { targets: [...byTask].map(([task, rowIndices]) => ({ task, rowIndices })) };
+}
 function pickDecideTargets(tasks, opts) {
   const { pages, taskId, rowRef } = opts;
-  if (rowRef) return decideRowTarget(tasks, rowRef);
+  const rowRefs = opts.rowRefs?.length ? opts.rowRefs : [rowRef].filter(Boolean);
+  if (rowRefs.length) return decideRowsTargets(tasks, rowRefs);
   if (taskId) return decideTaskTarget(tasks, taskId);
   if (pages?.length) return decidePagesTargets(tasks, pages);
   return { problems: ["--decide needs one of --pages, --task or --row to address rows"], targets: [] };
@@ -4810,6 +4830,15 @@ export function applyDecision(dir, result, opts = {}) {
     touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged };
 }
 
+// A task that is `todo` only because a build-it answer re-opened some of its rows, and that no builder has taken
+// since. Its other questions are still the person's to answer: refusing them as "a builder may be writing" sent
+// the retest's orchestrator round a closed task once per row. Dispatching it moves it to `in-progress`, which
+// ends this state.
+function reopenedByAnswer(task) {
+  if (task.status !== S_TODO) return false;
+  const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
+  return [...(map?.values() || [])].some(isBuildDecision);
+}
 // `--decide D<N> --build`: the answer to a needs-decision row is "build it". The row is re-opened for a builder:
 // its Outcome is cleared, the task's `decisions:` names who decided, and the task's status is recomputed off the
 // cells as a freshly re-opened task. Only a row waiting on a decision, in a task that is closed or blocked, is
@@ -4825,7 +4854,7 @@ function buildSkipReason(row, task, n) {
     return `already decided${decidedBy} — \`--revoke\` that decision first`;
   }
   if (row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION) {
-    if (awaitsAnswer(task)) return null;
+    if (awaitsAnswer(task) || reopenedByAnswer(task)) return null;
     return `its task is ${task.status || "unknown"}, not closed or blocked — a builder may still be writing its page, and re-opening the row would let a second agent be dispatched onto it; answer once the task closes`;
   }
   const cause = row.outcomeCause ? ` — ${row.outcomeCause}` : "";
@@ -5328,7 +5357,7 @@ function worklogField(worklogText, field, allowed) {
 // Returns the file text and the prompt it carries, so the caller prints that prompt without re-parsing the text.
 export function renderResume(f) {
   const nextLine = f.next
-    ? `\`${f.next.id}\` (step ${Number(f.next.order)} · ${f.next.pageKey} · ${f.next.group})`
+    ? `\`${f.next.id}\` (step ${Number(f.next.step ?? f.next.order)} · ${f.next.pageKey} · ${f.next.group})`
     : `none right now — \`--next\` answers \`${f.verdict}\`; ask it and act on that answer`;
   const prompt = [
     `Resume the Classic to Freedom UI migration build in ${f.migrationDir} with the classic-to-freedom-migration skill.`,
