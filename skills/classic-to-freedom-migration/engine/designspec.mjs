@@ -2374,7 +2374,7 @@ function renderPlanWith(result, opts) {
   };
   const signalLines = opts.processPage ? ["- not applicable — a process page has no section, list page or object; its process steps are listed under **Process page**"]
     : [sigLine("dcm", "DCM case"), processesSigLine(sigLine, signals.processes, launchedProcessNames(result.launchedProcesses, esc)), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check")];
-  P.push(...planQuestionLines(result.planQuestions || []));
+  P.push(...planQuestionLines(result.planQuestions?.questions || []));
   P.push("### On-stand signals", ...signalLines, "",
     ...dataWritingPlanLines(dataWritingPages(result)),
     ...conventionsPlanLines(opts.projectConventions, opts.recordIds || [], esc));
@@ -3821,17 +3821,26 @@ function renderDirectivesSection(result) {
     ...list.map((d) => `| ${esc(d.id)} | “${esc(d.quote || "?")}” | ${esc(d.expectation)} | ${where(d)} |`), ""];
 }
 const provenanceIssueText = (x) => `\`${x.key}\` ${x.problem}`;
-// QUESTIONS BEFORE APPROVAL (plan-questions.mjs): the ⛔ banners for an open question and for an entry that cannot
-// stand, and the plan section that lists every question with its answer. Nothing for a run without questions.
-function planQuestionBanners(result) {
-  const open = result.planQuestionsOpen || [];
-  const issues = result.planQuestionIssues || [];
-  const byId = new Map((result.planQuestions || []).map((q) => [q.id, q]));
+// QUESTIONS BEFORE APPROVAL (plan-questions.mjs, `result.planQuestions`): the plan gaps, the ⛔ banners for an open
+// question and for an entry that cannot stand, and the plan section that lists every question with its answer.
+// Nothing for a run without questions.
+const issueText = (x) => `\`${x.key}\` ${x.problem}`;
+export function planQuestionGaps(result) {
+  const { open = [], issues = [] } = result?.planQuestions || {};
   return [
-    ...(open.length ? [`> ⛔ **PLAN INCOMPLETE — ${open.length} question(s) to ask before approval:** ask them together where they do not depend on each other, record each answer in \`decisions.md\`, name its D<N> as the question's \`answer\` in \`manifest.planQuestions\`, then re-run \`migrate.mjs --plan\`.`,
-      ...open.map((id) => `> - \`${esc(id)}\` — ${esc(byId.get(id)?.question || "?")}`), ""] : []),
-    ...(issues.length ? [`> ⛔ **PLAN INCOMPLETE — ${issues.length} \`manifest.planQuestions\` problem(s):**`,
-      ...issues.map((x) => `> - ${esc(provenanceIssueText(x))}`), ""] : []),
+    ...(issues.length ? [`planQuestions INVALID (${issues.map(issueText).join("; ")})`] : []),
+    ...(open.length ? [`${open.length} plan question(s) OPEN (${open.join(", ")}) — ask them before approval`] : []),
+  ];
+}
+function planQuestionBanners(result) {
+  const { questions = [], open = [], issues = [] } = result.planQuestions || {};
+  const openIds = new Set(open);
+  return [
+    ...incompleteBanner(`${open.length} question(s) to ask before approval`, "only the user can answer them, and the build needs the answers.",
+      questions.filter((q) => openIds.has(q.id)).map((q) => `${q.id} — ${q.question}`),
+      "Ask them together where they do not depend on each other, record each answer in `decisions.md`, name its D<N> as the question's `answer` in `manifest.planQuestions`, then re-run `migrate.mjs --plan`."),
+    ...incompleteBanner(`${issues.length} \`manifest.planQuestions\` problem(s)`, "these entries cannot stand.", issues.map(issueText),
+      "Correct each entry, then re-run `migrate.mjs --plan`."),
   ];
 }
 function planQuestionLines(questions) {
@@ -6079,8 +6088,7 @@ export function planGaps(result) {
   if ((result?.statusIssues || []).length) g.push(`deliverableStatus INVALID (${result.statusIssues.map(statusIssueText).join("; ")})`);
   if ((result?.noDeliverableIssues || []).length) g.push(`decisionsWithoutDeliverable INVALID (${result.noDeliverableIssues.map(noDeliverableIssueText).join("; ")})`);
   if ((result?.provenanceIssues || []).length) g.push(`decisions.md provenance INVALID (${result.provenanceIssues.map(provenanceIssueText).join("; ")})`);
-  if ((result?.planQuestionIssues || []).length) g.push(`planQuestions INVALID (${result.planQuestionIssues.map(provenanceIssueText).join("; ")})`);
-  if ((result?.planQuestionsOpen || []).length) g.push(`${result.planQuestionsOpen.length} plan question(s) OPEN (${result.planQuestionsOpen.join(", ")}) — ask them before approval`);
+  g.push(...planQuestionGaps(result));
   return g;
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.

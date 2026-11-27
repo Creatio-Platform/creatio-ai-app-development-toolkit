@@ -110,96 +110,92 @@ export function headingTitle(raw) {
   return String(raw || "").replace(/^[\s—–:.-]+/, "").trim();
 }
 
-// Every `## D<N>` heading entry as `{ id, title, fields }`, in file order. A later heading for the same id
-// replaces the earlier one, the way the decision titles are read. Only heading entries carry provenance: a table
-// row or a plain line has no place for the field lines.
-export function parseDecisionRecords(text) {
+// A non-empty `Approved by:` line, with or without a list marker: the line that makes its entry the plan's approval.
+function approvesPlan(line) {
+  const s = line.trimStart();
+  const f = fieldLine(s.startsWith("- ") || s.startsWith("* ") ? s : `- ${s}`);
+  return f?.label.toLowerCase() === "approved by" && f.value !== "";
+}
+// THE DECISION LOG: every `## D<N>` heading entry as `{ id, title, fields, afterApproval }`, in file order, and
+// whether the plan's approval is recorded (`approved`). A later heading for the same id replaces the earlier one, the
+// way the decision titles are read. Only heading entries carry provenance: a table row or a plain line has no place
+// for the field lines. `afterApproval` marks an entry that follows the first entry with an `Approved by:` line.
+export function parseDecisionLog(text) {
   const byId = new Map();
   let cur = null;
+  let approved = false;
   for (const line of String(text || "").split(/\r?\n/)) {
     const h = DECISION_HEADING.exec(line);
     if (h) {
-      cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {} };
+      cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {}, afterApproval: approved };
       byId.delete(cur.id);
       byId.set(cur.id, cur);
       continue;
     }
     if (ANY_HEADING.test(line)) { cur = null; continue; }
+    if (approvesPlan(line)) approved = true;
     if (!cur) continue;
     const f = fieldLine(line);
     const field = f && FIELD_OF.get(f.label.toLowerCase());
     if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f.value);
   }
-  return [...byId.values()];
+  return { records: [...byId.values()], approved };
 }
+export const parseDecisionRecords = (text) => parseDecisionLog(text).records;
 
-// THE QUESTIONS ASKED AFTER THE PLAN WAS APPROVED. Every `Kind: answer` entry that follows the first approval entry
-// (a `## ` entry with a non-empty `Approved by:` line) is a question the build stopped on. Its `Plan question:` line
-// says whether discovery could have asked it before approval: `missed` (it could) or `build-only` with what the
-// build learned that discovery could not (a platform limit met while saving, a fact only the built page shows). An
-// answer without the line is counted as missed, so an unclassified question never hides the gap.
+// THE QUESTIONS ASKED AFTER THE PLAN WAS APPROVED. Every `Kind: answer` entry that follows the approval is a question
+// the build stopped on. Its `Plan question:` line says whether discovery could have asked it before approval:
+// `missed` (it could) or `build-only` with what the build learned that discovery could not (a platform limit met
+// while saving, a fact only the built page shows). An answer without the line is counted as missed, so an
+// unclassified question never hides the gap. `log` is `parseDecisionLog`'s result.
 //   → `{ approved, questions: [{ id, title, planQuestion, reason }], missed: [ids] }`
-export const PLAN_QUESTION_MISSED = "missed";
+const PLAN_QUESTION_MISSED = "missed";
 export const PLAN_QUESTION_BUILD_ONLY = "build-only";
-export function questionsAfterApproval(text) {
-  let approved = false;
-  let entry = null;
-  const questions = [];
-  const close = () => {
-    if (!entry) return;
-    if (entry.approval) approved = true;
-    else if (approved && entry.id && entry.fields.kind === KIND_ANSWER) questions.push(classify(entry));
-  };
-  for (const line of String(text || "").split(/\r?\n/)) {
-    if (ANY_HEADING.test(line)) {
-      close();
-      const h = DECISION_HEADING.exec(line);
-      entry = { id: h ? `D${h[1]}` : null, title: h ? headingTitle(h[2]) : "", fields: {}, approval: false };
-      continue;
-    }
-    const f = entry && fieldLine(line);
-    if (!f) continue;
-    const label = f.label.toLowerCase();
-    if (label === "approved by" && f.value !== "") entry.approval = true;
-    const field = FIELD_OF.get(label);
-    if (field && !(field in entry.fields)) entry.fields[field] = cleanValue(field, f.value);
-  }
-  close();
+export function questionsAfterApproval({ records = [], approved = false } = {}) {
+  const questions = records.filter((r) => r.afterApproval && r.fields.kind === KIND_ANSWER)
+    .map((r) => ({ id: r.id, title: r.title, ...planQuestionValue(r.fields.planQuestion) }));
   return { approved, questions, missed: questions.filter((q) => q.planQuestion !== PLAN_QUESTION_BUILD_ONLY).map((q) => q.id) };
 }
 // `build-only — <reason>` → `{ planQuestion: "build-only", reason }`; no line → `planQuestion: null` (counted missed).
-function classify(entry) {
-  const { kind, reason } = planQuestionValue(entry.fields.planQuestion);
-  return { id: entry.id, title: entry.title, planQuestion: kind, reason };
-}
 function planQuestionValue(raw) {
   const m = /^`?([a-z-]+)`?\s*(?:[—–:-]+\s*)?(.*)$/i.exec(String(raw || "").trim());
-  return m ? { kind: m[1].toLowerCase(), reason: m[2].trim() } : { kind: null, reason: "" };
+  return m ? { planQuestion: m[1].toLowerCase(), reason: m[2].trim() } : { planQuestion: null, reason: "" };
 }
 // A `Plan question:` line that does not classify the answer: an unknown value, or `build-only` with no reason.
 function planQuestionIssues(r) {
   if (blank(r.fields?.planQuestion)) return [];
-  const { kind, reason } = planQuestionValue(r.fields.planQuestion);
-  if (kind !== PLAN_QUESTION_MISSED && kind !== PLAN_QUESTION_BUILD_ONLY) {
+  const { planQuestion, reason } = planQuestionValue(r.fields.planQuestion);
+  if (planQuestion !== PLAN_QUESTION_MISSED && planQuestion !== PLAN_QUESTION_BUILD_ONLY) {
     return [`\`Plan question: ${r.fields.planQuestion}\` is not \`${PLAN_QUESTION_MISSED}\` or \`${PLAN_QUESTION_BUILD_ONLY} — <what the build learned>\``];
   }
-  if (kind === PLAN_QUESTION_BUILD_ONLY && !reason) {
+  if (planQuestion === PLAN_QUESTION_BUILD_ONLY && !reason) {
     return [`\`Plan question: ${PLAN_QUESTION_BUILD_ONLY}\` needs the reason — what the build learned that discovery could not`];
   }
   return [];
 }
 
-// The records of `<migrationDir>/decisions.md`; none when the file is absent. Any other read failure is thrown: a
+// The log of `<migrationDir>/decisions.md`; an empty one when the file is absent. Any other read failure is thrown: a
 // decisions.md that exists but cannot be read would otherwise drop every directive in it without a word.
-export function readDecisionRecords(migrationDir) {
+export function readDecisionLog(migrationDir) {
   let text;
   try {
     text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
   } catch (e) {
-    if (e?.code === "ENOENT") return [];
+    if (e?.code === "ENOENT") return { records: [], approved: false };
     throw e;
   }
-  return parseDecisionRecords(text);
+  return parseDecisionLog(text);
+}
+export const readDecisionRecords = (migrationDir) => readDecisionLog(migrationDir).records;
+
+// What keeps a `D<N>` a manifest entry names from resolving, or null: not shaped `D<N>`, no decisions.md read (none
+// is required in a mode that sets `decisionsOptional`), or an id decisions.md does not hold. `decisions` is the id →
+// title Map of decisions.md.
+export const DECISION_ID = /^D\d+$/;
+export function decisionRefProblem(d, { decisions, decisionsOptional }) {
+  if (typeof d !== "string" || !DECISION_ID.test(d)) return "is not a D<N>";
+  if (!decisions) return decisionsOptional ? null : "cannot be resolved: no decisions.md was read — plan with `--out` into the migration folder that holds decisions.md";
+  return decisions.has(d) ? null : "does not resolve to an entry in decisions.md";
 }
 
 // `Scope: main, typed:Product` → ["main", "typed:Product"]. Commas separate keys; backticks around a key are
@@ -275,7 +271,7 @@ export function orchestratorDecisions(records) {
     .map((r) => ({ id: r.id, title: r.title }));
 }
 
-const blank = (v) => typeof v !== "string" || v.trim() === "";
+export const blank = (v) => typeof v !== "string" || v.trim() === "";
 // Does the entry use the provenance format at all? An older entry may carry a free-text `Decided by:` (a person's
 // name) and nothing else; it is a plain decision, and its value is not checked against `user` / `orchestrator`.
 const usesProvenance = (f) => ["kind", "quote", "asked", "scope", "expectation"].some((k) => !blank(f[k]));

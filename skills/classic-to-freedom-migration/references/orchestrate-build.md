@@ -358,14 +358,10 @@ may change it at any time by saying so — update the line first.
 
    **A question the build stops on is counted.** The plan asked the questions discovery could list
    (`### Questions before approval`); every question you put to the user after the approval is one it
-   did not. Record its answer as a `Kind: answer` entry with a `Plan question:` line: `missed` when the
-   facts it turns on were readable before the approval (a behaviour choice on a page, a field or setting
-   defined in another package, a change that affects every page of an object, a page that writes data
-   when it opens), or `build-only — <what the build learned>` when only the build could raise it (a
-   platform refusal met while saving, a finding of the page-code check). An answer without the line is
-   counted as missed. The migration result lists them under **Questions after plan approval** with the
-   count of missed ones. When several build questions are open at once and do not depend on each
-   other, ask them in one message.
+   did not. Record its answer with a `Plan question:` line (`missed` or `build-only — <what the build
+   learned>`, `./migration-documentation.md` → *Directives and answers*); the migration result counts them
+   under **Questions after plan approval**. When several build questions are open at once and do not
+   depend on each other, ask them in one message.
 
    **The queue order it answers in is leaf-first, and that is a build requirement, not a
    preference:** a related list's Add/Edit opens the child's own form, so the child page exists

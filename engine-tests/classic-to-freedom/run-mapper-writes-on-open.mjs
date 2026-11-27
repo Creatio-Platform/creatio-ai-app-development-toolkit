@@ -142,10 +142,10 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
       && /EDIT mode on an existing record/.test(run.plan),
     () => run.plan.split("\n").filter((l) => /write data|MbContractLastNumber/.test(l)));
   check("writes-on-open: the page is a question before approval — `data-on-open:main` is open and listed in the plan until the user answers it",
-    () => (run.planQuestionsOpen || []).join() === "data-on-open:main"
+    () => run.planQuestions.open.join() === "data-on-open:main"
       && run.plan.split("\n").some((l) => /^\| 1 \| Opening MbContract form page as a new record changes data on the stand/.test(l)
         && /\| Data written when the page opens \| `main` \| ⚠ open \|$/.test(l)),
-    () => [run.planQuestionsOpen, run.plan.split("\n").filter((l) => /Questions before approval|data-on-open|Opening/.test(l))]);
+    () => [run.planQuestions, run.plan.split("\n").filter((l) => /Questions before approval|data-on-open|Opening/.test(l))]);
   check("writes-on-open: a plan without such a page has no such section",
     () => !/Pages that write data when opened/.test(plain.plan) && dataWritingPages(plain).length === 0,
     () => dataWritingPages(plain));

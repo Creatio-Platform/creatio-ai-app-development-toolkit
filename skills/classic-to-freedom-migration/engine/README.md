@@ -571,8 +571,9 @@ opens; the manifest answers it with `{ id, answer }`. The plan lists them under 
 In `--plan` and `--tasks` an open question is a plan gap (`N plan question(s) OPEN`, exit 2, stderr
 `⛔ PLAN QUESTIONS`), and so is an entry that cannot stand (`planQuestions INVALID`: a kind outside the four, no
 question, an id twice, an answer that is not a `D<N>`, that decisions.md does not hold, or that is not the user's
-own, a `data-on-open:` id for a page that writes nothing); other modes list them without a gap. The key is
-outside the plan version: an answer reaches the build through the manifest entries it leads to.
+own, a `data-on-open:` id for a page that writes nothing); other modes list them without a gap. The plan version
+reads the questions without their answers (`withoutAnswers`), so recording an answer leaves the approved version
+as it was, while adding, removing or rewording a question moves it.
 
 **Questions after approval (`Plan question:`).** Every `Kind: answer` entry of decisions.md that follows the first
 `## ` entry with a non-empty `Approved by:` is a question the build stopped on (`questionsAfterApproval` in

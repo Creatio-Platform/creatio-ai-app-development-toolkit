@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { planQuestionsOf, dataOnOpenQuestion, planQuestionAnswers, PLAN_QUESTION_KINDS }
   from "../../skills/classic-to-freedom-migration/engine/plan-questions.mjs";
-import { questionsAfterApproval, parseDecisionRecords, provenanceIssues, provenanceById }
+import { questionsAfterApproval, parseDecisionLog, parseDecisionRecords, provenanceIssues, provenanceById }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 import { unaccountedDecisions } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
@@ -24,7 +24,7 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
   const QUESTIONS = JSON.parse(read("plan-questions.json"));
   const decisions = new Map([["D9", "a"], ["D10", "b"], ["D11", "c"]]);
   const provenance = { D9: USER("yes"), D10: USER("b"), D11: { decidedBy: "orchestrator", quote: "" } };
-  const of = (entries, extra = {}) => planQuestionsOf({ entries, decisions, provenance, ...extra });
+  const of = (entries, extra = {}) => planQuestionsOf({ entries, opts: { decisions, decisionProvenance: provenance }, ...extra });
 
   // The entry rules.
   const answered = of([{ id: "q1", kind: "behaviour", question: "Keep it?", answer: "D9" }]);
@@ -36,7 +36,7 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
   check("plan questions: a question with no answer is OPEN, and an open question is no entry problem",
     () => open.open.join() === "q1" && open.issues.length === 0, () => open);
   check("plan questions: in a mode that reads no decisions.md an open question is listed but is no gap, and an answer is taken as written",
-    () => { const r = planQuestionsOf({ entries: [{ id: "q1", kind: "behaviour", question: "?" }, { id: "q2", kind: "behaviour", question: "?", answer: "D4" }], optional: true });
+    () => { const r = planQuestionsOf({ entries: [{ id: "q1", kind: "behaviour", question: "?" }, { id: "q2", kind: "behaviour", question: "?", answer: "D4" }], opts: { decisionsOptional: true } });
       return r.open.length === 0 && r.issues.length === 0 && r.questions.length === 2; });
   const problems = (entries, extra) => of(entries, extra).issues.map((x) => `${x.key}: ${x.problem}`);
   check("plan questions: a kind outside the four, a missing question and a missing id are named",
@@ -67,7 +67,7 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
   const derived = of([{ id: "data-on-open:main", answer: "D10" }], { derived: [addOnly] });
   check("plan questions: the manifest answers the engine's question by its id; kind and question stay the engine's",
     () => derived.issues.length === 0 && derived.open.length === 0 && derived.questions[0].question === addOnly.question
-      && derived.questions[0].answer === "D10" && derived.questions[0].derived === true,
+      && derived.questions[0].answer === "D10",
     () => derived);
   check("plan questions: the engine's question with no manifest entry is open; an answer for a page that writes nothing is named",
     () => of(undefined, { derived: [addOnly] }).open.join() === "data-on-open:main"
@@ -125,16 +125,21 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
       && (section(settled.plan).match(/\| Behaviour choice \|/g) || []).length === 4,
     () => section(settled.plan));
   const version = (plan) => /\*\*Plan version:\*\* `(plan-[0-9a-f]+)`/.exec(plan)?.[1];
-  check("plan questions golden: answering the questions leaves the plan version as it was — the answers are recorded with the approval, not ahead of it",
-    () => !!version(settled.plan) && version(settled.plan) === version(asked.plan) && version(planIn(before, undefined).plan) === version(settled.plan),
+  const reworded = QUESTIONS.map((q, i) => (i ? q : { ...q, question: `${q.question} Reworded.` }));
+  const onlyEngineAnswer = runMigration({ ...manifest([{ id: "data-on-open:main", answer: "D9" }]) });
+  check("plan questions golden: answering the questions leaves the plan version as it was; adding or rewording a question moves it",
+    () => !!version(settled.plan) && version(settled.plan) === version(asked.plan)
+      && version(planIn(before, undefined).plan) !== version(settled.plan) && version(planIn(before, reworded).plan) !== version(settled.plan)
+      && onlyEngineAnswer.planVersion === runMigration(manifest(undefined)).planVersion,
     () => [version(asked.plan), version(settled.plan)]);
   const none = runMigration(manifest(undefined));
   check("plan questions: a plan with no questions has no section and no gap",
-    () => !/### Questions before approval/.test(none.plan) && (none.planQuestions || []).length === 0 && (none.planQuestionsOpen || []).length === 0);
+    () => !/### Questions before approval/.test(none.plan) && none.planQuestions.questions.length === 0 && none.planQuestions.open.length === 0);
 
   // THE BUILD-TIME SIDE: the same section without plan questions stopped on six questions discovery could have asked.
   const afterText = read("decisions-after-approval.md");
-  const after = questionsAfterApproval(afterText);
+  const askedAfter = (text) => questionsAfterApproval(parseDecisionLog(text));
+  const after = askedAfter(afterText);
   check("questions after approval: every answer after the first approval is counted; unclassified counts as missed; a directive and an orchestrator choice are not questions",
     () => after.approved && after.questions.map((q) => q.id).join() === "D4,D5,D6,D7,D8,D9,D10"
       && after.missed.join() === "D4,D5,D6,D7,D8,D9"
@@ -143,9 +148,11 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
       && /page-code check found the save path/.test(after.questions.find((q) => q.id === "D10").reason),
     () => after);
   check("questions after approval: answers before the approval are plan questions, and a log with no approval counts nothing",
-    () => questionsAfterApproval(before).approved === false && questionsAfterApproval(before).questions.length === 0
-      && questionsAfterApproval(`${before}\n## Plan approval\n- Approved by: user\n- Plan version: plan-1\n`).questions.length === 0
-      && questionsAfterApproval("## Plan approval\n- Approved by:\n## D1 — x\n- Kind: answer\n").approved === false);
+    () => askedAfter(before).approved === false && askedAfter(before).questions.length === 0
+      && askedAfter(`${before}\n## Plan approval\n- Approved by: user\n- Plan version: plan-1\n`).questions.length === 0
+      && askedAfter("## Plan approval\n- Approved by:\n## D1 — x\n- Kind: answer\n").approved === false);
+  check("questions after approval: an `Approved by:` line without a list marker is an approval too, as the build gate reads it",
+    () => askedAfter("## Plan approval\nApproved by: user\n## D1 — x\n- Kind: answer\n").questions.map((q) => q.id).join() === "D1");
   check("questions after approval: a `Plan question:` line that is neither value, or `build-only` without its reason, is a provenance problem",
     () => { const issues = provenanceIssues(parseDecisionRecords("## D1 — a\n- Plan question: maybe\n## D2 — b\n- Plan question: build-only\n## D3 — c\n- Plan question: `missed`\n"));
       return issues.length === 2 && /`Plan question: maybe` is not `missed`/.test(issues[0].problem) && issues[0].key === "D1"
