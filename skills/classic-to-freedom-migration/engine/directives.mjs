@@ -125,34 +125,37 @@ function approvalField(line) {
 // for the field lines. The approval is the entry that holds both a non-empty `Approved by:` and a `Plan version:`,
 // the rule the build gate applies; `afterApproval` marks an entry that follows the first one.
 export function parseDecisionLog(text) {
-  const byId = new Map();
-  let cur = null;
-  let approved = false;
-  let entry = new Set();   // the approval fields the current heading entry holds
+  const log = { byId: new Map(), cur: null, approved: false, entry: new Set() };   // `entry`: the current entry's approval fields
   for (const line of String(text || "").split(/\r?\n/)) {
-    const h = DECISION_HEADING.exec(line);
-    if (h || ANY_HEADING.test(line)) {
-      if (entry.size === APPROVAL_LABELS.size) approved = true;
-      entry = new Set();
-    }
-    if (h) {
-      // A later heading for the same id amends the entry; it was decided where it was first recorded.
-      const first = byId.get(`D${h[1]}`);
-      cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {}, afterApproval: first ? first.afterApproval : approved };
-      byId.delete(cur.id);
-      byId.set(cur.id, cur);
-      continue;
-    }
-    if (ANY_HEADING.test(line)) { cur = null; continue; }
-    const approval = approvalField(line);
-    if (approval) entry.add(approval);
-    if (!cur) continue;
-    const f = fieldLine(line);
-    const field = f && FIELD_OF.get(f.label.toLowerCase());
-    if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f.value);
+    if (ANY_HEADING.test(line)) openEntry(log, DECISION_HEADING.exec(line));
+    else readEntryLine(log, line);
   }
-  if (entry.size === APPROVAL_LABELS.size) approved = true;
-  return { records: [...byId.values()], approved };
+  closeEntry(log);
+  return { records: [...log.byId.values()], approved: log.approved };
+}
+// The entry ends: it was the approval when it held both approval fields.
+function closeEntry(log) {
+  if (log.entry.size === APPROVAL_LABELS.size) log.approved = true;
+  log.entry = new Set();
+}
+// A heading opens an entry; a `D<N>` heading opens a decision record. A later heading for the same id amends the
+// entry, which was decided where it was first recorded.
+function openEntry(log, h) {
+  closeEntry(log);
+  if (!h) { log.cur = null; return; }
+  const id = `D${h[1]}`;
+  const first = log.byId.get(id);
+  log.cur = { id, title: headingTitle(h[2]), fields: {}, afterApproval: first ? first.afterApproval : log.approved };
+  log.byId.delete(id);
+  log.byId.set(id, log.cur);
+}
+function readEntryLine(log, line) {
+  const approval = approvalField(line);
+  if (approval) log.entry.add(approval);
+  if (!log.cur) return;
+  const f = fieldLine(line);
+  const field = f && FIELD_OF.get(f.label.toLowerCase());
+  if (field && !(field in log.cur.fields)) log.cur.fields[field] = cleanValue(field, f.value);
 }
 export const parseDecisionRecords = (text) => parseDecisionLog(text).records;
 
