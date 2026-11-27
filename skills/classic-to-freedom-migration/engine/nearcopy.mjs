@@ -13,8 +13,9 @@
 // - an object key that names a column or an attribute (PascalCase: `MbIsActive`, `PDS_MbDate`) is a value too; a
 //   camelCase key is the API's (`type`, `schemaName`, `modelInitConfigs`) and is kept, and so is the literal a `type`
 //   key holds: a `crt.OpenPageRequest` and a `crt.LoadDataRequest` are different requests whatever their keys;
-// - a test of whether a value is set is that value, however it is written: `Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`,
-//   `x > 0`, `x !== 0` and `x != 0` are all `x`.
+// - a test of whether a value is set is that value, however it is written: `Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`
+//   and `x > 0` are all `x`. `x !== 0` and `x != 0` are not: they are true for an unset value (`undefined`, `null`,
+//   `""`), where the others are false, so code using them behaves differently and is not the same code.
 // Nothing is evaluated; the walk is bounded by depth like the other AST walks.
 import { childNodesOf, staticPropKey, isFunction, lineOf, endLineOf } from "./engine.mjs";
 
@@ -61,15 +62,14 @@ function keyToken(p) {
 const isZero = (n) => n?.type === "Literal" && n.value === 0;
 const isPrimitiveLiteral = (n) => n?.type === "Literal" && n.value !== null && typeof n.value !== "object";
 
-// The value a test of whether it is set reads (`Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`, `x > 0`, `x !== 0`, `x != 0`),
-// else null.
+// The value a test of whether it is set reads (`Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`, `x > 0`), else null.
 function truthTestOf(n) {
   switch (n.type) {
     case "CallExpression":
       return n.callee.type === "Identifier" && n.callee.name === "Boolean" && n.arguments.length === 1 ? n.arguments[0] : null;
     case "UnaryExpression": return n.operator === "!" && n.argument.type === "UnaryExpression" && n.argument.operator === "!" ? n.argument.argument : null;
     case "LogicalExpression": return n.operator !== "&&" && isZero(n.right) ? n.left : null;
-    case "BinaryExpression": return [">", "!==", "!="].includes(n.operator) && isZero(n.right) ? n.left : null;
+    case "BinaryExpression": return n.operator === ">" && isZero(n.right) ? n.left : null;
     default: return null;
   }
 }

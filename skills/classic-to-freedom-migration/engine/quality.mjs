@@ -1130,8 +1130,16 @@ function constantValueKey(c) {
   return typeof c.value === "string" ? `string:${kindOf(c.name)}:${JSON.stringify(c.value)}` : `${c.name} = ${c.raw}`;
 }
 
-// The last word of a constant's name, upper case: `NOTE_HISTORY_DATA_SOURCE` and `historyDataSource` are `SOURCE`.
-const kindOf = (name) => (name.split(/_|(?=[A-Z][a-z])/).findLast(Boolean) ?? name).toUpperCase();
+// The kind of value a constant's name says it holds, upper case: its last word (`NOTE_HISTORY_DATA_SOURCE` and
+// `historyDataSource` are `SOURCE`), or its last two words when the last one says nothing about the kind
+// (`ENTITY_NAME` is `ENTITY_NAME` and `PARENT_COLUMN_NAME` is `COLUMN_NAME`: an entity and a column, two values).
+const GENERIC_NAME_WORDS = new Set(["NAME", "KEY", "CODE", "VALUE", "ID", "TEXT"]);
+function kindOf(name) {
+  const words = name.split(/_|(?=[A-Z][a-z])/).filter(Boolean).map((w) => w.toUpperCase());
+  if (!words.length) return name.toUpperCase();
+  const last = words.length - 1;
+  return GENERIC_NAME_WORDS.has(words[last]) && last > 0 ? words[last - 1] + "_" + words[last] : words[last];
+}
 
 // A record id or a constant's value declared in two or more modules, also under another name: one finding, on the
 // record of the second module, naming the first declaration and every other one with the name it has there.

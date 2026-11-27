@@ -862,10 +862,11 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const avail = (test) => `async function refresh($context) { const selection = await $context.Selection; const any = selection?.type === "all" || (${test}); await $context.set("UsrDisabled", !any); }`;
     const sameAsBoolean = (test) => nearIn(twoModules(avail("Boolean(selection?.selected?.length)"), avail(test))).length;
     const sel = "selection?.selected?.length";
-    for (const test of [`(${sel} || 0) > 0`, `!!${sel}`, `${sel} ?? 0`, `${sel} !== 0`, `${sel} != 0`, `${sel} > 0`]) {
+    for (const test of [`(${sel} || 0) > 0`, `!!${sel}`, `${sel} ?? 0`, `${sel} > 0`]) {
       check(`near-copy: \`${test}\` is the same test of whether the value is set as \`Boolean(…)\``, () => sameAsBoolean(test) === 1);
     }
-    for (const test of [`${sel} > 1`, `!${sel}`, `${sel} >= 0`, `${sel} || 5`]) {
+    // `!== 0` and `!= 0` are true when nothing is selected (`undefined`), where `Boolean(…)` is false.
+    for (const test of [`${sel} > 1`, `!${sel}`, `${sel} >= 0`, `${sel} || 5`, `${sel} !== 0`, `${sel} != 0`]) {
       check(`near-copy: \`${test}\` is a different test, not \`Boolean(…)\``, () => sameAsBoolean(test) === 0);
     }
     const renamed = twoModules("const SUM = 2; const LOG_SOURCE = \"UsrLogDS\";", "const AGGREGATION_SUM = 2; const HISTORY_SOURCE = \"UsrLogDS\";");
@@ -875,6 +876,10 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const valuesOf = (a, b) => twoModules(a, b).filter((f) => f.rule === R.sharedValueInTwoModules).map((f) => f.text);
     check("shared values: a camelCase name has a kind too — `historyDataSource` and `noteHistoryDataSource` are one data source",
       () => valuesOf("const historyDataSource = \"UsrLogDS\";", "const noteHistoryDataSource = \"UsrLogDS\";").length === 1);
+    check("shared values: a name ending in a generic word is kinded by its last two words — an entity name and a column name holding the same text are two values",
+      () => valuesOf("const ENTITY_NAME = \"DemoContract\";", "const PARENT_COLUMN_NAME = \"DemoContract\";").length === 0
+        && valuesOf("const ENTITY_NAME = \"DemoContract\";", "const CONTRACT_ENTITY_NAME = \"DemoContract\";").length === 1
+        && valuesOf("const entityName = \"DemoContract\";", "const parentColumnName = \"DemoContract\";").length === 0);
     check("shared values: a constant named only with underscores is keyed by its name and never stops the lint",
       () => valuesOf("const _ = \"UsrLogDS\";", "const __ = \"UsrLogDS\";").length === 0
         && valuesOf("const _ = \"UsrLogDS\";", "const _ = \"UsrLogDS\";").length === 1);
