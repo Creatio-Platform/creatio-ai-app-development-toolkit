@@ -1,0 +1,30 @@
+{
+ "pages": {
+  "child:MbDeliveryNote": {
+   "bundle": "bundle-child-mbdeliverynote.json",
+   "handlers": [
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV4App_SharedModule.applyNewNoteDate",
+      "UsrMbContractsV4App_MbDeliveryNoteFormPageModule.applyNewNoteDate"
+     ]
+    }
+   ]
+  },
+  "child:MbReturnNote": {
+   "bundle": "bundle-child-mbreturnnote.json",
+   "handlers": [
+    {
+     "method": "onEntityInitialized",
+     "parent": null,
+     "portedAs": [
+      "UsrMbContractsV4App_MbReturnNoteFormPageModule.applyNewReturnNoteDefaults",
+      "UsrMbContractsV4App_SharedModule.applyNewNoteDate"
+     ]
+    }
+   ]
+  }
+ }
+}

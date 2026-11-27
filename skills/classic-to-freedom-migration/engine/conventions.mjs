@@ -371,11 +371,25 @@ function depSlots(v) {
   return node?.type === "ArrayExpression" ? stringSlots(node) : null;
 }
 // WHAT A CLIENT MODULE DEFINES AND IMPORTS. `functions`: by name, each `function name(…)`, `const name = function /
-// arrow`, and `name: function / arrow` property, with its source. A property whose value is another name
-// (`startApproval: start`, or the shorthand `{ startApproval }`) is kept as a call of that name, so an export reaches
-// the function behind it. `imports`: each `define()` dependency -> the local name the module's factory gives it (null
-// where it gives none), paired by position like a page's. null when the source is not a `define()` module.
+// arrow`, and `name: function / arrow` property, with its source. A name that only REFERS to a function is kept as a
+// call of what it refers to, so an export reaches the function behind it: a property whose value is another name
+// (`startApproval: start`, or the shorthand `{ startApproval }`) or a member of an import (`applyNewNoteDate:
+// shared.applyNewNoteDate`, a re-export), and the same as `const name = …` or `const { name } = shared`. `imports`:
+// each `define()` dependency -> the local name the module's factory gives it (null where it gives none), paired by
+// position like a page's. null when the source is not a `define()` module.
 const isFunctionNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+// `name` -> `name()`, `obj.name` -> `obj.name()`: the call a reference stands for; null for any other expression.
+function referenceCall(n) {
+  if (n?.type === "Identifier") return `${n.name}()`;
+  const plain = n?.type === "MemberExpression" && !n.computed && n.object?.type === "Identifier" && n.property?.type === "Identifier";
+  return plain ? `${n.object.name}.${n.property.name}()` : null;
+}
+// `const { a, b: c } = obj` -> [["a", "obj.a()"], ["c", "obj.b()"]]: each name the pattern takes off an import.
+function destructuredReferences(decl) {
+  if (decl.id?.type !== "ObjectPattern" || decl.init?.type !== "Identifier") return [];
+  return decl.id.properties.filter((p) => p.type === "Property" && !p.computed && p.value?.type === "Identifier")
+    .map((p) => [p.value.name, `${decl.init.name}.${staticPropKey(p)}()`]);
+}
 export function moduleShape(src) {
   const text = String(src ?? "");
   const mod = parseDefineModule(text);
@@ -383,11 +397,16 @@ export function moduleShape(src) {
   const imports = pairSlots(mod.depSlots, mod.factory.params.map(paramName));
   const fns = new Map();
   const add = (name, body) => { if (name) fns.set(name, [...(fns.get(name) || []), body]); };
+  const addDeclarator = (d) => {
+    if (d.id?.type !== "Identifier") for (const [name, call] of destructuredReferences(d)) add(name, call);
+    else if (isFunctionNode(d.init)) add(d.id.name, text.slice(d.init.start, d.init.end));
+    else if (d.init?.type === "MemberExpression" && referenceCall(d.init)) add(d.id.name, referenceCall(d.init));
+  };
   walkAstBounded(mod.factory, (n) => {
     if (n.type === "FunctionDeclaration") add(n.id?.name, text.slice(n.start, n.end));
-    else if (n.type === "VariableDeclarator" && n.id?.type === "Identifier" && isFunctionNode(n.init)) add(n.id.name, text.slice(n.init.start, n.init.end));
+    else if (n.type === "VariableDeclarator") addDeclarator(n);
     else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) add(staticPropKey(n), text.slice(n.value.start, n.value.end));
-    else if (n.type === "Property" && !n.computed && n.value?.type === "Identifier") add(staticPropKey(n), `${n.value.name}()`);
+    else if (n.type === "Property" && !n.computed && referenceCall(n.value)) add(staticPropKey(n), referenceCall(n.value));
   });
   return { functions: fns, imports };
 }
