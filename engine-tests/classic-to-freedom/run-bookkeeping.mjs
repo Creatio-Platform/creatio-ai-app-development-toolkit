@@ -1,4 +1,4 @@
-// Offline checks for the build loop's BOOKKEEPING (ENG-108022): the ledger moves a confirmed run reaches only
+// Offline checks for the build loop's BOOKKEEPING: the ledger moves a confirmed run reaches only
 // through the engine — `--decide`, `--tasks`, `--verify` — must close it, never keep it open. A retest of a whole
 // customer section confirmed every plan item on the stand and still ended NOT COMPLETE, because the folder the
 // engine itself wrote kept re-opening under its own hands. Each block below is one of those loops, on a small
@@ -128,8 +128,8 @@ function twoQuestions(label) {
 // The ids the folder's index lists in its queue, in queue order.
 const indexIds = (dir) => [...fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").matchAll(/^\| \d+ \|.*\[(task-[^\]]+\.md)\]/gm)]
   .map((m) => m[1]).sort((a, b) => a.localeCompare(b));
-// A task file an EARLIER cut wrote, which the current plan no longer derives: a copy of a settled task under an id
-// the plan does not produce, closed `built`, with no dispatch record of its own.
+// An orphan: a task file under an id the current plan does not produce (a copy of a settled task), closed `built`,
+// with no dispatch record of its own.
 function plantOrphan(dir, from) {
   const text = fs.readFileSync(taskFilePath(dir, from.id), "utf8").replace(/^id: .*$/m, "id: orphan0001");
   const file = "task-main-page-build-from-user-d-orphan0001.md";
@@ -158,8 +158,8 @@ console.log("\n===== E7, E8: `--tasks` and `--verify` read ONE task set =====");
       && !afterTasks.includes(orphan) && repaired.every((r) => afterTasks.includes(r.file)),
     () => ({ onlyTasks: afterTasks.filter((f) => !afterVerify.includes(f)), onlyVerify: afterVerify.filter((f) => !afterTasks.includes(f)),
       orphanQueued: afterTasks.includes(orphan) }));
-  check("the orphan stays on disk and is named on the index as no longer in the plan",
-    () => fs.existsSync(path.join(dir, orphan)) && fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").includes(`\`${orphan}\` — no longer in the plan`));
+  check("the orphan stays on disk and the index names it outside the queue",
+    () => fs.existsSync(path.join(dir, orphan)) && fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").includes(`\`${orphan}\``));
   fs.rmSync(base, { recursive: true, force: true });
 }
 

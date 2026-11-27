@@ -2663,7 +2663,7 @@ function recordedRowsStand(rows, prev) {
     const k = labelKey(r.label);
     if (pageCode.has(k)) continue;
     const inputs = now.get(k);
-    if (!inputs) return false;                         // a recorded row the plan no longer has
+    if (!inputs) return false;                         // a recorded row absent from the current plan
     const n = seen.get(k) || 0;
     seen.set(k, n + 1);
     // One listing more than the plan has rows of that label is a duplicate only while all of them are one row.
@@ -3240,10 +3240,9 @@ export function readMergedTaskDir(dir, result, opts = {}, split = null, fresh = 
   return merged;
 }
 // THE FOLDER'S TASK SET, and the only derivation of it: the plan's tasks (the frozen split's when the folder has
-// one) merged with every file on disk, an orphan an earlier cut left named in `stale` and out of the queue.
-// `--tasks`, `--verify`, `--route`, `--decide` and `--revoke` all read it here. The retest's `--verify` audited the
-// raw files instead, so a task "no longer in the plan" failed its dispatch gate while `--tasks` said it was not the
-// plan's work, and the two modes disagreed on which tasks and rows the folder held.
+// one) merged with every file on disk, an orphan file named in `stale` and out of the queue. `--tasks`, `--verify`,
+// `--route`, `--decide` and `--revoke` all read it here: a mode that audited the raw files would fail its dispatch
+// gate on an orphan `--tasks` does not schedule, and the two would disagree on which tasks and rows the folder holds.
 // `fresh` is the plan's own task set when the caller already derived it: the merge re-reads the files only.
 export function folderTaskSet(dir, result, opts = {}, split = null, derived = null) {
   const fresh = derived || taskSetFor(dir, result, opts, split);

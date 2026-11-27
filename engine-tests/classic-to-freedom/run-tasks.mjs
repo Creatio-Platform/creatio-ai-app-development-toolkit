@@ -5043,8 +5043,8 @@ check("a newly recorded cause gets its OWN round rather than waiting behind anot
     const pages = { main: { openRows: [{ deliverable: "Fields — 3 fields", outcome: "not-built",
       status: "not-built — blocked", evidence: "recorded on task-x.md, row 1" }] } };
     const opened = buildRepairTasks(RUN, pages, OPTS, openOther);
-    // The KIND still caps: three rounds on THESE field rows is three, whatever each was opened for. (Rounds that
-    // covered other rows of the kind do not spend this row's cap — ENG-108022.)
+    // The KIND still caps: three rounds on THESE field rows is three, whatever each was opened for. Rounds that
+    // covered other rows of the kind do not spend this row's cap.
     const covers = opened.tasks.find((t) => t.cause === "not-built:fields")?.covers.join(" ");
     const capped = [1, 2, 3].map((n) => ({ file: `task-repair-round${n}-main-unverified-fields-${n}.md`, notes: "", malformed: null,
       meta: { id: `rc${n}`, status: "done", origin: "engine", pageKey: "main", kind: "repair",
@@ -9411,8 +9411,7 @@ console.log("\n===== --verify --tasks: a refused round under a changed plan leav
   const dir = path.join(base, "build-tasks");
   cliTasks(["--tasks", dir], MANIFEST);
   // A closure nobody was dispatched for, on a task the CHANGED plan still queues: an orchestrator task is adopted
-  // under any cut. (A plan task the change retires is an orphan, and an orphan is not the run's work, so its
-  // closure no longer refuses a round — ENG-108022.)
+  // under any cut. A plan task the change retires is an orphan, which is not the run's work and refuses nothing.
   const added = addTasks(dir, RUN, { id: "orch-undispatched", pageKey: "main", group: "Extra", order: 3, readOnly: true,
     deliverables: ["One thing", "Another thing"] }, checklistOpts(MANIFEST));
   closeCells(dir, "orch-undispatched");
