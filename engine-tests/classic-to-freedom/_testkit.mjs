@@ -88,7 +88,8 @@ export function checker() {
     const { value, error } = settle(cond);
     if (value && !error) { counts.pass++; console.log(`  ✅ ${name}`); return; }
     counts.fail++;
-    console.log(`  ❌ ${name}${error ? `  (threw: ${error.message})` : ""}`);
+    const threw = error ? "  (threw: " + error.message + ")" : "";
+    console.log(`  ❌ ${name}${threw}`);
     if (detail === undefined) return;
     const shown = settle(detail);
     const text = shown.error ? `<detail threw: ${shown.error.message}>` : shown.value;
