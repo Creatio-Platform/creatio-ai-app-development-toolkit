@@ -72,7 +72,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys, portedRowSymbols, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
+  applyDecision, revokeDecision, decidedRowKeys, stepOf, portedRowSymbols, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
   RESUME_FILE, RESUME_MANIFEST_FILE, DISPATCH_ROUTES, planApprovalLine, approvedPlanVersions, worklogRoute, readWorklogBrowser, BROWSER_ANSWERS, browserAnswerOwed, browserAnswerUngated, readTimingsFile, renderResume,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_TIMINGS_LOCKED, REFUSED_LEDGER_BUSY, TIMINGS_LOCK, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED,
   RECONCILE_MODES, RECONCILE_MODE_LIST, RECONCILE_MODE_CLASSIC, readFrozenModeState, effectiveFrozenMode, stampedModes, rawStampedValues } from "./tasks.mjs";
@@ -3849,9 +3849,7 @@ export function withCarriedAdjustments(plan, previous) {
   if (at < 0 || ADJUSTMENTS_HEADING.test(plan)) return plan;
   return `${plan.trimEnd()}\n\n${previous.slice(at).trimEnd()}\n`;
 }
-function readIfExists(file) {
-  try { return fs.readFileSync(file, "utf8"); } catch { return ""; }
-}
+const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
 // Every value of a flag that may be given more than once, in the order given. `--row` is one: reading only the
 // first occurrence answered one row of `--decide D<N> --row a:1 --row a:2` and dropped the rest without a word.
 function valueFlagArgs(argv, flag, example, onBad, noun = "a path") {
@@ -4345,7 +4343,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
 //
 // IT DOES NOT DISPATCH. It names tasks and prints commands; issuing a token stays with `--start`, which is the
 // one place a clock is opened. That is why it combines with nothing that moves the folder.
-const taskLine = (t) => `step ${Number(t.order)} · ${t.pageKey} · ${t.group}  [${t.id}]`;
+const taskLine = (t) => `step ${stepOf(t)} · ${t.pageKey} · ${t.group}  [${t.id}]`;
 const withheldLine = (w) => {
   const on = (w.tasks || []).map((d) => `${d.id} (\`${d.status}\`)`).join(", ");
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
@@ -4465,7 +4463,6 @@ function runNextMode(result, dir, opts, cmdFor) {
 // path (the CLI, before parsing); the cut folder, the approval of THIS plan version and the dispatch route, together;
 // the folder refresh `--next` would refuse (an uncited decision); and a `--next` answer that exits 2 (a broken
 // dispatch ledger, or a run that cannot move).
-const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
 // The folder-level preconditions, with the values they read — the renderer reuses them rather than reading again.
 function handoffCauses(result, dir, folder, opts) {
   const causes = [];
@@ -4557,7 +4554,7 @@ function runHandoffMode(result, dir, opts, ctx) {
 // not the answer; it is a decision for the user.
 // The two refusals a repair round makes BEFORE it writes anything, shared by `--verify --tasks` and `--route`:
 // both schedule sub-agents, so both answer the same two questions first. Returns the refusal text, or null.
-function repairPreflight(result, dir, opts) {
+function repairPreflight(result, dir, opts, merged = null) {
   // THE LEDGER IS CHECKED BEFORE MORE WORK IS SCHEDULED AGAINST IT. Read-only: nothing is written here. No repair
   // task is written while it fails — a repair round adds sub-agents on top of closures nobody was dispatched for,
   // and the rows it would open cannot be trusted to describe what was actually built.
@@ -4566,7 +4563,7 @@ function repairPreflight(result, dir, opts) {
   // `--tasks` could neither start nor decide. A set the plan cannot be cut into is refused by the round itself.
   // NOT-BUILT IS NOT JUDGED HERE: the verdict is set once, after `syncRepairDir`, off the folder it wrote; a
   // refusal reports the gate that actually fired and nothing else.
-  const audit = readMergedTaskDir(dir, result, opts).dispatch;
+  const audit = (merged || readMergedTaskDir(dir, result, opts)).dispatch;
   if (audit?.failing.length) {
     dispatchGateFailure = { audit, dir, started: true };
     // The files and their remedies go out ONCE, on stderr with the other ⛔ banners. Stdout carries the verify
@@ -4710,8 +4707,8 @@ function runRouteMode(result, dir, opts) {
 // Returns `{ note, set, repair }`: the stdout note, the MERGED task set the final report reads (null when the
 // round was refused before it merged anything — the caller then reads the folder read-only), and what the round
 // wrote (null when refused).
-function runRepairMode(result, dir, verifyRes, opts) {
-  const refused = repairPreflight(result, dir, opts);
+function runRepairMode(result, dir, verifyRes, opts, merged = null) {
+  const refused = repairPreflight(result, dir, opts, merged);
   if (refused) return { note: refused, set: null, repair: null };
   let res;
   // Same verdict as the routed round, raised on the same flag: one repair code path reached by two entry commands,
@@ -5017,7 +5014,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const pagesArg = valueFlagArg(argv, PAGES_FLAG, `${PAGES_FLAG} typed:Service,typed:Product`, fail);
   const taskArg = valueFlagArg(argv, TASK_FLAG, `${TASK_FLAG} <task-id>`, fail);
   const rowArgs = valueFlagArgs(argv, ROW_FLAG, `${ROW_FLAG} <task-id>:<n>`, fail);
-  const rowArg = rowArgs[0] ?? null;
   const decideMode = !!decideArg, revokeMode = !!revokeArg;
   if ((decideMode || revokeMode) && !tasksMode) fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it writes into that folder.`);
   if (decideMode && revokeMode) fail(`\`${DECIDE_FLAG}\` and \`${REVOKE_FLAG}\` are opposite operations — run them as separate commands.`);
@@ -5036,13 +5032,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Refused at the boundary as well as normalised in `decideCellText`, because the destination ends up inside a
     // markdown table row: a line break would split the row in two and the engine would read the task back broken.
     if (toArg && /[\r\n]/.test(toArg)) fail(`\`${TO_FLAG}\` must be a single line — the destination is written into a \`## Deliverables\` table cell, and a line break splits the row.`);
-    const addressings = [!!pagesArg, !!taskArg, !!rowArg].filter(Boolean).length;
+    const addressings = [!!pagesArg, !!taskArg, rowArgs.length > 0].filter(Boolean).length;
     if (addressings === 0) fail(`\`${DECIDE_FLAG}\` needs one of \`${PAGES_FLAG} <keys>\`, \`${TASK_FLAG} <id>\` or \`${ROW_FLAG} <task-id>:<n>\` — the row addressing this decision covers.`);
     if (addressings > 1) fail(`\`${PAGES_FLAG}\` / \`${TASK_FLAG}\` / \`${ROW_FLAG}\` are three addressings for ONE decision — pick one.`);
   }
   if (revokeMode) {
     if (!/^D\d+$/.test(revokeArg)) fail(`\`${REVOKE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${REVOKE_FLAG} D13\`) — got \`${revokeArg}\`.`);
-    for (const [flag, val] of [[WONT_DO_FLAG, wontDoFlag], [POSTPONED_FLAG, postponedFlag], [TO_FLAG, !!toArg], [PAGES_FLAG, !!pagesArg], [TASK_FLAG, !!taskArg], [ROW_FLAG, !!rowArg]]) {
+    for (const [flag, val] of [[WONT_DO_FLAG, wontDoFlag], [POSTPONED_FLAG, postponedFlag], [TO_FLAG, !!toArg], [PAGES_FLAG, !!pagesArg], [TASK_FLAG, !!taskArg], [ROW_FLAG, rowArgs.length > 0]]) {
       if (val) fail(`\`${flag}\` does not go with \`${REVOKE_FLAG}\` — the subject is the decision, and the engine removes exactly the cells it wrote (named in each task's \`decisions:\` map). No addressing to give.`);
     }
   }
@@ -5369,7 +5365,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const rep = readProblems.length
         ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
             + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
-        : runRepairMode(result, tasksDir, verifyRes, { ...runOpts(), decisions, decisionTexts });
+        : runRepairMode(result, tasksDir, verifyRes, { ...runOpts(), decisions, decisionTexts }, preMergedSet);
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing
@@ -5434,7 +5430,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (tasksMode) label = "build tasks";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
-    try { fs.writeFileSync(outFile, planMode ? withCarriedAdjustments(output, readIfExists(outFile)) : output); }
+    try { fs.writeFileSync(outFile, planMode ? withCarriedAdjustments(output, readTextOr(outFile)) : output); }
     catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
     process.stdout.write(outFileNote(label, outFile, notReady, verifyMode));
   } else {

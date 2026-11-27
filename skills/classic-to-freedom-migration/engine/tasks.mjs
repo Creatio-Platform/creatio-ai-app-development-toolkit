@@ -70,6 +70,9 @@ export const TASK_ORIGIN_ORCHESTRATOR = "orchestrator";
 // The two origins a task file may declare: the engine authored it from the plan, or the orchestrator added it.
 export const TASK_ORIGINS = [TASK_ORIGIN_ENGINE, TASK_ORIGIN_ORCHESTRATOR];
 export const TASK_INDEX_FILE = "index.md";
+// A task's place in the queue as every surface prints it: its position in the merged set, else its cut order. A
+// repair task sorts last on a sentinel order, and printing that order showed `[9007199254740990/51]`.
+export const stepOf = (t) => t.step ?? t.order;
 
 // WHY a task set was refused, because the remedies differ and an operator acts on the remedy, not on the banner.
 // The split could not be READ (fix its syntax); it reads but does not RESOLVE, naming work the plan lacks or
@@ -979,7 +982,7 @@ function renderFrontMatter(task, set) {
     // file the engine's own (see `declaredOf`).
     declared: task.declared || "",
     origin: task.origin, pageKey: task.pageKey,
-    group: task.group, order: String(task.step ?? task.order), planVersion: set.planVersion || "",
+    group: task.group, order: String(stepOf(task)), planVersion: set.planVersion || "",
     // The digest the STATUS was recorded against, not necessarily the current rows — see `carryOver`. Writing the
     // current one here would erase the drift warning on the first re-slice after the plan changed, which is the
     // one moment it has to survive.
@@ -1419,12 +1422,12 @@ export function renderTaskFile(task, set = {}) {
   const body = [
     ...renderFrontMatter(task, set),
     "",
-    `# ${task.step ?? task.order}. ${task.pageKey} · ${task.group}`,
+    `# ${stepOf(task)}. ${task.pageKey} · ${task.group}`,
     "",
     ...taskBanner(task),
     "",
     `- **Page key:** \`${task.pageKey}\``,
-    `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
+    `- **Build order:** ${stepOf(task)} — leaf-first; a child page's form exists before the parent list that opens it`,
     `- **Rows:** ${task.rows.length} (${task.gatedRows} machine-checked by \`--verify\`${naNote})`,
     ...outcomeBlock(task.kind === REPAIR_KIND),
     ...markersBlock(),
@@ -1696,7 +1699,7 @@ function indexRows(tasks) {
     const writes = t.writesTo ? `\`${t.writesTo}\`` : "— read-only";
     const gate = t.stopGate ? " ⏸ stop-gate" : "";
     const disp = DISPATCH_MARK.get(t.dispatched) || "—";
-    L.push(`| ${t.step ?? t.order} | ${cell(t.group)}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${disp} | ${rows} | [${t.file}](${t.file}) |`);
+    L.push(`| ${stepOf(t)} | ${cell(t.group)}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${disp} | ${rows} | [${t.file}](${t.file}) |`);
   }
   return L;
 }
@@ -2037,7 +2040,7 @@ export const notBuiltOpenItems = (tasks) =>
 // a `--decide` entry. No repair round is written for them.
 // A `blocked` task is read too: the question that raised the halt is still the thing it waits on.
 // A task whose open questions a person is asked about: closed or halted, never one a builder may still be writing.
-export const awaitsAnswer = (t) => !t.unread && (SETTLED.has(t.status) || t.status === S_BLOCKED);
+export const awaitsAnswer = (t) => !t.unread && (SETTLED.has(t.status) || t.status === S_BLOCKED || reopenedByAnswer(t));
 
 // The ONE predicate of an open question: a row recorded `not-built — needs-decision`, not built by a repair round,
 // with no closing `--decide` entry. Callers add their own task-status gate.
@@ -2284,14 +2287,15 @@ function repairCoverage(tasks) {
     const prev = latest.get(key);
     if (!prev || round > prev.round || (round === prev.round && state === "open")) latest.set(key, { round, state });
   };
-  // The attempted rounds that covered each row, keyed like the cap (page, kind of row, row).
-  const spent = new Map();
-  const spentKey = (t, c) => `${capKey(t.pageKey, t.cause)} ${c}`;
+  // The attempted rounds of each (page, kind of row), counted per row by `attemptsOn` — the rule `nextRound` spends
+  // the cap by, so a row reads `parked` exactly when no further round would be written for it.
+  const attempts = new Map();
   for (const t of tasks || []) {
-    if (t.kind !== REPAIR_KIND || !ROUND_ATTEMPTED.has(t.status)) continue;
-    for (const c of t.covers || []) spent.set(spentKey(t, c), (spent.get(spentKey(t, c)) || 0) + 1);
+    if (t.kind !== REPAIR_KIND || !ROUND_ATTEMPTED.has(t.status) || decidedRound(t)) continue;
+    const k = capKey(t.pageKey, t.cause);
+    attempts.set(k, [...(attempts.get(k) || []), t.covers?.length ? new Set(t.covers) : null]);
   }
-  const spentOn = (t, c) => spent.get(spentKey(t, c)) || 0;
+  const spentOn = (t, c) => attemptsOn(attempts.get(capKey(t.pageKey, t.cause)), c);
   for (const t of tasks || []) {
     const round = roundCoverage(t, spentOn);
     if (!round) continue;
@@ -2602,7 +2606,8 @@ const withMark = (r, m) => ({ ...r, outcome: m.text, outcomeKind: m.outcome, out
 // is a cleared Outcome that stays blank), and the mark comes from a previous owner, an engine file whose table
 // lists that exact label with a mark. The label names its page's evidence id, so it is unique to its page.
 // Several previous owners are ranked by `previousOwnerRank`.
-const sameLabel = (a, b) => String(a || "").trim().replace(/\s+/g, " ") === String(b || "").trim().replace(/\s+/g, " ");
+const labelKey = (label) => String(label || "").trim().replace(/\s+/g, " ");
+const sameLabel = (a, b) => labelKey(a) === labelKey(b);
 const listsRow = (e, label) => (e?.table || []).some((r) => sameLabel(r.label, label));
 const markFor = (e, label) => (e.table || []).find((r) => sameLabel(r.label, label) && r.mark)?.mark || null;
 // A file whose task is still in the plan before a retired one: a live file is rewritten on every sync and a
@@ -2641,7 +2646,6 @@ function carryWithMovedFiledMarks(task, prev, sources, live) {
 // the old digest over either named the task "deliverables CHANGED" on every later sync with nothing a builder or a
 // decision could do to clear it — six such tasks kept the retest's confirmed run NOT COMPLETE. A label that is gone
 // or now asks for something else still fails the comparison, and the warning stands.
-const labelKey = (label) => String(label || "").trim().replace(/\s+/g, " ");
 function recordedRowsStand(rows, prev) {
   // The current rows under each label, in order: the n-th listing of a label in the file is its n-th row now.
   const now = new Map();
@@ -2969,6 +2973,10 @@ function closedByDecision(meta, rows, outcomes) {
   }
   return true;
 }
+// `closedByDecision` over a merged task rather than its file: every row accounted for by a person's answer.
+const decidedRound = (t) => closedByDecision({ decisions: t.decisions instanceof Map ? renderDecisionsMap(t.decisions) : t.decisions },
+  t.rows || [], new Map(rowKeys((t.rows || []).map((r) => r.label)).map((k, i) => [k, t.rows[i].outcomeKind
+    ? { outcome: t.rows[i].outcomeKind } : null]).filter(([, m]) => m)));
 function repairRounds(existing) {
   const rounds = new Map(), openRounds = new Map();
   for (const e of existing) {
@@ -3034,7 +3042,7 @@ function nextRound(cap, own, rows) {
   const round = (cap?.round || 0) + 1;
   const spent = (row) => attemptsOn(cap?.attempts, coverKey(row.deliverable));
   const parked = rows.filter((r) => spent(r) >= REPAIR_ROUND_CAP);
-  return { hold: null, round, parked, live: rows.filter((r) => !parked.includes(r)) };
+  return { round, parked, live: rows.filter((r) => !parked.includes(r)) };
 }
 const coversOf = (meta) => (meta?.covers ? new Set(String(meta.covers).split(/\s+/).filter(Boolean)) : null);
 const attemptsOn = (attempts, cover) => (attempts || []).filter((covers) => !covers || covers.has(cover)).length;
@@ -3163,7 +3171,8 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // ids while every file on disk carries the split's slug ids, so nothing would match, every task would read as
   // stale, and the index would be rewritten with all of them back at `todo` — an index describing a folder that
   // does not exist. `taskSetFor` falls back to `buildTaskSet` on its own when there is no split.
-  const mergedForResidual = readMergedTaskDir(dir, result, opts);
+  const fresh = taskSetFor(dir, result, opts);
+  const mergedForResidual = readMergedTaskDir(dir, result, opts, null, fresh);
   // A refused split writes NOTHING, for the reason `syncTaskDir` refuses: half a folder schedules half a plan.
   if (mergedForResidual.refused) return { ...mergedForResidual, written: [], parked: [], pending: [], disputed: [], stalled: [], set: mergedForResidual };
   const existing = readExisting(dir);
@@ -3196,7 +3205,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // folder-derived like the rest of the index: without it every row would render as "not known" and a repair round
   // would quietly erase what the build rounds recorded. It also feeds `resolvePartials`, which only lets a
   // DISPATCHED closure resolve a residual.
-  const merged = readMergedTaskDir(dir, result, opts);
+  const merged = readMergedTaskDir(dir, result, opts, null, fresh);
   unrouteStalled(merged, stalled);
   // Opening a round changes the residual coverage of every task whose rows it covers, so their files are
   // re-written here too and not only the index.
@@ -3223,10 +3232,9 @@ function unrouteStalled(set, stalled) {
 // tellable from an approved one; dispatch and residuals resolved), minus every write. It exists for the paths
 // where the repair leg wrote nothing (a dispatch-gate refusal, a plan-level gap) and the report still has to say
 // what the folder holds: a run refused at the gate is exactly the run whose ledger the user most needs to see.
-export function readMergedTaskDir(dir, result, opts = {}, split = null) {
-  const merged = folderTaskSet(dir, result, opts, split);
+export function readMergedTaskDir(dir, result, opts = {}, split = null, fresh = null) {
+  const merged = folderTaskSet(dir, result, opts, split, fresh);
   if (merged.refused) return merged;
-  merged.reconcileMode = effectiveFrozenMode(dir); // the index refresh reads `merged`; keep the frozen stamp on it
   attachDispatch(merged, dir);
   resolvePartials(merged);
   return merged;
@@ -3236,10 +3244,13 @@ export function readMergedTaskDir(dir, result, opts = {}, split = null) {
 // `--tasks`, `--verify`, `--route`, `--decide` and `--revoke` all read it here. The retest's `--verify` audited the
 // raw files instead, so a task "no longer in the plan" failed its dispatch gate while `--tasks` said it was not the
 // plan's work, and the two modes disagreed on which tasks and rows the folder held.
-export function folderTaskSet(dir, result, opts = {}, split = null) {
-  const fresh = taskSetFor(dir, result, opts, split);
+// `fresh` is the plan's own task set when the caller already derived it: the merge re-reads the files only.
+export function folderTaskSet(dir, result, opts = {}, split = null, derived = null) {
+  const fresh = derived || taskSetFor(dir, result, opts, split);
   if (fresh.refused) return { ...fresh, tasks: [], stale: [], blocked: [] };
-  return mergeTaskSet(fresh, readExisting(dir));
+  const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = effectiveFrozenMode(dir); // persistTaskSet and the index refresh write it back from `merged`
+  return merged;
 }
 
 // THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every
@@ -3722,7 +3733,7 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
     const eta = f ? `, expected ${f.low}-${f.high} min` : "";
     // The position in the run, not `t.order`: a repair task sorts last on a sentinel order, which printed as the
     // counter itself (`[9007199254740990/51]`).
-    L.push(`[${tasks.indexOf(t) + 1}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
+    L.push(`[${stepOf(t)}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
   }
   const leftWeight = [...running, ...open].reduce((a, t) => a + (t.weight || 0), 0);
   const left = forecastMinutes(leftWeight, samples);
@@ -4861,7 +4872,6 @@ export function applyDecision(dir, result, opts = {}) {
   if (guard) return { refused: true, problems: guard };
   const merged = folderTaskSet(dir, result, opts, opts.split || null);
   if (merged.refused) return { refused: true, problems: merged.problems || ["the task folder could not be sliced"] };
-  merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
   if (mode === BUILD_MODE) return applyBuildDecision(dir, merged, picked, decision);
@@ -4924,7 +4934,7 @@ function buildSkipReason(row, task, n) {
     return `already decided${decidedBy} — \`--revoke\` that decision first`;
   }
   if (row.outcomeKind === O_NOT_BUILT && row.outcomeCause === CAUSE_NEEDS_DECISION) {
-    if (awaitsAnswer(task) || reopenedByAnswer(task)) return null;
+    if (awaitsAnswer(task)) return null;
     return `its task is ${task.status || "unknown"}, not closed or blocked — a builder may still be writing its page, and re-opening the row would let a second agent be dispatched onto it; answer once the task closes`;
   }
   const cause = row.outcomeCause ? ` — ${row.outcomeCause}` : "";
@@ -5087,7 +5097,6 @@ export function revokeDecision(dir, result, opts = {}) {
   if (!decision || !/^D\d+$/.test(decision)) return { refused: true, problems: [`--revoke needs a D<N> (got '${decision || "(none)"}')`] };
   const merged = folderTaskSet(dir, result, opts, opts.split || null);
   if (merged.refused) return { refused: true, problems: merged.problems || ["the task folder could not be sliced"] };
-  merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
 
   const cleared = [];
   const skipped = [];
@@ -5425,7 +5434,7 @@ function worklogField(worklogText, field, allowed) {
 // Returns the file text and the prompt it carries, so the caller prints that prompt without re-parsing the text.
 export function renderResume(f) {
   const nextLine = f.next
-    ? `\`${f.next.id}\` (step ${Number(f.next.step ?? f.next.order)} · ${f.next.pageKey} · ${f.next.group})`
+    ? `\`${f.next.id}\` (step ${stepOf(f.next)} · ${f.next.pageKey} · ${f.next.group})`
     : `none right now — \`--next\` answers \`${f.verdict}\`; ask it and act on that answer`;
   const prompt = [
     `Resume the Classic to Freedom UI migration build in ${f.migrationDir} with the classic-to-freedom-migration skill.`,
