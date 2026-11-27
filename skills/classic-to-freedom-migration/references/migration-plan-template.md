@@ -138,6 +138,31 @@ List only decisions or blockers that affect implementation.
 | --- | --- | --- |
 |  |  |  |
 
+## Questions before approval
+
+The build stops on every question the plan left open and waits for a person, and what it built
+without the answer is reworked. So while you read the pages, the behaviour cards (step 5.1) and the
+packages, write each question the build will need into `manifest.planQuestions`, as
+`{ "id", "kind", "question", "pages" }` — the question in product terms, the page keys it concerns:
+
+- **`behaviour`** — a choice on a page the Classic code does not settle: two places behave
+  differently (the page locks a field, its list lets a right holder edit it), nothing opens a page the
+  migration builds, a parameter Classic let the user change, a rule Freedom cannot apply per row of an
+  editable list. A behaviour card that describes two behaviours the Freedom page cannot both keep, or a
+  right or status the behaviour depends on, is one.
+- **`outside-package`** — a change the build would make outside `manifest.targetPackage`: a column,
+  a lookup setting or a schema defined in another package, a system setting.
+- **`object-wide`** — a change that affects every page of an object: a column setting, an object rule.
+- **`data-on-open`** — the engine raises it itself, as `data-on-open:<pageKey>`, for each page under
+  **Pages that write data when opened**; answer it by that id with `{ "id", "answer" }`.
+
+The plan lists them under `### Questions before approval`; an open one keeps `--plan` and `--tasks` at
+exit 2. Ask them with the plan's other decisions (SKILL.md step 6), the independent ones batched;
+record each answer in `decisions.md` as the user's `Kind: answer`, put its `D<N>` as the question's
+`answer`, and re-run `--plan --out`. The plan version reads the questions, not their answers, so
+recording an answer does not move it. A question the build still has to ask after the approval is
+recorded with a `Plan question:` line (`./migration-documentation.md` → *Directives and answers*).
+
 ## Approval Gate
 
 Implementation must stop here until the user explicitly approves this plan.

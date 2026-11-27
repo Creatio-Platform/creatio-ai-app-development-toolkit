@@ -408,28 +408,7 @@ you take back, and where it lands, stays here:
 - **What you take back is TWO files, not a transcript**: the report (`customizations.md`) and a machine-readable **`behaviour-index.json`** — one entry per handed-over row → the card, the **AC numbers**, and, for a row whose trigger you sent as unresolved, the trigger that run established. Ask for it explicitly and name its path; a report alone leaves the plan with no link to the cards.
 - **Where it lands in the plan: `manifest.behaviourIndex`, then re-run `--plan --out`.** Merge `behaviour-index.json` into the manifest under `behaviourIndex` (keys: `"<method>"`, `"<schema>::<method>"` when two scopes share a method name, `"<kind>:<name>"` for a member row) and regenerate. The engine folds each entry into the GENERATED tables: the `⚠ Custom methods` row gets a **Described in** cell naming the card + AC, a reported trigger replaces `⚠ unresolved` (marked `reported` — an engine-traced trigger always wins), and a described `⚠ Other declared logic` row carries the same reference in its own **Described in** cell. Do NOT hand-edit those tables (Contract rule 2) and do NOT put the index in `Adjustments`: `--plan --out` rewrites the file, so an appended section is lost on every regenerate — which is how a completed analysis ended up unlinked from the worklist. A key matching no row is printed as a plan banner: reconcile it (renamed method, stale report, wrong scope), never ignore it. At build you port from the card's acceptance criteria, and the row's *ported* marking (not a code comment) names the Freedom handler/converter/attribute you built AND the AC it satisfies.
 
-- **What it leaves to the user becomes a plan question.** A card that describes two behaviours the Freedom page cannot both keep, a right or a status the behaviour depends on, or a field defined in another package is a `behaviour` / `outside-package` / `object-wide` entry in `manifest.planQuestions` (5.2), asked before the approval.
-
 Run it BEFORE the final `--plan --out` and before approval, so the plan the user approves already carries the behaviour analysis — the same reason `signals` is a plan-time gate and not a build-time note. It is usually also the run that closes the aggregated `module-dep` row, since referenced module bodies are inside its logic closure. Never port from a method NAME, and never drop a row because its trigger was not obvious.
-
-**5.2 — List the questions only the user can answer, before the plan.** The build stops on any
-question the plan left open, and waits for a person: a run that asked them after the approval spent
-most of its rework and hours of waiting on them. While you read the pages, the behaviour cards and the
-packages, write each question the build will need into `manifest.planQuestions` (`id`, `kind`,
-`question` in product terms, `pages`):
-
-- **`behaviour`** — a choice on a page the Classic code does not settle: two places behave differently
-  (the page locks a field, its list lets a right holder edit it), nothing opens a page the migration
-  builds, a parameter Classic let the user change, a rule Freedom cannot apply per row of an editable list.
-- **`outside-package`** — a change the build would make outside `manifest.targetPackage`: a column, a
-  lookup setting or a schema defined in another package, a system setting.
-- **`object-wide`** — a change that affects every page of an object: a column setting, an object rule.
-- **`data-on-open`** — the engine raises it itself, as `data-on-open:<pageKey>`, for each page under
-  **Pages that write data when opened**; answer it by that id.
-
-The plan lists them under `### Questions before approval`, and an open one keeps `--plan` and `--tasks`
-at exit 2. Ask them as step 6 says, record each answer, put its `D<N>` as the question's `answer`, and
-re-run `--plan --out`. The answers stay outside the plan version, so recording one does not move it.
 
 **Complex components carry a required SHAPE — check the plan states it, don't build it here.** Approvals, Activities/Emails, DCM widgets (case stages / Next steps) and "Run process" are the components agents most often mis-map, and the rules for each live in one place: `./references/classic-to-freedom-mapping.md` → **Standard features, widgets & actions**. The engine already emits the right `uiShape` / widget kind and the generated design spec renders each correctly, so your job at PLAN time is to present it verbatim and resolve its `⚠` items. Building them in that shape is step 7's.
 
@@ -473,13 +452,12 @@ The default strategy is a **parallel Freedom analog**: do not remove or disable 
 
 **Stop after presenting the plan and ask for explicit approval.** Do not edit code, create pages, update schemas, deploy, compile, or push before approval.
 
-**Every plan question and every Adjustment that is a DECISION is asked through `AskUserQuestion` before the approval — the independent ones together.** `Adjustments` is the one place the user would otherwise answer prose. Split the list before you present it:
+**Every plan question and every Adjustment that is a DECISION goes through `AskUserQuestion` before the approval, the independent ones batched.** `Adjustments` is the one place the user would otherwise answer prose. Split the list before you present it:
 
-- A **decision** changes what gets built and only the user can settle it — a binding that cannot be reproduced 1:1, a customization to port faithfully or drop, a duplicated field, the list's column set, a hard-coded caption, and every row of `### Questions before approval`. Each is one question with 2–4 concrete options, each option saying what the built page will actually do if chosen (and its `preview` showing the resulting bindings where that is clearer than prose).
-- **Batch the questions that do not depend on each other**: up to four in one `AskUserQuestion` call, highest-stakes first; when questions are asked as plain text, one numbered message. A question whose options depend on another's answer waits for that answer and goes in the next batch.
+- A **decision** changes what gets built and only the user can settle it — a binding that cannot be reproduced 1:1, a customization to port faithfully or drop, a duplicated field, the list's column set, a hard-coded caption, a plan question (`./references/migration-plan-template.md` → *Questions before approval*). Each gets 2–4 options saying what the built page will do (a `preview` where clearer). Batch the independent ones — up to four per call, or one numbered plain-text message, highest-stakes first; one an earlier answer can narrow waits for it.
 - A **finding** is something you resolved and are reporting — a worklist row that turned out to be inherited platform boilerplate, an on-stand check that came back empty, a missing worklist row you have already accounted for. It stays prose in `Adjustments`. Do not turn a finding into a dialog.
 
-Never fold decisions into one prose confirmation ("confirm A2 and A8"): each keeps its own options and its own answer. Record every answer, and each instruction given unasked, in `decisions.md` in the user's words (*Directives and answers*), and keep the questions in the user's language. A deliverable the user drops is recorded ONLY as its `manifest.deliverableStatus` entry with its own `D<N>` — never Adjustments, chat or a blanket "Plan approved"; a `D<N>` dropping none goes in `manifest.decisionsWithoutDeliverable`, or the cut refuses (`./references/orchestrate-build.md`). Step 7 builds on the answers; one closing no `--verify` row on its own is a decision, not evidence (`./references/migration-documentation.md`).
+Never fold decisions into one prose message ("confirm A2 and A8"). Record every answer, and each instruction given unasked, in `decisions.md` in the user's words (*Directives and answers*), and keep the questions in the user's language. A deliverable the user drops is recorded ONLY as its `manifest.deliverableStatus` entry with its own `D<N>` — never Adjustments, chat or a blanket "Plan approved"; a `D<N>` dropping none goes in `manifest.decisionsWithoutDeliverable`, or the cut refuses (`./references/orchestrate-build.md`). Step 7 builds on the answers; one closing no `--verify` row on its own is a decision, not evidence (`./references/migration-documentation.md`).
 
 > **A question names only what the user can SEE in their product.** The person answering owns the application, not this pipeline: the vocabulary that is allowed is the section, the list and its columns, the record page, a field, a caption, a button, an action. **Never name a system table, a system column, a schema/manager/`Sys*` object, a clio or MCP tool, an engine flag, or a step of this skill.** A real run asked *"saved Classic list columns live in `SysProfileData.ObjectData`, which the available tools cannot read — which set do we build?"*: every fact in it was true and none of it was the user's to know. The question is *"which columns should the Freedom list show?"*, and the options are column sets.
 >
