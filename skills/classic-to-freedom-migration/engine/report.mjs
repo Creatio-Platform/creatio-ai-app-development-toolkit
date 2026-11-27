@@ -28,7 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
-import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
+import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle, approvedObjectWide, userAnswerIds } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   worklogFieldValues, addModeChecks, STAND_DATA_FIELD, STAND_DATA_MARKER,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
@@ -634,9 +634,11 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName, declined = [])
 // OBJECT-WIDE CHANGES — every change this run made that reaches beyond the page it rebuilt, each with the decision
 // that approved it: the entity rules and add-on entries the plan carried (read off `--verify`), each object whose edit
 // card stays Classic, every entity rule found on an object that the plan did not list, and every `Object-wide (row N):`
-// line a builder wrote for a change the engine cannot read (a column's setting, a system setting). A change made on
-// the approved plan alone cites the plan; a mixed-navigation answer, an unplanned rule and a builder's line each need
-// a recorded decision, and one without leaves the run incomplete.
+// line a builder wrote for a change the engine cannot read (a column's setting, a system setting). An entity rule or
+// add-on entry the plan lists stands on the approved plan. Every other change stands only on the user's own answer
+// addressed to it — `Approves: mixed-navigation:<Entity>` for a Classic edit card kept, `Approves:
+// entity-rule:<Entity>.<Attribute>` for an unplanned rule, a cited user answer for a builder's line — never on a
+// decision that merely appears in a row's text. One without leaves the run incomplete.
 export const OBJECT_WIDE_MARKER = notesMarker("Object-wide");
 const OBJECT_WIDE_LABEL = {
   "entity-rules": (it) => `Entity business rules on \`${cell(it.entity || "?")}\`: ${(it.attributes || []).map(cell).join(", ")} — apply on every page and list of the object`,
@@ -656,31 +658,37 @@ function taskRowIndex(tasks) {
   }
   return (pageKey, label) => byKey.get(`${pageKey} ${labelKey(label)}`) || byLabel.get(labelKey(label));
 }
-// The Approved-by cell: the recorded decisions a reason cites, or `fallback` — open when it is a warning.
-function approvalOf(reason, decisions, fallback) {
-  const refs = decisionRefs(reason, decisions);
-  if (refs.resolved.length) return { approval: refs.resolved.map((d) => `**${cell(d.ref)}** — ${cell(d.title)}`).join("<br>"), open: false };
-  return { approval: fallback, open: fallback.startsWith("⚠") };
+// The Approved-by cell for the user's answers among `ids`, or `fallback`; `open` says whether the change still
+// waits on one — decided by the kind of change at the call site, never read off the label.
+function approvalOf(ids, decisions, { fallback, open }) {
+  const own = [...new Set(ids)].filter((id) => decisions.has(id));
+  if (own.length) return { approval: own.map((id) => `**${cell(id)}** — ${cell(decisions.get(id))}`).join("<br>"), open: false };
+  return { approval: fallback, open };
 }
-function objectWideItems(verifyRes, tasks, decisions) {
+const citedUserAnswers = (text, decisions, userIds) => decisionRefs(text, decisions).resolved.map((d) => d.ref).filter((id) => userIds.has(id));
+function objectWideItems(verifyRes, tasks, decisions, records) {
   const ow = verifyRes?.objectWide || {};
+  const approvals = approvedObjectWide(records);
+  const userIds = userAnswerIds(records);
   const items = [];
   if (ow.rows?.length) {
     const rowOf = taskRowIndex(tasks);
     for (const it of ow.rows) {
-      const fallback = it.kind === "mixed-navigation" ? "⚠ no recorded answer" : "the approved plan";
-      items.push({ pageKey: it.pageKey, change: OBJECT_WIDE_LABEL[it.kind](it), status: it.status,
-        ...approvalOf(rowOf(it.pageKey, it.deliverable)?.outcomeReason, decisions, fallback) });
+      const answer = it.kind === "mixed-navigation"
+        ? approvalOf([approvals[`mixed-navigation:${it.entity}`]].filter(Boolean), decisions, { fallback: "⚠ no recorded answer", open: true })
+        : approvalOf(citedUserAnswers(rowOf(it.pageKey, it.deliverable)?.outcomeReason, decisions, userIds), decisions,
+          { fallback: "the approved plan", open: false });
+      items.push({ pageKey: it.pageKey, change: OBJECT_WIDE_LABEL[it.kind](it), status: it.status, ...answer });
     }
   }
   for (const u of ow.unplanned || []) {
     items.push({ pageKey: u.pageKey, change: `Entity rule \`${cell(u.name)}\` on \`${cell(u.entity)}\` — NOT in the plan`, status: "on the object",
-      ...approvalOf(u.approvedBy, decisions, "⚠ no decision approves it") });
+      ...approvalOf([u.approvedBy].filter(Boolean), decisions, { fallback: "⚠ no decision approves it", open: true }) });
   }
   for (const t of tasks) {
     for (const [n, values] of notesMarkers(t.notes, OBJECT_WIDE_MARKER)) for (const v of values) {
       items.push({ pageKey: t.pageKey, change: `${cell(v)} (${where({ task: t, n })})`, status: "recorded by the builder",
-        ...approvalOf(v, decisions, "⚠ no recorded decision") });
+        ...approvalOf(citedUserAnswers(v, decisions, userIds), decisions, { fallback: "⚠ no answer of the user's cited", open: true }) });
     }
   }
   return items;
@@ -860,6 +868,16 @@ function decidedWithoutYouSection(entries) {
 }
 // The section for the decisions.md above the task folder `dir`. Read only beside a task folder: with none, `..`
 // would name whatever folder the process happens to run in.
+// The decisions.md records beside the task folder; none when there is no folder or the file cannot be read, which
+// the Decided-without-you section already reports — then no object-wide change counts as approved.
+function decisionRecordsFor(dir) {
+  if (!dir) return [];
+  try {
+    return readDecisionRecords(path.join(dir, ".."));
+  } catch {
+    return [];
+  }
+}
 function decidedWithoutYouFor(dir) {
   if (!dir) return [];
   try {
@@ -995,7 +1013,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   // "the machine has nothing left to do, the person has a debt" from "someone still has work here".
   const postponedRows = collectPostponedRows(tasks);
   reasons.push(...postponedUnbackedReasons(postponedRows, decisions));
-  const objectWide = objectWideItems(verifyRes, tasks, decisions);
+  const objectWide = objectWideItems(verifyRes, tasks, decisions, decisionRecordsFor(dir));
   const objectWideOpen = objectWide.filter((it) => it.open).length;
   if (objectWideOpen) reasons.push(`${plural(objectWideOpen, "object-wide change")} without a recorded decision — see Object-wide changes`);
   const complete = reasons.length === 0;

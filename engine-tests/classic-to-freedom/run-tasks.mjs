@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey, mixedNavigationDecisions } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport, browserChecksOf, savedPage, readDecisionTexts, unexercisedNote, browserAnswerUnreadNote } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
@@ -34,7 +34,7 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
-import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys, approvedEntityRules }
+import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys, approvedObjectWide }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -12752,8 +12752,8 @@ console.log("\n===== a decision closing a rule attribute is not drift =====");
 console.log("\n===== object-wide changes: asked before the build, flagged when unapproved, listed in the result =====");
 {
   // A child page whose Classic edit page carries two lookup filters, rebuilt and wired from its parent's related
-  // list. The object's rules read back hold the two planned rules and three a builder added on its own; two of those
-  // govern no planned attribute (a third governs one that is planned, so it reads as part of the planned set).
+  // list. The object's rules read back hold the two planned lookup filters and three a builder added on its own: a
+  // filter on another lookup, a required rule, and a read-only rule on a lookup the plan filters.
   const FIX = path.join(DIR, "fixtures", "object-wide-retest");
   const m = JSON.parse(fs.readFileSync(path.join(FIX, "manifest.json"), "utf8"));
   const built = JSON.parse(fs.readFileSync(path.join(FIX, "built.json"), "utf8"));
@@ -12766,78 +12766,117 @@ console.log("\n===== object-wide changes: asked before the build, flagged when u
     () => mixed?.pageKey === "main" && mixed.confirm.item === "DemoLine"
       && rows.filter((r) => r.confirm?.kind === "mixed-navigation").length === 1
       && /\*\*\[mixed-navigation\]\*\* DemoLine — DemoLine's edit card in SysModuleEdit stays the Classic DemoLinePage/.test(RUN.plan)
-      && /recorded not built, needs-decision/.test(RUN.plan),
+      && /Approves: mixed-navigation:DemoLine/.test(RUN.plan) && /recorded not built, needs-decision/.test(RUN.plan),
     () => ({ mixed, plan: RUN.plan.split("\n").filter((l) => /mixed-navigation/.test(l)) }));
+
+  // Only a wired child rebuilt from a Classic page owes the question, once per object.
+  {
+    const wired = (entity, extra = {}) => ({ entity, via: `${entity}Detail`, pageKey: `child:${entity}`, pageRows: [{}], spec: "x", resolvedFrom: `${entity}Page`, ...extra });
+    const items = (childs) => mixedNavigationDecisions(childs).map((d) => d.item);
+    check("object-wide: no mixed-navigation question for an inline grid, a reused Freedom page, a cross-section boundary, or a child with no Classic page",
+      () => items([wired("A", { formless: "inline-grid" })]).length === 0
+        && items([wired("A", { reuseFreedomPage: "UsrA_FormPage" })]).length === 0
+        && items([wired("A", { opensClassicPage: "APage" })]).length === 0
+        && items([wired("A", { resolvedFrom: undefined, editPage: false })]).length === 0
+        && items([wired("A", { pageRows: undefined })]).length === 0);
+    check("object-wide: two related lists opening one object ask about it once; two objects ask twice",
+      () => items([wired("A"), wired("A", { via: "OtherADetail", pageKey: "child:A2" }), wired("B")]).join() === "A,B");
+    check("object-wide: a wired child with a Classic edit page but no lookup filter still owes the question — the edit card stays Classic either way",
+      () => items([{ ...wired("A"), resolvedFrom: undefined, editPage: "APage" }]).join() === "A");
+  }
 
   const withRecords = (text) => checklistOpts(m, { decisionRecords: parseDecisionRecords(text) });
   const v = renderVerify(RUN, withRecords(decisionsText), built);
   const unplanned = v.objectWide.unplanned;
-  check("object-wide: verify reads the object's rules and flags the two the plan does not list and no decision approves — the run is not complete",
-    () => unplanned.map((u) => u.name).join() === "BusinessRule_b1,BusinessRule_b2" && unplanned.every((u) => !u.approvedBy && u.entity === "DemoLine")
-      && v.complete === false && /⛔ \*\*2 entity rule\(s\) on the object that the plan does not list and no decision approves\*\*/.test(v.markdown)
-      && /`BusinessRule_b1` on `DemoLine`/.test(v.markdown),
+  check("object-wide: verify flags every rule the plan does not list — the filter on another lookup, the required rule and the read-only rule on a filtered lookup — and the run is not complete",
+    () => unplanned.map((u) => u.name).join() === "BusinessRule_b1,BusinessRule_b2,BusinessRule_b3"
+      && unplanned.every((u) => !u.approvedBy && u.entity === "DemoLine") && v.complete === false
+      && /⛔ \*\*3 entity rule\(s\) on the object that the plan does not list and no decision approves\*\*/.test(v.markdown)
+      && /`BusinessRule_b3` on `DemoLine`/.test(v.markdown),
     () => ({ unplanned, complete: v.complete }));
   check("object-wide: verify lists the plan's own object-wide rows — the entity rules, the add-on binding and the mixed-navigation question",
     () => ["entity-rules", "related-page", "mixed-navigation"].every((k) => v.objectWide.rows.some((r) => r.kind === k && r.entity === "DemoLine"))
       && v.objectWide.rows.find((r) => r.kind === "entity-rules").attributes.join() === "Order,Product",
     () => v.objectWide.rows);
+  {
+    const md = { ...m, deliverableStatus: { "child:DemoLine#entity-rules": { status: "wont-do", decision: "D13" } } };
+    const declined = renderVerify(runMigration(md, { baseDir: FIX }), checklistOpts(md, { decisionRecords: parseDecisionRecords(decisionsText) }), built);
+    check("object-wide: when the user declines the entity rules, the planned filters themselves are unplanned rules on the object",
+      () => declined.objectWide.unplanned.map((u) => u.name).join() === "BusinessRule_a1,BusinessRule_a2,BusinessRule_b1,BusinessRule_b2,BusinessRule_b3",
+      () => declined.objectWide.unplanned.map((u) => u.name));
+  }
 
-  const approving = `${decisionsText}\n## D48 — Keep the two extra rules on DemoLine\n- Kind: answer\n- Decided by: user\n`
-    + "- Asked: Two entity rules on DemoLine are not in the plan (InternalRequest filter, Customer when filled). Keep them?\n"
-    + "- Quote: \"keep both\"\n- Approves: `entity-rule:DemoLine.InternalRequest`, `entity-rule:DemoLine.Customer`\n";
+  const approving = `${decisionsText}\n## D48 — Keep the three extra rules on DemoLine\n- Kind: answer\n- Decided by: user\n`
+    + "- Asked: Three entity rules on DemoLine are not in the plan (InternalRequest filter, Customer required, Order read-only). Keep them?\n"
+    + "- Quote: \"keep all three\"\n- Approves: `entity-rule:DemoLine.InternalRequest`, `entity-rule:DemoLine.Customer`, `entity-rule:DemoLine.Order`\n"
+    + "\n## D49 — DemoLine keeps its Classic edit card\n- Kind: answer\n- Decided by: user\n"
+    + "- Asked: The related list will open the rebuilt DemoLine page while other entry points open the Classic card. Keep that?\n"
+    + "- Quote: \"keep it, we switch later\"\n- Approves: `mixed-navigation:DemoLine`\n"
+    + "\n## D50 — Account made read-only on DemoLine\n- Kind: answer\n- Decided by: orchestrator\n- Asked: none\n";
   const approvedRecords = parseDecisionRecords(approving);
   const va = renderVerify(RUN, withRecords(approving), built);
-  check("object-wide: a user's `Approves:` answer naming the object and attribute accepts an unplanned rule — listed with its decision, no banner",
-    () => JSON.stringify(approvedEntityRules(approvedRecords)) === JSON.stringify({ "DemoLine.InternalRequest": "D48", "DemoLine.Customer": "D48" })
+  check("object-wide: a user's `Approves:` answer naming the object and the attribute a rule acts on accepts it — listed with its decision, no banner",
+    () => JSON.stringify(approvedObjectWide(approvedRecords)) === JSON.stringify({ "entity-rule:DemoLine.InternalRequest": "D48",
+      "entity-rule:DemoLine.Customer": "D48", "entity-rule:DemoLine.Order": "D48", "mixed-navigation:DemoLine": "D49" })
       && va.objectWide.unplanned.every((u) => u.approvedBy === "D48") && !/that the plan does not list and no decision approves/.test(va.markdown),
     () => va.objectWide.unplanned);
-  check("object-wide: `Approves:` counts only on the user's own answer and only for `entity-rule:<Entity>.<Attribute>`",
+  check("object-wide: `Approves:` counts only on the user's own answer and only for `entity-rule:<Entity>.<Attribute>` or `mixed-navigation:<Entity>`",
     () => {
       const orch = parseDecisionRecords("## D49 — x\n- Kind: answer\n- Decided by: orchestrator\n- Asked: q\n- Approves: `entity-rule:DemoLine.Customer`\n");
       const bad = parseDecisionRecords("## D50 — y\n- Kind: answer\n- Decided by: user\n- Asked: q\n- Quote: \"ok\"\n- Approves: `rule:Customer`\n");
-      return Object.keys(approvedEntityRules(orch)).length === 0 && Object.keys(approvedEntityRules(bad)).length === 0
+      return Object.keys(approvedObjectWide(orch)).length === 0 && Object.keys(approvedObjectWide(bad)).length === 0
         && provenanceIssues(orch).some((p) => /`Approves:` approves an object-wide change only on the user's own answer/.test(p.problem))
-        && provenanceIssues(bad).some((p) => /names `rule:Customer`, which is not an entity rule/.test(p.problem));
+        && provenanceIssues(bad).some((p) => /names `rule:Customer`, which is not an object-wide change/.test(p.problem));
     });
 
-  // The result report, from a task folder whose builder recorded the entity rules per D13, left the mixed-navigation
-  // question unanswered, and wrote two `Object-wide` lines — one citing D33, one citing nothing.
+  // The result report, from a task folder whose builder recorded the entity rules per D13, closed the
+  // mixed-navigation question by citing the unrelated D33, and wrote two `Object-wide` lines — one citing the user's
+  // answer D33, one citing nothing.
   const base = tmp("object-wide-report");
   fs.writeFileSync(path.join(base, "decisions.md"), decisionsText);
   const dir = path.join(base, "build-tasks");
   const label = (k) => v.objectWide.rows.find((r) => r.kind === k).deliverable;
   const task = (id, pageKey, rs, notes = "") => ({ id, file: `${id}.md`, group: id, pageKey, status: "done", kind: "build", notes,
     rows: rs.map(([l, reason]) => ({ label: l, outcomeKind: "built", outcome: `built — ${reason}`, outcomeReason: reason, na: null })) });
-  const tasks = [
+  const rep = renderFinalReport({ result: RUN, verifyRes: v, dir, built, set: { planVersion: RUN.planVersion, tasks: [
     task("t-child", "child:DemoLine", [[label("entity-rules"), "two entity rules per D13"]],
       "- Object-wide (row 1): DemoLine.ProductType shows as a dropdown on every page (column setting) — D33\n"
         + "- Object-wide (row 1): DemoLine.Account made read-only on the object, as on the Classic page\n"),
-    task("t-wiring", "main", [[label("related-page"), "add-on written, empty before"], [label("mixed-navigation"), "noted for the final report"]]),
-  ];
-  const rep = renderFinalReport({ result: RUN, verifyRes: v, set: { planVersion: RUN.planVersion, tasks }, dir, built });
+    task("t-wiring", "main", [[label("related-page"), "add-on written, empty before"], [label("mixed-navigation"), "user keeps the Classic card, D33"]]),
+  ] } });
   const section = rep.markdown.slice(rep.markdown.indexOf("## Object-wide changes"));
   const body = section.slice(0, section.indexOf("\n## ", 3) > 0 ? section.indexOf("\n## ", 3) : undefined);
   check("object-wide: the result has an Object-wide changes section listing every change made beyond the page, each with what approved it",
-    () => /^## Object-wide changes \(7\)$/m.test(body)
+    () => /^## Object-wide changes \(8\)$/m.test(body)
       && /Entity business rules on `DemoLine`: Order, Product .*\| \*\*D13\*\* — Lookup filters become entity rules/.test(body)
       && /RelatedPage add-on for `DemoLine` .*\| the approved plan \|/.test(body)
-      && /Edit card of `DemoLine` stays Classic .*\| ⚠ no recorded answer \|/.test(body)
-      && /Entity rule `BusinessRule_b1` on `DemoLine` — NOT in the plan .*\| ⚠ no decision approves it \|/.test(body)
+      && /Entity rule `BusinessRule_b3` on `DemoLine` — NOT in the plan .*\| ⚠ no decision approves it \|/.test(body)
       && /DemoLine\.ProductType shows as a dropdown .*\| \*\*D33\*\* — Product type lookups/.test(body)
-      && /DemoLine\.Account made read-only on the object.*\| ⚠ no recorded decision \|/.test(body),
+      && /DemoLine\.Account made read-only on the object.*\| ⚠ no answer of the user's cited \|/.test(body),
     () => body);
-  check("object-wide: an unanswered mixed-navigation question, an unapproved rule and a builder's line without a decision leave the run NOT COMPLETE and say why",
-    () => rep.complete === false && rep.reasons.some((r) => /^4 object-wide changes without a recorded decision — see Object-wide changes$/.test(r)),
+  check("object-wide: a decision merely cited in the row's text does not answer the mixed-navigation question — citing D33 leaves it open",
+    () => /Edit card of `DemoLine` stays Classic .*\| ⚠ no recorded answer \|/.test(body), () => body);
+  check("object-wide: an unanswered mixed-navigation question, unapproved rules and a builder's line without the user's answer leave the run NOT COMPLETE and say why",
+    () => rep.complete === false && rep.reasons.some((r) => /^5 object-wide changes without a recorded decision — see Object-wide changes$/.test(r)),
     () => rep.reasons);
+
   fs.writeFileSync(path.join(base, "decisions.md"), approving);
   const repOk = renderFinalReport({ result: RUN, verifyRes: va, dir, built, set: { planVersion: RUN.planVersion, tasks: [
     task("t-child", "child:DemoLine", [[label("entity-rules"), "two entity rules per D13"]],
       "- Object-wide (row 1): DemoLine.ProductType shows as a dropdown on every page (column setting) — D33\n"),
-    task("t-wiring", "main", [[label("related-page"), "add-on written, empty before"], [label("mixed-navigation"), "user keeps the Classic card, D33"]]),
+    task("t-wiring", "main", [[label("related-page"), "add-on written, empty before"], [label("mixed-navigation"), "user keeps the Classic card, D49"]]),
   ] } });
-  check("object-wide: with every change approved the section stays, and adds no reason to the verdict",
-    () => /## Object-wide changes \(6\)/.test(repOk.markdown) && !repOk.reasons.some((r) => /object-wide/.test(r)),
+  check("object-wide: with every change approved by the user's own answer the section stays, and adds no reason to the verdict",
+    () => /## Object-wide changes \(7\)/.test(repOk.markdown) && /stays Classic .*\| \*\*D49\*\* — DemoLine keeps its Classic edit card \|/.test(repOk.markdown)
+      && !repOk.reasons.some((r) => /object-wide/.test(r)),
     () => repOk.reasons);
+  const repOrch = renderFinalReport({ result: RUN, verifyRes: va, dir, built, set: { planVersion: RUN.planVersion, tasks: [
+    task("t-child", "child:DemoLine", [[label("entity-rules"), "two entity rules per D13"]],
+      "- Object-wide (row 1): DemoLine.Account made read-only on the object — D50\n"),
+  ] } });
+  check("object-wide: a builder's line citing a decision the orchestrator made alone is not approved",
+    () => /DemoLine\.Account made read-only on the object — D50 .*\| ⚠ no answer of the user's cited \|/.test(repOrch.markdown),
+    () => repOrch.markdown.split("\n").filter((l) => /Account made read-only/.test(l)));
   fs.rmSync(base, { recursive: true, force: true });
 }
 

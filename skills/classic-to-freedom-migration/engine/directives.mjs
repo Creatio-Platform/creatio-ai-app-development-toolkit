@@ -178,17 +178,18 @@ export const directiveCovers = (directive, pageKey) =>
 // address is read here, and only from an entry the user decided in their own words: the other statuses drop or
 // re-open a deliverable, which is a planning choice the approved plan has to show.
 const RULE_ATTRIBUTE_KEY = /^[^#\s]+#business-rule:[^\s#]+$/;
-// THE ENTITY RULES A USER'S ANSWER APPROVES BEYOND THE PLAN (`Approves:`). An entity rule reaches every page of its
-// object, so one the plan did not list stands only on the user's own answer naming the object and the attribute it
-// governs; `--verify` flags every other rule it reads on the object.
-const ENTITY_RULE_APPROVAL = /^entity-rule:([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/;
+// THE OBJECT-WIDE CHANGES A USER'S ANSWER APPROVES (`Approves:`). Each reaches every page of its object, so it stands
+// only on the user's own answer naming it: `entity-rule:<Entity>.<Attribute>` for an entity rule the plan did not
+// list (`--verify` flags every other rule it reads on the object), `mixed-navigation:<Entity>` for keeping the
+// object's Classic edit card while its related list opens the rebuilt page.
+const OBJECT_WIDE_APPROVAL = /^(?:entity-rule:[A-Za-z_]\w*\.[A-Za-z_]\w*|mixed-navigation:[A-Za-z_]\w*)$/;
 const closesFromUser = (f) => f?.kind === KIND_ANSWER && f.decidedBy === DECIDED_BY_USER && !blank(f.quote);
 // The address lines a user's answer may carry, each with the shape its addresses must have.
 const ANSWER_LINES = [
   { field: "closes", label: "Closes:", acts: "closes a rule", re: RULE_ATTRIBUTE_KEY,
     shape: "a business-rule attribute (`<pageKey>#business-rule:<Attribute>`)" },
-  { field: "approves", label: "Approves:", acts: "approves an object-wide change", re: ENTITY_RULE_APPROVAL,
-    shape: "an entity rule (`entity-rule:<Entity>.<Attribute>`)" },
+  { field: "approves", label: "Approves:", acts: "approves an object-wide change", re: OBJECT_WIDE_APPROVAL,
+    shape: "an object-wide change (`entity-rule:<Entity>.<Attribute>` or `mixed-navigation:<Entity>`)" },
 ];
 // The well-formed addresses of one line across the user's own answers, as `[{ key, decision }]`, in file order.
 function userAnswerKeys(records, field, re) {
@@ -198,14 +199,17 @@ function userAnswerKeys(records, field, re) {
 export function closedRuleAttributes(records) {
   return userAnswerKeys(records, "closes", RULE_ATTRIBUTE_KEY);
 }
-// `{ "<Entity>.<Attribute>": "D<N>" }`; the first answer approving an address is the one that counts.
-export function approvedEntityRules(records) {
+// `{ "<address>": "D<N>" }` for every address a user's answer approves; the first answer approving one counts.
+export function approvedObjectWide(records) {
   const out = {};
-  for (const { key, decision } of userAnswerKeys(records, "approves", ENTITY_RULE_APPROVAL)) {
-    const k = key.slice("entity-rule:".length);
-    if (!Object.hasOwn(out, k)) out[k] = decision;
+  for (const { key, decision } of userAnswerKeys(records, "approves", OBJECT_WIDE_APPROVAL)) {
+    if (!Object.hasOwn(out, key)) out[key] = decision;
   }
   return out;
+}
+// The ids of the entries that are the user's own answers — the only decisions that can approve an object-wide change.
+export function userAnswerIds(records) {
+  return new Set((records || []).filter((r) => closesFromUser(r.fields)).map((r) => r.id));
 }
 // An address line that addresses nothing is named, never dropped: on an entry that is not the user's own answer,
 // and for each address of the wrong shape.

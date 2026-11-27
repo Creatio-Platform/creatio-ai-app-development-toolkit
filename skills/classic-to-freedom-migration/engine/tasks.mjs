@@ -1254,11 +1254,12 @@ function markersBlock() {
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
-    "  - for every change you made that reaches beyond this page — an entity rule, an object column's setting, a"
-      + " RelatedPage add-on entry, a system setting: `Object-wide (row N): <what changed, on which object> — D<N>`,"
-      + " citing the decision that approved it. Make no such change the plan or a recorded answer does not name:"
-      + " never by analogy with one that was approved. The result report lists every line, and one citing no"
-      + " recorded decision leaves the run incomplete.",
+    "  - for every change you made that reaches beyond this page and that the engine cannot read — an object"
+      + " column's setting, a system setting: `Object-wide (row N): <what changed, on which object> — D<N>`, citing"
+      + " the user's answer that approved it (entity rules, add-on entries and edit cards are listed from the plan"
+      + " and the stand, so they get no line). Make no object-wide change the plan or a user's answer does not name:"
+      + " never by analogy with one that was approved. The result report lists every line, and one citing no answer"
+      + " of the user's leaves the run incomplete.",
     "  - for every `Handler — …` row you ported under another name: `Ported as (row N): <symbol>` — the request"
       + " type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or `Module.function`"
       + " (the module's schema name, also when the page calls it through its `define()` parameter, and also for a"

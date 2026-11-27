@@ -443,7 +443,10 @@ may change it at any time by saying so — update the line first.
    fails the run on a rule the plan does not list and no such line approves; the result report's
    **Object-wide changes** section lists every change, the plan's and the approved ones, with the
    decision behind each. Each `[mixed-navigation] <Entity>` ⚠ Confirm item is answered at plan
-   approval like any other; an unanswered one leaves its binding row `not-built — needs-decision`.
+   approval like any other; the user's answer keeping the Classic card carries
+   `` - Approves: `mixed-navigation:<Entity>` ``, and only that line closes it in the report — a
+   decision merely cited in a row's text never does. An unanswered item leaves its binding row
+   `not-built — needs-decision`.
 
    **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
    deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints

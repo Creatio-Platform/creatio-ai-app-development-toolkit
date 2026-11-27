@@ -8,20 +8,20 @@
     "count": 5,
     "rules": [
      { "name": "BusinessRule_a1", "caption": "Order filtered by Account",
-       "condition": { "conditions": [{ "leftExpression": "Account", "comparisonType": "isFilled" }] },
-       "actions": [{ "type": "filter-lookup", "targetAttribute": "Order", "filterBy": "Account" }] },
+       "condition": {},
+       "actions": [{ "type": "apply-filter", "target": "Order", "targetFilterPath": "Account", "source": "Account" }] },
      { "name": "BusinessRule_a2", "caption": "Product filtered by type",
-       "condition": { "conditions": [] },
-       "actions": [{ "type": "filter-lookup", "targetAttribute": "Product", "filterBy": "ProductType" }] },
+       "condition": {},
+       "actions": [{ "type": "apply-filter", "target": "Product", "targetFilterPath": "ProductType", "source": "ProductType" }] },
      { "name": "BusinessRule_b1", "caption": "Internal request filter",
-       "condition": { "conditions": [] },
-       "actions": [{ "type": "filter-lookup", "targetAttribute": "InternalRequest", "filterBy": "RequestType" }] },
+       "condition": {},
+       "actions": [{ "type": "apply-filter", "target": "InternalRequest", "targetFilterPath": "RequestType", "source": "RequestType" }] },
      { "name": "BusinessRule_b2", "caption": "Customer when filled",
-       "condition": { "conditions": [{ "leftExpression": "Customer", "comparisonType": "isFilled" }] },
-       "actions": [{ "type": "set-required", "targetAttribute": "Customer" }] },
+       "condition": { "conditions": [{ "leftExpression": "Customer", "comparisonType": "is-filled" }] },
+       "actions": [{ "type": "make-required", "items": ["Customer"] }] },
      { "name": "BusinessRule_b3", "caption": "Order when filled",
-       "condition": { "conditions": [{ "leftExpression": "Order", "comparisonType": "isFilled" }] },
-       "actions": [{ "type": "set-readonly", "targetAttribute": "Order" }] }
+       "condition": { "conditions": [{ "leftExpression": "Order", "comparisonType": "is-filled" }] },
+       "actions": [{ "type": "make-read-only", "items": ["Order"] }] }
     ]
    }
   }

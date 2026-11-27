@@ -67,7 +67,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
   freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, mixedNavigationDecisions } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes, approvedEntityRules } from "./directives.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes, approvedObjectWide } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
@@ -1156,9 +1156,9 @@ export function checklistOpts(manifest, opts = {}) {
     // fold: a `built-elsewhere` rule status stands only on the user's own decision.
     // Null when this call read no decisions.md, so the root result's copy is used instead.
     decisionProvenance: opts.decisionProvenance || (opts.decisionRecords ? provenanceById(opts.decisionRecords) : null),
-    // The entity rules beyond the plan the user approved (`Approves:` in decisions.md), `{ "<Entity>.<Attr>": "D<N>" }`:
+    // The object-wide changes the user approved (`Approves:` in decisions.md), `{ "entity-rule:<Entity>.<Attr>": "D<N>" }`:
     // `--verify` accepts an unplanned rule on the object only under one of them.
-    entityRuleApprovals: opts.entityRuleApprovals || (opts.decisionRecords ? approvedEntityRules(opts.decisionRecords) : null),
+    objectWideApprovals: opts.objectWideApprovals || (opts.decisionRecords ? approvedObjectWide(opts.decisionRecords) : null),
     decisionsOptional: opts.decisionsOptional === true,
     // Root-only, like the plan's `### Won't do` list it is printed in.
     decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],

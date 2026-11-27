@@ -40,10 +40,12 @@ clio-safety rules apply to every write.
      its ⚠ Confirm item recorded, and no other: a rule that "would fit the same decision" is a new
      object-wide change. Ask the user first; record the answer as its own `D<N>`, and for an entity
      rule add `- Approves: entity-rule:<Entity>.<Attribute>` to it (the user's own answer, quoted).
-     Write each change you made as `Object-wide (row N): <what changed, on which object> — D<N>`
-     under `## Notes`. `--verify` reads the object's rules and fails the run on any rule the plan does
+     For a change the engine cannot read — a column's setting, a system setting — write
+     `Object-wide (row N): <what changed, on which object> — D<N>` under `## Notes`, citing that
+     answer; entity rules, add-on entries and edit cards are listed from the plan and the stand and
+     get no line. `--verify` reads the object's rules and fails the run on any rule the plan does
      not list and no `Approves:` names, and the result report lists every object-wide change with the
-     decision behind it.
+     user's answer behind it.
    - **On a RECONCILE (existing Freedom page), apply the `reconcileMode:` in your task's front matter.**
      `overlay` (or no key) — add the client delta onto the existing Freedom layout, keeping base
      positions and base "extra" elements. `classic-layout` — re-lay the page so every FIELD and DETAIL
@@ -143,11 +145,10 @@ clio-safety rules apply to every write.
      The read is all you do there — **never write `SysModuleEdit`**, a system table. When any entry
      has `kind: classic`, the binding leaves navigation mixed: the related list opens the Freedom
      page while other entry points open Classic. The plan asks this before the build, as the
-     `[mixed-navigation] <Entity>` item of ⚠ Confirm; build on the `D<N>` that records the user's
-     answer, cite it in the row's outcome, and write
-     `Object-wide (row N): mixed navigation — <entity>: SysModuleEdit → <cardSchema> — D<N>` under
-     `## Notes`, one line per Classic entry. **No recorded answer — the item was missed, or the read
-     finds a Classic card the plan did not ask about — means you do not bind:** record the row
+     `[mixed-navigation] <Entity>` item of ⚠ Confirm; the user's answer keeping it is a `D<N>` with
+     `- Approves: mixed-navigation:<Entity>`. Build on that answer and cite it in the row's outcome.
+     **No such answer — the item was missed, or the read finds a Classic card the plan did not ask
+     about — means you do not bind:** record the row
      `not-built — needs-decision` with a `Decision needed (row N):` line naming the card. A note
      "for the final report" is not an answer.
      `create-related-page-addon` REPLACES the whole configuration, so send back every entry you read

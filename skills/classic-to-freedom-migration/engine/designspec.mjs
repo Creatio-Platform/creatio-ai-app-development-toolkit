@@ -3366,7 +3366,8 @@ export function mixedNavigationDecisions(childs) {
       reason: `${c.entity}'s edit card in SysModuleEdit stays the Classic ${classic}, and this run never writes SysModuleEdit. `
         + "Once the RelatedPage add-on names the rebuilt page, the related list opens the Freedom page while the section, "
         + `lookups and every other entry point to ${c.entity} still open the Classic card. Ask the user whether to keep `
-        + "that mixed navigation (they switch the card themselves if not) and record the answer as its own D<N> before "
+        + "that mixed navigation (they switch the card themselves if not) and record their answer as its own D<N>, "
+        + `with the line Approves: mixed-navigation:${c.entity} when they keep it, before `
         + "the binding row is built; without that answer the binding row is recorded not built, needs-decision" });
   }
   return [...out.values()];
@@ -4634,17 +4635,31 @@ function objectWideEntry(r, row) {
   return { kind, pageKey: row.pageKey, entity, deliverable: row.deliverable, status: row.status,
     ...(kind === "entity-rules" ? { attributes: [...new Set(r.vk.names || [])] } : {}) };
 }
-const ruleNameOf = (rule) => String(rule?.name || rule?.caption || "?");
-// Planned entity-rule attributes per object, and the pages whose entry holds that object's rules.
+// A rule's identity on its object: its schema name; a rule without one is told apart by its place in the read.
+const ruleNameOf = (rule, i) => String(rule?.name || `${rule?.caption || "unnamed rule"} #${i + 1}`);
+// Planned entity-rule attributes per object, and the pages whose entry holds that object's rules. A row the user
+// declined (`wont-do`), and an attribute the user accepted as built another way, plan no rule on the object — but
+// the object is still read, so a rule built against the answer is found.
 function addPlannedEntityRules(planned, r, pageKey) {
   if (objectWideKind(r) !== "entity-rules" || !r.vk.entity) return;
   const p = planned.get(r.vk.entity) || { attrs: new Set(), pages: [] };
-  for (const n of r.vk.names || []) p.attrs.add(n);
+  const declined = r.status?.kind === STATUS_WONT_DO;
+  for (const n of r.vk.names || []) if (!declined && !Object.hasOwn(r.vk.decided || {}, n)) p.attrs.add(n);
   p.pages.push(pageKey);
   planned.set(r.vk.entity, p);
 }
-// The rules read off each object that govern none of the attributes the plan lists for it, each with the decision
-// that approved it, or null. The same object read on two pages is one set of rules, so a rule is listed once.
+// What a rule acts on: the column forms its `actions` name, and whether any action filters a lookup — the only kind
+// of entity rule a plan lists. Null for a rule whose actions cannot be read, which is then matched on its whole
+// governed text, as the rule rows are.
+function ruleTargets(rule) {
+  const actions = Array.isArray(rule?.actions) ? rule.actions : null;
+  if (!actions?.length) return null;
+  const raw = String(JSON.stringify(actions)).match(/[A-Za-z_]\w*/g) || [];
+  return { attrs: new Set(raw.flatMap(columnFormsOf)), filters: actions.some((a) => /filter/i.test(String(a?.type || a?.action || ""))) };
+}
+// The rules read off each object that the plan does not list — a lookup filter on a planned attribute is the plan's,
+// any other rule is not — each with the user's answer approving it (`Approves: entity-rule:<Entity>.<Attribute>`
+// naming an attribute it acts on), or null. The same object read on two pages is one set of rules.
 export function unplannedEntityRules(planned, root, approvals) {
   const out = [];
   for (const [entity, p] of planned) {
@@ -4653,11 +4668,13 @@ export function unplannedEntityRules(planned, root, approvals) {
       const slot = entryObject(root?.pages?.[key])?.[ENTITY_RULES_SLOT];
       const rules = rulesIn(slot) || [];
       (builtRuleTokens(slot) || []).forEach((tokens, i) => {
-        const name = ruleNameOf(rules[i]);
+        const name = ruleNameOf(rules[i], i);
         if (seen.has(name)) return;
         seen.add(name);
-        for (const a of p.attrs) if (tokens.has(a)) return;
-        const approvedBy = [...tokens].map((t) => approvals?.[`${entity}.${t}`]).find(Boolean) || null;
+        const t = ruleTargets(rules[i]);
+        const acted = t ? t.attrs : tokens;
+        if ((!t || t.filters) && [...p.attrs].some((a) => acted.has(a))) return;
+        const approvedBy = [...acted].map((a) => approvals?.[`entity-rule:${entity}.${a}`]).find(Boolean) || null;
         out.push({ entity, pageKey: key, name, approvedBy });
       });
     }
@@ -6324,27 +6341,29 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   const plannedRules = new Map();
   const derivedEvidenceIds = new Set();
   const peers = pageItemPeers(groups, decidedKeys);
+  // One plan row: decided rows are set aside, every other row is resolved into the table and the collections.
+  const verifyOne = (g, r0) => {
+    // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
+    // `buildVerifyRow` applies inside.
+    const rowPage = r0.pageKey || g.pageKey || "main";
+    const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
+    // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
+    // evidence id is one the run publishes, and an evidence record under it is not an orphan.
+    if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
+    if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
+      decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
+      return;
+    }
+    const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
+    rows.push(row);
+    L.push(tableLine);
+    const ow = objectWideEntry(r, row);
+    if (ow) objectWide.push(ow);
+    addPlannedEntityRules(plannedRules, r, rowPage);
+  };
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
-    for (const r0 of g.rows) {
-      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
-      // `buildVerifyRow` applies inside.
-      const rowPage = r0.pageKey || g.pageKey || "main";
-      const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
-      // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
-      // evidence id is one the run publishes, and an evidence record under it is not an orphan.
-      if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
-      if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
-        decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
-        continue;
-      }
-      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
-      rows.push(row);
-      L.push(tableLine);
-      const ow = objectWideEntry(r, row);
-      if (ow) objectWide.push(ow);
-      addPlannedEntityRules(plannedRules, r, rowPage);
-    }
+    for (const r0 of g.rows) verifyOne(g, r0);
   }
   // A RECORD FILED WHERE THE ENGINE NEVER LOOKS IS NOT A RECORD. The ids are engine-derived and written into the
   // skeletons, so a key matching none of them resolves to nothing and the design pass it records counts for
@@ -6352,7 +6371,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
   // every other page's id would read as an orphan of the scope rather than of the run.
   const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
-  const unplanned = unplannedEntityRules(plannedRules, root, opts.entityRuleApprovals);
+  const unplanned = unplannedEntityRules(plannedRules, root, opts.objectWideApprovals);
   const unapproved = unplanned.filter((u) => !u.approvedBy);
   const { missing, unverified, builderOpen, pages } = tally;
   const verdict = verifyVerdict(missing, unverified, orphans.length, unapproved.length);
