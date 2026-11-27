@@ -320,7 +320,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
 - **A page that writes data when it opens is named, not guessed at.** `engine.mjs` records each data-writing call
   of a method body (`dataWrites`: `postSysSettingsValue`, an insert / update / delete query, `getIncrement*`) and
   `writesOnOpen` in `mapper.mjs` follows `this.<method>` calls from the open hooks (`init`, `onEntityInitialized`,
-  `onRender`) to them. The plan lists such pages under *Pages that write data when opened*, each page's task file
+  `onRender`) to them, and from a body that calls `this.callParent` into the client layer below it (each method keeps
+  its override stack's facts as `layers`). A write in code the bundle does not carry, a mixin body, reaches it as the
+  bundle's `openWrites` declaration. A page that takes a number on open (`postSysSettingsValue`, `getIncrement*`)
+  gets a build rule: the number is taken on save, on the server, unless a `Client counter kept:` line of `worklog.md`
+  records the user keeping the Classic counter (`keptCounters` in `tasks.mjs`). The plan lists such pages under *Pages that write data when opened*, each page's task file
   tells its builder to open it in edit mode (`page-smoke` with `record-id`) unless an `Add-mode check:` line in
   `worklog.md` names its page key (`addModeChecks` in `tasks.mjs` reads it on every sync and writes the consent into
   the file), and the result report lists every `Stand data changed:` line of `worklog.md` and every
