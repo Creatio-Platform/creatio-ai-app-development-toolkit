@@ -2337,21 +2337,44 @@ function toolsMenuDeviations(body, spans) {
   // platform's `editSelectedRecords` action (a member named after it, such as `reAddEditSelectedRecordsMenuItem`,
   // counts too): either one adds the item. The mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so
   // the raw text is read.
-  if (/\b(?:RecordsGroupEditing\b|\w{0,40}[eE]ditSelectedRecords)/.test(body)) added.push(BULK_EDIT_ITEM);
+  if (offersBulkEdit(body, spans)) added.push(BULK_EDIT_ITEM);
   return { removed, hidden, added, unreadable: override === null };
+}
+// Bulk edit is offered when the detail mixes in `RecordsGroupEditing` or names the `editSelectedRecords` action in its
+// code or a binding — never in a comment — and no member named after the action is switched off.
+const BULK_EDIT_NAME = /\b(?:RecordsGroupEditing\b|\w{0,40}[eE]ditSelectedRecords)/;
+const BULK_EDIT_MEMBER = /\b(\w{0,40}[eE]ditSelectedRecords\w{0,40})\s{0,5}:/g;
+function withoutComments(text, spans) {
+  let out = "", from = 0;
+  for (const [open, close] of spans) {
+    if (text[open] !== "/") continue;
+    out += text.slice(from, open) + " ";
+    from = close + 1;
+  }
+  return out + text.slice(from);
+}
+function offersBulkEdit(body, spans) {
+  if (!BULK_EDIT_NAME.test(withoutComments(body, spans))) return false;
+  const members = [...new Set([...codeOnly(body).matchAll(BULK_EDIT_MEMBER)].map((m) => m[1]))];
+  return !members.some((name) => switchedOff(body, name, spans));
 }
 
 // PER-ROW LOCKS: the row actions a detail enables or disables row by row, from the row's own data (an order status, a
-// right). A row-action getter overridden to bind its `Enabled` is one; so is an `onActiveRowChange` override that sets
-// state when the user moves to another row. A getter switched off removes the action for every row: that is the
-// `Row actions` row, not a lock. The members found, in a stable order; empty when the detail locks no row.
+// right). A row-action getter overridden to bind its `Enabled` to anything but the selection state the standard menu
+// binds is one; so is an `onActiveRowChange` override that sets state when the user moves to another row. A getter
+// switched off removes the action for every row: that is the `Row actions` row, not a lock. Each lock is
+// `{ action, member }` — the action in the user's words, the Classic member that does it — in a stable order; empty
+// when the detail locks no row.
 const ACTIVE_ROW_HOOK = "onActiveRowChange";
 const SETS_STATE = /\bthis\.(?:set\s{0,5}\(|\$\w{1,80}\s{0,5}=(?!=))/;
+const ENABLED_BINDING = /\bEnabled\b\s{0,5}:\s{0,5}(\{\s{0,5}bindTo\s{0,5}:\s{0,5}["'](\w{1,80})["'])?/g;
+const SELECTION_BINDINGS = new Set(["isSingleSelected", "isAnySelected", "isEnabled", "getEditRecordButtonEnabled"]);
+const locksRows = (code) => [...code.matchAll(ENABLED_BINDING)].some((m) => !m[1] || !SELECTION_BINDINGS.has(m[2]));
 function rowLockMembers(body, spans) {
   const locked = ROW_ACTION_GETTERS
-    .filter(([, g]) => !switchedOff(body, g, spans) && /\bEnabled\b/.test(lastMemberCode(body, g, spans)?.code || ""))
-    .map(([action, g]) => `${action} (\`${g}\`)`);
-  if (SETS_STATE.test(lastMemberCode(body, ACTIVE_ROW_HOOK, spans)?.code || "")) locked.push(`the active row (\`${ACTIVE_ROW_HOOK}\`)`);
+    .filter(([, g]) => !switchedOff(body, g, spans) && locksRows(lastMemberCode(body, g, spans, { raw: true })?.code || ""))
+    .map(([action, g]) => ({ action, member: g }));
+  if (SETS_STATE.test(lastMemberCode(body, ACTIVE_ROW_HOOK, spans)?.code || "")) locked.push({ action: "the actions on the selected row", member: ACTIVE_ROW_HOOK });
   return locked;
 }
 

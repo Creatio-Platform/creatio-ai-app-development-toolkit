@@ -199,7 +199,8 @@ question (`detail-feature`) that a build task owns until it is built or a person
 
 - **row colour** — `prepareResponseCollectionItem` sets `customStyle` (*Row styling*);
 - **per-row lock** — a row-action getter (`getCopyRecordMenuItem`, `getEditRecordMenuItem`,
-  `getDeleteRecordMenuItem`) that binds `Enabled`, or an `onActiveRowChange` that sets state (*Row lock*);
+  `getDeleteRecordMenuItem`) that binds `Enabled` to the row's data rather than to the selection, or an
+  `onActiveRowChange` that sets state (*Row lock*);
 - **bulk edit** — the `RecordsGroupEditing` mixin, or code built around `editSelectedRecords`
   (*Tools menu: + Edit selected records*).
 

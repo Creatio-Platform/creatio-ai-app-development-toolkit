@@ -851,23 +851,39 @@ function gateReasons(result, gates) {
 // decision written as a plan fact, so it has to cite a recorded decision and must not leave plan rows
 // unaccounted while the run reads COMPLETE.
 // A CLASSIC FEATURE A BUILDER DROPPED ON ITS OWN SAY-SO. Only a person drops a feature, through a recorded `D<N>`;
-// a builder leaves the row `not-built — needs-decision`. So a `## Notes` line that drops one (`Dropped:`, `won't do`,
-// `not ported`) and names no decision that resolves is an unanswered question the result must not pass over. A claim
-// that Freedom has no equivalent is the same unless the line names its row and that row has a `Checked (row N)` line
-// saying what was checked. The question and check lines themselves are not drops: a question names its options.
+// a builder leaves the row `not-built — needs-decision`. So a `## Notes` entry that drops one (`Dropped:`, `won't do`,
+// `not ported`) is an unanswered question the result must not pass over, unless it cites a decision ABOUT that
+// feature: one that resolves and whose title shares a word with the entry — citing an unrelated `D<N>` authorises
+// nothing. A claim that Freedom has no equivalent is the same unless the entry names its row and that row has a
+// `Checked (row N)` line saying what was checked. An entry is a bullet with the lines wrapped under it. The question
+// and check entries themselves are not drops (a question names its options), and neither is a negated one
+// ("nothing was dropped").
 export const CHECKED_MARKER = notesMarker("Checked");
 const DROP_WORDS = /\b(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
+const NEGATED_DROP = /\b(?:nothing|none|no)\b[^.;:]{0,40}\b(?:dropped|not ported|won'?t[\s-]do)\b/i;
 const NO_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b|\bfreedom\s(?:has|offers|provides)\sno\b/i;
 const ROW_REF = /\brow\s(\d+)\b/i;
+// A wrapped line is indented and opens no bullet, numbered item, quote or heading of its own.
+const CONTINUATION = /^\s+(?![-*+>#]|\d+[.)]\s)\S/;
+function noteEntries(notes) {
+  const entries = [];
+  for (const raw of String(notes || "").split(/\r?\n/)) {
+    if (CONTINUATION.test(raw) && entries.length) entries[entries.length - 1] += " " + raw.trim();
+    else if (raw.trim()) entries.push(raw.trim());
+  }
+  return entries;
+}
+const TERM = /[\p{L}\d]{4,}/gu;
+const terms = (s) => new Set(String(s || "").toLowerCase().match(TERM) || []);
+const coversEntry = (entry, decision) => { const t = terms(entry); return [...terms(decision.title)].some((w) => t.has(w)); };
 function unauthorisedDrops(task, decisions) {
   let checked = null;
   const isChecked = (row) => !!row && (checked ??= notesMarkers(task.notes, CHECKED_MARKER)).has(Number(row[1]));
   const out = [];
-  for (const raw of String(task.notes || "").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || DECISION_MARKER.test(line) || CHECKED_MARKER.test(line)) continue;
-    const dropped = DROP_WORDS.test(line) || (NO_EQUIVALENT.test(line) && !isChecked(ROW_REF.exec(line)));
-    if (dropped && !decisionRefs(line, decisions).resolved.length) out.push(line);
+  for (const entry of noteEntries(task.notes)) {
+    if (DECISION_MARKER.test(entry) || CHECKED_MARKER.test(entry)) continue;
+    const dropped = (DROP_WORDS.test(entry) && !NEGATED_DROP.test(entry)) || (NO_EQUIVALENT.test(entry) && !isChecked(ROW_REF.exec(entry)));
+    if (dropped && !decisionRefs(entry, decisions).resolved.some((d) => coversEntry(entry, d))) out.push(entry);
   }
   return out;
 }

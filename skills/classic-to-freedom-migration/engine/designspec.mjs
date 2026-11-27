@@ -1205,23 +1205,29 @@ export const detailLabel = (d) => {
   return d.caption && d.entity ? `${base} · ${d.entity}` : base;
 };
 export const detailFeatureItem = (d, feature) => `${detailLabel(d)} · ${feature}`;
-const CHECK_FIRST = "check the Freedom list's settings first (`get-component-info` on the list component) and name what was checked";
+// The question (`reason`) is read by the person who owns the application, verbatim: it says what the related list
+// does for its users and what each option does on the built page, in product words. The Classic members stay in the
+// plan row's Classic cell, and checking the Freedom list's settings is the builder's duty (`Checked (row N)`).
+const plainList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}` : xs[0] || "");
 export function detailFeatureQuestions(d) {
   const f = d.features;
   if (!f) return [];
   const label = detailLabel(d);
   const out = (f.toolsMenu?.added || []).map((item) => ({ feature: `Tools menu: + ${item}`, classic: "added by the detail",
     options: "build as a custom list action, or Won't do",
-    reason: `Detail '${label}' offers the tools-menu item '${item}' in Classic. Decide: build it as a custom list action, or Won't do — ${CHECK_FIRST}` }));
+    reason: `The '${label}' list offers '${item}' in its menu in Classic. Decide: add the same action to the Freedom list, or Won't do` }));
+  if (f.toolsMenu?.unreadable) out.push({ feature: "Tools menu", classic: "`addToolsButtonMenuItems` overridden in a form the engine cannot read",
+    options: "read that Classic member and build the same menu, or Won't do",
+    reason: `The '${label}' list changes its menu in Classic in a way that has to be read by hand. Decide: give the Freedom list the same menu, or keep the standard one (Won't do)` });
   if (f.multiSelect === "conditional") out.push({ feature: "Multi-select", classic: "conditional (`isMultiSelectVisible` overridden)",
     options: "carry the condition as Freedom state, or Won't do",
-    reason: `Detail '${label}' turns multi-select on or off by a condition in Classic (\`isMultiSelectVisible\` overridden). Decide: carry the condition as Freedom state, or Won't do` });
+    reason: `The '${label}' list lets users select several rows only in some cases in Classic. Decide: keep that condition on the Freedom list, or Won't do` });
   if (f.rowStyling) out.push({ feature: "Row styling", classic: "`prepareResponseCollectionItem` sets `customStyle`",
     options: "a conditional row style, or Won't do",
-    reason: `Detail '${label}' colours rows by their data in Classic (\`prepareResponseCollectionItem\` sets \`customStyle\`). Decide: build a conditional row style, or Won't do — ${CHECK_FIRST}` });
-  if (f.rowLock?.length) out.push({ feature: "Row lock", classic: `enabled row by row: ${f.rowLock.join(", ")}`,
+    reason: `The '${label}' list shows some rows in another colour in Classic, depending on their data. Decide: colour the same rows on the Freedom list, or Won't do` });
+  if (f.rowLock?.length) out.push({ feature: "Row lock", classic: `enabled row by row: ${f.rowLock.map((l) => `${l.action} (\`${l.member}\`)`).join(", ")}`,
     options: "the same per-row lock on the Freedom list, or Won't do",
-    reason: `Detail '${label}' enables or disables ${f.rowLock.join(", ")} row by row in Classic, from each row's data. Decide: build the same per-row lock on the Freedom list, or Won't do — ${CHECK_FIRST}` });
+    reason: `The '${label}' list allows ${plainList(f.rowLock.map((l) => l.action))} only on some rows in Classic, depending on each row's data. Decide: lock the same rows on the Freedom list, or Won't do` });
   return out;
 }
 // The plan row of a question. Its Freedom cell names the ⚠ Confirm item it waits on; an unplaced detail's questions
@@ -1235,9 +1241,8 @@ function detailMenuRows(name, menu) {
   const rows = [];
   for (const item of menu.removed) rows.push([name, `Tools menu: ${esc(item)}`, "removed (its getter returns nothing)", MENU_ITEM_FREEDOM]);
   for (const item of menu.hidden) rows.push([name, `Tools menu: ${esc(item)}`, "hidden (its visibility member returns `false`)", MENU_ITEM_FREEDOM]);
-  if (menu.unreadable) rows.push([name, "Tools menu", "`addToolsButtonMenuItems` overridden in a form the engine cannot read", "⚠ read that Classic member and build the same menu"]);
-  // the items a detail adds are rows of their own (`detailFeatureQuestions`), so they too keep the menu from reading standard
-  if (!rows.length && !menu.added.length) rows.push([name, "Tools menu", "standard (`BaseGridDetailV2`)", "kept — the Freedom list's standard menu"]);
+  // an added item and an unreadable override are questions (`detailFeatureQuestions`), so they too keep the menu from reading standard
+  if (!rows.length && !menu.added.length && !menu.unreadable) rows.push([name, "Tools menu", "standard (`BaseGridDetailV2`)", "kept — the Freedom list's standard menu"]);
   return rows;
 }
 function detailFilterRow(name, q) {
@@ -1256,7 +1261,8 @@ export function detailFeatureRows(cs) {
   for (const d of cs.details || []) {
     const name = detailName(d);
     const f = d.features;
-    if (!f) { rows.push([name, "—", "detail schema not bundled — what users can do with it is unknown", "⚠ bundle the detail schema (`manifest.detailSchemas`)"]); continue; }
+    // the mapper asks this detail's `detail-editability` question, whose ⚠ Confirm row holds it until the schema is bundled or the answer recorded
+    if (!f) { rows.push([name, "—", "detail schema not bundled — what users can do with it is unknown", `⚠ bundle the detail schema (\`manifest.detailSchemas\`) — ⚠ Confirm \`[detail-editability] ${esc(d.detailSchema || d.element || "")}\``]); continue; }
     rows.push(...detailMenuRows(name, f.toolsMenu), ...f.quickFilters.map((q) => detailFilterRow(name, q)));
     if (f.multiSelect === "off") rows.push([name, "Multi-select", "switched off (`isMultiSelectVisible`)", "build the list without multi-select"]);
     rows.push(...detailFeatureQuestions(d).map((q) => detailQuestionRow(name, d, q)));
