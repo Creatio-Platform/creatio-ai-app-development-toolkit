@@ -857,10 +857,12 @@ function gateReasons(result, gates) {
 // nothing. A claim that Freedom has no equivalent is the same unless the entry names its row and that row has a
 // `Checked (row N)` line saying what was checked. An entry is a bullet with the lines wrapped under it. The question
 // and check entries themselves are not drops (a question names its options), and neither is a negated one
-// ("nothing was dropped").
+// ("nothing was dropped"). A drop word counts only in an entry about the plan: one that names a row, opens with the
+// drop as its label (`Dropped:`, `Not ported here …`) or names Classic — "dropped the stale import" is not one.
 export const CHECKED_MARKER = notesMarker("Checked");
 const DROP_WORDS = /\b(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
-const NEGATED_DROP = /\b(?:nothing|none|no)\b[^.;:]{0,40}\b(?:dropped|not ported|won'?t[\s-]do)\b/i;
+const DROP_LABEL = /^[\s*>+-]*\**\s{0,3}(?:dropped|won'?t[\s-]do|wont-do|not ported|will not (?:build|port))\b/i;
+const NEGATED_DROP =/\b(?:nothing|none|no)\b[^.;:]{0,40}\b(?:dropped|not ported|won'?t[\s-]do)\b/i;
 const NO_EQUIVALENT = /\bno\s(?:[\w-]+\s){0,3}?freedom\s(?:[\w-]+\s){0,2}?(?:equivalent|analog(?:ue)?|counterpart)\b|\bfreedom\s(?:has|offers|provides)\sno\b/i;
 const ROW_REF = /\brow\s(\d+)\b/i;
 // A wrapped line is indented and opens no bullet, numbered item, quote or heading of its own.
@@ -882,7 +884,8 @@ function unauthorisedDrops(task, decisions) {
   const out = [];
   for (const entry of noteEntries(task.notes)) {
     if (DECISION_MARKER.test(entry) || CHECKED_MARKER.test(entry)) continue;
-    const dropped = (DROP_WORDS.test(entry) && !NEGATED_DROP.test(entry)) || (NO_EQUIVALENT.test(entry) && !isChecked(ROW_REF.exec(entry)));
+    const aboutPlan = ROW_REF.test(entry) || DROP_LABEL.test(entry) || /\bclassic\b/i.test(entry);
+    const dropped = (DROP_WORDS.test(entry) && !NEGATED_DROP.test(entry) && aboutPlan) || (NO_EQUIVALENT.test(entry) && !isChecked(ROW_REF.exec(entry)));
     if (dropped && !decisionRefs(entry, decisions).resolved.some((d) => coversEntry(entry, d))) out.push(entry);
   }
   return out;

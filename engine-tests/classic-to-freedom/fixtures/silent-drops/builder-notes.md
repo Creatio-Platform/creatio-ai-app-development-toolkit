@@ -7,6 +7,7 @@
   items (no Freedom list equivalent).
 - Row 7 keeps the platform Open/Copy/Delete; Freedom has no per-row lock for them.
 - Nothing was dropped from the Products list.
+- Tidied the page code and dropped the stale duplicate import.
 - Decision needed (row 9): Build "Edit selected records" as a custom list action,
   or Won't do?
 - Checked (row 9): `get-component-info crt.DataGrid` — no bulk-edit action in its tools menu settings.

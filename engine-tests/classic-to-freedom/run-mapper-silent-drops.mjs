@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanDetailFeatures, checklistOpts, BULK_EDIT_ITEM } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, resolveVk, renderVerify, detailFeatureRows, DETAIL_FEATURE_KIND } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { checklistGroups, resolveVk, renderVerify, detailFeatureRows, detailFeatureQuestions, verifyRowKey, DETAIL_FEATURE_KIND } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { parseDecisionRecords, provenanceIssues, premisesOf } from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 import { builderDropReasons, renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import os from "node:os";
@@ -109,10 +109,21 @@ export function runSilentDropsChecks({ check, runMigration, CLEAN_SEED, FULL_SIG
   const uncitedRow = renderVerify(uncited, uncitedOpts, { pages, judge: { "premise:D4": { convincing: true } } }).rows.find((x) => x.group === "Decision premises");
   check("silent drops (premise): a question with no `Classic source:` is ❌ MISSING in `--verify`, even with a judge's `convincing: true`",
     () => uncitedRow?.outcome === "missing" && /Classic source:/.test(uncitedRow?.evidence || ""), () => uncitedRow);
-  const premiseGroupsOf = (scopePageKey) => renderVerify(run4, { ...opts4, scopePageKey }, { pages }).rows.filter((x) => x.group === "Decision premises").length;
-  check("silent drops (premise): the premise rows are the run's — a verify scoped to the main page carries them once, one scoped to another page none",
-    () => premiseGroupsOf("main") === 1 && premiseGroupsOf("child:ProductLine") === 0,
-    () => ({ main: premiseGroupsOf("main"), child: premiseGroupsOf("child:ProductLine") }));
+  const premiseRowsOf = (scopePageKey) => renderVerify(run4, { ...opts4, scopePageKey }, { pages }).rows.filter((x) => x.group === "Decision premises").length;
+  const sweep = renderVerify(run4, opts4, { pages });
+  check("silent drops (premise): the premise rows are the run's — only the unscoped sweep carries them, and they count toward its verdict but never a page's open rows (no builder repair round)",
+    () => premiseRowsOf(undefined) === 1 && premiseRowsOf("main") === 0 && premiseRowsOf("child:ProductLine") === 0
+      && !sweep.complete && !Object.values(sweep.pages).some((p) => p.openRows.some((x) => /Decision `D4`/.test(x.deliverable))),
+    () => ({ unscoped: premiseRowsOf(undefined), main: premiseRowsOf("main"), pages: Object.keys(sweep.pages) }));
+  const premiseLabel = sweep.rows.find((x) => x.group === "Decision premises")?.deliverable;
+  const notHidden = renderVerify(run4, opts4, { pages }, new Set([verifyRowKey("main", premiseLabel)]));
+  check("silent drops (premise): a task's recorded decision does not close a premise row — only the judge's ruling does",
+    () => notHidden.rows.some((x) => x.group === "Decision premises" && x.outcome === "unverified") && !notHidden.decided.some((x) => x.deliverable === premiseLabel),
+    () => notHidden.decided);
+  const ukrainian = parseDecisionRecords("## D9 — Поле суми\n- Kind: answer\n- Decided by: user\n- Asked: У класичній картці сума не має валюти. Залишити так?\n- Quote: \"так\"\n");
+  check("silent drops (premise): a question that states a Classic fact in Ukrainian is a premise too",
+    () => premisesOf(ukrainian).map((p) => p.id).join() === "D9" && provenanceIssues(ukrainian).some((x) => x.key === "D9" && /Classic source:/.test(x.problem)),
+    () => premisesOf(ukrainian));
 
   // the questions are the user's to read
   check("silent drops (questions): a detail-feature question names no Classic member and no tool — those stay in the plan row's Classic cell",
@@ -145,11 +156,31 @@ export function runSilentDropsChecks({ check, runMigration, CLEAN_SEED, FULL_SIG
     Caption:{bindTo:"Resources.Strings.MyCopy"},Click:{bindTo:"copyRecord"},Enabled:{bindTo:"isSingleSelected"}});}}};});`);
   check("silent drops (row lock, anti-vacuity): a row-action getter that keeps the standard selection binding for `Enabled` is no per-row lock",
     () => copiedGetter.rowLock.length === 0, () => copiedGetter.rowLock);
+  const unrelatedHook = scanDetailFeatures(`define("D",[],function(){return{methods:{
+    onActiveRowChange:function(id){this.callParent(arguments);this.set("ActiveRecordId",id);},
+    getDeleteRecordMenuItem:function(){return this.getButtonMenuItem({Click:{bindTo:"deleteRecords"},Enabled:true});}}};});`);
+  check("silent drops (row lock, anti-vacuity): an active-row hook setting state no row action binds, and a constant `Enabled`, are no per-row lock",
+    () => unrelatedHook.rowLock.length === 0, () => unrelatedHook.rowLock);
+  const conditional = scanDetailFeatures(`define("D",[],function(){return{methods:{isMultiSelectVisible:function(){return this.get("CanEdit");}}};});`);
+  const conditionalQ = detailFeatureQuestions({ detailSchema: "D", features: conditional });
+  check("silent drops (routing): a conditional multi-select is a `detail-feature` question in product words",
+    () => conditionalQ.length === 1 && conditionalQ[0].feature === "Multi-select" && /select several rows only in some cases/.test(conditionalQ[0].reason),
+    () => conditionalQ);
+  const decidedRow = confirmRow(/Row styling/);
+  const decidedVerify = renderVerify(r, checklistOpts(manifest), { pages }, new Set([verifyRowKey("main", decidedRow.label)]));
+  check("silent drops (routing): a recorded decision closes the detail-feature row and raises no unrouted row",
+    () => decidedVerify.decided.some((x) => x.deliverable === decidedRow.label) && !decidedVerify.rows.some((x) => x.vkType === "unrouted"),
+    () => ({ decided: decidedVerify.decided, unrouted: decidedVerify.rows.filter((x) => x.vkType === "unrouted") }));
   const commented = scanDetailFeatures(`define("D",[],function(){return{methods:{init:function(){/* this.editSelectedRecords(); */ this.callParent(arguments);}}};});`);
   const hiddenBulk = scanDetailFeatures(`define("D",[],function(){return{methods:{getEditSelectedRecordsMenuItem:Terrasoft.emptyFn}};});`);
   check("silent drops (bulk edit, anti-vacuity): a mention in a comment and a bulk-edit member switched off offer no bulk edit",
     () => !commented.toolsMenu.added.includes(BULK_EDIT_ITEM) && !hiddenBulk.toolsMenu.added.includes(BULK_EDIT_ITEM),
     () => ({ commented: commented.toolsMenu, hidden: hiddenBulk.toolsMenu }));
+  const viaGetter = scanDetailFeatures(`define("D",[],function(){return{methods:{
+    addToolsButtonMenuItems:function(m){this.callParent(arguments);m.addItem(this.getEditSelectedRecordsMenuItem());},
+    getEditSelectedRecordsMenuItem:function(){return this.getButtonMenuItem({Click:{bindTo:"editSelectedRecords"}});}}};});`);
+  check("silent drops (bulk edit): a bulk-edit item added through its own getter is one item, not the getter and the item",
+    () => viaGetter.toolsMenu.added.join("|") === BULK_EDIT_ITEM, () => viaGetter.toolsMenu.added);
 
   // the builder's notes
   const decisions = new Map([["D5", "Refresh button"], ["D6", "Order status lock on product lines"]]);
@@ -159,7 +190,7 @@ export function runSilentDropsChecks({ check, runMigration, CLEAN_SEED, FULL_SIG
     () => reasons);
   check("silent drops (builder, anti-vacuity): a drop citing the decision about it, a negated drop, a wrapped `Decision needed` question and a claim backed by `Checked (row N)` are no drop",
     () => !/D6 task/.test(reasons[0] || "") && !/Nothing was dropped/.test(reasons[0] || "") && !/Decision needed/.test(reasons[0] || "")
-      && !/or Won't do/.test(reasons[0] || "") && !/Row 9/.test(reasons[0] || ""),
+      && !/or Won.t do/.test(reasons[0] || "") && !/Row 9/.test(reasons[0] || "") && !/stale duplicate import/.test(reasons[0] || ""),
     () => reasons);
 
   // …and the final report reads them

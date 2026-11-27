@@ -2337,8 +2337,9 @@ function toolsMenuDeviations(body, spans) {
   // platform's `editSelectedRecords` action (a member named after it, such as `reAddEditSelectedRecordsMenuItem`,
   // counts too): either one adds the item. The mixin is named in a string (`"Terrasoft.RecordsGroupEditing"`), so
   // the raw text is read.
-  if (offersBulkEdit(body, spans)) added.push(BULK_EDIT_ITEM);
-  return { removed, hidden, added, unreadable: override === null };
+  // one item, one row: a getter named after the action is the same item the bulk-edit entry names
+  const items = offersBulkEdit(body, spans) ? [...added.filter((g) => !/EditSelectedRecords/i.test(g)), BULK_EDIT_ITEM] : added;
+  return { removed, hidden, added: items, unreadable: override === null };
 }
 // Bulk edit is offered when the detail mixes in `RecordsGroupEditing` or names the `editSelectedRecords` action in its
 // code or a binding — never in a comment — and no member named after the action is switched off.
@@ -2360,21 +2361,27 @@ function offersBulkEdit(body, spans) {
 }
 
 // PER-ROW LOCKS: the row actions a detail enables or disables row by row, from the row's own data (an order status, a
-// right). A row-action getter overridden to bind its `Enabled` to anything but the selection state the standard menu
-// binds is one; so is an `onActiveRowChange` override that sets state when the user moves to another row. A getter
-// switched off removes the action for every row: that is the `Row actions` row, not a lock. Each lock is
-// `{ action, member }` — the action in the user's words, the Classic member that does it — in a stable order; empty
-// when the detail locks no row.
+// right). A row-action getter overridden to bind its `Enabled` to an attribute other than the selection state the
+// standard menu binds is one. An `onActiveRowChange` override joins it when it sets one of those bound attributes as
+// the user moves to another row; on its own, or setting anything else, it is no lock. A getter switched off removes
+// the action for every row: that is the `Row actions` row, not a lock. Each lock is `{ action, member }` — the action
+// in the user's words, the Classic member that does it — in a stable order; empty when the detail locks no row.
 const ACTIVE_ROW_HOOK = "onActiveRowChange";
-const SETS_STATE = /\bthis\.(?:set\s{0,5}\(|\$\w{1,80}\s{0,5}=(?!=))/;
-const ENABLED_BINDING = /\bEnabled\b\s{0,5}:\s{0,5}(\{\s{0,5}bindTo\s{0,5}:\s{0,5}["'](\w{1,80})["'])?/g;
+const ENABLED_BINDING = /\bEnabled\s{0,5}:\s{0,5}\{\s{0,5}bindTo\s{0,5}:\s{0,5}["'](\w{1,80})["']/g;
 const SELECTION_BINDINGS = new Set(["isSingleSelected", "isAnySelected", "isEnabled", "getEditRecordButtonEnabled"]);
-const locksRows = (code) => [...code.matchAll(ENABLED_BINDING)].some((m) => !m[1] || !SELECTION_BINDINGS.has(m[2]));
+const SETS_ATTRIBUTE = /\bthis\.(?:set\s{0,5}\(\s{0,5}["'](\w{1,80})["']|\$(\w{1,80})\s{0,5}=(?!=))/g;
 function rowLockMembers(body, spans) {
-  const locked = ROW_ACTION_GETTERS
-    .filter(([, g]) => !switchedOff(body, g, spans) && locksRows(lastMemberCode(body, g, spans, { raw: true })?.code || ""))
-    .map(([action, g]) => ({ action, member: g }));
-  if (SETS_STATE.test(lastMemberCode(body, ACTIVE_ROW_HOOK, spans)?.code || "")) locked.push({ action: "the actions on the selected row", member: ACTIVE_ROW_HOOK });
+  const bound = new Map();
+  for (const [action, g] of ROW_ACTION_GETTERS) {
+    if (switchedOff(body, g, spans)) continue;
+    const attrs = [...(lastMemberCode(body, g, spans, { raw: true })?.code || "").matchAll(ENABLED_BINDING)]
+      .map((m) => m[1]).filter((a) => !SELECTION_BINDINGS.has(a));
+    if (attrs.length) bound.set(action, { member: g, attrs });
+  }
+  const locked = [...bound].map(([action, { member }]) => ({ action, member }));
+  const boundAttrs = new Set([...bound.values()].flatMap((b) => b.attrs));
+  const hookSets = [...(lastMemberCode(body, ACTIVE_ROW_HOOK, spans, { raw: true })?.code || "").matchAll(SETS_ATTRIBUTE)].map((m) => m[1] || m[2]);
+  if (hookSets.some((a) => boundAttrs.has(a))) locked.push({ action: "the actions on the selected row", member: ACTIVE_ROW_HOOK });
   return locked;
 }
 

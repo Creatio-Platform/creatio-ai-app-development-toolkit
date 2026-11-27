@@ -6315,7 +6315,11 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const planGroups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
-  const premises = !opts.scopePageKey || opts.scopePageKey === "main" ? premiseGroups(result, opts) : [];
+  // The premise rows are the run's, not a page's: only the unscoped sweep carries them, and they count toward its
+  // verdict through a tally of their own — never a page's open rows, which become a builder's repair round, while a
+  // false premise is answered by asking the person again.
+  const premiseTally = verifyTally();
+  const premises = opts.scopePageKey ? [] : premiseGroups(result, opts);
   const groups = [...planGroups, ...codeQualityGroups(planGroups, opts, root), ...premises];
   const L = []; let n = 0;
   // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
@@ -6337,12 +6341,14 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
       // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
       // evidence id is one the run publishes, and an evidence record under it is not an orphan.
-      if ((r.vk?.type === "evidence" || r.vk?.type === "premise") && r.vk.id) derivedEvidenceIds.add(r.vk.id);
-      if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
+      const premise = r.vk?.type === "premise";
+      if ((r.vk?.type === "evidence" || premise) && r.vk.id) derivedEvidenceIds.add(r.vk.id);
+      // a task's recorded decision closes plan rows; a premise is no plan row and closes only on the judge's ruling
+      if (!premise && decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;
       }
-      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
+      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, premise ? premiseTally : tally, ++n);
       rows.push(row);
       L.push(tableLine);
     }
@@ -6353,7 +6359,9 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
   // every other page's id would read as an orphan of the scope rather than of the run.
   const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
-  const { missing, unverified, builderOpen, pages } = tally;
+  const { builderOpen, pages } = tally;
+  const missing = tally.missing + premiseTally.missing;
+  const unverified = tally.unverified + premiseTally.unverified;
   const verdict = verifyVerdict(missing, unverified, orphans.length);
   const decidedBanner = decided.length
     ? [`> ℹ ${decided.length} plan row(s) closed by a recorded decision are OUT of this table — the task registry`
