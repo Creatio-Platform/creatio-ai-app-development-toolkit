@@ -828,15 +828,16 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const v4Findings = runFindings(Object.fromEntries(Object.keys(v4).filter((n) => n !== V4SHARED).map((n) => [n, v4Page(n)])), v4);
     const v4Of = (rule) => v4Findings.filter((f) => f.rule === rule).map((f) => f.text);
     const v4Near = v4Of(R.duplicateAcrossModules);
+    const once = (texts, re) => texts.filter((t) => re.test(t)).length === 1;
     check("near-copy (v4): a short function that is all of another one with another page name is reported — a small wrapper does not hide it",
-      () => v4Near.filter((t) => /^`openContractFormPage` of `\w+_ListPageModule` \(lines 33-37\) is `openChildPage` of `\w+_FormPageModule`/.test(t)).length === 1, () => v4Near);
+      () => once(v4Near, /^`openContractFormPage` of `\w+_ListPageModule` \(lines 33-37\) is `openChildPage` of `\w+_FormPageModule`/), () => v4Near);
     check("near-copy (v4): `Boolean(x)` and `(x || 0) > 0` are one test of whether x is set — the availability functions are one function",
-      () => v4Near.filter((t) => /^`refreshCloseSelectedAvailability` .* is `refreshDeactivateAvailability`/.test(t)).length === 1, () => v4Near);
+      () => once(v4Near, /^`refreshCloseSelectedAvailability` .* is `refreshDeactivateAvailability`/), () => v4Near);
     const v4Values = v4Of(R.sharedValueInTwoModules);
     check("shared values (v4): a string constant declared again under another name is reported, naming the name it has in each module",
-      () => v4Values.filter((t) => /^`HISTORY_DATA_SOURCE = "DemoDocumentLogDS"` is declared in .*ReturnNoteFormPageModule` \(line 5\), `UsrDemoV4App_SharedModule` \(line 15, as `NOTE_HISTORY_DATA_SOURCE`\)/.test(t)).length === 1, () => v4Values);
+      () => once(v4Values, /^`HISTORY_DATA_SOURCE = "DemoDocumentLogDS"` is declared in .*ReturnNoteFormPageModule` \(line 5\), `UsrDemoV4App_SharedModule` \(line 15, as `NOTE_HISTORY_DATA_SOURCE`\)/), () => v4Values);
     check("shared values (v4): a list of literals is one value whether it is an array or a Set",
-      () => v4Values.filter((t) => /^`POST_STATE_ATTRIBUTES = \["PDS_DemoIsPosted", "CardState"\]` is declared in .*\(line 6\), `UsrDemoV4App_SharedModule` \(line 16\)/.test(t)).length === 1, () => v4Values);
+      () => once(v4Values, /^`POST_STATE_ATTRIBUTES = \["PDS_DemoIsPosted", "CardState"\]` is declared in .*\(line 6\), `UsrDemoV4App_SharedModule` \(line 16\)/), () => v4Values);
     check("shared values (v4): the same string as an entity and as a column is two values — `CONTRACT_ENTITY` and `CHILD_CONTRACT_COLUMN` are not reported",
       () => v4Values.length === 2 && !v4Values.some((t) => /CHILD_CONTRACT_COLUMN/.test(t)), () => v4Values);
     const v4Unused = v4Of(R.unusedModuleExport).filter((t) => t.includes(V4SHARED));

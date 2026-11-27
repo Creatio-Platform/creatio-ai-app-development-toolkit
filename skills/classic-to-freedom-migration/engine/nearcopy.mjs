@@ -14,7 +14,7 @@
 //   camelCase key is the API's (`type`, `schemaName`, `modelInitConfigs`) and is kept, and so is the literal a `type`
 //   key holds: a `crt.OpenPageRequest` and a `crt.LoadDataRequest` are different requests whatever their keys;
 // - a test of whether a value is set is that value, however it is written: `Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`,
-//   `x > 0` and `x !== 0` are all `x`.
+//   `x > 0`, `x !== 0` and `x != 0` are all `x`.
 // Nothing is evaluated; the walk is bounded by depth like the other AST walks.
 import { childNodesOf, staticPropKey, isFunction, lineOf, endLineOf } from "./engine.mjs";
 
@@ -59,17 +59,17 @@ function keyToken(p) {
 }
 
 const isZero = (n) => n?.type === "Literal" && n.value === 0;
+const isPrimitiveLiteral = (n) => n?.type === "Literal" && n.value !== null && typeof n.value !== "object";
 
-// The value a test of whether it is set reads (`Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`, `x > 0`, `x !== 0`), else null.
+// The value a test of whether it is set reads (`Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`, `x > 0`, `x !== 0`, `x != 0`),
+// else null.
 function truthTestOf(n) {
   switch (n.type) {
     case "CallExpression":
       return n.callee.type === "Identifier" && n.callee.name === "Boolean" && n.arguments.length === 1 ? n.arguments[0] : null;
     case "UnaryExpression": return n.operator === "!" && n.argument.type === "UnaryExpression" && n.argument.operator === "!" ? n.argument.argument : null;
-    case "LogicalExpression": return n.operator !== "&&" && n.right.type === "Literal" ? n.left : null;
-    case "BinaryExpression":
-      if ([">", "!==", "!="].includes(n.operator) && isZero(n.right)) return n.left;
-      return n.operator === "<" && isZero(n.left) ? n.right : null;
+    case "LogicalExpression": return n.operator !== "&&" && isZero(n.right) ? n.left : null;
+    case "BinaryExpression": return [">", "!==", "!="].includes(n.operator) && isZero(n.right) ? n.left : null;
     default: return null;
   }
 }
@@ -211,7 +211,7 @@ export function nearCopies(modules, isExactCopy) {
 function literalListOf(init) {
   const array = init?.type === "NewExpression" && init.callee.type === "Identifier" && init.callee.name === "Set" ? init.arguments[0] : init;
   if (array?.type !== "ArrayExpression" || array.elements.length < 2) return null;
-  if (!array.elements.every((e) => e?.type === "Literal" && e.value !== null && typeof e.value !== "object")) return null;
+  if (!array.elements.every(isPrimitiveLiteral)) return null;
   const raw = "[" + array.elements.map((e) => e.raw).join(", ") + "]";
   return { values: array.elements.map((e) => e.value), raw: array === init ? raw : `new Set(${raw})` };
 }
@@ -226,7 +226,7 @@ export function literalConstantsOf(factoryBody) {
       if (d.id?.type !== "Identifier") continue;
       const list = literalListOf(d.init);
       if (list) out.push({ name: d.id.name, raw: list.raw, list: list.values, line: lineOf(d) });
-      else if (d.init?.type === "Literal" && d.init.value !== null && typeof d.init.value !== "object") {
+      else if (isPrimitiveLiteral(d.init)) {
         out.push({ name: d.id.name, raw: d.init.raw, value: d.init.value, line: lineOf(d) });
       }
     }

@@ -72,7 +72,7 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.pageWithoutModule, label: "a page with handlers imports its own `<PageSchema>Module`" },
   { rule: QUALITY_RULES.duplicateHandlerAcrossPages, label: "no handler copied from another page of the run" },
   { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function or run of statements in two modules of the run, also with other values, or in a page and a module" },
-  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or constant value declared in two modules, under any name — a value the pages share lives in one module" },
+  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or constant value declared in two modules, also under another name — a value the pages share lives in one module" },
   { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a page's own module that no page or module uses" },
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
@@ -889,7 +889,10 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
   reportNearCopies(read, report);
   reportSharedValues(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
-  if (wholeRun) reportUnusedExports(read.filter((m) => isRunOwnModule(m.name, pages, keys) && !external.has(m.name)), importers, report);
+  if (wholeRun) {
+    const isOwn = runOwnModuleTest(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean));
+    reportUnusedExports(read.filter((m) => isOwn(m.name) && !external.has(m.name)), importers, report);
+  }
   reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
 }
 
@@ -897,10 +900,10 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
 // page's own `<PageSchema>Module`, or a module named with the app prefix of a run page (`UsrApp_SharedModule` beside
 // `UsrApp_FormPage`). Any other module (a project module, another app's) can serve pages outside the run, whose
 // imports nothing here sees.
-function isRunOwnModule(name, pages, keys) {
-  const schemas = keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean);
-  if (schemas.some((s) => s + "Module" === name)) return true;
-  return schemas.some((s) => s.includes("_") && name.startsWith(s.slice(0, s.indexOf("_") + 1)));
+function runOwnModuleTest(schemas) {
+  const own = new Set(schemas.map((s) => s + "Module"));
+  const prefixes = [...new Set(schemas.filter((s) => s.includes("_")).map((s) => s.slice(0, s.indexOf("_") + 1)))];
+  return (name) => own.has(name) || prefixes.some((p) => name.startsWith(p));
 }
 
 // The page a module's findings belong to: the page whose own module it is, else the first page importing it.
@@ -1117,14 +1120,14 @@ function declaredValuesOf(m) {
 }
 
 function constantValueKey(c) {
-  if (c.list) return "list:" + JSON.stringify(c.list.map(String).sort((a, b) => a.localeCompare(b)));
+  if (c.list) return "list:" + JSON.stringify(c.list.map(String).sort());
   return typeof c.value === "string" ? `string:${kindOf(c.name)}:${JSON.stringify(c.value)}` : `${c.name} = ${c.raw}`;
 }
 
 // The last word of a constant's name, upper case: `NOTE_HISTORY_DATA_SOURCE` and `historyDataSource` are `SOURCE`.
 const kindOf = (name) => name.split(/_|(?=[A-Z][a-z])/).filter(Boolean).pop().toUpperCase();
 
-// A record id or a constant's value declared in two or more modules, under any name: one finding, on the record of
+// A record id or a constant's value declared in two or more modules, also under another name: one finding, on the record of
 // the second module, naming the first declaration and every other one with the name it has there.
 function reportSharedValues(read, report) {
   const where = new Map();
