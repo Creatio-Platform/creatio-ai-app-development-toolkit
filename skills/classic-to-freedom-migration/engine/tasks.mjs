@@ -1129,7 +1129,12 @@ function taskCardBlock(task, set = {}) {
       + " finding none is part of done.",
     "- **A helper or constant two modules use lives in the shared module.** Code that does what another module's code"
       + " does with another value is the same code: give it that value as a parameter, keep it once in the shared"
-      + " module and import it; declare a named constant there once, never again in a page module.",
+      + " module and import it; declare a constant there once, never again in a page module under any name.",
+    "- **A repeat finding is fixed by sharing, never by rewording.** Move the code or the value the code map flags into"
+      + " the shared module and call or import it from both places. Writing the copy another way until the check stops"
+      + " matching (inlining it, reading the data another way, renaming the constant) does not fix it, and the judge"
+      + " rejects it. When the other copy is another page's artifact, leave the finding open and say in `## Notes`"
+      + " which shared function both should call.",
     "- **One place per behaviour.** Handler deduplication is only what clio's `update-page` does in APPEND mode"
       + " (it merges entries by request); it is not a platform rule, and a replace-mode save sends exactly the body"
       + " you write. Either way, extend the handler the map lists for the SAME feature instead of adding a second one;"

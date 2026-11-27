@@ -113,6 +113,15 @@ out of reach. A `#quality-gates`
 record that calls the page clean while either row reads `⚠ verify` is not convincing; quote the row
 in `why`.
 
+A repeat across modules (`duplicate-function-across-modules`, `shared-value-in-two-modules`) is fixed
+only by sharing: the code or the value moves into the shared module and both places call or import
+it. When a builder's `## Notes` say such a finding was cleared, open the module code at the place the
+finding named and check that it now calls the shared function or imports the shared value. A finding
+cleared by writing the copy another way, so that the check no longer matches (the code inlined, the
+data read another way, the constant renamed), is not fixed: a `#quality-gates` record that relies on
+it is `convincing: false`. Quote the Notes sentence that says how it was cleared in `why`, and say
+what changed in behaviour when the rewrite changed it.
+
 ## How to rule
 
 - **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines`

@@ -47,13 +47,21 @@ handler's row only, so another handler that drops `next` still opens a row of it
   module function already wraps is made through it.
 - **A helper or a constant two modules use lives in the shared module.** Code that does what another module's code
   does with another value (another entity, path, column or page name) is the same code: make that value a
-  parameter, keep one function in the shared module, and call it from both. A named constant two modules declare
-  (`DATA_VALUE_TYPE_GUID = 0`, `CARD_STATE_ADD = "add"`) is declared once there and imported.
+  parameter, keep one function in the shared module, and call it from both. A constant two modules declare, under
+  the same name or another one (`DATA_VALUE_TYPE_GUID = 0`, `HISTORY_DATA_SOURCE` and `NOTE_HISTORY_DATA_SOURCE` both
+  `"DocumentLogDS"`, the same attribute list as an array and as a `Set`), is declared once there and imported.
+- **A repeat finding is fixed by sharing, never by rewording.** When the code map reports code or a value that
+  repeats another module's, move it into the shared module (the differing value made a parameter) and call or
+  import it from both places. Writing the copy another way until the check stops matching (inlining it, reading the
+  data another way, renaming the constant) does not fix it, and the judge rejects a record that relies on it. When
+  the code you would have to change belongs to another page's artifact, leave the finding open and say in
+  `## Notes` which shared function both should call.
 - **Export only what a page or another module calls.** An export nobody imports is removed.
 - The module keeps no page context in module-level variables: the handler passes `request.$context` (and
   `request.scopes` when the function fires requests) on each call.
 - `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules already hold, and
-  flags code and named constants that repeat across modules, including a copy that differs only in its values.
+  flags code and constants that repeat across modules, including a copy that differs only in its values or its
+  names, and exports of the run's modules (the shared one too) that nothing uses.
 
 ## 4. Custom requests only for what the page fires
 

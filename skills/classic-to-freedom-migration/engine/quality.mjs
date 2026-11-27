@@ -72,7 +72,7 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.pageWithoutModule, label: "a page with handlers imports its own `<PageSchema>Module`" },
   { rule: QUALITY_RULES.duplicateHandlerAcrossPages, label: "no handler copied from another page of the run" },
   { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function or run of statements in two modules of the run, also with other values, or in a page and a module" },
-  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or named constant declared in two modules — a value the pages share lives in one module" },
+  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or constant value declared in two modules, under any name — a value the pages share lives in one module" },
   { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a page's own module that no page or module uses" },
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
@@ -889,11 +889,18 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
   reportNearCopies(read, report);
   reportSharedValues(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
-  // Only a run page's own `<PageSchema>Module`: any other module (a shared one, a declared project module) can serve
-  // pages outside the run, whose imports nothing here sees.
-  const pageModules = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
-  if (wholeRun) reportUnusedExports(read.filter((m) => pageModules.has(m.name) && !external.has(m.name)), importers, report);
+  if (wholeRun) reportUnusedExports(read.filter((m) => isRunOwnModule(m.name, pages, keys) && !external.has(m.name)), importers, report);
   reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
+}
+
+// A module the run built for its own pages, whose every user is therefore a run page or another run module: a run
+// page's own `<PageSchema>Module`, or a module named with the app prefix of a run page (`UsrApp_SharedModule` beside
+// `UsrApp_FormPage`). Any other module (a project module, another app's) can serve pages outside the run, whose
+// imports nothing here sees.
+function isRunOwnModule(name, pages, keys) {
+  const schemas = keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean);
+  if (schemas.some((s) => s + "Module" === name)) return true;
+  return schemas.some((s) => s.includes("_") && name.startsWith(s.slice(0, s.indexOf("_") + 1)));
 }
 
 // The page a module's findings belong to: the page whose own module it is, else the first page importing it.
@@ -1095,27 +1102,45 @@ const fnLabel = (w) => codeName(w.fnName || "(anonymous)");
 const wholeFunctionAt = (w) => `${fnLabel(w)} of ${codeName(w.module)} (lines ${w.from}-${w.to})`;
 const linesOfFunctionAt = (w) => `lines ${w.from}-${w.to} of ${fnLabel(w)} in ${codeName(w.module)}`;
 
-// What one module declares that another may declare again: each record id it writes (keyed by the id), and each named
-// constant (`const NAME = <literal>`, keyed by `NAME = <literal>`; one that holds a record id is keyed by the id).
+// What one module declares that another may declare again, keyed so that a copy under another name still matches:
+// a record id by the id; a list of literals by its values, as a set (`["A", "B"]` and `new Set(["B", "A"])` are one
+// value); a string by its value and the kind of thing its name says it is, the last word of the name
+// (`HISTORY_DATA_SOURCE` and `NOTE_HISTORY_DATA_SOURCE` are one data source, while `CONTRACT_ENTITY` and
+// `CHILD_CONTRACT_COLUMN` are an entity and a column that happen to share a name); a number or a boolean by its name
+// and value, because a small number means nothing without its name (`AGGREGATION_COUNT = 1` and
+// `COMPARISON_IS_NULL = 1` are two values).
 function declaredValuesOf(m) {
-  const constants = literalConstantsOf(m.factory.body).filter((c) => !(typeof c.value === "string" && GUID_RE.test(c.value)));
-  return [...m.guids.map((g) => ({ key: g.value, line: g.line })), ...constants.map((c) => ({ key: `${c.name} = ${c.raw}`, line: c.line }))];
+  const constants = literalConstantsOf(m.factory.body)
+    .filter((c) => c.value !== "" && !(typeof c.value === "string" && GUID_RE.test(c.value)));
+  return [...m.guids.map((g) => ({ key: g.value, text: g.value, line: g.line })),
+    ...constants.map((c) => ({ key: constantValueKey(c), name: c.name, text: `${c.name} = ${c.raw}`, line: c.line }))];
 }
 
-// A record id or a named constant declared in two or more modules: one finding, on the record of the second module.
+function constantValueKey(c) {
+  if (c.list) return "list:" + JSON.stringify(c.list.map(String).sort((a, b) => a.localeCompare(b)));
+  return typeof c.value === "string" ? `string:${kindOf(c.name)}:${JSON.stringify(c.value)}` : `${c.name} = ${c.raw}`;
+}
+
+// The last word of a constant's name, upper case: `NOTE_HISTORY_DATA_SOURCE` and `historyDataSource` are `SOURCE`.
+const kindOf = (name) => name.split(/_|(?=[A-Z][a-z])/).filter(Boolean).pop().toUpperCase();
+
+// A record id or a constant's value declared in two or more modules, under any name: one finding, on the record of
+// the second module, naming the first declaration and every other one with the name it has there.
 function reportSharedValues(read, report) {
   const where = new Map();
   for (const m of read) {
     for (const d of declaredValuesOf(m)) {
       if (!where.has(d.key)) where.set(d.key, new Map());
-      if (!where.get(d.key).has(m.name)) where.get(d.key).set(m.name, d.line);
+      if (!where.get(d.key).has(m.name)) where.get(d.key).set(m.name, d);
     }
   }
-  for (const [key, mods] of where) {
+  for (const mods of where.values()) {
     if (mods.size < 2) continue;
-    const [, second] = [...mods.keys()];
-    const list = [...mods].map(([n, line]) => `${codeName(n)} (line ${line})`).join(", ");
-    report(second, QUALITY_RULES.sharedValueInTwoModules, mods.get(second), `${codeName(key)} is declared in ${list} — keep it in the shared module and import it`);
+    const [first, second] = [...mods.values()];
+    const [, secondModule] = [...mods.keys()];
+    const list = [...mods].map(([n, d]) => `${codeName(n)} (line ${d.line}${d.name && d.name !== first.name ? `, as ${codeName(d.name)}` : ""})`).join(", ");
+    report(secondModule, QUALITY_RULES.sharedValueInTwoModules, second.line,
+      `${codeName(first.text)} is declared in ${list} — keep it in the shared module and import it`);
   }
 }
 
