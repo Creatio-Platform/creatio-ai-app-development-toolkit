@@ -464,7 +464,7 @@ reference on a described `⚠ Imperative members` row, and a reported trigger wh
 `reported`; an engine-traced trigger is never overwritten).
 
 **Deliverable status (`manifest.deliverableStatus`).** Every deliverable `checklistGroups` emits carries `deliverableId`,
-its id on its page: the item's kind and name, never label text or a count. Ids: `page:list` · `page:entity` ·
+its id on its page: the item's kind and name, never label text or a count. Ids: `page:list` · `page:entity` (`page:process-parameters` in its place on a process page) ·
 `page:placement` · `page:form` · `page:typed:<schema>` · `page:typed-routing` · `page:mini` · `page:mini-wiring` ·
 `page:reuse-bindings` · `page:reuse-reconcile` · `page:boundary` · `page:section` · `page:list-template` ·
 `page:list-not-built` · `page:reuse` · `page:child` · `page:child-evidence` · `list-columns` ·

@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets, pageTitleOf } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -631,6 +631,9 @@ function artifactRows(groups, B) {
 // next run-level field cannot be added to some writers and missed at others.
 const runHeader = (result) => ({ planVersion: result.planVersion || null, projectConventions: result.projectConventions || null,
   directives: result.directives, dataWritingPages: dataWritingPages(result) });
+// The task set's headline names what the run builds: a process page by its own name, never the entity its Classic
+// chain inherits.
+const taskSetTitleOf = (result) => ((result.entity || result.processPage) ? pageTitleOf(result) : null);
 export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
@@ -683,7 +686,7 @@ export function buildTaskSet(result, opts = {}, groups = checklistGroups(result,
     : [refs, ...ordered].flatMap((b) => chunksOf(b, B));
   const tasks = withJudgedRecords(chunks.map((c, i) => ({ ...taskOf(c, i + 1), wiresArtifacts: wiredArtifacts(c.srcRows, identity) })), groups);
   return {
-    entity: result.entity || null,
+    entity: taskSetTitleOf(result),
     ...runHeader(result),
     // The decisions in force, carried on the set so every render of it — sync, start, decide, revoke — writes the
     // same task card. `mergeTaskSet` keeps it with the rest of the fresh set.
@@ -2790,7 +2793,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
     groups: [{ pageKey: "run", baseTitle: REFS_GROUP, title: REFS_GROUP, rows: refsRows(result) }],
   }, B).map((c, i) => taskOf(c, i + 1));
   return {
-    entity: result.entity || null,
+    entity: taskSetTitleOf(result),
     ...runHeader(result),
     cardDecisions: opts.decisions ?? null,
     cardDecisionTexts: opts.decisionTexts ?? null,

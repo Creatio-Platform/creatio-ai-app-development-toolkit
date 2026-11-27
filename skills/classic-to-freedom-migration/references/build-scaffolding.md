@@ -80,4 +80,10 @@ build does this, in this order, inside the ONE task that owns the page:
    the body, and the card then **hangs the browser** with `$Id` undefined. Measured on a live run.
 6. Only now author the layout into the new page.
 
+**A process page** (the plan has a `### Process page` section) has no object. `create-page` gets no
+`--entity-schema-name`, there is no RelatedPage add-on to bind (step 4), and step 5 is skipped: the page
+declares no primary data source, and its fields bind to the page parameters the process maps. The Pages
+row *Bound to the process parameters* fails `--verify` when the built page has a primary data source
+(`./process-page.md`).
+
 A re-template that stops after step 3 is the failure this sequence exists to prevent.

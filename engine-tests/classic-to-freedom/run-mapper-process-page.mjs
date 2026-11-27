@@ -8,6 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assembleBuilt, PROCESS_FILE } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
+import { buildTaskSet, buildTaskSetFromSplit, renderTaskIndex } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { checklistGroups, pageTitleOf } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { processTemplateOfManifest, processButtonsOf, processStepsIssues, PROCESS_BEHAVIOUR, PROCESS_TEMPLATES }
   from "../../skills/classic-to-freedom-migration/engine/process-page.mjs";
 
@@ -166,6 +168,42 @@ export function runProcessPageChecks({ check, runMigration, runMigrate, renderVe
     viewConfig: [...viewConfig(), { name: "Order", type: "crt.ComboBox", control: "$UsrOrderParam" }] } } }).markdown;
   check("process page: verify does not demand a primary data source from a page that binds page parameters",
     () => { const row = rowOf(tplVerify, "Form template →"); return row !== "" && !/❌|primaryDataSourceName/.test(row); }, () => rowOf(tplVerify, "Form template →"));
+
+  // A process page has no object, even when the merged chain names an entity: its Pages row binds it to the process
+  // parameters, and verify fails it when the built page sits on an object.
+  const withEntity = manifest({ entity: "UsrOrder" });
+  const entityRun = runMigration(withEntity), entityOpts = checklistOpts(withEntity);
+  const PARAMS_ROW = "Bound to the process parameters";
+  check("process page: the Pages group binds the page to the process parameters and asks for no object, whatever entity the chain names",
+    () => entityRun.entity === "UsrOrder" && /Bound to the process parameters \(`UsrOrderParam`\), not to an object/.test(entityRun.checklist)
+      && !/Bound to the EXISTING object/.test(entityRun.checklist),
+    () => entityRun.checklist.split("\n").filter((l) => /Bound to/.test(l)));
+  const headline = (set) => renderTaskIndex(set).split("\n")[0];
+  const groups = checklistGroups(entityRun, entityOpts);
+  const split = { planVersion: entityRun.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].map((k) => ({ id: `build-${k}`,
+    title: `build-${k}`, pageKey: k, writesTo: k, rows: groups.filter((g) => g.pageKey === k).flatMap((g) => g.rows.map((r) => r.label)) })) };
+  const fromSplit = buildTaskSetFromSplit(entityRun, split, entityOpts);
+  const titles = [headline(buildTaskSet(entityRun, entityOpts)), fromSplit.problems?.length ? String(fromSplit.problems) : headline(fromSplit)];
+  check("process page: the build tasks are titled after the page, not after the entity the chain names, planned by the engine or by a split",
+    () => titles.every((t) => /UsrDeliveryCheckPage \(process page\)/.test(t) && !/UsrOrder\b/.test(t)), () => titles);
+  check("process page: a process page with no resolved name is still not titled after the entity",
+    () => pageTitleOf({ entity: "UsrOrder", processPage: { pageName: null } }) === "? (process page)");
+  const paramsRow = (page) => rowOf(renderVerify(entityRun, entityOpts, { ...built(), pages: page === undefined ? {} : { main: page } }).markdown, PARAMS_ROW);
+  const read = (modelConfig) => ({ viewConfig: viewConfig(), modelConfig });
+  const onObject = read({ primaryDataSourceName: "PDS", dataSources: { PDS: { type: "crt.EntityDataSource", config: { entitySchemaName: "UsrOrder" } } } });
+  check("process page: verify closes the parameters row when the read modelConfig names no primary data source",
+    () => /✅ Done.*no primary data source/.test(paramsRow(read({}))), () => paramsRow(read({})));
+  const pdsOnly = read({ primaryDataSourceName: "PDS" });
+  check("process page: verify fails the parameters row when the read modelConfig names a primary data source, naming its object",
+    () => /❌ MISSING.*bound to the object .UsrOrder./.test(paramsRow(onObject))
+      && /❌ MISSING.*bound to the object .UsrOrder./.test(paramsRow({ ...pdsOnly, entitySchemaName: "UsrOrder" }))
+      && /❌ MISSING.*bound to the primary data source .PDS./.test(paramsRow(pdsOnly)),
+    () => [paramsRow(onObject), paramsRow({ ...pdsOnly, entitySchemaName: "UsrOrder" }), paramsRow(pdsOnly)]);
+  check("process page: verify leaves the parameters row open while the page, or its modelConfig, was not read",
+    () => /⚠ verify.*was not read/.test(paramsRow()) && /⚠ verify.*no .modelConfig./.test(paramsRow({ viewConfig: viewConfig() })),
+    () => [paramsRow(), paramsRow({ viewConfig: viewConfig() })]);
+  check("process page: verify fails the parameters row for a page reported as not built",
+    () => /❌ MISSING.*NOT BUILT/.test(paramsRow(false)), () => paramsRow(false));
   const hiddenCancel = PAGE.replace('"click": { "bindTo": "onCancelProcessElementClick" },', '"click": { "bindTo": "onCancelProcessElementClick" },\n\t\t\t\t\t"visible": false,');
   const hiddenRun = runMigration(manifest({}, hiddenCancel));
   check("process page: a process button hidden by default is still planned and gets no generated handler",
