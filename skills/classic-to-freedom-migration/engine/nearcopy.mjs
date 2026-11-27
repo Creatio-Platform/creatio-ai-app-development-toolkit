@@ -12,13 +12,19 @@
 //   `showMessage` are one call; `sdk.HandlerChainService.instance.process` keeps `HandlerChainService.instance.process`);
 // - an object key that names a column or an attribute (PascalCase: `MbIsActive`, `PDS_MbDate`) is a value too; a
 //   camelCase key is the API's (`type`, `schemaName`, `modelInitConfigs`) and is kept, and so is the literal a `type`
-//   key holds: a `crt.OpenPageRequest` and a `crt.LoadDataRequest` are different requests whatever their keys.
+//   key holds: a `crt.OpenPageRequest` and a `crt.LoadDataRequest` are different requests whatever their keys;
+// - a test of whether a value is set is that value, however it is written: `Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`
+//   and `x > 0` are all `x`. `x !== 0` and `x != 0` are not: they are true for an unset value (`undefined`, `null`,
+//   `""`), where the others are false, so code using them behaves differently and is not the same code.
 // Nothing is evaluated; the walk is bounded by depth like the other AST walks.
 import { childNodesOf, staticPropKey, isFunction, lineOf, endLineOf } from "./engine.mjs";
 
 // A run of statements this large is code worth one function. Smaller runs (a guard, one plain call) repeat in any
 // two modules by nature.
 const MIN_NEAR_COPY_NODES = 18;
+// A whole function is compared from a smaller size: one that is all of another function, with other values, is the
+// same function even when it is a short one (an open-page request, a button's availability).
+const MIN_WHOLE_FUNCTION_NODES = 12;
 // The longest run of statements compared, counted in statements.
 const MAX_WINDOW_STATEMENTS = 12;
 const MAX_DEPTH = 1000;
@@ -53,6 +59,21 @@ function keyToken(p) {
   return name === "type" && p.value?.type === "Literal" ? `type=${p.value.value}` : name;
 }
 
+const isZero = (n) => n?.type === "Literal" && n.value === 0;
+const isPrimitiveLiteral = (n) => n?.type === "Literal" && n.value !== null && typeof n.value !== "object";
+
+// The value a test of whether it is set reads (`Boolean(x)`, `!!x`, `x || 0`, `x ?? 0`, `x > 0`), else null.
+function truthTestOf(n) {
+  switch (n.type) {
+    case "CallExpression":
+      return n.callee.type === "Identifier" && n.callee.name === "Boolean" && n.arguments.length === 1 ? n.arguments[0] : null;
+    case "UnaryExpression": return n.operator === "!" && n.argument.type === "UnaryExpression" && n.argument.operator === "!" ? n.argument.argument : null;
+    case "LogicalExpression": return n.operator !== "&&" && isZero(n.right) ? n.left : null;
+    case "BinaryExpression": return n.operator === ">" && isZero(n.right) ? n.left : null;
+    default: return null;
+  }
+}
+
 // The tag of a node that is not a value read, and the children its shape goes on with.
 function tagOf(n) {
   switch (n.type) {
@@ -77,6 +98,8 @@ function tagOf(n) {
 function valueShape(n, out, depth = 0) {
   if (!n) { out.push("_"); return 0; }
   if (depth > MAX_DEPTH) { out.push("?"); return 1; }
+  const tested = truthTestOf(n);
+  if (tested) return valueShape(tested, out, depth + 1);
   if (isValueRead(n)) { out.push("V"); return 1; }
   const [tag, children] = tagOf(n);
   out.push("(" + tag);
@@ -119,8 +142,8 @@ function nameOfFunctionAt(node) {
   return null;
 }
 
-// Every run of statements of at least MIN_NEAR_COPY_NODES, keyed by the ids of its statements' value shapes (one id
-// per distinct shape, shared by all modules through `ids`).
+// Every run of statements of at least MIN_NEAR_COPY_NODES (a whole function: MIN_WHOLE_FUNCTION_NODES), keyed by
+// the ids of its statements' value shapes (one id per distinct shape, shared by all modules through `ids`).
 function windowsOf(m, ids) {
   const idOf = (shape) => {
     if (!ids.has(shape)) ids.set(shape, ids.size);
@@ -133,17 +156,23 @@ function windowsOf(m, ids) {
       const count = valueShape(st, tokens);
       return { st, count, id: idOf(tokens.join(" ")) };
     });
-    for (let i = 0; i < shaped.length; i++) {
-      let count = 0;
-      const key = [];
-      for (let j = i; j < shaped.length && j - i < MAX_WINDOW_STATEMENTS; j++) {
-        count += shaped[j].count;
-        key.push(shaped[j].id);
-        if (count < MIN_NEAR_COPY_NODES) continue;
-        out.push({ module: m.name, fnName: list.fnName, fn: list.fn, whole: !!list.fn && i === 0 && j === shaped.length - 1,
-          from: lineOf(shaped[i].st), to: endLineOf(shaped[j].st), count, key: key.join() });
-      }
-    }
+    for (let i = 0; i < shaped.length; i++) out.push(...windowsFrom(m, list, shaped, i));
+  }
+  return out;
+}
+
+// The runs of one statement list that start at statement `i` and are large enough to compare.
+function windowsFrom(m, list, shaped, i) {
+  const out = [];
+  let count = 0;
+  const key = [];
+  for (let j = i; j < shaped.length && j - i < MAX_WINDOW_STATEMENTS; j++) {
+    count += shaped[j].count;
+    key.push(shaped[j].id);
+    const whole = !!list.fn && i === 0 && j === shaped.length - 1;
+    if (count < (whole ? MIN_WHOLE_FUNCTION_NODES : MIN_NEAR_COPY_NODES)) continue;
+    out.push({ module: m.name, fnName: list.fnName, fn: list.fn, whole,
+      from: lineOf(shaped[i].st), to: endLineOf(shaped[j].st), count, key: key.join() });
   }
   return out;
 }
@@ -183,13 +212,26 @@ export function nearCopies(modules, isExactCopy) {
   return reported;
 }
 
-// One module-level constant per name: `const NAME = <literal>` at the top of the module factory.
+// The literal values of a list: `["A", "B"]` or `new Set(["A", "B"])`, two literals or more; else null.
+function literalListOf(init) {
+  const array = init?.type === "NewExpression" && init.callee.type === "Identifier" && init.callee.name === "Set" ? init.arguments[0] : init;
+  if (array?.type !== "ArrayExpression" || array.elements.length < 2) return null;
+  if (!array.elements.every(isPrimitiveLiteral)) return null;
+  const raw = "[" + array.elements.map((e) => e.raw).join(", ") + "]";
+  return { values: array.elements.map((e) => e.value), raw: array === init ? raw : `new Set(${raw})` };
+}
+
+// One module-level constant per name: `const NAME = <literal>` at the top of the module factory, or a list of
+// literals (`list`: its values).
 export function literalConstantsOf(factoryBody) {
   const out = [];
   for (const st of factoryBody.body) {
     if (st.type !== "VariableDeclaration" || st.kind !== "const") continue;
     for (const d of st.declarations) {
-      if (d.id?.type === "Identifier" && d.init?.type === "Literal" && d.init.value !== null && typeof d.init.value !== "object") {
+      if (d.id?.type !== "Identifier") continue;
+      const list = literalListOf(d.init);
+      if (list) out.push({ name: d.id.name, raw: list.raw, list: list.values, line: lineOf(d) });
+      else if (isPrimitiveLiteral(d.init)) {
         out.push({ name: d.id.name, raw: d.init.raw, value: d.init.value, line: lineOf(d) });
       }
     }

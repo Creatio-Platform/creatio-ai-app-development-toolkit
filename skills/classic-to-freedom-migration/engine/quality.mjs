@@ -72,8 +72,8 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.pageWithoutModule, label: "a page with handlers imports its own `<PageSchema>Module`" },
   { rule: QUALITY_RULES.duplicateHandlerAcrossPages, label: "no handler copied from another page of the run" },
   { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function or run of statements in two modules of the run, also with other values, or in a page and a module" },
-  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or named constant declared in two modules — a value the pages share lives in one module" },
-  { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a page's own module that no page or module uses" },
+  { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or constant value declared in two modules, also under another name — a value the pages share lives in one module" },
+  { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a module the run built (a page's own module, or one a build task recorded as `Module created`) that no page or module uses" },
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
 
@@ -794,8 +794,8 @@ function groupBy(items, keyOf) {
 // declared helper and constants modules.
 // `wholeRun` says `pages` are ALL the run's pages (the verify payload): only then is an export nobody uses known to be
 // unused — one page alone cannot see what the others import. Even then only a run page's own `<PageSchema>Module` is
-// judged, never an external one.
-export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, external = new Set(), wholeRun = true) {
+// judged, never an external one. `created` names the modules the run's build tasks created (`Module created:`).
+export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, external = new Set(), wholeRun = true, created = new Set()) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   addModuleFindings(byPage, pages || {}, modules || {}, external, thresholds, constantsGuids);
@@ -804,7 +804,7 @@ export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, c
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
   for (const [key, page] of byPage) if (page) reportCopiesFromOtherPages(key, page, helperOwners);
-  lintRunModules(byPage, pages || {}, modules, wholeRun, external);
+  lintRunModules(byPage, pages || {}, modules, wholeRun, external, created);
   return byPage;
 }
 
@@ -823,16 +823,17 @@ const RUN_CACHE = new WeakMap();
 // The key of one thresholds + constants-module + external-module combination, built once per set of rows (see
 // `codeQualityRows`).
 const sortedList = (xs) => [...(xs || [])].sort((a, b) => a.localeCompare(b)).join();
-export const qualityRunKey = (thresholds, constantsGuids, externalModules = []) =>
-  JSON.stringify(thresholds) + "|" + sortedList(constantsGuids) + "|" + sortedList(externalModules);
-export function runQualityOf(root, thresholds, constantsGuids, externalModules = [], cacheKey = qualityRunKey(thresholds, constantsGuids, externalModules)) {
+export const qualityRunKey = (thresholds, constantsGuids, externalModules = [], createdModules = []) =>
+  JSON.stringify(thresholds) + "|" + sortedList(constantsGuids) + "|" + sortedList(externalModules) + "|" + sortedList(createdModules);
+export function runQualityOf(root, thresholds, constantsGuids, externalModules = [], cacheKey = qualityRunKey(thresholds, constantsGuids, externalModules), createdModules = []) {
   const wholeRun = Boolean(root?.pages && typeof root.pages === "object");
   const pages = wholeRun ? root.pages : { main: root };
   const modules = root?.modules && typeof root.modules === "object" ? root.modules : null;
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
   if (!perRoot.has(cacheKey)) {
-    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules), wholeRun));
+    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules), wholeRun,
+      new Set(createdModules || [])));
   }
   return perRoot.get(cacheKey);
 }
@@ -867,7 +868,7 @@ export function runModuleLint(run, pageKey) {
   return run?.modules?.get(pageKey) || { findings: [], unreadable: [] };
 }
 
-function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) {
+function lintRunModules(byPage, pages, modules, wholeRun, external = new Set(), created = new Set()) {
   const keys = Object.keys(pages);
   const bindings = new Map(keys.map((k) => [k, pageBindings(pages[k])]));
   reportPagesWithoutModule(byPage, pages);
@@ -889,10 +890,14 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
   reportNearCopies(read, report);
   reportSharedValues(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
-  // Only a run page's own `<PageSchema>Module`: any other module (a shared one, a declared project module) can serve
-  // pages outside the run, whose imports nothing here sees.
-  const pageModules = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
-  if (wholeRun) reportUnusedExports(read.filter((m) => pageModules.has(m.name) && !external.has(m.name)), importers, report);
+  // Judged only where every user is a run page or a run module: a run page's own `<PageSchema>Module`, and a module a
+  // build task of this run created (`created`). A module an earlier run created (a shared module a section migrated
+  // before this one also imports), a project module or another app's can serve pages outside the run, whose imports
+  // nothing here sees: its exports are never judged.
+  if (wholeRun) {
+    const own = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
+    reportUnusedExports(read.filter((m) => (own.has(m.name) || created.has(m.name)) && !external.has(m.name)), importers, report);
+  }
   reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
 }
 
@@ -1095,27 +1100,58 @@ const fnLabel = (w) => codeName(w.fnName || "(anonymous)");
 const wholeFunctionAt = (w) => `${fnLabel(w)} of ${codeName(w.module)} (lines ${w.from}-${w.to})`;
 const linesOfFunctionAt = (w) => `lines ${w.from}-${w.to} of ${fnLabel(w)} in ${codeName(w.module)}`;
 
-// What one module declares that another may declare again: each record id it writes (keyed by the id), and each named
-// constant (`const NAME = <literal>`, keyed by `NAME = <literal>`; one that holds a record id is keyed by the id).
+// What one module declares that another may declare again, keyed so that a copy under another name still matches:
+// a record id by the id; a list of literals by its values, as a set (`["A", "B"]` and `new Set(["B", "A"])` are one
+// value); a string by its value and the kind of thing its name says it is, the last word of the name
+// (`HISTORY_DATA_SOURCE` and `NOTE_HISTORY_DATA_SOURCE` are one data source, while `CONTRACT_ENTITY` and
+// `CHILD_CONTRACT_COLUMN` are an entity and a column that happen to share a name); a number or a boolean by its name
+// and value, because a small number means nothing without its name (`AGGREGATION_COUNT = 1` and
+// `COMPARISON_IS_NULL = 1` are two values).
 function declaredValuesOf(m) {
-  const constants = literalConstantsOf(m.factory.body).filter((c) => !(typeof c.value === "string" && GUID_RE.test(c.value)));
-  return [...m.guids.map((g) => ({ key: g.value, line: g.line })), ...constants.map((c) => ({ key: `${c.name} = ${c.raw}`, line: c.line }))];
+  const constants = literalConstantsOf(m.factory.body)
+    .filter((c) => c.value !== "" && ![c.value, ...(c.list || [])].some(isGuidString));
+  return [...m.guids.map((g) => ({ key: g.value, text: g.value, line: g.line })),
+    ...constants.map((c) => ({ key: constantValueKey(c), name: c.name, text: `${c.name} = ${c.raw}`, line: c.line }))];
 }
 
-// A record id or a named constant declared in two or more modules: one finding, on the record of the second module.
+const isGuidString = (v) => typeof v === "string" && GUID_RE.test(v);
+
+// A list of strings is one value as a set; a list that holds a number or a boolean, like a single number, keeps its
+// name. Each element keeps its type: `[1, 2]` and `["1", "2"]` are two values.
+function constantValueKey(c) {
+  if (c.list?.every((v) => typeof v === "string")) return "list:" + JSON.stringify(c.list.map((v) => JSON.stringify(v)).sort());
+  return typeof c.value === "string" ? `string:${kindOf(c.name)}:${JSON.stringify(c.value)}` : `${c.name} = ${c.raw}`;
+}
+
+// The kind of value a constant's name says it holds, upper case: its last word (`NOTE_HISTORY_DATA_SOURCE` and
+// `historyDataSource` are `SOURCE`), or its last two words when the last one says nothing about the kind
+// (`ENTITY_NAME` is `ENTITY_NAME` and `PARENT_COLUMN_NAME` is `COLUMN_NAME`: an entity and a column, two values).
+const GENERIC_NAME_WORDS = new Set(["NAME", "KEY", "CODE", "VALUE", "ID", "TEXT"]);
+function kindOf(name) {
+  const words = name.split(/_|(?=[A-Z][a-z])/).filter(Boolean).map((w) => w.toUpperCase());
+  if (!words.length) return name.toUpperCase();
+  const last = words.length - 1;
+  return GENERIC_NAME_WORDS.has(words[last]) && last > 0 ? words[last - 1] + "_" + words[last] : words[last];
+}
+
+// A record id or a constant's value declared in two or more modules, also under another name: one finding, on the
+// record of the second module, naming the first declaration and every other one with the name it has there.
 function reportSharedValues(read, report) {
   const where = new Map();
   for (const m of read) {
     for (const d of declaredValuesOf(m)) {
       if (!where.has(d.key)) where.set(d.key, new Map());
-      if (!where.get(d.key).has(m.name)) where.get(d.key).set(m.name, d.line);
+      if (!where.get(d.key).has(m.name)) where.get(d.key).set(m.name, d);
     }
   }
-  for (const [key, mods] of where) {
+  for (const mods of where.values()) {
     if (mods.size < 2) continue;
-    const [, second] = [...mods.keys()];
-    const list = [...mods].map(([n, line]) => `${codeName(n)} (line ${line})`).join(", ");
-    report(second, QUALITY_RULES.sharedValueInTwoModules, mods.get(second), `${codeName(key)} is declared in ${list} — keep it in the shared module and import it`);
+    const [first, second] = [...mods.values()];
+    const [, secondModule] = [...mods.keys()];
+    const renamed = (d) => (d.name && d.name !== first.name ? ", as " + codeName(d.name) : "");
+    const list = [...mods].map(([n, d]) => `${codeName(n)} (line ${d.line}${renamed(d)})`).join(", ");
+    report(secondModule, QUALITY_RULES.sharedValueInTwoModules, second.line,
+      `${codeName(first.text)} is declared in ${list} — keep it in the shared module and import it`);
   }
 }
 

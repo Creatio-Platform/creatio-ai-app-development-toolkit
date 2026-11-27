@@ -10,6 +10,7 @@ import path from "node:path";
 import { lintPageQuality, lintRunQuality, lintModuleQuality, runModuleLint, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { createdModuleNames } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 
 const R = QUALITY_RULES;
@@ -642,6 +643,18 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     check("modules (verify): with module bodies in the payload the owning page's module rows block, and the clean modules close them",
       () => [R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].every((r) => /⚠ verify/.test(rowOf(badTable, r)) && /✅ Done/.test(rowOf(goodTable, r))),
       () => [R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].map((r) => [rowOf(badTable, r), rowOf(goodTable, r)]));
+    // `Module created:` end to end: the task records -> `createdModuleNames` -> `renderVerify`'s `createdModules`.
+    const sharedSpare = { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"),
+      UsrApp_SharedModule: mod("UsrApp_SharedModule", [], "", "function spare() { return 1; }", "{ spare }") };
+    const created = createdModuleNames({ tasks: [
+      { notes: "Built the form.\nModule created: `UsrApp_FormPageModule`, `UsrApp_SharedModule`\n- Module created: UsrApp_FormPageModule" },
+      { unread: true, notes: "Module created: `UsrIgnored`" }, { notes: "Module created: not a module name!" }] });
+    check("Module created: the lines name modules as code spans or a bare word, sorted and once each; an unread task and a word that is no name add nothing",
+      () => created.join() === "UsrApp_FormPageModule,UsrApp_SharedModule", () => created);
+    const sharedRow = (o) => rowOf(renderVerify(result, { ...opts, ...o }, verifyRoot(sharedSpare)).markdown, R.unusedModuleExport);
+    check("Module created (verify): the unused export of a shared module blocks only when a task recorded creating it",
+      () => /⚠ verify/.test(sharedRow({ createdModules: created })) && /spare/.test(sharedRow({ createdModules: created })) && /✅ Done/.test(sharedRow({})),
+      () => [sharedRow({ createdModules: created }), sharedRow({})]);
     const unreadableModule = renderVerify(result, opts, verifyRoot({ UsrApp_FormPageModule: "define(\"UsrApp_FormPageModule\", [], function() { return {" })).markdown;
     check("modules (verify): an unreadable module blocks the rows module code can break — a rule about the page's handlers alone still judges them",
       () => /⚠ verify/.test(rowOf(unreadableModule, R.unusedModuleExport)) && /⚠ verify/.test(rowOf(unreadableModule, R.catchLogOnly))
@@ -665,14 +678,29 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
       () => { const f = withProject.get("main").findings.filter((x) => x.rule === R.unusedModuleExport).map((x) => x.text);
         return f.length === 1 && /spare/.test(f[0]); },
       () => withProject.get("main").findings);
-    // A shared module can serve pages outside the run, whose imports nothing here sees: its exports are never judged.
+    // A shared module of another app (no run page's prefix) can serve pages outside the run, whose imports nothing
+    // here sees: its exports are never judged.
     const withShared = lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule", "UsrShared"], thin("formPage"), "(formPage, shared)") },
       DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"),
         UsrShared: mod("UsrShared", [], "", `const CLOSED = "${GUID}";
 function spare() { return 1; }`, "{ CLOSED, spare }") });
-    check("modules: an unused export of a shared module the run's pages import is not reported — only a run page's own module is judged",
+    check("modules: an unused export of a shared module without the run's app prefix is not reported — only the run's own modules are judged",
       () => [...withShared.values()].every((p) => count(p, R.unusedModuleExport) === 0),
       () => [...withShared.values()]);
+    // A module other than a page's own is judged only when a build task of this run created it (`Module created:`).
+    const exportsModule = (name) => mod(name, [], "", "function spare() { return 1; }", "{ spare }");
+    const ownAnd = (extra, external, created) => lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage")) }, DEFAULT_QUALITY_THRESHOLDS, new Set(),
+      { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"), ...extra }, external, true, created);
+    const unusedIn = (r, name) => [...r.values()].flatMap((p) => p.findings).filter((f) => f.rule === R.unusedModuleExport && f.text.includes(name)).length;
+    const withCreated = ownAnd({ UsrApp_ProjectConstants: exportsModule("UsrApp_ProjectConstants"), UsrApp_SharedModule: exportsModule("UsrApp_SharedModule") },
+      new Set(["UsrApp_ProjectConstants"]), new Set(["UsrApp_ProjectConstants", "UsrApp_SharedModule"]));
+    check("unused exports: a shared module this run created is judged; a module declared in projectConventions stays exempt even when listed as created",
+      () => unusedIn(withCreated, "UsrApp_ProjectConstants") === 0 && unusedIn(withCreated, "UsrApp_SharedModule") === 1, () => [...withCreated.values()]);
+    // An earlier run (another section of the same app) created the shared module; this run's page imports it. Pages of
+    // the earlier section use exports this run cannot see, so none of them is reported, whatever the module's name.
+    const fromEarlierRun = ownAnd({ UsrApp_SharedModule: exportsModule("UsrApp_SharedModule") }, new Set(), new Set());
+    check("unused exports: a shared module of the same app that this run did not create (an earlier section's) is not judged",
+      () => unusedIn(fromEarlierRun, "UsrApp_SharedModule") === 0, () => [...fromEarlierRun.values()]);
     // The binding a page names in `args` decides which module `x.export` reads from.
     const bound = (call) => lint({ main: { ...page("UsrApp_FormPage", ["UsrApp_FormPageModule"], handler("crt.HandleViewModelInitRequest", `${call}(request.$context);`)), args: "(formPage)" } },
       DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }") }).get("main");
@@ -755,8 +783,8 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const SHARED = "UsrDemoV3App_ContractAmountModule";
     const pageFor = (mod) => ({ schemaName: mod.replace(/Module$/, ""), handlers: "[]", args: "(sdk, own, shared)",
       deps: JSON.stringify(["@creatio-devkit/common", mod, SHARED]) });
-    const runFindings = (pages, modules) => {
-      const run = lintRunQuality(pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), modules);
+    const runFindings = (pages, modules, created = new Set()) => {
+      const run = lintRunQuality(pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), modules, new Set(), true, created);
       return [...run.modules.values()].flatMap((r) => r.findings);
     };
     const v3Findings = runFindings(Object.fromEntries(Object.keys(v3).filter((n) => n !== SHARED).map((n) => [n, pageFor(n)])), v3);
@@ -815,6 +843,73 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     check("shared constants: the same name with another value is not reported; a record id is reported once, by the record-id check",
       () => constCase.filter((f) => f.rule === R.sharedValueInTwoModules).length === 1
         && constCase.some((f) => f.rule === R.sharedValueInTwoModules && f.text.includes("3a8b2f10")), () => constCase);
+
+    // module-lint-v4: the next benchmark run, built with one shared module. What it still let through: a function
+    // that is all of another one in a short form, a test of whether a value is set written another way, a value
+    // declared again under another name, and exports of the shared module nothing uses.
+    const V4DIR = path.join(FIX, "module-lint-v4");
+    const v4 = Object.fromEntries(fs.readdirSync(V4DIR).sort((a, b) => a.localeCompare(b)).map((f) => [f.replace(/\.js$/, ""), fs.readFileSync(path.join(V4DIR, f), "utf8")]));
+    const V4SHARED = "UsrDemoV4App_SharedModule";
+    const v4Page = (mod) => ({ schemaName: mod.replace(/Module$/, ""), handlers: "[]", args: "(sdk, own, shared)",
+      deps: JSON.stringify(["@creatio-devkit/common", mod, V4SHARED]) });
+    const v4Pages = Object.fromEntries(Object.keys(v4).filter((n) => n !== V4SHARED).map((n) => [n, v4Page(n)]));
+    const v4Findings = runFindings(v4Pages, v4, new Set([V4SHARED]));
+    const v4Of = (rule) => v4Findings.filter((f) => f.rule === rule).map((f) => f.text);
+    const v4Near = v4Of(R.duplicateAcrossModules);
+    const once = (texts, re) => texts.filter((t) => re.test(t)).length === 1;
+    check("near-copy (v4): a short function that is all of another one with another page name is reported — a small wrapper does not hide it",
+      () => once(v4Near, /^`openContractFormPage` of `\w+_ListPageModule` \(lines 33-37\) is `openChildPage` of `\w+_FormPageModule`/), () => v4Near);
+    check("near-copy (v4): `Boolean(x)` and `(x || 0) > 0` are one test of whether x is set — the availability functions are one function",
+      () => once(v4Near, /^`refreshCloseSelectedAvailability` .* is `refreshDeactivateAvailability`/), () => v4Near);
+    const v4Values = v4Of(R.sharedValueInTwoModules);
+    check("shared values (v4): a string constant declared again under another name is reported, naming the name it has in each module",
+      () => once(v4Values, /^`HISTORY_DATA_SOURCE = "DemoDocumentLogDS"` is declared in .*ReturnNoteFormPageModule` \(line 5\), `UsrDemoV4App_SharedModule` \(line 15, as `NOTE_HISTORY_DATA_SOURCE`\)/), () => v4Values);
+    check("shared values (v4): a list of literals is one value whether it is an array or a Set",
+      () => once(v4Values, /^`POST_STATE_ATTRIBUTES = \["PDS_DemoIsPosted", "CardState"\]` is declared in .*\(line 6\), `UsrDemoV4App_SharedModule` \(line 16\)/), () => v4Values);
+    check("shared values (v4): the same string as an entity and as a column is two values — `CONTRACT_ENTITY` and `CHILD_CONTRACT_COLUMN` are not reported",
+      () => v4Values.length === 2 && !v4Values.some((t) => /CHILD_CONTRACT_COLUMN/.test(t)), () => v4Values);
+    const v4Unused = v4Of(R.unusedModuleExport).filter((t) => t.includes(V4SHARED));
+    check("unused exports (v4): the shared module the run created is judged — the two approval constants nothing uses are reported, its used exports are not",
+      () => v4Unused.map((t) => /^`(\w+)`/.exec(t)[1]).sort((a, b) => a.localeCompare(b)).join() === "APPROVAL_PROCESS_NAME,APPROVAL_PROCESS_RECORD_PARAMETER", () => v4Unused);
+    const notCreated = runFindings(v4Pages, v4).filter((f) => f.rule === R.unusedModuleExport && f.text.includes(V4SHARED));
+    check("unused exports (v4): the same shared module with no `Module created:` record is not judged — an earlier run may have created it",
+      () => notCreated.length === 0, () => notCreated);
+    // What the v4 rules do NOT report.
+    const tiny = (name, attr) => `function ${name}(attributeName) { return attributeName === ${attr}; }`;
+    check("near-copy: a whole function below the whole-function floor (one comparison) is not reported",
+      () => nearIn(twoModules(tiny("isSelectionChange", "\"A\""), tiny("isItemsSelectionChange", "\"B\""))).length === 0);
+    const avail = (test) => `async function refresh($context) { const selection = await $context.Selection; const any = selection?.type === "all" || (${test}); await $context.set("UsrDisabled", !any); }`;
+    const sameAsBoolean = (test) => nearIn(twoModules(avail("Boolean(selection?.selected?.length)"), avail(test))).length;
+    const sel = "selection?.selected?.length";
+    for (const test of [`(${sel} || 0) > 0`, `!!${sel}`, `${sel} ?? 0`, `${sel} > 0`]) {
+      check(`near-copy: \`${test}\` is the same test of whether the value is set as \`Boolean(…)\``, () => sameAsBoolean(test) === 1);
+    }
+    // `!== 0` and `!= 0` are true when nothing is selected (`undefined`), where `Boolean(…)` is false.
+    for (const test of [`${sel} > 1`, `!${sel}`, `${sel} >= 0`, `${sel} || 5`, `${sel} !== 0`, `${sel} != 0`]) {
+      check(`near-copy: \`${test}\` is a different test, not \`Boolean(…)\``, () => sameAsBoolean(test) === 0);
+    }
+    const renamed = twoModules("const SUM = 2; const LOG_SOURCE = \"UsrLogDS\";", "const AGGREGATION_SUM = 2; const HISTORY_SOURCE = \"UsrLogDS\";");
+    check("shared values: a number under another name is not reported (a small number means nothing without its name); a string of the same kind is",
+      () => { const t = renamed.filter((f) => f.rule === R.sharedValueInTwoModules).map((f) => f.text);
+        return t.length === 1 && /`LOG_SOURCE = "UsrLogDS"` .* as `HISTORY_SOURCE`/.test(t[0]); }, () => renamed);
+    const valuesOf = (a, b) => twoModules(a, b).filter((f) => f.rule === R.sharedValueInTwoModules).map((f) => f.text);
+    check("shared values: a camelCase name has a kind too — `historyDataSource` and `noteHistoryDataSource` are one data source",
+      () => valuesOf("const historyDataSource = \"UsrLogDS\";", "const noteHistoryDataSource = \"UsrLogDS\";").length === 1);
+    check("shared values: a name ending in a generic word is kinded by its last two words — an entity name and a column name holding the same text are two values",
+      () => valuesOf("const ENTITY_NAME = \"DemoContract\";", "const PARENT_COLUMN_NAME = \"DemoContract\";").length === 0
+        && valuesOf("const ENTITY_NAME = \"DemoContract\";", "const CONTRACT_ENTITY_NAME = \"DemoContract\";").length === 1
+        && valuesOf("const entityName = \"DemoContract\";", "const parentColumnName = \"DemoContract\";").length === 0);
+    check("shared values: a constant named only with underscores is keyed by its name and never stops the lint",
+      () => valuesOf("const _ = \"UsrLogDS\";", "const __ = \"UsrLogDS\";").length === 0
+        && valuesOf("const _ = \"UsrLogDS\";", "const _ = \"UsrLogDS\";").length === 1);
+    check("shared values: a list of numbers keeps its name — `[1, 2]` under two names is not one value, and `[1, 2]` is never `[\"1\", \"2\"]`",
+      () => valuesOf("const STEPS = [1, 2];", "const TYPES = [1, 2];").length === 0
+        && valuesOf("const STEPS = [1, 2];", "const STEPS = [1, 2];").length === 1
+        && valuesOf("const KEYS = [\"1\", \"2\"];", "const IDS = [1, 2];").length === 0);
+    const guidList = valuesOf("const CLOSED = [\"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\", \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5c\"];",
+      "const DONE = [\"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\", \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5c\"];");
+    check("shared values: a list of record ids is reported by the record-id check, once per id — not a second time as a list",
+      () => guidList.length === 2 && guidList.every((t) => t.startsWith("`3a8b2f10")), () => guidList);
   }
 
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
