@@ -61,6 +61,8 @@ Sentence case and "use typical wording from existing Creatio interfaces" are in 
 
 Explanation belongs in the tooltip, the description line or a helper line under a heading — never in the caption.
 
+**Tabs and groups are named by what they hold.** A tab caption tells the user what they will find there in the business's words: *Budget and payments*, *Schedule and tasks*, *Site and building*. Catch-all captions — *Details*, *Other*, *Misc*, *Info*, *Money*, *Additional* — say nothing; if the content has no common name, the grouping is wrong, not the caption.
+
 **One word per concept, across the app and with base Creatio.** Pick one of *delete / remove / archive*, *client / customer / account*, *user / member / person* and never mix them. When base Creatio already names a concept on a related page — the owner of a record, the account of a contact — reuse its word. Two words for one thing make people look for a difference that does not exist.
 
 **Words that mean different things stay different:**
@@ -83,6 +85,7 @@ The tooltip and placeholder rule — when a field needs guidance, how specific i
 - **State the rule before it is broken.** A tooltip or description line that says the limit up front beats a validation message afterwards.
 - **Explain why where the rule is surprising.** *Used to match payments on the bank statement* tells the user whether to be careful.
 - **For a read-only or calculated field, name the source and the moment it changes.**
+- **A checkbox is captioned with the state it sets, not as a code-style question.** *Critical project*, *Overdue*, *Permit required* — not *Is critical*, *Is overdue*, *Requires permit?* The same caption serves the field and the list column.
 - **Mark required the way the platform does.** Required fields carry the platform's own required marker (page-layout-and-controls.md, *Fields*); do not add *(required)* or *(optional)* to captions, and do not add a legend explaining the marker.
 
 | Field | Before | After |
