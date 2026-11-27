@@ -3246,7 +3246,12 @@ function moduleGapText(run) {
 // `result.entity` is THIS page's own Classic entity: each sub-page is its own `runMigration` result, so a child's
 // row gets the child's entity rather than the parent's. `"?"` means the merged chain never named one — nothing to
 // compare against, so no row (the same rule `placementRows` follows for a missing target package).
+//
+// A PROCESS PAGE has no object: a business process opens it with page parameters and reads them back. Whatever
+// entity the merged chain names is inherited, not the page's, so the row asks for the opposite — no primary data
+// source, the fields bound to the process parameters.
 function entityRows(result) {
+  if (result?.processPage) return [processParametersRow(result.processPage)];
   const ent = typeof result?.entity === "string" ? result.entity.trim() : "";
   if (!ent || ent === "?") return [];
   return [{
@@ -3254,6 +3259,15 @@ function entityRows(result) {
     label: `Bound to the EXISTING object \`${esc(ent)}\` — a migration re-presents data that already exists; a page on a new object migrates nothing and the customer's records stay behind`,
     vk: { type: "entity", exp: ent },
   }];
+}
+function processParametersRow(info) {
+  const params = info.parameters || [];
+  const named = params.length ? ` (${params.map((p) => "`" + esc(p) + "`").join(", ")})` : "";
+  return {
+    deliverableId: "page:process-parameters",
+    label: `Bound to the process parameters${named}, not to an object — a process page has no primary data source; its fields keep the parameter names the process maps`,
+    vk: { type: "entity", processParameters: params },
+  };
 }
 function placementRows(opts) {
   const pkg = opts.targetPackage;
@@ -4832,10 +4846,19 @@ function resolvePlacementVk(vk, ctx) {
 // report an entity at all is nobody-looked (⚠ unverified). Never `!value`: an absent field is not a wrong binding.
 function resolveEntityVk(vk, ctx) {
   if (vk.type !== "entity") return unknownVk();
+  if (Array.isArray(vk.processParameters)) return resolveProcessParametersVk(ctx);
   const ent = entryObject(ctx.page)?.entitySchemaName;
   if (ent == null || ent === "") return ["⚠ verify", `built-page entity not reported — record \`entitySchemaName\` (the entity the page's PRIMARY data source is bound to) and confirm it is \`${esc(vk.exp)}\``, "unverified"];
   if (ent === vk.exp) return ["✅ Done", `bound to \`${esc(vk.exp)}\``, "ok"];
   return ["❌ MISSING", `bound to \`${esc(String(ent))}\` but the Classic page's object is \`${esc(vk.exp)}\` — the customer's records live on \`${esc(vk.exp)}\`, so this page migrates nothing`, "missing"];
+}
+// A process page closes when its bundle was read and names no primary data source; an object on it is the defect.
+function resolveProcessParametersVk(ctx) {
+  const page = entryObject(ctx.page);
+  if (page?.viewConfig == null) return ["⚠ verify", "the built process page was not read — `get-page` it so its data sources can be checked", "unverified"];
+  const ent = page.entitySchemaName;
+  if (typeof ent === "string" && ent !== "") return ["❌ MISSING", `bound to the object \`${esc(ent)}\` — a process page has no object; bind its fields to the process parameters and remove the primary data source`, "missing"];
+  return ["✅ Done", "no primary data source — the fields bind to the process parameters", "ok"];
 }
 // A CHILD PAGE whose Classic source was never folded: nothing about it is derivable from the plan, so the only
 // machine question left is "does a page exist for this key, and does it have any content". Resolved from the

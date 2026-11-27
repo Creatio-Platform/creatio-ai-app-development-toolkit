@@ -12,6 +12,10 @@ not a process page.
 - **No section, list page, add mini page or primary data source.** `planMeta.sectionSchema`, the section's on-stand
   `signals` and the section host in `placement` do not apply; `placement.targetPackageEditable` still does. The page
   is named after its schema (`<Schema> (process page)`).
+- **No object, even when the Classic chain names one.** The scaffolding asks for no entity: `create-page` gets no
+  `entitySchemaName`, and the Pages group's row is *Bound to the process parameters*, not *Bound to the EXISTING
+  object*. `--verify` closes that row when the built page has no primary data source and fails it when the page
+  is bound to an object.
 - **Page parameters keep their Classic names.** The process maps its parameters by name; a renamed parameter breaks
   every mapping into it. The Layout's Source column reads `page parameter <Name>`.
 - **Each process button is planned by what it does to the step** (the plan's `### Process page` table):
