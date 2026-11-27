@@ -8,6 +8,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { buildTaskSet, syncTaskDir, startTask, readTaskDir, renderProgress, renderResume, buildRepairTasks, REPAIR_ROUND_CAP,
   readMergedTaskDir, TASK_INDEX_FILE }
@@ -185,6 +186,27 @@ console.log("\n===== E5: a plan change keeps what it did not touch, and the roun
   const after = syncTaskDir(dir, renamedRun, { ...checklistOpts(RENAMED), decisions: DECS }).tasks.find((t) => t.id === grown?.id);
   check("a change that DOES touch a recorded row still raises the drift warning",
     () => after?.drifted === true, () => ({ drifted: after?.drifted, rows: after?.rows.map((r) => r.label.slice(0, 50)) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // A folder an older engine wrote: one settled task lists a row twice (the retest's duplicated directive rows), and
+  // its recorded digest covers both copies. This engine derives the row once.
+  const { base, dir } = closedFolder("e5-dup");
+  const t = buildTaskSet(RUN, OPTS).tasks.reduce((a, x) => (x.rows.length > a.rows.length ? x : a));
+  const j = t.rows.findIndex((r) => r.vk !== "pagecode" && t.rows.filter((o) => o.label === r.label).length === 1);
+  const fp = taskFilePath(dir, t.id);
+  const lines = fs.readFileSync(fp, "utf8").split("\n");
+  const at = lines.findIndex((l) => /^\|\s*1\s*\|/.test(l));
+  const copy = lines[at + j].replace(/^\|\s*\d+\s*\|/, `| ${t.rows.length + 1} |`);
+  const inputs = [...t.rows.filter((r) => r.vk !== "pagecode").map((r) => r.digestInput), t.rows[j].digestInput];
+  const digest = createHash("sha256").update(inputs.join(" "), "utf8").digest("hex").slice(0, 8);
+  lines.splice(at + t.rows.length, 0, copy);
+  fs.writeFileSync(fp, lines.join("\n").replace(/^rowsDigest: .*$/m, `rowsDigest: ${digest}`));
+  const after = syncTaskDir(dir, RUN, { ...OPTS, now: AT(990) }).tasks.find((x) => x.id === t.id);
+  check("a settled task an older engine listed a row twice in reads as unchanged once the row is listed once — its cells stand, no drift",
+    () => j >= 0 && after.rows.length === t.rows.length && after.drifted === false && after.status === "done"
+      && fs.readFileSync(fp, "utf8").includes(`rowsDigest: ${t.rowsDigest}`),
+    () => ({ rows: after.rows.length, drifted: after.drifted, status: after.status }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 {

@@ -2634,17 +2634,39 @@ function carryWithMovedFiledMarks(task, prev, sources, live) {
   return { ...task, rows: rows.map((r, i) => (moved.has(keys[i]) ? withMark(r, moved.get(keys[i])) : r)) };
 }
 
-// ROWS ADDED TO A SETTLED TASK ARE NOT A CHANGE TO ITS RECORD. The rows its file already listed digest exactly as the
-// status was recorded, so every carried cell still sits on the deliverable it was written for; the new rows arrive
-// blank and keep the task `partial` until they are built or decided. Holding the old digest there named the task
-// "deliverables CHANGED" on every later sync, with nothing a builder or a decision could do to clear it — six such
-// tasks kept the retest's confirmed run NOT COMPLETE after a plan change that only added module-dependency rows.
-function onlyRowsAdded(rows, prev) {
-  const listed = new Set(rowKeys((prev.table || []).map((r) => r.label)));
-  const keys = rowKeys((rows || []).map((r) => r.label));
-  const kept = (rows || []).filter((r, i) => listed.has(keys[i]) && r.vk !== "pagecode");
-  if (!kept.length || kept.length === rows.length || kept.some((r) => r.digestInput === undefined)) return false;
-  return shortHash(kept.map((r) => r.digestInput).join(" ")) === prev.meta.rowsDigest;
+// A SETTLED TASK'S RECORD STANDS WHILE THE ROWS IT WAS RECORDED ON STAND. Its file lists those rows, and the
+// current rows say what each label now asks for: the recorded table rebuilt from them hashes to the recorded digest
+// exactly when none of those deliverables changed. Rows added since arrive blank and keep the task `partial` until
+// they are built or decided; a row listed twice by an older engine and now once is the same deliverable. Holding
+// the old digest over either named the task "deliverables CHANGED" on every later sync with nothing a builder or a
+// decision could do to clear it — six such tasks kept the retest's confirmed run NOT COMPLETE. A label that is gone
+// or now asks for something else still fails the comparison, and the warning stands.
+const labelKey = (label) => String(label || "").trim().replace(/\s+/g, " ");
+function recordedRowsStand(rows, prev) {
+  // The current rows under each label, in order: the n-th listing of a label in the file is its n-th row now.
+  const now = new Map();
+  const pageCode = new Set();
+  for (const r of rows || []) {
+    const k = labelKey(r.label);
+    if (r.vk === "pagecode") { pageCode.add(k); continue; }
+    if (r.digestInput === undefined) return false;   // a task this engine did not cut
+    if (!now.has(k)) now.set(k, []);
+    now.get(k).push(r.digestInput);
+  }
+  const seen = new Map();
+  const recorded = [];
+  for (const r of prev.table || []) {
+    const k = labelKey(r.label);
+    if (pageCode.has(k)) continue;
+    const inputs = now.get(k);
+    if (!inputs) return false;                         // a recorded row the plan no longer has
+    const n = seen.get(k) || 0;
+    seen.set(k, n + 1);
+    // One listing more than the plan has rows of that label is a duplicate only while all of them are one row.
+    if (n >= inputs.length && inputs.some((x) => x !== inputs[0])) return false;
+    recorded.push(inputs[Math.min(n, inputs.length - 1)]);
+  }
+  return recorded.length > 0 && shortHash(recorded.join(" ")) === prev.meta.rowsDigest;
 }
 function carryOver(task, prev) {
   if (!prev) return task;
@@ -2663,7 +2685,7 @@ function carryOver(task, prev) {
   // for are not the deliverables now in the file. The digest the status was recorded against is therefore KEPT in
   // the file for as long as that status stands, and only a status back at `todo` (the task re-opened) adopts the
   // current rows. Refreshing it eagerly would clear the warning on the very re-slice that should raise it.
-  const held = status !== S_TODO && prev.meta.rowsDigest && !onlyRowsAdded(task.rows, prev) ? prev.meta.rowsDigest : task.rowsDigest;
+  const held = status !== S_TODO && prev.meta.rowsDigest && !recordedRowsStand(task.rows, prev) ? prev.meta.rowsDigest : task.rowsDigest;
   return {
     ...task,
     status,
