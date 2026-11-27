@@ -1,8 +1,7 @@
-// Offline checks for the build loop's BOOKKEEPING: the ledger moves a confirmed run reaches only
-// through the engine — `--decide`, `--tasks`, `--verify` — must close it, never keep it open. A retest of a whole
-// customer section confirmed every plan item on the stand and still ended NOT COMPLETE, because the folder the
-// engine itself wrote kept re-opening under its own hands. Each block below is one of those loops, on a small
-// inline fixture (no stand-sourced page body is copied into the repo). Zero dependencies (node built-ins only).
+// Offline checks for the build loop's BOOKKEEPING: the ledger moves a confirmed run reaches only through the engine
+// — `--decide`, `--tasks`, `--verify`, a plan change — close it and never re-open it. Each block below is one such
+// move, on a small inline fixture (no stand-sourced page body is copied into the repo). Zero dependencies (node
+// built-ins only).
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -114,8 +113,7 @@ function closedFolder(label) {
 }
 const rowsOf = (dir, id) => readTaskDir(dir).find((x) => x.id === id).rows;
 const NEEDS = "not-built — needs-decision";
-// `closedFolder` with rows 1 and 2 of one settled task recorded as waiting on a decision — the state of the
-// retest's settled tasks when the orchestrator answered them.
+// `closedFolder` with rows 1 and 2 of one settled task recorded as waiting on a decision.
 function twoQuestions(label) {
   const f = closedFolder(label);
   const t = readTaskDir(f.dir).find((x) => x.rows.length >= 3 && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
@@ -160,6 +158,41 @@ console.log("\n===== E7, E8: `--tasks` and `--verify` read ONE task set =====");
       orphanQueued: afterTasks.includes(orphan) }));
   check("the orphan stays on disk and the index names it outside the queue",
     () => fs.existsSync(path.join(dir, orphan)) && fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").includes(`\`${orphan}\``));
+  // A repair task's place in the queue, wherever it is printed: never its sort-key order.
+  const next = cli("--tasks", dir, "--next");
+  const surfaces = [fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8"), next.stdout || "",
+    ...repaired.map((r) => fs.readFileSync(path.join(dir, r.file), "utf8"))];
+  // The front matter's `order:` is the sort key, data and not a printed step, so it is left out.
+  const printed = (x) => x.split("\n").filter((l) => !/^order: /.test(l) && /9007199254740/.test(l));
+  check("the index, `--next` and the repair task files print a repair task's step, never the sentinel order it sorts on",
+    () => repaired.length > 0 && surfaces.every((x) => !printed(x).length) && /\[task-repair-/.test(surfaces[0]),
+    () => surfaces.map((x) => printed(x).slice(0, 2)));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // The control: a closure of a task the plan DOES derive, with no dispatch record, still fails the gate.
+  const base = tmp("e7-control");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D5 — build the typed forms\n");
+  approvePlan(dir, RUN.planVersion);
+  recordBrowserAnswer(dir);
+  syncTaskDir(dir, RUN, OPTS);
+  const t = readTaskDir(dir).find((x) => x.origin === "engine" && x.kind !== "repair" && x.rows.length);
+  closeCells(dir, t.id);
+  const manifestFile = path.join(base, "m.json");
+  fs.writeFileSync(manifestFile, JSON.stringify(MANIFEST));
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const run = spawnSync(process.execPath, [MIGRATE, manifestFile, "--verify", "--built", builtFile, "--tasks", dir], { encoding: "utf8" });
+  check("control: a plan task closed with no dispatch record still fails `--verify`'s dispatch gate, and no repair task is written",
+    () => run.status === 2 && /DISPATCH GATE/.test(run.stderr || "") && !readTaskDir(dir).some((x) => x.kind === "repair"),
+    () => ({ status: run.status, stderr: (run.stderr || "").slice(0, 400) }));
+  // A folder whose frozen split cannot be read has no merged queue; the gate audits its raw files instead.
+  fs.writeFileSync(path.join(dir, "split.json"), "{ not json");
+  const routed = spawnSync(process.execPath, [MIGRATE, manifestFile, "--tasks", dir, "--route"], { encoding: "utf8" });
+  check("control: with an unreadable frozen split, `--route` still refuses that undispatched closure at the dispatch gate",
+    () => routed.status !== 0 && /dispatch gate/i.test((routed.stdout || "") + (routed.stderr || "")) && !readTaskDir(dir).some((x) => x.kind === "repair"),
+    () => ({ status: routed.status, out: ((routed.stdout || "") + (routed.stderr || "")).slice(0, 500) }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 
@@ -189,8 +222,8 @@ console.log("\n===== E5: a plan change keeps what it did not touch, and the roun
   fs.rmSync(base, { recursive: true, force: true });
 }
 {
-  // A folder an older engine wrote: one settled task lists a row twice (the retest's duplicated directive rows), and
-  // its recorded digest covers both copies. This engine derives the row once.
+  // A settled task whose file lists one row twice, its recorded digest covering both copies; the plan derives the
+  // row once.
   const { base, dir } = closedFolder("e5-dup");
   const t = buildTaskSet(RUN, OPTS).tasks.reduce((a, x) => (x.rows.length > a.rows.length ? x : a));
   const j = t.rows.findIndex((r) => r.vk !== "pagecode" && t.rows.filter((o) => o.label === r.label).length === 1);
@@ -226,7 +259,7 @@ console.log("\n===== E5: a plan change keeps what it did not touch, and the roun
     () => ({ tasks: tasks.map((t) => `r${t.repairRound}:${t.rows.map((r) => r.label).join(",")}`), parked }));
   const legacy = prior.map((e) => ({ ...e, meta: { ...e.meta, covers: undefined } }));
   const again = buildRepairTasks(RUN, { main: { openRows: [old, fresh] } }, OPTS, legacy);
-  check("a round file with no `covers` record still counts against every row of its kind, as before",
+  check("a round file with no `covers` record counts against every row of its kind",
     () => again.tasks.length === 0 && again.parked[0]?.rows === 2, () => again);
 }
 
@@ -337,14 +370,14 @@ console.log("\n===== E11: an Outcome written after a stray empty column =====");
   const { base, dir } = closedFolder("e11");
   const t = readTaskDir(dir).find((x) => x.rows.length >= 2 && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
   const fp = taskFilePath(dir, t.id);
-  // Row 1 as a sub-agent wrote it in the retest: one empty cell, then the mark.
+  // Row 1 with one empty cell before its mark.
   const stray = setOutcome(fs.readFileSync(fp, "utf8"), 1, "").replace(/^(\|\s*1\s*\|.*\|) {2}\|$/m, "$1 || not-built — blocked |");
   fs.writeFileSync(fp, stray);
   const rows = rowsOf(dir, t.id);
   check("a mark written one cell late (`|| not-built — blocked`) is read as that mark, not as no outcome",
     () => /\|\| not-built — blocked \|$/m.test(stray) && rows[0].outcomeKind === "not-built" && rows[0].outcomeCause === "blocked",
     () => ({ row: stray.split("\n").find((l) => /^\|\s*1\s*\|/.test(l)), parsed: rows[0] }));
-  check("the rows around it read as before", () => rows.slice(1).every((r) => r.outcomeKind === "built"), () => rows.map((r) => r.outcome));
+  check("the rows around it keep their own marks", () => rows.slice(1).every((r) => r.outcomeKind === "built"), () => rows.map((r) => r.outcome));
   fs.rmSync(base, { recursive: true, force: true });
 }
 
@@ -373,13 +406,11 @@ console.log("\n===== E12, E13a: the report title and the progress counters =====
   fs.rmSync(base, { recursive: true, force: true });
 }
 
-console.log("\n===== AC-6: the retest's bookkeeping, replayed, ends COMPLETE once every plan item is confirmed =====");
+console.log("\n===== AC-6: a ledger through every bookkeeping move ends COMPLETE once every plan item is confirmed =====");
 {
-  // The retest's folder states, in its order, on the inline fixture (the retest folder itself is customer data and
-  // stays out of the repo): every task built and dispatched; a task an earlier cut left behind; a plan change that
-  // adds a row to a settled page task; two questions answered in ONE `--decide`; the added row recorded by a
-  // sub-agent one cell late. Every plan item is then confirmed on the stand — the machine table is green — and the
-  // ledger must close with it.
+  // In this order: every task built and dispatched; an orphan task file; a plan change that adds a row to a settled
+  // page task; two questions answered in ONE `--decide`; the added row recorded one cell late. Every plan item is
+  // then confirmed on the stand — the machine table is green — and the ledger closes with it.
   const { base, dir, cli } = closedFolder("ac6");
   const settled = readTaskDir(dir).find((x) => x.origin === "engine" && x.kind !== "repair" && x.rows.length >= 3 && !x.rows.some((r) => r.na));
   plantOrphan(dir, settled);
@@ -413,7 +444,7 @@ console.log("\n===== AC-6: the retest's bookkeeping, replayed, ends COMPLETE onc
     () => decided.status === 0 && report.complete === true && report.reasons.length === 0 && !/NOT COMPLETE/.test(report.markdown.split("\n")[2]),
     () => ({ decided: decided.status, complete: report.complete, verdict: report.markdown.split("\n")[2], reasons: report.reasons, statuses: set.tasks.map((t) => `${t.id}:${t.status}${t.drifted ? ":drifted" : ""}`) }));
   check("AC-6: every task of the queue is settled and none is flagged as changed under its record",
-    () => set.tasks.every((t) => ["done", "not-applicable", "wont-do", "partial"].includes(t.status) && !t.drifted)
+    () => set.tasks.every((t) => ["done", "not-applicable", "wont-do"].includes(t.status) && !t.drifted)
       && set.tasks.find((t) => t.id === grown.id)?.status === "done",
     () => set.tasks.map((t) => `${t.id}:${t.status}${t.drifted ? ":drifted" : ""}`));
   fs.rmSync(base, { recursive: true, force: true });

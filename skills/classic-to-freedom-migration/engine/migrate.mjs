@@ -69,7 +69,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
 import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
-  REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, readTaskDir, notBuiltOpenItems,
+  REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, stepOf, portedRowSymbols, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
@@ -3840,9 +3840,8 @@ function valueFlagArg(argv, flag, example, onBad, noun = "a path") {
 }
 // THE PLAN'S `Adjustments` ARE THE AGENT'S, the rest of the file is the engine's. The agent appends that section
 // under the generated plan (findings, and the items decisions cite as `Adjustment N`), and `--plan --out` rewrites
-// the file on every regeneration — so the section was lost each time the plan changed and had to be appended again
-// by hand. The engine never renders a heading of that name, so the section of the file being replaced, from its
-// heading to the end, is carried under the new plan verbatim.
+// the file on every regeneration. The engine never renders a heading of that name, so the section of the file being
+// replaced, from its heading to the end, is carried under the new plan verbatim.
 const ADJUSTMENTS_HEADING = /^#{2,3}[ \t]+Adjustments\b/m;
 export function withCarriedAdjustments(plan, previous) {
   const at = String(previous || "").search(ADJUSTMENTS_HEADING);
@@ -3850,8 +3849,8 @@ export function withCarriedAdjustments(plan, previous) {
   return `${plan.trimEnd()}\n\n${previous.slice(at).trimEnd()}\n`;
 }
 const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
-// Every value of a flag that may be given more than once, in the order given. `--row` is one: reading only the
-// first occurrence answered one row of `--decide D<N> --row a:1 --row a:2` and dropped the rest without a word.
+// Every value of a flag that may be given more than once, in the order given (`--row`: one `--decide` answers
+// every row it names).
 function valueFlagArgs(argv, flag, example, onBad, noun = "a path") {
   const values = [];
   argv.forEach((a, i) => {
@@ -4558,12 +4557,13 @@ function repairPreflight(result, dir, opts, merged = null) {
   // THE LEDGER IS CHECKED BEFORE MORE WORK IS SCHEDULED AGAINST IT. Read-only: nothing is written here. No repair
   // task is written while it fails — a repair round adds sub-agents on top of closures nobody was dispatched for,
   // and the rows it would open cannot be trusted to describe what was actually built.
-  // THE SAME TASK SET `--tasks` GATES ON (`readMergedTaskDir`), not the raw files: a file an earlier cut left "no
-  // longer in the plan" is nobody's work in this run, and auditing it here failed a confirmed run on a task
-  // `--tasks` could neither start nor decide. A set the plan cannot be cut into is refused by the round itself.
+  // THE SAME TASK SET `--tasks` GATES ON (`readMergedTaskDir`), not the raw files: an orphan file the plan does not
+  // derive is nobody's work in this run and is not audited. A set the plan cannot be cut into (an unreadable or
+  // unresolved split) has no merged queue, so its raw files are audited instead: the gate never passes unread.
   // NOT-BUILT IS NOT JUDGED HERE: the verdict is set once, after `syncRepairDir`, off the folder it wrote; a
   // refusal reports the gate that actually fired and nothing else.
-  const audit = (merged || readMergedTaskDir(dir, result, opts)).dispatch;
+  const set = merged || readMergedTaskDir(dir, result, opts);
+  const audit = set.refused ? dispatchAudit(readTaskDir(dir), dir) : set.dispatch;
   if (audit?.failing.length) {
     dispatchGateFailure = { audit, dir, started: true };
     // The files and their remedies go out ONCE, on stderr with the other ⛔ banners. Stdout carries the verify

@@ -71,8 +71,10 @@ export const TASK_ORIGIN_ORCHESTRATOR = "orchestrator";
 export const TASK_ORIGINS = [TASK_ORIGIN_ENGINE, TASK_ORIGIN_ORCHESTRATOR];
 export const TASK_INDEX_FILE = "index.md";
 // A task's place in the queue as every surface prints it: its position in the merged set, else its cut order. A
-// repair task sorts last on a sentinel order, and printing that order showed `[9007199254740990/51]`.
-export const stepOf = (t) => t.step ?? t.order;
+// repair task's `order` (`REPAIR_ORDER`) is a sort key placing it last, never a number to print: before the merge
+// gives it a position it prints as `—`.
+export const REPAIR_ORDER = Number.MAX_SAFE_INTEGER - 1;
+export const stepOf = (t) => t.step ?? (Number(t.order) >= REPAIR_ORDER ? "—" : t.order);
 
 // WHY a task set was refused, because the remedies differ and an operator acts on the remedy, not on the banner.
 // The split could not be READ (fix its syntax); it reads but does not RESOLVE, naming work the plan lacks or
@@ -982,7 +984,7 @@ function renderFrontMatter(task, set) {
     // file the engine's own (see `declaredOf`).
     declared: task.declared || "",
     origin: task.origin, pageKey: task.pageKey,
-    group: task.group, order: String(stepOf(task)), planVersion: set.planVersion || "",
+    group: task.group, order: String(task.step ?? task.order), planVersion: set.planVersion || "",
     // The digest the STATUS was recorded against, not necessarily the current rows — see `carryOver`. Writing the
     // current one here would erase the drift warning on the first re-slice after the plan changed, which is the
     // one moment it has to survive.
@@ -2645,10 +2647,9 @@ function carryWithMovedFiledMarks(task, prev, sources, live) {
 // A SETTLED TASK'S RECORD STANDS WHILE THE ROWS IT WAS RECORDED ON STAND. Its file lists those rows, and the
 // current rows say what each label now asks for: the recorded table rebuilt from them hashes to the recorded digest
 // exactly when none of those deliverables changed. Rows added since arrive blank and keep the task `partial` until
-// they are built or decided; a row listed twice by an older engine and now once is the same deliverable. Holding
-// the old digest over either named the task "deliverables CHANGED" on every later sync with nothing a builder or a
-// decision could do to clear it — six such tasks kept the retest's confirmed run NOT COMPLETE. A label that is gone
-// or now asks for something else still fails the comparison, and the warning stands.
+// they are built or decided; a row a file lists twice and the plan once is the same deliverable. Neither is a
+// change to the record, so neither drifts the task. A label that is gone or now asks for something else fails the
+// comparison, and the warning stands.
 function recordedRowsStand(rows, prev) {
   const now = inputsByLabel(rows);
   const recorded = now && recordedInputs(prev.table, now);
@@ -3042,11 +3043,10 @@ const ROUND_ATTEMPTED = new Set([S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_PARTIAL]
 // still somebody's work, and a cause that has had its rounds is a decision for a person.
 // `cap` is what this page has spent on this KIND of row; `own` is this CAUSE's own last round. Only `own` can
 // hold a cause pending — its rows are the work of a round that is still somebody's.
-// THE CAP IS SPENT PER ROW. A round counts against the rows it covered, not against every row of its kind on the
-// page: the retest's three rounds over duplicated directive rows (`not-built:other`) parked the FIRST round over
-// unrelated module-dependency rows that a later plan change added, and the user was asked to decide rows nobody
-// had attempted. So `parked` holds the rows three attempted rounds already covered, and the rest get the round.
-// A round file with no `covers` (written before it was recorded) counts against every row, as it always did.
+// THE CAP IS SPENT PER ROW. A round counts against the rows in its `covers`, not against every row of its kind on
+// the page, so rows no round has attempted are never parked by rounds over other rows. `parked` holds the rows
+// `REPAIR_ROUND_CAP` attempted rounds already covered, and the rest get the round. A round file with no `covers`
+// counts against every row of its kind (`capAttempt`).
 function nextRound(cap, own, rows) {
   if (own && !ROUND_ATTEMPTED.has(own.status)) return { hold: "pending", round: own.round, status: own.status };
   // The NUMBER always continues from the highest one used, so a new file can never collide with one on disk.
@@ -3118,7 +3118,7 @@ function repairRoundTasks({ pageKey, identityKey, cause, rows, round, B }) {
       group: `Repair round ${round} — ${causeText(cause)}`,
       title: `Repair round ${round} — ${causeText(cause)}`,
       groups: [...new Set(chunkSrc.map((r) => r.groupTitle))],
-      order: Number.MAX_SAFE_INTEGER - 1, phase: DEFAULT_PHASE,
+      order: REPAIR_ORDER, phase: DEFAULT_PHASE,
       origin: TASK_ORIGIN_ENGINE, status: S_TODO,
       rows: chunkSrc.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? "repair" : null, na: null,
         status: r.status, evidence: r.evidence })),
@@ -3752,8 +3752,6 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
     const startedAt = clocks[t.id]?.startedAt;
     const elapsed = startedAt ? `, running ${Math.round((new Date(now) - new Date(startedAt)) / 60000)} min` : "";
     const eta = f ? `, expected ${f.low}-${f.high} min` : "";
-    // The position in the run, not `t.order`: a repair task sorts last on a sentinel order, which printed as the
-    // counter itself (`[9007199254740990/51]`).
     L.push(`[${stepOf(t)}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
   }
   const leftWeight = [...running, ...open].reduce((a, t) => a + (t.weight || 0), 0);
@@ -4935,10 +4933,9 @@ export function applyDecision(dir, result, opts = {}) {
     touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged };
 }
 
-// A task that is `todo` only because a build-it answer re-opened some of its rows, and that no builder has taken
-// since. Its other questions are still the person's to answer: refusing them as "a builder may be writing" sent
-// the retest's orchestrator round a closed task once per row. Dispatching it moves it to `in-progress`, which
-// ends this state.
+// A task that is `todo` only because a build-it answer re-opened some of its rows, and that no builder holds.
+// Its other questions are still the person's to answer. Dispatching it moves it to `in-progress`, which ends this
+// state; `--revoke` of the build-it answer ends it too, and the task's questions are answered as on any closed task.
 function reopenedByAnswer(task) {
   if (task.status !== S_TODO) return false;
   const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
