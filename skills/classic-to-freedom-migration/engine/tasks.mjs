@@ -1264,6 +1264,9 @@ function markersBlock() {
       + " (several as code spans). `--verify` closes the row only when the built page reaches that symbol. Never add"
       + " a function named after the Classic method to satisfy the check: a definition alone does not close the row,"
       + " only a call or a `Ported as` line does.",
+    "  - for every client module this task created (its schema did not exist before the task): `Module created:"
+      + " <ModuleSchemaName>`, one line per module. `--verify` holds a module to \"no export nobody uses\" only when it"
+      + " is a page's own module or a build task of this run created it.",
     "  - when this task saved nothing to the page's body (it only recorded outcomes, read the stand, or changed a"
       + " client module): `Page saved: no`. The page then stands as its last save left it, and the browser check made"
       + " after that save still counts; leave the line out whenever you saved the page.",
@@ -4556,6 +4559,31 @@ export function decidedRowKeys(set) {
 // symbols are written as code spans (`` `a`, `b` ``); without code spans the first word is the symbol, so prose
 // after it is never read as a claim.
 export const PORTED_MARKER = notesMarker("Ported as");
+// `Module created: <Module>` — a client module the task created (its schema did not exist before the task). Not tied
+// to a row: one line per module, the schema name as a code span or a bare word.
+const MODULE_CREATED_MARKER = /^[\s*>-]*Module created[\s:*]*([^\s:*].*)$/i;
+const MODULE_NAME = /^[A-Za-z_$][\w$]*$/;
+// The client modules the run's build tasks created, sorted: the modules `--verify` holds to "no export nobody uses"
+// beside each page's own module. A module an earlier run created is not on it, so its exports are not judged.
+export function createdModuleNames(set) {
+  const out = new Set();
+  for (const t of set?.tasks || []) {
+    if (t.unread) continue;
+    for (const line of String(t.notes || "").split(/\r?\n/)) {
+      const m = MODULE_CREATED_MARKER.exec(line);
+      if (m) for (const name of moduleNamesIn(m[1])) out.add(name);
+    }
+  }
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
+// The names a `Module created:` line gives: its code spans, else its words when every word is a module name. Prose
+// (`not a module name`) names nothing rather than its first word.
+function moduleNamesIn(value) {
+  const spans = [...String(value).matchAll(/`([^`]+)`/g)].map((x) => x[1].trim());
+  if (spans.length) return spans.filter((w) => MODULE_NAME.test(w));
+  const words = String(value).trim().split(/[\s,;]+/).filter(Boolean);
+  return words.every((w) => MODULE_NAME.test(w)) ? words : [];
+}
 // A word that is not a symbol is kept as written, so `--verify` names it instead of reading the row as unrecorded.
 export function portedSymbols(value) {
   const spans = [...String(value || "").matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());

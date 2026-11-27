@@ -56,12 +56,16 @@ handler's row only, so another handler that drops `next` still opens a row of it
   data another way, renaming the constant) does not fix it, and the judge rejects a record that relies on it. When
   the code you would have to change belongs to another page's artifact, leave the finding open and say in
   `## Notes` which shared function both should call.
-- **Export only what a page or another module calls.** An export nobody imports is removed.
+- **Export only what a page or another module calls.** An export nobody imports is removed. A module you create
+  is named in your task's `## Notes` as `Module created: <ModuleSchemaName>`: `--verify` checks the exports of a
+  page's own module and of the modules this run created, never of one an earlier run created (pages outside this
+  run may use it).
 - The module keeps no page context in module-level variables: the handler passes `request.$context` (and
   `request.scopes` when the function fires requests) on each call.
 - `node engine/codemap.mjs <page file> --modules .clio-pages` shows what the run's modules already hold, and
   flags code and constants that repeat across modules, including a copy that differs only in its values or its
-  names, and exports of the run's modules (the shared one too) that nothing uses.
+  names, and exports of a page's own module that nothing uses (the whole run's verify also checks the modules
+  this run created).
 
 ## 4. Custom requests only for what the page fires
 

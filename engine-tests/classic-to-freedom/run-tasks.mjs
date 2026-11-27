@@ -664,6 +664,8 @@ check("owner: the next task on the page still goes to a DIFFERENT sub-agent, whi
   check("task card: a repeat finding is fixed by sharing, never by rewording — the judge rejects a rewritten copy",
     () => /A repeat finding is fixed by sharing, never by rewording/.test(card) && /also not under another name/.test(card)
       && /does not fix it, and the judge\s+rejects it/.test(card), () => card);
+  check("task file: the builder records each client module it created as `Module created: <ModuleSchemaName>`",
+    () => carded.includes("`Module created: <ModuleSchemaName>`") && /a build task of this run created it/.test(carded), () => carded);
   check("task card: the decisions in force are inline, verbatim, the plan's Adjustments included",
     () => card.includes("- `D4` — Hide every element the Classic page did not have") && card.includes("- `Adjustment 1` — Keep the Notes tab"),
     () => card);

@@ -73,7 +73,7 @@ export const QUALITY_ROW_RULES = Object.freeze([
   { rule: QUALITY_RULES.duplicateHandlerAcrossPages, label: "no handler copied from another page of the run" },
   { rule: QUALITY_RULES.duplicateAcrossModules, label: "no function or run of statements in two modules of the run, also with other values, or in a page and a module" },
   { rule: QUALITY_RULES.sharedValueInTwoModules, label: "no record id or constant value declared in two modules, also under another name — a value the pages share lives in one module" },
-  { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a module the run built (a page's own module or the shared one) that no page or module uses" },
+  { rule: QUALITY_RULES.unusedModuleExport, label: "no export of a module the run built (a page's own module, or one a build task recorded as `Module created`) that no page or module uses" },
   { rule: QUALITY_RULES.wrappedCallInlined, label: "no call written out where a module export already wraps it" },
 ]);
 
@@ -794,8 +794,8 @@ function groupBy(items, keyOf) {
 // declared helper and constants modules.
 // `wholeRun` says `pages` are ALL the run's pages (the verify payload): only then is an export nobody uses known to be
 // unused — one page alone cannot see what the others import. Even then only a run page's own `<PageSchema>Module` is
-// judged, never an external one.
-export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, external = new Set(), wholeRun = true) {
+// judged, never an external one. `created` names the modules the run's build tasks created (`Module created:`).
+export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, constantsGuids = new Set(), modules = null, external = new Set(), wholeRun = true, created = new Set()) {
   const byPage = new Map();
   for (const [key, entry] of Object.entries(pages || {})) byPage.set(key, lintPageQuality(entry, thresholds, constantsGuids));
   addModuleFindings(byPage, pages || {}, modules || {}, external, thresholds, constantsGuids);
@@ -804,7 +804,7 @@ export function lintRunQuality(pages, thresholds = DEFAULT_QUALITY_THRESHOLDS, c
     for (const h of page?.helpers || []) if (!helperOwners.has(h.shape)) helperOwners.set(h.shape, { key, helper: h });
   }
   for (const [key, page] of byPage) if (page) reportCopiesFromOtherPages(key, page, helperOwners);
-  lintRunModules(byPage, pages || {}, modules, wholeRun, external);
+  lintRunModules(byPage, pages || {}, modules, wholeRun, external, created);
   return byPage;
 }
 
@@ -823,16 +823,17 @@ const RUN_CACHE = new WeakMap();
 // The key of one thresholds + constants-module + external-module combination, built once per set of rows (see
 // `codeQualityRows`).
 const sortedList = (xs) => [...(xs || [])].sort((a, b) => a.localeCompare(b)).join();
-export const qualityRunKey = (thresholds, constantsGuids, externalModules = []) =>
-  JSON.stringify(thresholds) + "|" + sortedList(constantsGuids) + "|" + sortedList(externalModules);
-export function runQualityOf(root, thresholds, constantsGuids, externalModules = [], cacheKey = qualityRunKey(thresholds, constantsGuids, externalModules)) {
+export const qualityRunKey = (thresholds, constantsGuids, externalModules = [], createdModules = []) =>
+  JSON.stringify(thresholds) + "|" + sortedList(constantsGuids) + "|" + sortedList(externalModules) + "|" + sortedList(createdModules);
+export function runQualityOf(root, thresholds, constantsGuids, externalModules = [], cacheKey = qualityRunKey(thresholds, constantsGuids, externalModules), createdModules = []) {
   const wholeRun = Boolean(root?.pages && typeof root.pages === "object");
   const pages = wholeRun ? root.pages : { main: root };
   const modules = root?.modules && typeof root.modules === "object" ? root.modules : null;
   let perRoot = RUN_CACHE.get(root);
   if (!perRoot) { perRoot = new Map(); RUN_CACHE.set(root, perRoot); }
   if (!perRoot.has(cacheKey)) {
-    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules), wholeRun));
+    perRoot.set(cacheKey, lintRunQuality(pages, thresholds, new Set(constantsGuids || []), modules, new Set(externalModules), wholeRun,
+      new Set(createdModules || [])));
   }
   return perRoot.get(cacheKey);
 }
@@ -867,7 +868,7 @@ export function runModuleLint(run, pageKey) {
   return run?.modules?.get(pageKey) || { findings: [], unreadable: [] };
 }
 
-function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) {
+function lintRunModules(byPage, pages, modules, wholeRun, external = new Set(), created = new Set()) {
   const keys = Object.keys(pages);
   const bindings = new Map(keys.map((k) => [k, pageBindings(pages[k])]));
   reportPagesWithoutModule(byPage, pages);
@@ -889,23 +890,15 @@ function lintRunModules(byPage, pages, modules, wholeRun, external = new Set()) 
   reportNearCopies(read, report);
   reportSharedValues(read, report);
   const importers = importerFacts(pages, byPage, bindings, read);
+  // Judged only where every user is a run page or a run module: a run page's own `<PageSchema>Module`, and a module a
+  // build task of this run created (`created`). A module an earlier run created (a shared module a section migrated
+  // before this one also imports), a project module or another app's can serve pages outside the run, whose imports
+  // nothing here sees: its exports are never judged.
   if (wholeRun) {
-    const isOwn = runOwnModuleTest(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean));
-    reportUnusedExports(read.filter((m) => isOwn(m.name) && !external.has(m.name)), importers, report);
+    const own = new Set(keys.map((k) => pageSchemaOf(pages[k])).filter(Boolean).map((s) => s + "Module"));
+    reportUnusedExports(read.filter((m) => (own.has(m.name) || created.has(m.name)) && !external.has(m.name)), importers, report);
   }
   reportInlinedWrappers(read, importers, report, ownModulesOf(pages, keys, read, wholeRun), byPage);
-}
-
-// A module the run built for its own pages, whose every user is therefore a run page or another run module: a run
-// page's own `<PageSchema>Module`, or a module named with the app prefix of a run page (`UsrApp_SharedModule` beside
-// `UsrApp_FormPage`). An app prefix names the app after the namespace (`UsrApp_`, two words or more); a prefix that
-// is only the namespace (`Usr_`) names no app and matches nothing. Any other module (a project module, another app's)
-// can serve pages outside the run, whose imports nothing here sees.
-function runOwnModuleTest(schemas) {
-  const own = new Set(schemas.map((s) => s + "Module"));
-  const prefixes = [...new Set(schemas.filter((s) => s.includes("_")).map((s) => s.slice(0, s.indexOf("_") + 1)))]
-    .filter((p) => p.slice(0, -1).split(/(?=[A-Z])/).length >= 2);
-  return (name) => own.has(name) || prefixes.some((p) => name.startsWith(p));
 }
 
 // The page a module's findings belong to: the page whose own module it is, else the first page importing it.

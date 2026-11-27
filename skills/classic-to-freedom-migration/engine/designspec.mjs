@@ -3206,7 +3206,9 @@ function qualityRunOf(opts) {
   const thresholds = opts.qualityThresholds || DEFAULT_QUALITY_THRESHOLDS;
   const constantsGuids = opts.constantsGuids || [];
   const externalModules = externalModulesOf(opts);
-  return { thresholds, constantsGuids, externalModules, runKey: qualityRunKey(thresholds, constantsGuids, externalModules) };
+  const createdModules = [...new Set(opts.createdModules || [])];
+  return { thresholds, constantsGuids, externalModules, createdModules,
+    runKey: qualityRunKey(thresholds, constantsGuids, externalModules, createdModules) };
 }
 // The modules the code rows do not follow into: the project's declared helper and constants modules, existing code
 // the run did not write. Every other module a built page imports is read back and held to the same rules.
@@ -5401,7 +5403,7 @@ export function resolvePageCodeVk(vk, ctx) {
   const a = analyzePageCode(ctx.handlersSrc, entry?.viewConfig, requestsSentElsewhere(ctx.root, ctx.pageKey), thresholds, sections);
   if (a.error) return ["⚠ verify", `${a.error} — re-read the page with get-page and check the saved body`, "unverified"];
   // The functions of the modules the page imports are the page's code too, held to the same length limit.
-  const run = runQualityOf(ctx.root, thresholds, vk.constantsGuids, vk.externalModules, vk.runKey).get(ctx.pageKey);
+  const run = runQualityOf(ctx.root, thresholds, vk.constantsGuids, vk.externalModules, vk.runKey, vk.createdModules).get(ctx.pageKey);
   a.findings.push(...moduleLengthFindings(run));
   // A module not measured holds the row; the page's own findings are still listed beside it.
   const gap = moduleGapText(run);
@@ -5605,7 +5607,7 @@ function codeQualityRows(opts, pageKey, root) {
 // request.
 function chainEndingRequests(root, pageKey, run) {
   if (!root || !pageKey) return [];
-  const page = runQualityOf(root, run.thresholds, run.constantsGuids, run.externalModules, run.runKey).get(pageKey);
+  const page = runQualityOf(root, run.thresholds, run.constantsGuids, run.externalModules, run.runKey, run.createdModules).get(pageKey);
   const requests = (page?.findings || []).filter((f) => f.rule === QUALITY_RULES.handlerWithoutNext && f.request).map((f) => f.request);
   return [...new Set(requests)].sort((a, b) => a.localeCompare(b));
 }
@@ -5642,7 +5644,7 @@ function moduleGapCell(gap, note, blocking, noted) {
 export function resolveQualityVk(vk, ctx) {
   if (ctx.entryAbsent) return ["☐ confirm on-stand", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — the page's code is checked once the page is read`, "skip"];
   if (ctx.page === false) return ["☐ confirm on-stand", "the page is reported as NOT BUILT, so there is no code to check", "skip"];
-  const run = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey);
+  const run = runQualityOf(ctx.root, vk.thresholds, vk.constantsGuids, vk.externalModules, vk.runKey, vk.createdModules);
   const page = run.get(ctx.pageKey);
   const rec = qualityRecord(run, ctx.pageKey, vk.rule);
   if (!rec) return ["☐ confirm on-stand", "the bundle carries no `handlers` / `validators` / `converters` — pass get-page's `bundle.json` whole to auto-check the page's code", "skip"];

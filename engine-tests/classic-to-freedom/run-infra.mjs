@@ -703,7 +703,8 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
       && /including a copy that differs only in its values/.test(contract));
   check("page-code-architecture.md: a constant is one value under any name, and a repeat finding is fixed by sharing, never by rewording",
     () => /under\s+the same name or another one/.test(contract) && /A repeat finding is fixed by sharing, never by rewording/.test(contract)
-      && /the judge rejects a record that relies on it/.test(contract) && /\(the shared one too\) that nothing uses/.test(contract));
+      && /the judge rejects a record that relies on it/.test(contract)
+      && /`Module created: <ModuleSchemaName>`/.test(contract) && /never of one an earlier run created/.test(contract));
   const judgeBrief = read("judge-brief.md");
   check("judge-brief.md: a repeat across modules cleared by rewriting the copy is not fixed — the record is not convincing",
     () => /is fixed\s+only by sharing/.test(judgeBrief) && /check that it now calls the shared function or imports the shared value/.test(judgeBrief.replace(/\s+/g, " "))

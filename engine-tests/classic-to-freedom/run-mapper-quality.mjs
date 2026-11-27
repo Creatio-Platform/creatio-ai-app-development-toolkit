@@ -10,6 +10,7 @@ import path from "node:path";
 import { lintPageQuality, lintRunQuality, lintModuleQuality, runModuleLint, qualityThresholdsOf, QUALITY_RULES, QUALITY_ROW_RULES, DEFAULT_QUALITY_THRESHOLDS, MODULE_BODY_RULES }
   from "../../skills/classic-to-freedom-migration/engine/quality.mjs";
 import { verifyRowKey, checklistGroups } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { createdModuleNames } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { assembleBuilt } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 
 const R = QUALITY_RULES;
@@ -642,6 +643,18 @@ export function runQualityChecks({ check, runMigration, renderVerify, checklistO
     check("modules (verify): with module bodies in the payload the owning page's module rows block, and the clean modules close them",
       () => [R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].every((r) => /⚠ verify/.test(rowOf(badTable, r)) && /✅ Done/.test(rowOf(goodTable, r))),
       () => [R.sharedValueInTwoModules, R.unusedModuleExport, R.wrappedCallInlined].map((r) => [rowOf(badTable, r), rowOf(goodTable, r)]));
+    // `Module created:` end to end: the task records -> `createdModuleNames` -> `renderVerify`'s `createdModules`.
+    const sharedSpare = { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"),
+      UsrApp_SharedModule: mod("UsrApp_SharedModule", [], "", "function spare() { return 1; }", "{ spare }") };
+    const created = createdModuleNames({ tasks: [
+      { notes: "Built the form.\nModule created: `UsrApp_FormPageModule`, `UsrApp_SharedModule`\n- Module created: UsrApp_FormPageModule" },
+      { unread: true, notes: "Module created: `UsrIgnored`" }, { notes: "Module created: not a module name!" }] });
+    check("Module created: the lines name modules as code spans or a bare word, sorted and once each; an unread task and a word that is no name add nothing",
+      () => created.join() === "UsrApp_FormPageModule,UsrApp_SharedModule", () => created);
+    const sharedRow = (o) => rowOf(renderVerify(result, { ...opts, ...o }, verifyRoot(sharedSpare)).markdown, R.unusedModuleExport);
+    check("Module created (verify): the unused export of a shared module blocks only when a task recorded creating it",
+      () => /⚠ verify/.test(sharedRow({ createdModules: created })) && /spare/.test(sharedRow({ createdModules: created })) && /✅ Done/.test(sharedRow({})),
+      () => [sharedRow({ createdModules: created }), sharedRow({})]);
     const unreadableModule = renderVerify(result, opts, verifyRoot({ UsrApp_FormPageModule: "define(\"UsrApp_FormPageModule\", [], function() { return {" })).markdown;
     check("modules (verify): an unreadable module blocks the rows module code can break — a rule about the page's handlers alone still judges them",
       () => /⚠ verify/.test(rowOf(unreadableModule, R.unusedModuleExport)) && /⚠ verify/.test(rowOf(unreadableModule, R.catchLogOnly))
@@ -674,18 +687,20 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     check("modules: an unused export of a shared module without the run's app prefix is not reported — only the run's own modules are judged",
       () => [...withShared.values()].every((p) => count(p, R.unusedModuleExport) === 0),
       () => [...withShared.values()]);
-    // The widened unused-export check: an app-prefixed project module stays exempt, a namespace-only prefix names no app.
+    // A module other than a page's own is judged only when a build task of this run created it (`Module created:`).
     const exportsModule = (name) => mod(name, [], "", "function spare() { return 1; }", "{ spare }");
-    const prefixed = (schema, extra, external) => lint({ main: page(schema, [schema + "Module"], thin("formPage")) }, DEFAULT_QUALITY_THRESHOLDS, new Set(),
-      { [schema + "Module"]: mod(schema + "Module", [], "", "function init(c) { return c; }", "{ init }"), ...extra }, external, true);
+    const ownAnd = (extra, external, created) => lint({ main: page("UsrApp_FormPage", ["UsrApp_FormPageModule"], thin("formPage")) }, DEFAULT_QUALITY_THRESHOLDS, new Set(),
+      { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }"), ...extra }, external, true, created);
     const unusedIn = (r, name) => [...r.values()].flatMap((p) => p.findings).filter((f) => f.rule === R.unusedModuleExport && f.text.includes(name)).length;
-    const withPrefixed = prefixed("UsrApp_FormPage", { UsrApp_ProjectConstants: exportsModule("UsrApp_ProjectConstants"),
-      UsrApp_SharedModule: exportsModule("UsrApp_SharedModule") }, new Set(["UsrApp_ProjectConstants"]));
-    check("unused exports: an app-prefixed module declared in projectConventions stays exempt; the app's own shared module is judged",
-      () => unusedIn(withPrefixed, "UsrApp_ProjectConstants") === 0 && unusedIn(withPrefixed, "UsrApp_SharedModule") === 1, () => [...withPrefixed.values()]);
-    const namespaceOnly = prefixed("Usr_FormPage", { Usr_OtherModule: exportsModule("Usr_OtherModule") }, new Set());
-    check("unused exports: a prefix that is only the namespace (`Usr_`) names no app — a module of that prefix is not judged",
-      () => unusedIn(namespaceOnly, "Usr_OtherModule") === 0, () => [...namespaceOnly.values()]);
+    const withCreated = ownAnd({ UsrApp_ProjectConstants: exportsModule("UsrApp_ProjectConstants"), UsrApp_SharedModule: exportsModule("UsrApp_SharedModule") },
+      new Set(["UsrApp_ProjectConstants"]), new Set(["UsrApp_ProjectConstants", "UsrApp_SharedModule"]));
+    check("unused exports: a shared module this run created is judged; a module declared in projectConventions stays exempt even when listed as created",
+      () => unusedIn(withCreated, "UsrApp_ProjectConstants") === 0 && unusedIn(withCreated, "UsrApp_SharedModule") === 1, () => [...withCreated.values()]);
+    // An earlier run (another section of the same app) created the shared module; this run's page imports it. Pages of
+    // the earlier section use exports this run cannot see, so none of them is reported, whatever the module's name.
+    const fromEarlierRun = ownAnd({ UsrApp_SharedModule: exportsModule("UsrApp_SharedModule") }, new Set(), new Set());
+    check("unused exports: a shared module of the same app that this run did not create (an earlier section's) is not judged",
+      () => unusedIn(fromEarlierRun, "UsrApp_SharedModule") === 0, () => [...fromEarlierRun.values()]);
     // The binding a page names in `args` decides which module `x.export` reads from.
     const bound = (call) => lint({ main: { ...page("UsrApp_FormPage", ["UsrApp_FormPageModule"], handler("crt.HandleViewModelInitRequest", `${call}(request.$context);`)), args: "(formPage)" } },
       DEFAULT_QUALITY_THRESHOLDS, new Set(), { UsrApp_FormPageModule: mod("UsrApp_FormPageModule", [], "", "function init(c) { return c; }", "{ init }") }).get("main");
@@ -768,8 +783,8 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const SHARED = "UsrDemoV3App_ContractAmountModule";
     const pageFor = (mod) => ({ schemaName: mod.replace(/Module$/, ""), handlers: "[]", args: "(sdk, own, shared)",
       deps: JSON.stringify(["@creatio-devkit/common", mod, SHARED]) });
-    const runFindings = (pages, modules) => {
-      const run = lintRunQuality(pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), modules);
+    const runFindings = (pages, modules, created = new Set()) => {
+      const run = lintRunQuality(pages, DEFAULT_QUALITY_THRESHOLDS, new Set(), modules, new Set(), true, created);
       return [...run.modules.values()].flatMap((r) => r.findings);
     };
     const v3Findings = runFindings(Object.fromEntries(Object.keys(v3).filter((n) => n !== SHARED).map((n) => [n, pageFor(n)])), v3);
@@ -837,7 +852,8 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const V4SHARED = "UsrDemoV4App_SharedModule";
     const v4Page = (mod) => ({ schemaName: mod.replace(/Module$/, ""), handlers: "[]", args: "(sdk, own, shared)",
       deps: JSON.stringify(["@creatio-devkit/common", mod, V4SHARED]) });
-    const v4Findings = runFindings(Object.fromEntries(Object.keys(v4).filter((n) => n !== V4SHARED).map((n) => [n, v4Page(n)])), v4);
+    const v4Pages = Object.fromEntries(Object.keys(v4).filter((n) => n !== V4SHARED).map((n) => [n, v4Page(n)]));
+    const v4Findings = runFindings(v4Pages, v4, new Set([V4SHARED]));
     const v4Of = (rule) => v4Findings.filter((f) => f.rule === rule).map((f) => f.text);
     const v4Near = v4Of(R.duplicateAcrossModules);
     const once = (texts, re) => texts.filter((t) => re.test(t)).length === 1;
@@ -853,8 +869,11 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     check("shared values (v4): the same string as an entity and as a column is two values — `CONTRACT_ENTITY` and `CHILD_CONTRACT_COLUMN` are not reported",
       () => v4Values.length === 2 && !v4Values.some((t) => /CHILD_CONTRACT_COLUMN/.test(t)), () => v4Values);
     const v4Unused = v4Of(R.unusedModuleExport).filter((t) => t.includes(V4SHARED));
-    check("unused exports (v4): the run's own shared module is judged — the two approval constants nothing uses are reported, its used exports are not",
+    check("unused exports (v4): the shared module the run created is judged — the two approval constants nothing uses are reported, its used exports are not",
       () => v4Unused.map((t) => /^`(\w+)`/.exec(t)[1]).sort((a, b) => a.localeCompare(b)).join() === "APPROVAL_PROCESS_NAME,APPROVAL_PROCESS_RECORD_PARAMETER", () => v4Unused);
+    const notCreated = runFindings(v4Pages, v4).filter((f) => f.rule === R.unusedModuleExport && f.text.includes(V4SHARED));
+    check("unused exports (v4): the same shared module with no `Module created:` record is not judged — an earlier run may have created it",
+      () => notCreated.length === 0, () => notCreated);
     // What the v4 rules do NOT report.
     const tiny = (name, attr) => `function ${name}(attributeName) { return attributeName === ${attr}; }`;
     check("near-copy: a whole function below the whole-function floor (one comparison) is not reported",
