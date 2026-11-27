@@ -44,5 +44,12 @@ Provenance (important):
   package (no customer data): every page-writing task of the run, in queue order, with its status, its `order` and its last
   `Browser checks:` line, and `unsaved: true` on the tasks whose notes say they saved no page. Generated from the
   run's `build-tasks/`; `run-tasks.mjs` asserts the run's browser verdict from it, with and without `Page saved: no`.
+- `plan-questions/` — **synthetic**, modelled on a section migration whose build stopped on its behaviour and
+  package questions after the plan was approved; names, quotes and packages are placeholders. `plan-questions.json`
+  is the list discovery writes into `manifest.planQuestions` (a lookup setting in another package, four behaviour
+  choices); `decisions-before-approval.md` answers them before the approval, `decisions-after-approval.md` records
+  the same questions asked during the build with their `Plan question:` lines; `plan-questions-section.golden.md`
+  is the plan section the answered list renders. `run-mapper-plan-questions.mjs` runs the process-page plan over
+  them and asserts the gap, the golden section and the result's missed count.
 
 `employeescore/` was removed — no runner loaded it.

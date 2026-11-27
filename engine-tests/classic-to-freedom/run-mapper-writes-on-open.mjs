@@ -14,6 +14,7 @@ import { dataWritingPages } from "../../skills/classic-to-freedom-migration/engi
 import { buildTaskSet, renderTaskFile, dataWritingBlock, syncTaskDir, worklogFieldValues, addModeChecks, notesMarkers,
   STAND_DATA_FIELD, ADD_MODE_FIELD, STAND_DATA_MARKER } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
+import { parseDecisionRecords } from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
 // a page body whose methods are given as source text
 const page = (name, methods) => `define("${name}", [], function() { return { entitySchemaName: "UsrThing", diff: [], methods: { ${methods} } }; });`;
@@ -141,6 +142,20 @@ export function runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEA
         && /MbContractLastNumber/.test(l) && /in add mode/.test(l))
       && /EDIT mode on an existing record/.test(run.plan),
     () => run.plan.split("\n").filter((l) => /write data|MbContractLastNumber/.test(l)));
+  check("writes-on-open: the page is a question before approval — `data-on-open:main` is open and listed in the plan until the user answers it",
+    () => run.planQuestions.open.join() === "data-on-open:main"
+      && run.plan.split("\n").some((l) => l.startsWith("| 1 | Opening MbContract form page as a new record changes data on the stand")
+        && l.endsWith("| Data written when the page opens | `main` | ⚠ open |")),
+    () => [run.planQuestions, run.plan.split("\n").filter((l) => /Questions before approval|data-on-open|Opening/.test(l))]);
+  const consent = parseDecisionRecords('## D7 — Add-mode checks of the contract page allowed\n- Kind: answer\n- Decided by: user\n'
+    + '- Asked: May the checks open the contract page as a new record?\n- Quote: "yes, once"\n');
+  const answered = runMigration({ ...manifest(golden), planQuestions: [{ id: "data-on-open:main", answer: "D7" }] },
+    { decisions: new Map([["D7", "Add-mode checks of the contract page allowed"]]), decisionRecords: consent });
+  check("writes-on-open: the manifest answers the engine's question by its id — the gap closes, the plan row names the D<N>, and the plan version stays as it was",
+    () => answered.planQuestions.open.length === 0 && answered.planQuestions.issues.length === 0
+      && answered.plan.split("\n").some((l) => l.startsWith("| 1 | Opening MbContract form page") && l.endsWith("| `main` | D7 |"))
+      && answered.planVersion === run.planVersion,
+    () => [answered.planQuestions, answered.planVersion, run.planVersion]);
   check("writes-on-open: a plan without such a page has no such section",
     () => !/Pages that write data when opened/.test(plain.plan) && dataWritingPages(plain).length === 0,
     () => dataWritingPages(plain));

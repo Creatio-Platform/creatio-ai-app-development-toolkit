@@ -10,6 +10,8 @@
 //   - Expectation: <one statement a judge can check on the built page>
 //   - Closes: `<pageKey>#business-rule:<Attribute>`[, …]   (an answer only: the rule attributes the user accepted as
 //     built another way after the plan was approved — see `closedRuleAttributes`)
+//   - Plan question: missed | build-only — <what the build learned>   (an answer given after the plan was approved:
+//     whether discovery could have asked it before approval — see `questionsAfterApproval`)
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
@@ -59,6 +61,7 @@ const FIELD_OF = new Map([
   ["scope", "scope"],
   ["expectation", "expectation"],
   ["closes", "closes"],
+  ["plan question", "planQuestion"],
 ]);
 // The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
 // entries and the same titles.
@@ -107,40 +110,118 @@ export function headingTitle(raw) {
   return String(raw || "").replace(/^[\s—–:.-]+/, "").trim();
 }
 
-// Every `## D<N>` heading entry as `{ id, title, fields }`, in file order. A later heading for the same id
-// replaces the earlier one, the way the decision titles are read. Only heading entries carry provenance: a table
-// row or a plain line has no place for the field lines.
-export function parseDecisionRecords(text) {
-  const byId = new Map();
-  let cur = null;
+// The non-empty value of an `Approved by:` or `Plan version:` line, with or without a list marker, as
+// `["approved by" | "plan version", value]`; null for any other line.
+const APPROVAL_LABELS = new Set(["approved by", "plan version"]);
+function approvalField(line) {
+  const s = line.trimStart();
+  const f = fieldLine(s.startsWith("- ") || s.startsWith("* ") ? s : `- ${s}`);
+  const label = f?.label.toLowerCase();
+  return APPROVAL_LABELS.has(label) && f.value !== "" ? label : null;
+}
+// THE DECISION LOG: every `## D<N>` heading entry as `{ id, title, fields, afterApproval }`, in file order, and
+// whether the plan's approval is recorded (`approved`). A later heading for the same id replaces the earlier one, the
+// way the decision titles are read. Only heading entries carry provenance: a table row or a plain line has no place
+// for the field lines. The approval is the entry that holds both a non-empty `Approved by:` and a `Plan version:`,
+// the rule the build gate applies; `afterApproval` marks an entry that follows the first one.
+export function parseDecisionLog(text) {
+  const log = { byId: new Map(), cur: null, approved: false, entry: new Set() };   // `entry`: the current entry's approval fields
   for (const line of String(text || "").split(/\r?\n/)) {
-    const h = DECISION_HEADING.exec(line);
-    if (h) {
-      cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {} };
-      byId.delete(cur.id);
-      byId.set(cur.id, cur);
-      continue;
-    }
-    if (ANY_HEADING.test(line)) { cur = null; continue; }
-    if (!cur) continue;
-    const f = fieldLine(line);
-    const field = f && FIELD_OF.get(f.label.toLowerCase());
-    if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f.value);
+    if (ANY_HEADING.test(line)) openEntry(log, DECISION_HEADING.exec(line));
+    else readEntryLine(log, line);
   }
-  return [...byId.values()];
+  closeEntry(log);
+  return { records: [...log.byId.values()], approved: log.approved };
+}
+// The entry ends: it was the approval when it held both approval fields.
+function closeEntry(log) {
+  if (log.entry.size === APPROVAL_LABELS.size) log.approved = true;
+  log.entry = new Set();
+}
+// A heading opens an entry; a `D<N>` heading opens a decision record. A later heading for the same id amends the
+// entry, which was decided where it was first recorded.
+function openEntry(log, h) {
+  closeEntry(log);
+  if (!h) { log.cur = null; return; }
+  const id = `D${h[1]}`;
+  const first = log.byId.get(id);
+  log.cur = { id, title: headingTitle(h[2]), fields: {}, afterApproval: first ? first.afterApproval : log.approved };
+  log.byId.delete(id);
+  log.byId.set(id, log.cur);
+}
+function readEntryLine(log, line) {
+  const approval = approvalField(line);
+  if (approval) log.entry.add(approval);
+  if (!log.cur) return;
+  const f = fieldLine(line);
+  const field = f && FIELD_OF.get(f.label.toLowerCase());
+  if (field && !(field in log.cur.fields)) log.cur.fields[field] = cleanValue(field, f.value);
+}
+export const parseDecisionRecords = (text) => parseDecisionLog(text).records;
+
+// THE QUESTIONS ASKED AFTER THE PLAN WAS APPROVED. Every `Kind: answer` entry that follows the approval is a question
+// the build stopped on. Its `Plan question:` line says whether discovery could have asked it before approval:
+// `missed` (it could) or `build-only` with what the build learned that discovery could not (a platform limit met
+// while saving, a fact only the built page shows). An answer without the line is counted as missed, so an
+// unclassified question never hides the gap. `log` is `parseDecisionLog`'s result. `planAnswers` are the D<N> the
+// plan's questions name as their answers (`manifest.planQuestions`): those were asked as plan questions, wherever
+// the log records them.
+//   → `{ approved, questions: [{ id, title, planQuestion, reason }], missed: [ids] }`
+const PLAN_QUESTION_MISSED = "missed";
+export const PLAN_QUESTION_BUILD_ONLY = "build-only";
+export function questionsAfterApproval({ records = [], approved = false } = {}, planAnswers = []) {
+  const asPlan = new Set(planAnswers);
+  const questions = records.filter((r) => r.afterApproval && r.fields.kind === KIND_ANSWER && !asPlan.has(r.id))
+    .map((r) => ({ id: r.id, title: r.title, ...planQuestionValue(r.fields.planQuestion) }));
+  return { approved, questions, missed: questions.filter((q) => q.planQuestion !== PLAN_QUESTION_BUILD_ONLY).map((q) => q.id) };
+}
+// `build-only — <reason>` → `{ planQuestion: "build-only", reason }`; no line → `planQuestion: null` (counted missed).
+// Read by hand, word then separator, so a long value costs one pass.
+const REASON_SEPARATORS = "—–:-";
+function planQuestionValue(raw) {
+  const s = stripTicks(String(raw || ""));
+  const word = /^[a-z-]+/i.exec(s);
+  if (!word) return { planQuestion: null, reason: "" };
+  const rest = stripTicks(s.slice(word[0].length));
+  let i = 0;
+  while (i < rest.length && REASON_SEPARATORS.includes(rest[i])) i++;
+  return { planQuestion: word[0].toLowerCase(), reason: rest.slice(i).trim() };
+}
+// A `Plan question:` line that does not classify the answer: an unknown value, or `build-only` with no reason.
+function planQuestionIssues(r) {
+  if (blank(r.fields?.planQuestion)) return [];
+  const { planQuestion, reason } = planQuestionValue(r.fields.planQuestion);
+  if (planQuestion !== PLAN_QUESTION_MISSED && planQuestion !== PLAN_QUESTION_BUILD_ONLY) {
+    return [`\`Plan question: ${r.fields.planQuestion}\` is not \`${PLAN_QUESTION_MISSED}\` or \`${PLAN_QUESTION_BUILD_ONLY} — <what the build learned>\``];
+  }
+  if (planQuestion === PLAN_QUESTION_BUILD_ONLY && !reason) {
+    return [`\`Plan question: ${PLAN_QUESTION_BUILD_ONLY}\` needs the reason — what the build learned that discovery could not`];
+  }
+  return [];
 }
 
-// The records of `<migrationDir>/decisions.md`; none when the file is absent. Any other read failure is thrown: a
+// The log of `<migrationDir>/decisions.md`; an empty one when the file is absent. Any other read failure is thrown: a
 // decisions.md that exists but cannot be read would otherwise drop every directive in it without a word.
-export function readDecisionRecords(migrationDir) {
+export function readDecisionLog(migrationDir) {
   let text;
   try {
     text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
   } catch (e) {
-    if (e?.code === "ENOENT") return [];
+    if (e?.code === "ENOENT") return { records: [], approved: false };
     throw e;
   }
-  return parseDecisionRecords(text);
+  return parseDecisionLog(text);
+}
+export const readDecisionRecords = (migrationDir) => readDecisionLog(migrationDir).records;
+
+// What keeps a `D<N>` a manifest entry names from resolving, or null: not shaped `D<N>`, no decisions.md read (none
+// is required in a mode that sets `decisionsOptional`), or an id decisions.md does not hold. `decisions` is the id →
+// title Map of decisions.md.
+export const DECISION_ID = /^D\d+$/;
+export function decisionRefProblem(d, { decisions, decisionsOptional }) {
+  if (typeof d !== "string" || !DECISION_ID.test(d)) return "is not a D<N>";
+  if (!decisions) return decisionsOptional ? null : "cannot be resolved: no decisions.md was read — plan with `--out` into the migration folder that holds decisions.md";
+  return decisions.has(d) ? null : "does not resolve to an entry in decisions.md";
 }
 
 // `Scope: main, typed:Product` → ["main", "typed:Product"]. Commas separate keys; backticks around a key are
@@ -216,7 +297,7 @@ export function orchestratorDecisions(records) {
     .map((r) => ({ id: r.id, title: r.title }));
 }
 
-const blank = (v) => typeof v !== "string" || v.trim() === "";
+export const blank = (v) => typeof v !== "string" || v.trim() === "";
 // Does the entry use the provenance format at all? An older entry may carry a free-text `Decided by:` (a person's
 // name) and nothing else; it is a plain decision, and its value is not checked against `user` / `orchestrator`.
 const usesProvenance = (f) => ["kind", "quote", "asked", "scope", "expectation"].some((k) => !blank(f[k]));
@@ -265,6 +346,7 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r),
+    ...planQuestionIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }
