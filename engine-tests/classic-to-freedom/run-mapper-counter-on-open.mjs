@@ -1,4 +1,4 @@
-// A NUMBER TAKEN ON OPEN THAT THE WALK DID NOT SEE (ENG-107721, reopened after the 2026-11 retest). On a two-layer
+// A NUMBER TAKEN ON OPEN THAT THE WALK DID NOT SEE. On a two-layer
 // Classic card the top layer's onEntityInitialized only subscribed to a message and called callParent, and the base
 // layer's onEntityInitialized wrote the counter's system settings and took the next number. The walk read only the
 // effective body, so the plan did not list the page, an add-mode browser check consumed a number and moved a system
@@ -65,7 +65,7 @@ export function runCounterOnOpenChecks({ check, runMigration, checklistOpts, CLE
       && planLines.some((l) => /callParent \(UsrSubscriptionBase\)/.test(l) && /UsrSubscriptionLastNumber/.test(l) && /in add mode/.test(l)),
     () => planLines.filter((l) => /UsrSubscription/.test(l)));
   check("counter-on-open: the plan carries the build rule for the number taken on open — on save, on the server, or the user's decision to keep it",
-    () => planLines.some((l) => /^\*\*Build rule — a number taken on open \(`main`\):\*\*/.test(l) && /SAVED, on the server/.test(l)
+    () => planLines.some((l) => l.startsWith("**Build rule — a number taken on open (`main`):**") && /SAVED, on the server/.test(l)
       && /Client counter kept: <page key>/.test(l)),
     () => planLines.filter((l) => /Build rule/.test(l)));
   const queriesOnly = runMigration(manifest({ schemas: [{ pkg: "UsrPkg", body: page("UsrLogPage",

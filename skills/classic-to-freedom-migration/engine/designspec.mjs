@@ -3445,7 +3445,7 @@ function dataWritingPlanLines(pages) {
       + " A page that writes every time it opens is not opened at all without that consent.", "",
     ...dataWriteBullets(pages), "",
     ...(counters.length ? [
-      `**Build rule — a number taken on open (${counters.map((p) => `\`${esc(p.pageKey)}\``).join(", ")}):** ${COUNTER_RULE}`
+      `**Build rule — a number taken on open (${counters.map((p) => "`" + esc(p.pageKey) + "`").join(", ")}):** ${COUNTER_RULE}`
         + " Keeping the Classic behaviour is the user's call: ask it with the browser question, and record a yes as"
         + ` \`${COUNTER_KEPT_FIELD} <page key> (user: "<their words>")\` in \`worklog.md\`.`, ""] : [])];
 }

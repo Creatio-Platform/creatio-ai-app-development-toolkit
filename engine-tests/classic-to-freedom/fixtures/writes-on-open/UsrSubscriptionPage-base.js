@@ -1,4 +1,4 @@
-// The base layer of a two-layer Classic card from the 2026-11 retest, anonymised: in add or copy mode its
+// The base layer of a two-layer Classic card, anonymised from a customer section: in add or copy mode its
 // onEntityInitialized reads the last generation date, resets the counter on a new day and takes the next number.
 // The top layer (UsrSubscriptionPage-top.js) overrides onEntityInitialized and only reaches this body through callParent.
 define("UsrSubscriptionPage", [], function() {

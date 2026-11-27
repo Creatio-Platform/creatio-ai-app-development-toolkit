@@ -2351,8 +2351,8 @@ function buildCallerIndex(methods) {
 // hop away (`onEntityInitialized → mbAssignNumber`) is found where it writes.
 // A body that calls `this.callParent` runs the client layer below it too, so the
 // walk reads that layer's body as well: a top layer whose `onEntityInitialized`
-// only subscribes to a message and calls `callParent` hid the counter its base
-// layer wrote (a customer Subscription page, 2026-11 retest).
+// only subscribes to a message and calls `callParent` would otherwise hide the
+// counter its base layer writes.
 // ---------------------------------------------------------------------------
 const OPEN_HOOKS = ["init", "onEntityInitialized", "onRender"];
 
@@ -2378,17 +2378,22 @@ function walkFromHook(hook, byName, found, visited) {
     visited.add(`${name}|${addMode}`);
     // The add-mode branch of an upper body holds its `callParent` too: the layer below then runs for a new card only.
     let layerMode = addMode;
-    for (const [i, { pkg, facts: f }] of bodiesRun(byName.get(name)).entries()) {
-      const path = i === 0 ? pathTo : [...pathTo, `callParent (${pkg})`];
-      keepWrites(found, { hook, path, method: name, layer: i === 0 ? null : pkg, addMode: layerMode, writes: f.dataWrites || [] });
-      const guarded = new Set(f.addModeOnlyCalls || []);
-      for (const c of f.calls) {
-        const next = internalCallTarget(c);
-        if (next && byName.has(next)) queue.push({ pathTo: [...path, next], addMode: layerMode || guarded.has(c) });
-      }
-      layerMode = layerMode || f.calls.some((c) => CALL_PARENT_RX.test(c) && guarded.has(c));
+    for (const [i, layer] of bodiesRun(byName.get(name)).entries()) {
+      layerMode = walkBody({ hook, name, pathTo, layer: i === 0 ? null : layer.pkg, facts: layer.facts, addMode: layerMode },
+        byName, found, queue);
     }
   }
+}
+// One body of the method: keep its writes, queue the page methods it calls, and return the mode the layer below runs in.
+function walkBody({ hook, name, pathTo, layer, facts: f, addMode }, byName, found, queue) {
+  const path = layer ? [...pathTo, `callParent (${layer})`] : pathTo;
+  keepWrites(found, { hook, path, method: name, layer, addMode, writes: f.dataWrites || [] });
+  const guarded = new Set(f.addModeOnlyCalls || []);
+  for (const c of f.calls) {
+    const next = internalCallTarget(c);
+    if (next && byName.has(next)) queue.push({ pathTo: [...path, next], addMode: addMode || guarded.has(c) });
+  }
+  return addMode || f.calls.some((c) => CALL_PARENT_RX.test(c) && guarded.has(c));
 }
 // The bodies one call of a method runs, top layer first: the effective body and, while a body calls `this.callParent`,
 // the client layer below it. A base-template layer ends the chain: its bodies are layout context, not this page's code.
