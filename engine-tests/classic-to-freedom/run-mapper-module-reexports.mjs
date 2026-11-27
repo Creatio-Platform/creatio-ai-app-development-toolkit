@@ -58,11 +58,24 @@ export function runModuleReexportChecks({ check, verifyCtx, resolveVk, FIX }) {
   const ANCHOR = 'const NOTE_ENTITY = "MbDeliveryNote";';
   const exportedAs = (decl) => edit(edit(src[DELIVERY], RECORDED, "applyNewNoteDate,"), ANCHOR, `${ANCHOR}\n\t${decl}`);
   const sources = [exportedAs("const applyNewNoteDate = shared.applyNewNoteDate;"), exportedAs("const { applyNewNoteDate } = shared;"),
-    edit(src[DELIVERY], RECORDED, "applyNewNoteDate: other.applyNewNoteDate,"), exportedAs("const { applyNewNoteDate } = other;")];
+    edit(src[DELIVERY], RECORDED, "applyNewNoteDate: other.applyNewNoteDate,"), exportedAs("const { applyNewNoteDate } = other;"),
+    edit(src[DELIVERY], RECORDED, 'applyNewNoteDate: shared["applyNewNoteDate"],'), edit(src[DELIVERY], RECORDED, "applyNewNoteDate: shared.ns.applyNewNoteDate,")];
   const shapes = sources.map((s) => rowOf(DN, ctxOf(DN, withDelivery(s)))[0]);
-  check("module re-exports: `const applyNewNoteDate = shared.applyNewNoteDate` and `const { applyNewNoteDate } = shared` exported by name read ✅; the same taken off `other` (no import of that name) reads ⚠",
-    () => shapes.join() === ["✅ Done", "✅ Done", "⚠ verify", "⚠ verify"].join(),
+  check("module re-exports: `const applyNewNoteDate = shared.applyNewNoteDate`, `const { applyNewNoteDate } = shared` and the literal key `shared[\"applyNewNoteDate\"]` read ✅; the same taken off `other` (no import of that name) or two members deep (`shared.ns.applyNewNoteDate`) reads ⚠",
+    () => shapes.join() === ["✅ Done", "✅ Done", "⚠ verify", "⚠ verify", "✅ Done", "⚠ verify"].join(),
     () => shapes);
+
+  // A name that only holds a reference is a module function only as far as something calls it: a local alias inside
+  // a function no handler reaches, or a key of a request config, is never credited; the same local alias called from
+  // a function a handler reaches is.
+  const POST = "\t\treturn shared.postNoteWithHistory(request, NOTE_ENTITY);";
+  const nested = edit(src[DELIVERY], POST, "\t\tconst helper = shared.applyNewNoteDate;\n\t\tconst config = {cfg: shared.APPROVAL_PROCESS_NAME};\n" + POST);
+  const nestedCalled = edit(src[DELIVERY], POST, "\t\tconst helper = shared.applyNewNoteDate;\n\t\thelper(request.$context);\n" + POST);
+  const probe = (moduleSrc, name) => resolveVk(portedVk(`${DELIVERY}.${name}`), ctxOf(DN, withDelivery(moduleSrc)))[0];
+  const nestedShapes = [probe(nested, "helper"), probe(nested, "cfg"), probe(nestedCalled, "helper")];
+  check("module re-exports: a local `const helper = shared.applyNewNoteDate` that nothing calls and a request-config key `cfg: shared.APPROVAL_PROCESS_NAME` read ⚠ as `Ported as` symbols; the local alias called from `postDeliveryNote`, which the Post handler reaches, reads ✅",
+    () => nestedShapes.join() === ["⚠ verify", "⚠ verify", "✅ Done"].join(),
+    () => nestedShapes);
 
   // The request-fired check follows a re-export too: the Post button fires `mb.MbPostButtonClicked`, whose handler is
   // pointed at `deliveryNotePage.startApproval`, a re-export of the shared `startApprovalProcess`, which sends
