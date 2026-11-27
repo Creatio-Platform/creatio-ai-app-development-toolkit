@@ -885,7 +885,7 @@ function spare() { return 1; }`, "{ CLOSED, spare }") });
     const guidList = valuesOf("const CLOSED = [\"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\", \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5c\"];",
       "const DONE = [\"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5b\", \"3a8b2f10-1c2d-4e5f-8a9b-0c1d2e3f4a5c\"];");
     check("shared values: a list of record ids is reported by the record-id check, once per id — not a second time as a list",
-      () => guidList.length === 2 && guidList.every((t) => /^`3a8b2f10/.test(t)), () => guidList);
+      () => guidList.length === 2 && guidList.every((t) => t.startsWith("`3a8b2f10")), () => guidList);
   }
 
   const src = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/quality.mjs", import.meta.url), "utf8");
