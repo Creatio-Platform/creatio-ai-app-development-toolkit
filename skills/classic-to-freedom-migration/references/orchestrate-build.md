@@ -674,7 +674,8 @@ request a page handler hands to the module (a Run-process card action whose butt
 `contractPage.startApproval(…)`, which sends `crt.RunBusinessProcessRequest`) and for a `Ported as` record that names
 a function of a module the page does not import itself (`contractAmount.recalculateContractAmount(…)` called from
 the page's own module). Only the module functions a handler calls count, then the functions they call in turn, in
-their own module or in a module that module imports, page → module → module; an import cycle is walked once.
+their own module or in a module that module imports, page → module → module; an import cycle is walked once, and
+a re-export (`applyNewNoteDate: shared.applyNewNoteDate`) is followed like a call.
 Without a file on that path, the row stays open and names the file to add. A `Ported as` record that names a
 function the page's handlers call directly needs no module file: the page's `deps` and `args` are enough.
 
