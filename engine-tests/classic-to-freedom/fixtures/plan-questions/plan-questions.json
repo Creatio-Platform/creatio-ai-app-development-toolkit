@@ -1,0 +1,37 @@
+[
+  {
+    "id": "outside-package:line-type-dropdowns",
+    "kind": "outside-package",
+    "question": "Billing type and Purchase type on a product line open a selection window. Show them as dropdowns instead? Both fields are defined in package UsrBillingBase, so the change is made there and applies on every page that shows them.",
+    "pages": ["child:UsrProductLine"],
+    "answer": "D9"
+  },
+  {
+    "id": "behaviour:usage-limit-editing",
+    "kind": "behaviour",
+    "question": "The usage-limit page locks its fields for everyone, while the usage-limit list let users with the \"Change usage limits\" right edit promotional limits. Which should the new page follow?",
+    "pages": ["child:UsrUsageLimit"],
+    "answer": "D10"
+  },
+  {
+    "id": "behaviour:usage-limit-opening",
+    "kind": "behaviour",
+    "question": "Usage limits are edited inside the list today and nothing opens a usage-limit page. Keep editing in the list, or open each limit in its own page?",
+    "pages": ["child:UsrUsageLimit"],
+    "answer": "D11"
+  },
+  {
+    "id": "behaviour:step-parameters-editable",
+    "kind": "behaviour",
+    "question": "The process page shows Order, Request and Account at the top, and the Classic step lets the user change them. Keep them editable, or show them read-only?",
+    "pages": ["main"],
+    "answer": "D12"
+  },
+  {
+    "id": "behaviour:product-list-lock",
+    "kind": "behaviour",
+    "question": "The product-line page locks single fields by order status. In the products list on the process page a cell cannot be locked per row: lock the whole list, open each line in its page instead of editing in the list, or both?",
+    "pages": ["main", "child:UsrProductLine"],
+    "answer": "D13"
+  }
+]

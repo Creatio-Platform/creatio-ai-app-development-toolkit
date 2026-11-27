@@ -35,7 +35,8 @@
 //     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
 //                        // `"<pageKey>#business-rule:<Attribute>": { status: "built-elsewhere", decision: "D<N>" }` closes one business-rule target attribute the user accepted as built another way; D<N> needs `Decided by: user` and a `Quote:`
 //     "createdApp": { primaryPackage }, // optional; the package create-app made, recorded after scaffolding. `--verify` compares built pages and RelatedPage add-ons against it (`packageNameOf`); outside the plan version
-//     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry or this list
+//     "decisionsWithoutDeliverable": ["D<N>", …] // optional; the decisions.md entries that close no deliverable (see noDeliverableIssues). Before the first dispatch every D<N> must be cited by a status, a task `decisions:` entry, a plan question's answer or this list
+//     "planQuestions": [{ id, kind, question, pages?, answer?: "D<N>" }, …] // optional; the questions only the user can answer that the build will need, asked before approval (see plan-questions.mjs). An open one is a plan gap in `--plan` and `--tasks`; outside the plan version
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
 // THE PLAN VERSION: `--plan` prints `**Plan version:** \`plan-<hash>\`` in its Overview — a deterministic hash over
@@ -66,7 +67,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
+  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, dataWritingPages } from "./designspec.mjs";
+import { planQuestionsOf, dataOnOpenQuestion, planQuestionAnswers } from "./plan-questions.mjs";
 import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
@@ -1159,6 +1161,8 @@ export function checklistOpts(manifest, opts = {}) {
     decisionsOptional: opts.decisionsOptional === true,
     // Root-only, like the plan's `### Won't do` list it is printed in.
     decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
+    // The D<N> a plan question's answer names: the plan shows the question it answers, so it is accounted for.
+    planQuestionAnswers: planQuestionAnswers(manifest.planQuestions),
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     // The package create-app made, recorded after scaffolding: `--verify` compares built pages against it
@@ -3083,7 +3087,10 @@ const answeredRuleStatuses = (records) => Object.fromEntries(closedRuleAttribute
   .map(({ key, decision }) => [key, { status: STATUS_BUILT_ELSEWHERE, decision }]));
 // `createdApp` is what create-app made (`packageNameOf` in designspec.mjs): a stand fact recorded after the approval,
 // never a plan choice, so recording it leaves the approved version as it was.
-const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules", "createdApp"]);
+// `planQuestions` holds the user's answers to the plan, recorded in decisions.md as they are given; an answer changes
+// the build only through the manifest entries it leads to (a deliverable status, a member disposition, placement),
+// which the version covers. Recording one must not move the version the user approves with it.
+const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules", "createdApp", "planQuestions"]);
 // A process step's `consent` is the user's answer to the plan, given in the same answer as the approval and recorded
 // after it, so it stays out like the approval entry: recording it must not move the version it answers.
 function withoutStepConsent(processPage) {
@@ -3693,6 +3700,12 @@ export function runMigration(manifest, opts = {}) {
     out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
     out.noDeliverableIssues = noDeliverableIssues(manifest.decisionsWithoutDeliverable, specOpts);
     out.provenanceIssues = provenanceIssues(decisionRecords, publishedPageKeys(planGroups));
+    // The questions only the user can answer, the engine's own (pages that write data when opened) included.
+    const asked = planQuestionsOf({ entries: manifest.planQuestions, derived: dataWritingPages(out).map(dataOnOpenQuestion),
+      decisions: specOpts.decisions, provenance: specOpts.decisionProvenance, optional: specOpts.decisionsOptional });
+    out.planQuestions = asked.questions;
+    out.planQuestionsOpen = asked.open;
+    out.planQuestionIssues = asked.issues;
   }
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
@@ -5391,8 +5404,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ DELIVERABLE STATUS — a planning decision the plan cannot apply, or a marker item that does not stand.
   // A decisions.md entry whose provenance does not stand (a user decision with no quote, a directive with no
   // page to land on) is the same kind of planning input the plan cannot apply.
+  // A plan question nobody has answered yet, or an entry that cannot stand, is the same: the plan is not approvable.
   const statusBad = (result.statusIssues || []).length > 0 || (result.noDeliverableIssues || []).length > 0
-    || (result.provenanceIssues || []).length > 0;
+    || (result.provenanceIssues || []).length > 0 || (result.planQuestionIssues || []).length > 0
+    || (result.planQuestionsOpen || []).length > 0;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || statusBad || verifyIncomplete
     || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
@@ -5464,6 +5479,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (listGateBad) process.stderr.write("migrate.mjs: ⛔ LIST GATE BLOCKED — the list page is NOT approvable (the form page may still be). " + result.listGate.reasons.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
+  if ((result.planQuestionsOpen || []).length || (result.planQuestionIssues || []).length) {
+    process.stderr.write(`migrate.mjs: ⛔ PLAN QUESTIONS — ${planGaps(result).filter((g) => /plan question|planQuestions/.test(g)).join(" · ")}.`
+      + " Ask the open ones before approval, the independent ones together, then re-run.\n");
+  }
   if (orphanEvidence.length) {
     const named = orphanEvidence.slice(0, 6).map((k) => "`" + k + "`").join(" | ");
     const more = orphanEvidence.length > 6 ? " | …and " + (orphanEvidence.length - 6) + " more (see the table)" : "";

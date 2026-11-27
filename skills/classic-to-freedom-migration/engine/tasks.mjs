@@ -5050,11 +5050,11 @@ function citedDirectives(rows) {
   return (rows || []).map((r) => parseDirectiveRowId(r.deliverableId)?.id).filter(Boolean);
 }
 // The `D<N>` entries of `decisions` (the Map from readDecisions) that nothing cites: no task `decisions:` entry,
-// no `deliverableStatus` entry, no `withoutDeliverable` item and no directive row. `{ id, title }` in file order;
-// `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
+// no `deliverableStatus` entry, no `withoutDeliverable` item, no plan question's answer and no directive row.
+// `{ id, title }` in file order; `Adjustment N` keys are never returned. A directive is cited by the rows that carry it to a builder, so a
 // directive whose scope reached no task stays unaccounted and the first dispatch is refused.
-export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [] } = {}) {
-  const cited = new Set(Array.isArray(withoutDeliverable) ? withoutDeliverable : []);
+export function unaccountedDecisions(decisions, { tasks = [], deliverableStatus = {}, withoutDeliverable = [], planQuestionAnswers = [] } = {}) {
+  const cited = new Set([...(Array.isArray(withoutDeliverable) ? withoutDeliverable : []), ...planQuestionAnswers]);
   for (const e of Object.values(deliverableStatus || {})) if (typeof e?.decision === "string") cited.add(e.decision);
   for (const t of tasks) {
     if (t.unread) continue;
@@ -5096,7 +5096,7 @@ function openDeliverableKeys(tasks) {
 function decisionRefusal(merged, dir, opts) {
   if (!opts.refuseUnaccounted || !firstDispatchPending(dir, merged.tasks)) return null;
   const open = unaccountedDecisions(opts.decisions, { tasks: merged.tasks, deliverableStatus: opts.deliverableStatus,
-    withoutDeliverable: opts.decisionsWithoutDeliverable });
+    withoutDeliverable: opts.decisionsWithoutDeliverable, planQuestionAnswers: opts.planQuestionAnswers || [] });
   if (!open.length) return null;
   return { problems: open.map((d) => `${d.id} — ${d.title}`), openDeliverables: openDeliverableKeys(merged.tasks) };
 }

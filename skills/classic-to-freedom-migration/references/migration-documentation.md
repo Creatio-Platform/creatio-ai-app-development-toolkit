@@ -298,7 +298,21 @@ without them is a plain decision and reads exactly as before.
   those pages. A directive whose scope names no published page makes the plan incomplete: it would reach no
   builder.
 - **`Kind: answer`** — the user's reply to a question you asked, an answer outside the offered options
-  included. It needs `Quote:` and `Asked:`.
+  included. It needs `Quote:` and `Asked:`. An answer to a plan question is named by its `D<N>` as the
+  question's `answer` in `manifest.planQuestions`.
+- **`Plan question:`** — on an answer given AFTER the plan's approval: `missed` when discovery could have asked
+  it before the approval, or `build-only — <what the build learned>` when only the build could raise it. Any
+  other value, or `build-only` without the reason, makes the plan incomplete. The migration result counts the
+  answers after the approval and how many were missed; one without the line counts as missed.
+
+  ```markdown
+  ## D17 — Usage limits open in their own page
+  - Kind: answer
+  - Decided by: user
+  - Asked: Keep editing limits in the list, or open each in its own page?
+  - Quote: "open them in a page"
+  - Plan question: missed
+  ```
 - **`Decided by: user`** always needs `Quote:` — the user's words, not your summary of them. A choice the user
   did not state in words is yours: record it `Decided by: orchestrator`. Never fold your own addition into the
   user's entry; it is a new question before the build, or its own orchestrator entry.

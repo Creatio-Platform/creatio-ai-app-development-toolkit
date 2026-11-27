@@ -10,6 +10,8 @@
 //   - Expectation: <one statement a judge can check on the built page>
 //   - Closes: `<pageKey>#business-rule:<Attribute>`[, …]   (an answer only: the rule attributes the user accepted as
 //     built another way after the plan was approved — see `closedRuleAttributes`)
+//   - Plan question: missed | build-only — <what the build learned>   (an answer given after the plan was approved:
+//     whether discovery could have asked it before approval — see `questionsAfterApproval`)
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
@@ -59,6 +61,7 @@ const FIELD_OF = new Map([
   ["scope", "scope"],
   ["expectation", "expectation"],
   ["closes", "closes"],
+  ["plan question", "planQuestion"],
 ]);
 // The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
 // entries and the same titles.
@@ -128,6 +131,62 @@ export function parseDecisionRecords(text) {
     if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f.value);
   }
   return [...byId.values()];
+}
+
+// THE QUESTIONS ASKED AFTER THE PLAN WAS APPROVED. Every `Kind: answer` entry that follows the first approval entry
+// (a `## ` entry with a non-empty `Approved by:` line) is a question the build stopped on. Its `Plan question:` line
+// says whether discovery could have asked it before approval: `missed` (it could) or `build-only` with what the
+// build learned that discovery could not (a platform limit met while saving, a fact only the built page shows). An
+// answer without the line is counted as missed, so an unclassified question never hides the gap.
+//   → `{ approved, questions: [{ id, title, planQuestion, reason }], missed: [ids] }`
+export const PLAN_QUESTION_MISSED = "missed";
+export const PLAN_QUESTION_BUILD_ONLY = "build-only";
+export function questionsAfterApproval(text) {
+  let approved = false;
+  let entry = null;
+  const questions = [];
+  const close = () => {
+    if (!entry) return;
+    if (entry.approval) approved = true;
+    else if (approved && entry.id && entry.fields.kind === KIND_ANSWER) questions.push(classify(entry));
+  };
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (ANY_HEADING.test(line)) {
+      close();
+      const h = DECISION_HEADING.exec(line);
+      entry = { id: h ? `D${h[1]}` : null, title: h ? headingTitle(h[2]) : "", fields: {}, approval: false };
+      continue;
+    }
+    const f = entry && fieldLine(line);
+    if (!f) continue;
+    const label = f.label.toLowerCase();
+    if (label === "approved by" && f.value !== "") entry.approval = true;
+    const field = FIELD_OF.get(label);
+    if (field && !(field in entry.fields)) entry.fields[field] = cleanValue(field, f.value);
+  }
+  close();
+  return { approved, questions, missed: questions.filter((q) => q.planQuestion !== PLAN_QUESTION_BUILD_ONLY).map((q) => q.id) };
+}
+// `build-only — <reason>` → `{ planQuestion: "build-only", reason }`; no line → `planQuestion: null` (counted missed).
+function classify(entry) {
+  const { kind, reason } = planQuestionValue(entry.fields.planQuestion);
+  return { id: entry.id, title: entry.title, planQuestion: kind, reason };
+}
+function planQuestionValue(raw) {
+  const m = /^`?([a-z-]+)`?\s*(?:[—–:-]+\s*)?(.*)$/i.exec(String(raw || "").trim());
+  return m ? { kind: m[1].toLowerCase(), reason: m[2].trim() } : { kind: null, reason: "" };
+}
+// A `Plan question:` line that does not classify the answer: an unknown value, or `build-only` with no reason.
+function planQuestionIssues(r) {
+  if (blank(r.fields?.planQuestion)) return [];
+  const { kind, reason } = planQuestionValue(r.fields.planQuestion);
+  if (kind !== PLAN_QUESTION_MISSED && kind !== PLAN_QUESTION_BUILD_ONLY) {
+    return [`\`Plan question: ${r.fields.planQuestion}\` is not \`${PLAN_QUESTION_MISSED}\` or \`${PLAN_QUESTION_BUILD_ONLY} — <what the build learned>\``];
+  }
+  if (kind === PLAN_QUESTION_BUILD_ONLY && !reason) {
+    return [`\`Plan question: ${PLAN_QUESTION_BUILD_ONLY}\` needs the reason — what the build learned that discovery could not`];
+  }
+  return [];
 }
 
 // The records of `<migrationDir>/decisions.md`; none when the file is absent. Any other read failure is thrown: a
@@ -265,6 +324,7 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r),
+    ...planQuestionIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }

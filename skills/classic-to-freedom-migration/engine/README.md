@@ -302,7 +302,8 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
      non-empty `Approved by:` field, or the last `Route:` line of `worklog.md` names none of `agent` · `codex` ·
      `copilot` · `inline` (`Route: TBD` is no route);
   4. the folder refresh `--next` would refuse — before the first dispatch, a `D<N>` in `decisions.md` that no
-     deliverable status, task `decisions:` entry, `decisionsWithoutDeliverable` item or directive row cites;
+     deliverable status, task `decisions:` entry, `decisionsWithoutDeliverable` item, plan question's `answer` or
+     directive row cites;
   5. `--next` would answer `ledger` or `stuck` (it exits 2 on both): the same answer follows the header, and the
      same stderr gate is raised.
 
@@ -557,9 +558,28 @@ under the same rule as `deliverableStatus`), and an item a `wont-do` status also
 no task with an `agentNonce` or a sub-agent outcome (`built`, `not-built`, or `not-applicable` on a row the plan did
 not mark `na`), and no `timings.json` record (one that does not parse counts as a dispatch) — `--tasks` (the cut, a re-sync, `--start`, `--next`) refuses (`unaccounted-decisions`, exit 2, nothing
 written) while a `D<N>` in decisions.md is cited by no `deliverableStatus` entry, no task `decisions:` entry, no
-item of this list and no directive row (`directive:D<N>:…`, which a `Kind: directive` entry puts on every page in
-its scope). The refusal names each `D<N>` with its title, the entry shape for each remedy and the open
-deliverable ids per page. `Adjustment N` keys are not checked. `--decide` and `--revoke` never run the check.
+item of this list, no plan question's `answer` and no directive row (`directive:D<N>:…`, which a `Kind: directive`
+entry puts on every page in its scope). The refusal names each `D<N>` with its title, the entry shape for each
+remedy and the open deliverable ids per page. `Adjustment N` keys are not checked. `--decide` and `--revoke` never
+run the check.
+
+**Questions before approval (`manifest.planQuestions`, `plan-questions.mjs`).** The questions only the user can
+answer that the build will need: `[{ id, kind, question, pages?, answer? }]`, `kind` one of `behaviour` ·
+`outside-package` · `object-wide` · `data-on-open`, `answer` the `D<N>` of the user's own answer (`Kind: answer`,
+`Decided by: user`, `Quote:`). The engine adds `data-on-open:<pageKey>` for every page that writes data when it
+opens; the manifest answers it with `{ id, answer }`. The plan lists them under `### Questions before approval`.
+In `--plan` and `--tasks` an open question is a plan gap (`N plan question(s) OPEN`, exit 2, stderr
+`⛔ PLAN QUESTIONS`), and so is an entry that cannot stand (`planQuestions INVALID`: a kind outside the four, no
+question, an id twice, an answer that is not a `D<N>`, that decisions.md does not hold, or that is not the user's
+own, a `data-on-open:` id for a page that writes nothing); other modes list them without a gap. The key is
+outside the plan version: an answer reaches the build through the manifest entries it leads to.
+
+**Questions after approval (`Plan question:`).** Every `Kind: answer` entry of decisions.md that follows the first
+`## ` entry with a non-empty `Approved by:` is a question the build stopped on (`questionsAfterApproval` in
+`directives.mjs`). Its `Plan question:` line is `missed` or `build-only — <what the build learned>`; any other
+value, or `build-only` with no reason, is a provenance problem. The migration result lists them under
+`## Questions after plan approval (N)` with `Missed plan questions: M of N` (an answer without the line counts as
+missed) and returns `counts.missedPlanQuestions` — null when no approval is recorded.
 
 **Two cards, when the body lives elsewhere.** Any row whose behaviour is defined outside the scope that owns it is
 described twice — a `mixin:` member or the method wiring one in, a method assigned from another module

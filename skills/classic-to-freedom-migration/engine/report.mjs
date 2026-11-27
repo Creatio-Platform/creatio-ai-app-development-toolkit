@@ -28,7 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
-import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
+import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle, questionsAfterApproval, PLAN_QUESTION_BUILD_ONLY } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
   worklogFieldValues, addModeChecks, STAND_DATA_FIELD, STAND_DATA_MARKER,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
@@ -805,6 +805,35 @@ function decidedWithoutYouFor(dir) {
     return ["## Decided without you", "", `⚠ decisions.md could not be read (${esc(e.message)}), so the choices the agent made without asking are not listed.`];
   }
 }
+// THE QUESTIONS THE BUILD STOPPED ON: every answer decisions.md records after the plan's approval
+// (`questionsAfterApproval`), with the count of those discovery could have asked before it. A build-time question
+// costs a wait for a person and the rework of what was built without the answer, so the count is the gap between
+// the plan and the build. Nothing for a run whose plan approval is not recorded.
+function questionsAfterApprovalSection({ approved, questions, missed }) {
+  if (!approved) return [];
+  if (!questions.length) return ["## Questions after plan approval (0)", "", "None: the build asked nothing the approved plan had not."];
+  const how = (q) => {
+    if (q.planQuestion === PLAN_QUESTION_BUILD_ONLY) return `build-only — ${cell(q.reason)}`;
+    return q.planQuestion ? "missed" : "missed (no `Plan question:` line)";
+  };
+  return [`## Questions after plan approval (${questions.length})`, "",
+    `**Missed plan questions: ${missed.length} of ${questions.length}.** Discovery could have asked them before the plan was approved; each one stopped the build to wait for an answer. \`build-only\` names what only the build could learn.`, "",
+    "| Decision | Question | Plan question |", "| --- | --- | --- |",
+    ...questions.map((q) => `| ${esc(q.id)} | ${cell(q.title || "?")} | ${how(q)} |`)];
+}
+// The section for the decisions.md above the task folder `dir`, and the missed count (null without an approval).
+function questionsAfterApprovalFor(dir) {
+  if (!dir) return { lines: [], missed: null };
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dir, "..", "decisions.md"), "utf8");
+  } catch (e) {
+    if (e?.code === "ENOENT") return { lines: [], missed: null };
+    return { lines: ["## Questions after plan approval", "", `⚠ decisions.md could not be read (${esc(e.message)}), so the questions asked after the plan's approval are not counted.`], missed: null };
+  }
+  const asked = questionsAfterApproval(text);
+  return { lines: questionsAfterApprovalSection(asked), missed: asked.approved ? asked.missed.length : null };
+}
 function carryOverSection(items, pageName) {
   if (!items.length) return [];
   const L = [`## Carry-over — postponed items (${items.length})`, "",
@@ -946,6 +975,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
   const withoutYou = decidedWithoutYouFor(dir);
+  const afterApproval = questionsAfterApprovalFor(dir);
   const browser = browserSection(exercise, pageName, browserAnswer);
   const standData = standDataSection(result, tasks, dir ? answerRead : { unread: "no task folder was given" }, pageName);
   let sec = 3;
@@ -962,6 +992,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName, declined),
     ...(carryOver.length ? ["", ...carryOver] : []),
     ...(withoutYou.length ? ["", ...withoutYou] : []),
+    ...(afterApproval.lines.length ? ["", ...afterApproval.lines] : []),
     ...(browser.length ? ["", ...browser] : []),
     ...(standData.length ? ["", ...standData] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
@@ -971,5 +1002,5 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
     unexercisedPages: unexercised.map((p) => pageName(p.pageKey)), browserAnswerUnread: browserAnswer.unread,
     counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount,
-      unexercised: unexercised.length, capBreaches: exercise.capBreaches.length } };
+      unexercised: unexercised.length, capBreaches: exercise.capBreaches.length, missedPlanQuestions: afterApproval.missed } };
 }

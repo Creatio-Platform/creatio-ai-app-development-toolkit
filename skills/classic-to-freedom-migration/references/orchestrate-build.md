@@ -159,9 +159,11 @@ post-save check):
 plan has a **Pages that write data when opened** section, every browser check of the run opens those pages only
 in EDIT mode on an existing record, and each task file of such a page says so. Opening one in add mode (or, for a
 page listed as writing *every time it opens*, at all) consumes stand data — the benchmark Contracts page takes the
-next `MbContractLastNumber` each time. So, in the same message as the browser question, list those pages and ask
-the user whether an add-mode check of any of them is wanted. Record each page the user agrees to as ONE line in
-`worklog.md`, starting with the page KEY the plan's list prints in backticks:
+next `MbContractLastNumber` each time. The plan asked this already: each such page is a `data-on-open:<page key>`
+row under **Questions before approval**, answered before the approval. Carry each page the user agreed to into
+`worklog.md` from that answer; ask here, in the same message as the browser question, only about a page the plan
+did not list. Record each page the user agrees to as ONE line in `worklog.md`, starting with the page KEY the
+plan's list prints in backticks:
 
 - `Add-mode check: <page key> (user: "<their words>")`.
 
@@ -353,6 +355,17 @@ may change it at any time by saying so — update the line first.
    engine clears the row, records the decision and puts its task back to `todo`; never edit the task
    file. `--decide D<N> --build` re-opens only a `not-built — needs-decision` row and names every
    other row it skipped. Do not dispatch the held task first.
+
+   **A question the build stops on is counted.** The plan asked the questions discovery could list
+   (`### Questions before approval`); every question you put to the user after the approval is one it
+   did not. Record its answer as a `Kind: answer` entry with a `Plan question:` line: `missed` when the
+   facts it turns on were readable before the approval (a behaviour choice on a page, a field or setting
+   defined in another package, a change that affects every page of an object, a page that writes data
+   when it opens), or `build-only — <what the build learned>` when only the build could raise it (a
+   platform refusal met while saving, a finding of the page-code check). An answer without the line is
+   counted as missed. The migration result lists them under **Questions after plan approval** with the
+   count of missed ones. When several build questions are open at once and do not depend on each
+   other, ask them in one message.
 
    **The queue order it answers in is leaf-first, and that is a build requirement, not a
    preference:** a related list's Add/Edit opens the child's own form, so the child page exists

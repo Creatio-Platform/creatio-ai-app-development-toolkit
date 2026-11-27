@@ -6,6 +6,7 @@ import { runProcessPageChecks } from "./run-mapper-process-page.mjs";
 import { runLaunchedProcessesChecks } from "./run-mapper-launched-processes.mjs";
 import { runQualityChecks } from "./run-mapper-quality.mjs";
 import { runWritesOnOpenChecks } from "./run-mapper-writes-on-open.mjs";
+import { runPlanQuestionChecks } from "./run-mapper-plan-questions.mjs";
 import { runModuleDepChecks } from "./run-mapper-module-deps.mjs";
 import { runModuleClosureChecks } from "./run-mapper-module-closure.mjs";
 import { runVerifyFalseNegativeChecks, runCaptionKeyChecks, runEntityRuleChecks } from "./run-mapper-verify-false-negatives.mjs";
@@ -10763,6 +10764,7 @@ runProcessPageChecks({ check, runMigration, runMigrate, renderVerify, checklistO
 runLaunchedProcessesChecks({ check, runMigration, runMigrate, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runQualityChecks({ check, runMigration, renderVerify, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FULL_PLACEMENT, FIX });
 runWritesOnOpenChecks({ check, runMigration, checklistOpts, CLEAN_SEED, FULL_PLANMETA, FULL_SIGNALS, FIX });
+runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_SEED, FULL_PLANMETA, FULL_PLACEMENT, FULL_CONVENTIONS, FIX });
 runModuleDepChecks({ check, verifyCtx, resolveVk, FIX });
 runModuleClosureChecks({ check, verifyCtx, resolveVk, FIX });
 
