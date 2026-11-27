@@ -4866,6 +4866,7 @@ function decidedCellOf({ mode, decision, title, destination }) {
 }
 // THE ONE WRITER of a decided row, for `--decide` and for a planning status at the cut. Returns why the row was
 // left alone, or null once it is written.
+const HELD_BY_BUILDER = `its task is ${S_IN_PROGRESS}: a builder holds it and may be writing these rows; answer once the task closes`;
 function writeDecidedRow(task, idx, cell, entry = cell.decision) {
   const row = task.rows[idx];
   // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
@@ -4904,7 +4905,10 @@ export function applyDecision(dir, result, opts = {}) {
   const writeCell = (task, idx, cascade = false) => {
     // A cascade-written cell carries the `+` marker so `--revoke` leaves it standing: the next `--verify`
     // round measures the page as it then stands and re-opens what still needs work.
-    const why = writeDecidedRow(task, idx, cell, cascade ? markCascade(decision) : decision);
+    // A task a builder holds open is the builder's to record: an answer written into it lands under rows that
+    // builder may be writing, so it waits until the task closes, as `--build` does.
+    const why = (!cascade && task.status === S_IN_PROGRESS && HELD_BY_BUILDER)
+      || writeDecidedRow(task, idx, cell, cascade ? markCascade(decision) : decision);
     if (why) skipped.push({ task, n: idx + 1, why });
     return !why;
   };

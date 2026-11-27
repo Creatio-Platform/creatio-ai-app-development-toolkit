@@ -284,6 +284,30 @@ console.log("\n===== E3: `--decide --build` re-opens only the decided rows =====
   fs.rmSync(base, { recursive: true, force: true });
 }
 
+{
+  // Where that state ends: a builder dispatched onto the task owns its rows, and `--decide` writes none of them.
+  const { base, dir, t, fp, cli } = twoQuestions("e3-dispatched");
+  cli("--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+  startTask(dir, t.id, RUN, { ...OPTS, dispatchToken: "tok-builder" }, null, AT(920));
+  const before = fs.readFileSync(fp, "utf8");
+  const refused = cli("--tasks", dir, "--decide", "D6", "--wont-do", "--row", `${t.id}:2`);
+  check("once a builder is dispatched onto the re-opened task, `--decide` on its other rows is refused and the file is unchanged",
+    () => refused.status === 1 && fs.readFileSync(fp, "utf8") === before, () => refused.stdout + refused.stderr);
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // `--revoke` of the build-it answer puts row 1's question back; the task's questions are answerable again.
+  const { base, dir, t, cli } = twoQuestions("e3-revoked");
+  cli("--tasks", dir, "--decide", "D5", "--build", "--row", `${t.id}:1`);
+  const revoked = cli("--tasks", dir, "--revoke", "D5");
+  const answered = cli("--tasks", dir, "--decide", "D6", "--wont-do", "--row", `${t.id}:1`, "--row", `${t.id}:2`);
+  const rows = rowsOf(dir, t.id);
+  check("after `--revoke` of the build-it answer, both questions are answerable again and one `--decide` closes them",
+    () => revoked.status === 0 && answered.status === 0 && rows[0].outcomeKind === "wont-do" && rows[1].outcomeKind === "wont-do",
+    () => ({ revoked: revoked.stdout + revoked.stderr, answered: answered.stdout + answered.stderr, rows: rows.slice(0, 3).map((x) => x.outcome) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
 console.log("\n===== E4: regenerating the plan keeps its Adjustments =====");
 {
   const base = tmp("e4");
