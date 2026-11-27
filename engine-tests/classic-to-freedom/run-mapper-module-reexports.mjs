@@ -16,8 +16,9 @@ export function runModuleReexportChecks({ check, verifyCtx, resolveVk, FIX }) {
   const read = (f) => fs.readFileSync(path.join(DIR, f), "utf8");
   const src = Object.fromEntries([DELIVERY, RETURN, SHARED].map((m) => [m, read(`modules/${m}.js`)]));
   const expected = JSON.parse(read("expected.json")).pages;
+  const bundles = Object.fromEntries(Object.entries(expected).map(([key, p]) => [key, JSON.parse(read(p.bundle))]));
   const entryOf = (key, extra = {}) => {
-    const b = JSON.parse(read(expected[key].bundle));
+    const b = bundles[key];
     return { schemaName: b.name, parentSchemaName: "PageWithTabsFreedomTemplate", viewConfig: b.viewConfig, handlers: b.handlers,
       deps: b.deps, args: b.args, validators: b.validators, converters: b.converters, ...extra };
   };
@@ -32,6 +33,7 @@ export function runModuleReexportChecks({ check, verifyCtx, resolveVk, FIX }) {
     return text.replace(from, to);
   };
   const withDelivery = (deliverySrc) => ({ ...src, [DELIVERY]: deliverySrc });
+  const RECORDED = "applyNewNoteDate: shared.applyNewNoteDate,";
 
   // As recorded: both pages' `onEntityInitialized` rows name `SharedModule.applyNewNoteDate`, which the delivery-note
   // page reaches only through its module's re-export, the return-note page through a call in its module.
@@ -45,7 +47,7 @@ export function runModuleReexportChecks({ check, verifyCtx, resolveVk, FIX }) {
   // The re-export is read from the module that holds it: without the delivery-note module's source the row names that
   // file; a re-export of a function the filed shared module does not define is not a port.
   const noModule = rowOf(DN, ctxOf(DN, { [SHARED]: src[SHARED] }));
-  const reexportsMissing = edit(src[DELIVERY], "applyNewNoteDate: shared.applyNewNoteDate,", "applyNewNoteDate: shared.applyNewNoteDate,\n\t\tnotDefinedHere: shared.notDefinedHere,");
+  const reexportsMissing = edit(src[DELIVERY], RECORDED, RECORDED + "\n\t\tnotDefinedHere: shared.notDefinedHere,");
   const undefinedShared = resolveVk(portedVk(`${SHARED}.notDefinedHere`),
     ctxOf(DN, withDelivery(reexportsMissing), { handlers: edit(entryOf(DN).handlers, "deliveryNotePage.applyNewNoteDate(", "deliveryNotePage.notDefinedHere(") }));
   check("module re-exports: without the page module's source the row reads ⚠ naming `reads/modules/UsrMbContractsV4App_MbDeliveryNoteFormPageModule.js`; a re-export of a function the filed shared module does not define reads ⚠",
@@ -53,13 +55,13 @@ export function runModuleReexportChecks({ check, verifyCtx, resolveVk, FIX }) {
     () => [noModule, undefinedShared]);
 
   // Every spelling of a re-export is followed; a member of something that is not an import is not.
-  const RECORDED = "applyNewNoteDate: shared.applyNewNoteDate,";
-  const asConst = edit(src[DELIVERY], RECORDED, "applyNewNoteDate,").replace('const NOTE_ENTITY = "MbDeliveryNote";', 'const NOTE_ENTITY = "MbDeliveryNote";\n\tconst applyNewNoteDate = shared.applyNewNoteDate;');
-  const asPattern = edit(src[DELIVERY], RECORDED, "applyNewNoteDate,").replace('const NOTE_ENTITY = "MbDeliveryNote";', 'const NOTE_ENTITY = "MbDeliveryNote";\n\tconst { applyNewNoteDate } = shared;');
-  const asOther = edit(src[DELIVERY], RECORDED, "applyNewNoteDate: other.applyNewNoteDate,");
-  const shapes = [asConst, asPattern, asOther].map((s) => rowOf(DN, ctxOf(DN, withDelivery(s)))[0]);
-  check("module re-exports: `const applyNewNoteDate = shared.applyNewNoteDate` and `const { applyNewNoteDate } = shared` exported by name read ✅; `applyNewNoteDate: other.applyNewNoteDate` (no import named `other`) reads ⚠",
-    () => asConst !== src[DELIVERY] && asPattern !== src[DELIVERY] && shapes.join() === ["✅ Done", "✅ Done", "⚠ verify"].join(),
+  const ANCHOR = 'const NOTE_ENTITY = "MbDeliveryNote";';
+  const exportedAs = (decl) => edit(edit(src[DELIVERY], RECORDED, "applyNewNoteDate,"), ANCHOR, `${ANCHOR}\n\t${decl}`);
+  const sources = [exportedAs("const applyNewNoteDate = shared.applyNewNoteDate;"), exportedAs("const { applyNewNoteDate } = shared;"),
+    edit(src[DELIVERY], RECORDED, "applyNewNoteDate: other.applyNewNoteDate,"), exportedAs("const { applyNewNoteDate } = other;")];
+  const shapes = sources.map((s) => rowOf(DN, ctxOf(DN, withDelivery(s)))[0]);
+  check("module re-exports: `const applyNewNoteDate = shared.applyNewNoteDate` and `const { applyNewNoteDate } = shared` exported by name read ✅; the same taken off `other` (no import of that name) reads ⚠",
+    () => shapes.join() === ["✅ Done", "✅ Done", "⚠ verify", "⚠ verify"].join(),
     () => shapes);
 
   // The request-fired check follows a re-export too: the Post button fires `mb.MbPostButtonClicked`, whose handler is

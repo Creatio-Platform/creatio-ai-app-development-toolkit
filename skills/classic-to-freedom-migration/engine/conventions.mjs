@@ -379,14 +379,16 @@ function depSlots(v) {
 // position like a page's. null when the source is not a `define()` module.
 const isFunctionNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
 // `name` -> `name()`, `obj.name` -> `obj.name()`: the call a reference stands for; null for any other expression.
-function referenceCall(n) {
+// Only a member of one of the module's imports (`importNames`, the factory's parameters) is a re-export: a member of
+// a config object or a constant is not a function the walk should follow.
+function referenceCall(n, importNames) {
   if (n?.type === "Identifier") return `${n.name}()`;
-  const plain = n?.type === "MemberExpression" && !n.computed && n.object?.type === "Identifier" && n.property?.type === "Identifier";
-  return plain ? `${n.object.name}.${n.property.name}()` : null;
+  const chain = memberChain(n);
+  return chain?.keys.length === 1 && importNames.has(chain.root) ? `${chain.root}.${chain.keys[0]}()` : null;
 }
-// `const { a, b: c } = obj` -> [["a", "obj.a()"], ["c", "obj.b()"]]: each name the pattern takes off an import.
-function destructuredReferences(decl) {
-  if (decl.id?.type !== "ObjectPattern" || decl.init?.type !== "Identifier") return [];
+// `const { a, b: c } = shared` -> [["a", "shared.a()"], ["c", "shared.b()"]]: each name the pattern takes off an import.
+function destructuredReferences(decl, importNames) {
+  if (decl.id?.type !== "ObjectPattern" || !importNames.has(decl.init?.name)) return [];
   return decl.id.properties.filter((p) => p.type === "Property" && !p.computed && p.value?.type === "Identifier")
     .map((p) => [p.value.name, `${decl.init.name}.${staticPropKey(p)}()`]);
 }
@@ -394,19 +396,22 @@ export function moduleShape(src) {
   const text = String(src ?? "");
   const mod = parseDefineModule(text);
   if (mod.error) return null;
-  const imports = pairSlots(mod.depSlots, mod.factory.params.map(paramName));
+  const params = mod.factory.params.map(paramName);
+  const imports = pairSlots(mod.depSlots, params);
+  const importNames = new Set(params.filter(Boolean));
   const fns = new Map();
-  const add = (name, body) => { if (name) fns.set(name, [...(fns.get(name) || []), body]); };
+  const add = (name, body) => { if (name && body) fns.set(name, [...(fns.get(name) || []), body]); };
   const addDeclarator = (d) => {
-    if (d.id?.type !== "Identifier") for (const [name, call] of destructuredReferences(d)) add(name, call);
-    else if (isFunctionNode(d.init)) add(d.id.name, text.slice(d.init.start, d.init.end));
-    else if (d.init?.type === "MemberExpression" && referenceCall(d.init)) add(d.id.name, referenceCall(d.init));
+    for (const [name, call] of destructuredReferences(d, importNames)) add(name, call);
+    if (d.id?.type !== "Identifier") return;
+    if (isFunctionNode(d.init)) add(d.id.name, text.slice(d.init.start, d.init.end));
+    else if (d.init?.type === "MemberExpression") add(d.id.name, referenceCall(d.init, importNames));
   };
   walkAstBounded(mod.factory, (n) => {
     if (n.type === "FunctionDeclaration") add(n.id?.name, text.slice(n.start, n.end));
     else if (n.type === "VariableDeclarator") addDeclarator(n);
     else if (n.type === "Property" && !n.computed && isFunctionNode(n.value)) add(staticPropKey(n), text.slice(n.value.start, n.value.end));
-    else if (n.type === "Property" && !n.computed && referenceCall(n.value)) add(staticPropKey(n), referenceCall(n.value));
+    else if (n.type === "Property" && !n.computed) add(staticPropKey(n), referenceCall(n.value, importNames));
   });
   return { functions: fns, imports };
 }
