@@ -110,22 +110,31 @@ export function headingTitle(raw) {
   return String(raw || "").replace(/^[\s—–:.-]+/, "").trim();
 }
 
-// A non-empty `Approved by:` line, with or without a list marker: the line that makes its entry the plan's approval.
-function approvesPlan(line) {
+// The non-empty value of an `Approved by:` or `Plan version:` line, with or without a list marker, as
+// `["approved by" | "plan version", value]`; null for any other line.
+const APPROVAL_LABELS = new Set(["approved by", "plan version"]);
+function approvalField(line) {
   const s = line.trimStart();
   const f = fieldLine(s.startsWith("- ") || s.startsWith("* ") ? s : `- ${s}`);
-  return f?.label.toLowerCase() === "approved by" && f.value !== "";
+  const label = f?.label.toLowerCase();
+  return APPROVAL_LABELS.has(label) && f.value !== "" ? label : null;
 }
 // THE DECISION LOG: every `## D<N>` heading entry as `{ id, title, fields, afterApproval }`, in file order, and
 // whether the plan's approval is recorded (`approved`). A later heading for the same id replaces the earlier one, the
 // way the decision titles are read. Only heading entries carry provenance: a table row or a plain line has no place
-// for the field lines. `afterApproval` marks an entry that follows the first entry with an `Approved by:` line.
+// for the field lines. The approval is the entry that holds both a non-empty `Approved by:` and a `Plan version:`,
+// the rule the build gate applies; `afterApproval` marks an entry that follows the first one.
 export function parseDecisionLog(text) {
   const byId = new Map();
   let cur = null;
   let approved = false;
+  let entry = new Set();   // the approval fields the current heading entry holds
   for (const line of String(text || "").split(/\r?\n/)) {
     const h = DECISION_HEADING.exec(line);
+    if (h || ANY_HEADING.test(line)) {
+      if (entry.size === APPROVAL_LABELS.size) approved = true;
+      entry = new Set();
+    }
     if (h) {
       cur = { id: `D${h[1]}`, title: headingTitle(h[2]), fields: {}, afterApproval: approved };
       byId.delete(cur.id);
@@ -133,12 +142,14 @@ export function parseDecisionLog(text) {
       continue;
     }
     if (ANY_HEADING.test(line)) { cur = null; continue; }
-    if (approvesPlan(line)) approved = true;
+    const approval = approvalField(line);
+    if (approval) entry.add(approval);
     if (!cur) continue;
     const f = fieldLine(line);
     const field = f && FIELD_OF.get(f.label.toLowerCase());
     if (field && !(field in cur.fields)) cur.fields[field] = cleanValue(field, f.value);
   }
+  if (entry.size === APPROVAL_LABELS.size) approved = true;
   return { records: [...byId.values()], approved };
 }
 export const parseDecisionRecords = (text) => parseDecisionLog(text).records;
@@ -147,12 +158,15 @@ export const parseDecisionRecords = (text) => parseDecisionLog(text).records;
 // the build stopped on. Its `Plan question:` line says whether discovery could have asked it before approval:
 // `missed` (it could) or `build-only` with what the build learned that discovery could not (a platform limit met
 // while saving, a fact only the built page shows). An answer without the line is counted as missed, so an
-// unclassified question never hides the gap. `log` is `parseDecisionLog`'s result.
+// unclassified question never hides the gap. `log` is `parseDecisionLog`'s result. `planAnswers` are the D<N> the
+// plan's questions name as their answers (`manifest.planQuestions`): those were asked as plan questions, wherever
+// the log records them.
 //   → `{ approved, questions: [{ id, title, planQuestion, reason }], missed: [ids] }`
 const PLAN_QUESTION_MISSED = "missed";
 export const PLAN_QUESTION_BUILD_ONLY = "build-only";
-export function questionsAfterApproval({ records = [], approved = false } = {}) {
-  const questions = records.filter((r) => r.afterApproval && r.fields.kind === KIND_ANSWER)
+export function questionsAfterApproval({ records = [], approved = false } = {}, planAnswers = []) {
+  const asPlan = new Set(planAnswers);
+  const questions = records.filter((r) => r.afterApproval && r.fields.kind === KIND_ANSWER && !asPlan.has(r.id))
     .map((r) => ({ id: r.id, title: r.title, ...planQuestionValue(r.fields.planQuestion) }));
   return { approved, questions, missed: questions.filter((q) => q.planQuestion !== PLAN_QUESTION_BUILD_ONLY).map((q) => q.id) };
 }

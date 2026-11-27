@@ -797,8 +797,8 @@ function decidedWithoutYouSection(entries) {
 // The two sections read off the decisions.md above the task folder `dir`, read once, and the count of missed plan
 // questions (null without a recorded approval). Read only beside a task folder: with none, `..` would name whatever
 // folder the process happens to run in. An unreadable decisions.md does not stop the report; each section says what
-// it could not list.
-function decisionLogSections(dir) {
+// it could not list. `planAnswers` are the D<N> the plan's questions name as their answers: never a build question.
+function decisionLogSections(dir, planAnswers) {
   if (!dir) return { withoutYou: [], afterApproval: [], missed: null };
   let log;
   try {
@@ -808,7 +808,7 @@ function decisionLogSections(dir) {
     return { withoutYou: ["## Decided without you", "", `${why} the choices the agent made without asking are not listed.`],
       afterApproval: ["## Questions after plan approval", "", `${why} the questions asked after the plan's approval are not counted.`], missed: null };
   }
-  const asked = questionsAfterApproval(log);
+  const asked = questionsAfterApproval(log, planAnswers);
   return { withoutYou: decidedWithoutYouSection(orchestratorDecisions(log.records)),
     afterApproval: questionsAfterApprovalSection(asked), missed: asked.approved ? asked.missed.length : null };
 }
@@ -968,7 +968,8 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   const carryOver = carryOverSection(postponedRows, pageName);
-  const { withoutYou, afterApproval, missed: missedPlanQuestions } = decisionLogSections(dir);
+  const { withoutYou, afterApproval, missed: missedPlanQuestions } = decisionLogSections(dir,
+    (result?.planQuestions?.questions || []).map((q) => q.answer).filter(Boolean));
   const browser = browserSection(exercise, pageName, browserAnswer);
   const standData = standDataSection(result, tasks, dir ? answerRead : { unread: "no task folder was given" }, pageName);
   let sec = 3;

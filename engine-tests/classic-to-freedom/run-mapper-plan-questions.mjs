@@ -85,7 +85,7 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
   const proc = path.join(FIX, "process-page");
   const body = (f) => fs.readFileSync(path.join(proc, f), "utf8");
   const processPlanMeta = Object.fromEntries(Object.entries(FULL_PLANMETA).filter(([k]) => k !== "sectionSchema"));
-  const manifest = (planQuestions) => ({
+  const manifest = (planQuestions, extra = {}) => ({
     entity: "", targetPackage: "UsrSU", planMeta: processPlanMeta, placement: FULL_PLACEMENT, projectConventions: FULL_CONVENTIONS,
     seed: [...CLEAN_SEED, { pkg: "CrtUIPlatform7x", body: body("BasePageV2_skeleton.js") }, { pkg: "CrtWizards7x", body: body("BasePageProcessTemplate.js") }],
     schemas: [{ pkg: "UsrDelivery", body: body("UsrDeliveryCheckPage.js") }],
@@ -93,7 +93,7 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
     resources: { SaveDataButtonCaption: "Save", CancelButtonCaption: "Cancel" },
     processPage: { stepsResolved: true, evidence: "the user named one process",
       steps: [{ process: "UsrDeliveryProcess", element: "CheckDelivery", caption: "Check the delivery", consent: "approved" }] },
-    ...(planQuestions ? { planQuestions } : {}),
+    ...(planQuestions ? { planQuestions } : {}), ...extra,
   });
   const unanswered = QUESTIONS.map(({ answer, ...q }) => q);
   const planIn = (decisionsText, planQuestions) => {
@@ -126,12 +126,38 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
     () => section(settled.plan));
   const version = (plan) => /\*\*Plan version:\*\* `(plan-[0-9a-f]+)`/.exec(plan)?.[1];
   const reworded = QUESTIONS.map((q, i) => (i ? q : { ...q, question: `${q.question} Reworded.` }));
-  const onlyEngineAnswer = runMigration({ ...manifest([{ id: "data-on-open:main", answer: "D9" }]) });
   check("plan questions golden: answering the questions leaves the plan version as it was; adding or rewording a question moves it",
     () => !!version(settled.plan) && version(settled.plan) === version(asked.plan)
-      && version(planIn(before, undefined).plan) !== version(settled.plan) && version(planIn(before, reworded).plan) !== version(settled.plan)
-      && onlyEngineAnswer.planVersion === runMigration(manifest(undefined)).planVersion,
+      && version(planIn(before, undefined).plan) !== version(settled.plan) && version(planIn(before, reworded).plan) !== version(settled.plan),
     () => [version(asked.plan), version(settled.plan)]);
+  const invalidOnly = planIn(before, [...QUESTIONS, { id: "behaviour:style", kind: "style", question: "Which colour?", answer: "D13" }]);
+  check("plan questions (CLI): an entry that cannot stand is a gap on its own — exit 2, the banner and stderr name it, with every question answered",
+    () => invalidOnly.status === 2 && /PLAN INCOMPLETE — 1 `manifest\.planQuestions` problem\(s\)/.test(invalidOnly.plan)
+      && /⛔ PLAN QUESTIONS — planQuestions INVALID \(`behaviour:style` `kind` must be one of/.test(invalidOnly.stderr)
+      && !/OPEN/.test(invalidOnly.stderr),
+    () => ({ status: invalidOnly.status, stderr: invalidOnly.stderr.slice(0, 600) }));
+
+  // `--tasks` (the cut): the same gap stops it, and an answer counts as a cited decision at the first dispatch.
+  const cut = (decisionsText, planQuestions) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-questions-cut-"));
+    try {
+      const input = JSON.stringify(manifest(planQuestions, { decisionsWithoutDeliverable: ["D2", "D3"] }));
+      fs.writeFileSync(path.join(tmp, "decisions.md"), decisionsText);
+      const planned = runMigrate(["-", "--plan", "--out", path.join(tmp, "plan.md")], { input });
+      fs.appendFileSync(path.join(tmp, "decisions.md"),
+        `\n## Plan approval\n- Approved by: user\n- Plan version: ${version(fs.readFileSync(path.join(tmp, "plan.md"), "utf8"))}\n`);
+      const r = runMigrate(["-", "--tasks", path.join(tmp, "build-tasks")], { input });
+      return { planned: planned.status, status: r.status, stderr: r.stderr || "", out: r.stdout || "" };
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  };
+  const cutOpen = cut(before.split("## D9")[0], unanswered);
+  check("plan questions (CLI): `--tasks` with the questions open exits 2 and stderr names them",
+    () => cutOpen.status === 2 && /⛔ PLAN QUESTIONS — 5 plan question\(s\) OPEN/.test(cutOpen.stderr),
+    () => ({ status: cutOpen.status, stderr: cutOpen.stderr.slice(0, 600) }));
+  const cutAnswered = cut(before, QUESTIONS);
+  check("plan questions (CLI): `--tasks` cuts the approved plan — the D<N> cited only as plan-question answers are accounted for, not refused as unaccounted",
+    () => cutAnswered.planned === 0 && cutAnswered.status === 0 && !/unaccounted|no deliverable accounts for/i.test(cutAnswered.stderr + cutAnswered.out),
+    () => ({ planned: cutAnswered.planned, status: cutAnswered.status, stderr: cutAnswered.stderr.slice(0, 800), out: cutAnswered.out.slice(0, 800) }));
   const none = runMigration(manifest(undefined));
   check("plan questions: a plan with no questions has no section and no gap",
     () => !/### Questions before approval/.test(none.plan) && none.planQuestions.questions.length === 0 && none.planQuestions.open.length === 0);
@@ -151,8 +177,14 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
     () => askedAfter(before).approved === false && askedAfter(before).questions.length === 0
       && askedAfter(`${before}\n## Plan approval\n- Approved by: user\n- Plan version: plan-1\n`).questions.length === 0
       && askedAfter("## Plan approval\n- Approved by:\n## D1 — x\n- Kind: answer\n").approved === false);
-  check("questions after approval: an `Approved by:` line without a list marker is an approval too, as the build gate reads it",
-    () => askedAfter("## Plan approval\nApproved by: user\n## D1 — x\n- Kind: answer\n").questions.map((q) => q.id).join() === "D1");
+  check("questions after approval: the approval is the entry with both `Approved by:` and `Plan version:`, read with or without list markers, as the build gate reads it",
+    () => askedAfter("## Plan approval\nApproved by: user\nPlan version: plan-1\n## D1 — x\n- Kind: answer\n").questions.map((q) => q.id).join() === "D1"
+      && askedAfter("## D1 — a\n- Kind: answer\n- Approved by: user\n## D2 — b\n- Kind: answer\n").approved === false
+      && askedAfter("## D1 — a\n- Approved by: user\n## Note\n- Plan version: plan-1\n## D2 — b\n- Kind: answer\n").questions.length === 0
+      && askedAfter("## D1 — a\n- Kind: answer\n## Plan approval\n- Approved by: user\n- Plan version: plan-1").approved === true);
+  check("questions after approval: an answer a plan question names is not a build question, wherever the log records it",
+    () => questionsAfterApproval(parseDecisionLog(afterText), ["D4", "D10"]).questions.map((q) => q.id).join() === "D5,D6,D7,D8,D9"
+      && questionsAfterApproval(parseDecisionLog(afterText), ["D4", "D10"]).missed.join() === "D5,D6,D7,D8,D9");
   check("questions after approval: a `Plan question:` line that is neither value, or `build-only` without its reason, is a provenance problem",
     () => { const issues = provenanceIssues(parseDecisionRecords("## D1 — a\n- Plan question: maybe\n## D2 — b\n- Plan question: build-only\n## D3 — c\n- Plan question: `missed`\n"));
       return issues.length === 2 && /`Plan question: maybe` is not `missed`/.test(issues[0].problem) && issues[0].key === "D1"
@@ -161,15 +193,20 @@ export function runPlanQuestionChecks({ check, runMigration, runMigrate, CLEAN_S
   check("questions after approval: the after-approval log itself carries no provenance problem",
     () => provenanceIssues(parseDecisionRecords(afterText)).length === 0 && Object.keys(provenanceById(parseDecisionRecords(afterText))).length > 0,
     () => provenanceIssues(parseDecisionRecords(afterText)));
-  const reportFor = (decisionsText) => {
+  const reportFor = (decisionsText, result = none) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-questions-report-"));
     try {
       const tasksDir = path.join(tmp, "build-tasks");
       fs.mkdirSync(tasksDir);
       if (decisionsText !== null) fs.writeFileSync(path.join(tmp, "decisions.md"), decisionsText);
-      return renderFinalReport({ result: none, verifyRes: { rows: [] }, set: { tasks: [], planVersion: none.planVersion }, dir: tasksDir });
+      return renderFinalReport({ result, verifyRes: { rows: [] }, set: { tasks: [], planVersion: result.planVersion }, dir: tasksDir });
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   };
+  const asPlanAnswer = reportFor(afterText, { ...none, planQuestions: { questions: [{ id: "data-on-open:main", answer: "D4" }], open: [], issues: [] } });
+  check("migration result: an answer the plan's questions name, recorded after the approval, is not counted as a build question",
+    () => asPlanAnswer.counts.missedPlanQuestions === 5 && /\*\*Missed plan questions: 5 of 6\.\*\*/.test(asPlanAnswer.markdown)
+      && !/\| D4 \|/.test(asPlanAnswer.markdown.split("\n## ").find((s) => s.startsWith("Questions after plan approval")) || ""),
+    () => asPlanAnswer.markdown.split("\n## ").find((s) => s.startsWith("Questions after")));
   const report = reportFor(afterText);
   const reportSection = report.markdown.split("\n## ").find((s) => s.startsWith("Questions after plan approval")) || "";
   check("migration result: the questions asked after approval are listed with the count of missed plan questions",

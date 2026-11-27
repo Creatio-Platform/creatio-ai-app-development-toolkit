@@ -3087,8 +3087,9 @@ const answeredRuleStatuses = (records) => Object.fromEntries(closedRuleAttribute
 // never a plan choice, so recording it leaves the approved version as it was.
 const PLAN_VERSION_EXCLUDED_KEYS = new Set(["runDiagnostics", "constantsModules", "createdApp"]);
 // What the version reads of a manifest key. A process step's `consent` and a plan question's `answer` are the user's
-// replies to the plan, given with the approval and recorded after it; recording one must not move the version it
-// answers (`withoutStepConsent`, `withoutAnswers`). An undefined value is left out, like an absent key.
+// replies to the plan: a consent is given with the approval, an answer before it, and the manifest records each once
+// it is given. Recording one must not move the version the user approves (`withoutStepConsent`, `withoutAnswers`).
+// An undefined value is left out, like an absent key.
 const plannedValue = (k, v) => {
   if (k === "processPage") return withoutStepConsent(v);
   return k === "planQuestions" ? withoutAnswers(v) : v;

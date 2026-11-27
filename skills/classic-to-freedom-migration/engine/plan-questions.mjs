@@ -103,7 +103,7 @@ export const planQuestionAnswers = (entries) => (Array.isArray(entries) ? entrie
   .map((e) => (typeof e?.answer === "string" ? e.answer.trim() : "")).filter((d) => DECISION_ID.test(d));
 
 // `manifest.planQuestions` as the plan version hashes it: the questions without their answers, and undefined when
-// nothing but answers is left. An answer is the user's reply, recorded with the approval, and an entry that only
+// nothing but answers is left. An answer is the user's reply, given before the approval, and an entry that only
 // answers the engine's own question (`{ id, answer }`) adds no question; a question added, removed or reworded
 // changes the plan.
 export function withoutAnswers(entries) {
