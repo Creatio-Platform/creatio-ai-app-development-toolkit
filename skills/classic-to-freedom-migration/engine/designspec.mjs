@@ -182,7 +182,7 @@ function rowActionsNote(am) {
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
 // The name a plan heading uses for the page: its entity, or for a process page (no entity) its schema name.
-const pageTitleOf = (result) => (result.processPage?.pageName ? `${result.processPage.pageName} (process page)` : result.entity || "?");
+export const pageTitleOf = (result) => (result.processPage?.pageName ? `${result.processPage.pageName} (process page)` : result.entity || "?");
 // The form page's own label: a process page's title already says what it is.
 const pageHeadingLabel = (entity, opts) => (opts.processPage ? entity : `${entity} form page`);
 function rowsForFields(fields, regionOf, sourcePrefix = "PDS.") {
@@ -3266,7 +3266,7 @@ function processParametersRow(info) {
   return {
     deliverableId: "page:process-parameters",
     label: `Bound to the process parameters${named}, not to an object — a process page has no primary data source; its fields keep the parameter names the process maps`,
-    vk: { type: "entity", processParameters: params },
+    vk: { type: "processparams", parameters: params },
   };
 }
 function placementRows(opts) {
@@ -4846,18 +4846,26 @@ function resolvePlacementVk(vk, ctx) {
 // report an entity at all is nobody-looked (⚠ unverified). Never `!value`: an absent field is not a wrong binding.
 function resolveEntityVk(vk, ctx) {
   if (vk.type !== "entity") return unknownVk();
-  if (Array.isArray(vk.processParameters)) return resolveProcessParametersVk(ctx);
   const ent = entryObject(ctx.page)?.entitySchemaName;
   if (ent == null || ent === "") return ["⚠ verify", `built-page entity not reported — record \`entitySchemaName\` (the entity the page's PRIMARY data source is bound to) and confirm it is \`${esc(vk.exp)}\``, "unverified"];
   if (ent === vk.exp) return ["✅ Done", `bound to \`${esc(vk.exp)}\``, "ok"];
   return ["❌ MISSING", `bound to \`${esc(String(ent))}\` but the Classic page's object is \`${esc(vk.exp)}\` — the customer's records live on \`${esc(vk.exp)}\`, so this page migrates nothing`, "missing"];
 }
-// A process page closes when its bundle was read and names no primary data source; an object on it is the defect.
-function resolveProcessParametersVk(ctx) {
+// A process page closes only on its read `modelConfig` naming no primary data source: a bundle read without its
+// `modelConfig` says nothing about the data sources, and a primary data source is an object on the page.
+function resolveProcessParametersVk(vk, ctx) {
+  if (vk.type !== "processparams") return unknownVk();
+  if (ctx.page === false) return ["❌ MISSING", "the process page is reported as NOT BUILT", "missing"];
   const page = entryObject(ctx.page);
   if (page?.viewConfig == null) return ["⚠ verify", "the built process page was not read — `get-page` it so its data sources can be checked", "unverified"];
-  const ent = page.entitySchemaName;
-  if (typeof ent === "string" && ent !== "") return ["❌ MISSING", `bound to the object \`${esc(ent)}\` — a process page has no object; bind its fields to the process parameters and remove the primary data source`, "missing"];
+  const mc = entryObject(page.modelConfig);
+  if (!mc) return ["⚠ verify", "the read process page carries no `modelConfig` — file it whole so its data sources can be checked", "unverified"];
+  const pds = mc.primaryDataSourceName;
+  if (pds) {
+    const ent = mc.dataSources?.[pds]?.config?.entitySchemaName || page.entitySchemaName;
+    const on = ent ? `the object \`${esc(ent)}\`` : `the primary data source \`${esc(pds)}\``;
+    return ["❌ MISSING", `bound to ${on} — a process page has no object; bind its fields to the process parameters and remove the primary data source`, "missing"];
+  }
   return ["✅ Done", "no primary data source — the fields bind to the process parameters", "ok"];
 }
 // A CHILD PAGE whose Classic source was never folded: nothing about it is derivable from the plan, so the only
@@ -5167,6 +5175,7 @@ function resolveQuickFilterVk(vk, ctx, surface) {
 const VK_LIST = new Set(["listcolumns", "listfilter"]);
 const VK_PLACEMENT = new Set(["placement"]);
 const VK_ENTITY = new Set(["entity"]);
+const VK_PROCESS_PARAMS = new Set(["processparams"]);
 const VK_CHILDPAGE = new Set(["childpage"]);
 const VK_EVIDENCE = new Set(["evidence"]);
 const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
@@ -5727,7 +5736,7 @@ export function resolveModuleDepVk(vk, ctx) {
 // resolvers by name. Same order and behaviour, one lookup each. (The sets are disjoint, so order among them is moot.)
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
-  [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
+  [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_PROCESS_PARAMS, resolveProcessParametersVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
 const VK_BY_TYPE = new Map([["detailfilter", (vk, ctx) => resolveQuickFilterVk(vk, ctx, "detail")], ["readonly", resolveReadonlyVk], ["rowtoolbar", resolveRowToolbarVk], ["rowlinks", resolveRowLinksVk], ["listsort", resolveListSortVk],
   ["handler", resolveHandlerVk], ["pagecode", resolvePageCodeVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk],
   ["relatedpage", resolveRelatedPageVk], ["namespace", resolveNamespaceVk], ["moduledep", resolveModuleDepVk], ["quality", resolveQualityVk],
