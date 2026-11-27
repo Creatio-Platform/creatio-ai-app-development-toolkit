@@ -39,7 +39,8 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets,
+  counterPages, COUNTER_KEPT_FIELD, COUNTER_RULE } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -1288,11 +1289,17 @@ function directivesBlock(task, directives) {
 // record, and an add-mode check only on the consent the user gave. A whole-run task covers every page.
 // `agreed` is the page key → `Add-mode check:` value map `addModeChecks` read off `worklog.md`: every sync re-renders
 // the file with it, so the consent reaches the builder in its own file rather than through the orchestrator's prompt.
-export function dataWritingBlock(task, pages, agreed = new Map()) {
+// `kept` is the same map of the `Client counter kept:` lines: a page whose counter the user chose to keep in the browser.
+export function dataWritingBlock(task, pages, agreed = new Map(), kept = new Map()) {
   const keys = new Set([task.pageKey, ...(task.rows || []).map((r) => r.pageKey)].filter(Boolean));
   const own = (pages || []).filter((p) => task.pageKey === "run" || keys.has(p.pageKey));
   if (!own.length) return [];
   const consent = own.filter((p) => agreed?.has(p.pageKey));
+  const counterRule = counterPages(own).map((p) => (kept?.has(p.pageKey)
+    ? `  - The user kept the Classic counter of \`${esc(p.pageKey)}\` (\`worklog.md\`: “${esc(kept.get(p.pageKey))}”): port it as`
+      + " Classic had it, and say under `## Notes` that a user without the right to change system settings gets no number."
+    : `  - **Build rule for \`${esc(p.pageKey)}\`:** ${COUNTER_RULE} No \`${COUNTER_KEPT_FIELD}\` line of \`worklog.md\` names`
+      + " this page, so the user has not chosen to keep the Classic behaviour."));
   return [
     "- **⚠ This task's page writes data when it opens — keep every browser check from consuming it:**",
     ...dataWriteBullets(own, "  "),
@@ -1306,6 +1313,7 @@ export function dataWritingBlock(task, pages, agreed = new Map()) {
         + " `Stand data changed (row N):` line for each one under `## Notes`.")
       : ["  - No add-mode check is agreed: no `Add-mode check:` line of `worklog.md` names this page, so the rule above holds"
         + " for every check."]),
+    ...counterRule,
   ];
 }
 // An id as a code span the judge can copy as written: Markdown escapes nothing inside one, so the id is not escaped
@@ -1426,7 +1434,7 @@ export function renderTaskFile(task, set = {}) {
     ...markersBlock(),
     ...oneAgentBlock(task),
     ...directivesBlock(task, set.directives),
-    ...dataWritingBlock(task, set.dataWritingPages, set.addModeChecks),
+    ...dataWritingBlock(task, set.dataWritingPages, set.addModeChecks, set.keptCounters),
     // Before the deliverables, so a builder reads the namespace and the modules before the first row it builds.
     ...(conventions.length ? ["", ...conventions.slice(0, -1)] : []),
     ...judgedRecordsBlock(task),
@@ -5135,7 +5143,9 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const unaccounted = decisionRefusal(merged, dir, opts);
   if (unaccounted) return { ...fresh, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
-  merged.addModeChecks = addModeChecks(readWorklogText(dir).text, fresh.dataWritingPages).agreed;
+  const worklogNow = readWorklogText(dir).text;
+  merged.addModeChecks = addModeChecks(worklogNow, fresh.dataWritingPages).agreed;
+  merged.keptCounters = keptCounters(worklogNow, fresh.dataWritingPages).agreed;
   // Close the clocks of everything that finished since the last pass, before the files are written. A lock another
   // process keeps is a refusal like the others above: nothing is written, and the caller re-runs.
   // A ledger file kept busy past the rename budget is a refusal too, with the difference `REFUSED_LEDGER_BUSY`
@@ -5295,11 +5305,15 @@ export function worklogFieldValues(worklogText, field) {
 // The add-mode checks the user agreed to. The first word of each value is the page key the plan's **Pages that write
 // data when opened** section prints; a line that names no page of that section is returned in `unknown`, never as
 // consent, so a typo or a page label cannot lift the edit-mode rule of a page the user did not name.
-export function addModeChecks(worklogText, pages) {
+export const addModeChecks = (worklogText, pages) => pageKeyLines(worklogText, pages, ADD_MODE_FIELD);
+// The browser-side counters the user chose to keep (`Client counter kept:`), by the same rule: only a page the plan
+// lists as taking a number on open can be named, so the build rule of any other page stands.
+export const keptCounters = (worklogText, pages) => pageKeyLines(worklogText, counterPages(pages), COUNTER_KEPT_FIELD);
+function pageKeyLines(worklogText, pages, field) {
   const keys = new Set((pages || []).map((p) => p.pageKey));
   const agreed = new Map();
   const unknown = [];
-  for (const value of worklogFieldValues(worklogText, ADD_MODE_FIELD)) {
+  for (const value of worklogFieldValues(worklogText, field)) {
     const key = value.split(/\s/)[0];
     if (keys.has(key)) agreed.set(key, value);
     else unknown.push(value);

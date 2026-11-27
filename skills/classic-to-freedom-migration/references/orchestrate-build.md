@@ -167,7 +167,9 @@ the user whether an add-mode check of any of them is wanted. Record each page th
 
 The engine reads these lines on every sync and writes the consent into the task file of that page, so the builder
 reads it in its own file; a line whose first word is not a page key of the list is not consent, and the result
-report says so. No line means no consent: the builders keep to edit mode. An add-mode check you run yourself follows the builder's
+report says so. When the section carries a **Build rule — a number taken on open**, ask in the same message whether
+the user keeps that Classic counter in the browser; the rule (the number taken on save, on the server) holds unless
+they say yes, recorded the same way as `Client counter kept: <page key> (user: "<their words>")`. No line means no consent: the builders keep to edit mode. An add-mode check you run yourself follows the builder's
 rule: read each value the plan names for that page before it, and after it write
 `Stand data changed: <what> <before> → <after> (<page>)` into `worklog.md`. Any other data a check of yours
 changed — a `page-smoke` `click` that saved, its `click.created` records — is a `Stand data changed:` line too. The

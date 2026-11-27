@@ -225,7 +225,9 @@ wait for the user to ask for a UI review.
      opens* is not opened at all. Your task file says whether the user agreed to an add-mode check of
      the page; only then is the rule lifted for that check: read the values the file names before it
      and write `Stand data changed (row N): <what> <before> → <after> (<page>)` under `## Notes` after
-     it. Any data a check of yours changes on any page (a `click` that saved, `click.created`) gets the
+     it. A page whose file carries a **Build rule** for a number taken on open gets that number on save,
+     on the server, never from a browser write of a system setting, unless the file says the user kept
+     the Classic counter. Any data a check of yours changes on any page (a `click` that saved, `click.created`) gets the
      same line. Between edits the evidence is the
      saved schema read back with `get-page`, which also answers while a tab is frozen; any other
      question between saves is answered by that `get-page` read-back, never by opening the page.

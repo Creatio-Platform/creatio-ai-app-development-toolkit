@@ -30,7 +30,7 @@ import path from "node:path";
 import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
-  worklogFieldValues, addModeChecks, STAND_DATA_FIELD, STAND_DATA_MARKER,
+  worklogFieldValues, addModeChecks, keptCounters, STAND_DATA_FIELD, STAND_DATA_MARKER,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -233,6 +233,9 @@ function standDataSection(result, tasks, { text: worklog = "", unread = null }, 
     agreed.size ? `Add-mode checks the user agreed to: ${[...agreed.values()].map(cell).join("; ")}.`
       : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule.");
     if (unknown.length) L.push(`Not counted as consent — an \`Add-mode check:\` line that names no page key of the plan's list: ${unknown.map(cell).join("; ")}.`);
+    const counters = keptCounters(worklog, pages);
+    if (counters.agreed.size) L.push(`Browser-side counters the user chose to keep (a user without the right to change system settings gets no number): ${[...counters.agreed.values()].map(cell).join("; ")}.`);
+    if (counters.unknown.length) L.push(`Not counted as a decision — a \`Client counter kept:\` line that names no page the plan lists as taking a number on open: ${counters.unknown.map(cell).join("; ")}.`);
   }
   return L;
 }
