@@ -6290,6 +6290,7 @@ function withPortedAs(r, page, portedAs) {
 // judge's ruling on that fact, read against the Classic source the entry cites. The rows are the run's, not a page's:
 // no build task owns them, so they are checked here and never cut into the task folder.
 function premiseGroups(result, opts) {
+  if (opts.scopePageKey) return [];
   const rows = (result.premises || []).map((p) => ({ deliverableId: premiseId(p.id),
     label: `Decision \`${esc(p.id)}\` — the question stated a Classic fact: “${esc(p.asked)}”. Classic source: ${p.source ? esc(p.source) : "none cited"}`,
     vk: { type: "premise", id: premiseId(p.id), decision: p.id, source: p.source } }));
@@ -6311,6 +6312,7 @@ const isPremiseRow = (r) => r.vk?.type === "premise";
 // The record id a row publishes — an evidence row's or a premise's — or null.
 const publishedRecordId = (r) => ((r.vk?.type === "evidence" || isPremiseRow(r)) && r.vk.id) || null;
 // A task's recorded decision closes plan rows; a premise is no plan row and closes only on the judge's ruling.
+const tallyOf = (r, planTally, premiseTally) => (isPremiseRow(r) ? premiseTally : planTally);
 const closedByTaskDecision = (r, page, decidedKeys) => !isPremiseRow(r) && !!decidedKeys?.has(verifyRowKey(page, r.label));
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
@@ -6325,7 +6327,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // verdict through a tally of their own — never a page's open rows, which become a builder's repair round, while a
   // false premise is answered by asking the person again.
   const premiseTally = verifyTally();
-  const premises = opts.scopePageKey ? [] : premiseGroups(result, opts);
+  const premises = premiseGroups(result, opts);
   const groups = [...planGroups, ...codeQualityGroups(planGroups, opts, root), ...premises];
   const L = []; let n = 0;
   // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
@@ -6353,7 +6355,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;
       }
-      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, isPremiseRow(r) ? premiseTally : tally, ++n);
+      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tallyOf(r, tally, premiseTally), ++n);
       rows.push(row);
       L.push(tableLine);
     }
