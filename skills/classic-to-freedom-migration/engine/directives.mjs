@@ -10,6 +10,8 @@
 //   - Expectation: <one statement a judge can check on the built page>
 //   - Closes: `<pageKey>#business-rule:<Attribute>`[, …]   (an answer only: the rule attributes the user accepted as
 //     built another way after the plan was approved — see `closedRuleAttributes`)
+//   - Approves: `entity-rule:<Entity>.<Attribute>`[, …]   (an answer only: an entity rule the plan did not list that the
+//     user accepted on the object, which reaches every page of it — see `approvedEntityRules`)
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
@@ -59,6 +61,7 @@ const FIELD_OF = new Map([
   ["scope", "scope"],
   ["expectation", "expectation"],
   ["closes", "closes"],
+  ["approves", "approves"],
 ]);
 // The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
 // entries and the same titles.
@@ -192,6 +195,31 @@ function closesIssues(r) {
     .map((k) => `\`Closes:\` names \`${k}\`, which is not a business-rule attribute (\`<pageKey>#business-rule:<Attribute>\`)`);
 }
 
+// THE ENTITY RULES A USER'S ANSWER APPROVES BEYOND THE PLAN, as `Map<"<Entity>.<Attribute>", "D<N>">`. An entity
+// rule reaches every page of its object, so one the plan did not list stands only on the user's own answer naming
+// the object and the attribute it governs; `--verify` flags every other rule it reads on the object.
+const ENTITY_RULE_APPROVAL = /^entity-rule:([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/;
+export function approvedEntityRules(records) {
+  const out = new Map();
+  for (const r of records || []) {
+    if (!closesFromUser(r.fields)) continue;
+    for (const k of scopeKeys(r.fields.approves)) {
+      const m = ENTITY_RULE_APPROVAL.exec(k);
+      if (m && !out.has(`${m[1]}.${m[2]}`)) out.set(`${m[1]}.${m[2]}`, r.id);
+    }
+  }
+  return out;
+}
+// An `Approves:` line that approves nothing is named, never dropped, as a `Closes:` line is.
+function approvesIssues(r) {
+  const keys = scopeKeys(r.fields?.approves);
+  if (!keys.length) return [];
+  if (!closesFromUser(r.fields)) {
+    return [`\`Approves:\` approves an object-wide change only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
+  }
+  return keys.filter((k) => !ENTITY_RULE_APPROVAL.test(k))
+    .map((k) => `\`Approves:\` names \`${k}\`, which is not an entity rule (\`entity-rule:<Entity>.<Attribute>\`)`);
+}
 // Who decided each entry, and in what words: `{ D<N>: { decidedBy, quote } }` for the entries that carry either
 // line, as a plain object so it rides on a run result the way the directives do. An entry without provenance is
 // absent, which reads as "not the user's own words".
@@ -265,6 +293,6 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r), ...approvesIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }

@@ -66,8 +66,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, withheldFeatureStatus, withheldPageKey, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_BUILT_ELSEWHERE, RULE_ATTR_PREFIX, ruleAttrId, STATUS_ISSUE, engineStatusReason,
   reconcilesExisting, EXISTING_SECTION_MODE,
-  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
-import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
+  freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND, mixedNavigationDecisions } from "./designspec.mjs";
+import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes, approvedEntityRules } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
@@ -1156,6 +1156,9 @@ export function checklistOpts(manifest, opts = {}) {
     // fold: a `built-elsewhere` rule status stands only on the user's own decision.
     // Null when this call read no decisions.md, so the root result's copy is used instead.
     decisionProvenance: opts.decisionProvenance || (opts.decisionRecords ? provenanceById(opts.decisionRecords) : null),
+    // The entity rules beyond the plan the user approved (`Approves:` in decisions.md), `{ "<Entity>.<Attr>": "D<N>" }`:
+    // `--verify` accepts an unplanned rule on the object only under one of them.
+    entityRuleApprovals: opts.entityRuleApprovals || (opts.decisionRecords ? Object.fromEntries(approvedEntityRules(opts.decisionRecords)) : null),
     decisionsOptional: opts.decisionsOptional === true,
     // Root-only, like the plan's `### Won't do` list it is printed in.
     decisionsWithoutDeliverable: Array.isArray(manifest.decisionsWithoutDeliverable) ? manifest.decisionsWithoutDeliverable : [],
@@ -3528,6 +3531,9 @@ export function runMigration(manifest, opts = {}) {
   const mpName = miniPageNameOf(processPage, mpDecl, secMpName);
   const miniPageVerified = mpDecl !== undefined || secMpExists; // explicit {schema}/false, or the section body names one
   const miniPage = foldMiniPage(mpName, mpDecl, manifest.miniPageSchemas || {}, foldCtx);
+  // Each wired child whose Classic edit card stays registered is asked about on THIS page, which holds its list:
+  // after the fold, because whether a child is wired is known only once it is.
+  changeSet.needsDecision = [...(changeSet.needsDecision || []), ...mixedNavigationDecisions(childPages)];
   const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
   // The step-5.1 handoff index — assembled once every scope has folded, so a `behaviourIndex` key can be checked
   // against the WHOLE surface before it is reported as matching nothing.

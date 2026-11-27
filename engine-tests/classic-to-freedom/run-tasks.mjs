@@ -34,7 +34,7 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
-import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
+import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys, approvedEntityRules }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -9658,7 +9658,11 @@ check("identity digest guard: rendering the identity condition does NOT move any
     const now = SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`);
     return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
   },
-  () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+  () => {
+    const now = SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`);
+    return { count: [now.length, ROWS_DIGESTS_BASE.length],
+      moved: now.map((d, i) => [i, d, ROWS_DIGESTS_BASE[i]]).filter(([, d, p]) => d !== p) };
+  });
 
 // The RelatedPage add-on is per object, so every wiring row says so and that an existing entry moves only on the
 // user's answer — the builder reads the row, not the reference, at the moment it writes the add-on.
@@ -9674,7 +9678,7 @@ check("child page wiring: build-page.md names the call, argument and fields of t
   () => {
     const doc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
       "../../skills/classic-to-freedom-migration/references/build-page.md"), "utf8");
-    const step = doc.slice(doc.indexOf("read the entity's `SysModuleEdit` cards"), doc.indexOf("one line\n     per Classic entry"));
+    const step = doc.slice(doc.indexOf("read the entity's `SysModuleEdit` cards"), doc.indexOf("is not an answer."));
     return step.length > 0 && /`list-entity-client-schemas` with `entity-name`/.test(step)
       && /`editPages\[\]`/.test(step) && /`cardSchema`/.test(step) && /`kind: classic`/.test(step)
       && /never write `SysModuleEdit`/.test(step);
@@ -12743,6 +12747,98 @@ console.log("\n===== a decision closing a rule attribute is not drift =====");
   check("decided: a rule row's read slot and object leave its rowsDigest unchanged; a RelatedPage row's entity still moves it",
     () => rowsDigest([rule]) === rowsDigest([onObject]) && rowsDigest([related]) !== rowsDigest([relatedElsewhere]),
     () => [rowsDigest([rule]), rowsDigest([onObject]), rowsDigest([related]), rowsDigest([relatedElsewhere])]);
+}
+
+console.log("\n===== object-wide changes: asked before the build, flagged when unapproved, listed in the result =====");
+{
+  // A child page whose Classic edit page carries two lookup filters, rebuilt and wired from its parent's related
+  // list. The object's rules read back hold the two planned rules and three a builder added on its own; two of those
+  // govern no planned attribute (a third governs one that is planned, so it reads as part of the planned set).
+  const FIX = path.join(DIR, "fixtures", "object-wide-retest");
+  const m = JSON.parse(fs.readFileSync(path.join(FIX, "manifest.json"), "utf8"));
+  const built = JSON.parse(fs.readFileSync(path.join(FIX, "built.json"), "utf8"));
+  const decisionsText = fs.readFileSync(path.join(FIX, "decisions.md"), "utf8");
+  const RUN = runMigration(m, { baseDir: FIX });
+  const groups = checklistGroups(RUN, checklistOpts(m));
+  const rows = groups.flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: r.pageKey || g.pageKey })));
+  const mixed = rows.find((r) => r.confirm?.kind === "mixed-navigation");
+  check("object-wide: a child rebuilt from a Classic edit page and wired from a related list puts ONE mixed-navigation question in ⚠ Confirm before the build, on the page holding the list",
+    () => mixed?.pageKey === "main" && mixed.confirm.item === "DemoLine"
+      && rows.filter((r) => r.confirm?.kind === "mixed-navigation").length === 1
+      && /\*\*\[mixed-navigation\]\*\* DemoLine — DemoLine's edit card in SysModuleEdit stays the Classic DemoLinePage/.test(RUN.plan)
+      && /recorded not built, needs-decision/.test(RUN.plan),
+    () => ({ mixed, plan: RUN.plan.split("\n").filter((l) => /mixed-navigation/.test(l)) }));
+
+  const withRecords = (text) => checklistOpts(m, { decisionRecords: parseDecisionRecords(text) });
+  const v = renderVerify(RUN, withRecords(decisionsText), built);
+  const unplanned = v.objectWide.unplanned;
+  check("object-wide: verify reads the object's rules and flags the two the plan does not list and no decision approves — the run is not complete",
+    () => unplanned.map((u) => u.name).join() === "BusinessRule_b1,BusinessRule_b2" && unplanned.every((u) => !u.approvedBy && u.entity === "DemoLine")
+      && v.complete === false && /⛔ \*\*2 entity rule\(s\) on the object that the plan does not list and no decision approves\*\*/.test(v.markdown)
+      && /`BusinessRule_b1` on `DemoLine`/.test(v.markdown),
+    () => ({ unplanned, complete: v.complete }));
+  check("object-wide: verify lists the plan's own object-wide rows — the entity rules, the add-on binding and the mixed-navigation question",
+    () => ["entity-rules", "related-page", "mixed-navigation"].every((k) => v.objectWide.rows.some((r) => r.kind === k && r.entity === "DemoLine"))
+      && v.objectWide.rows.find((r) => r.kind === "entity-rules").attributes.join() === "Order,Product",
+    () => v.objectWide.rows);
+
+  const approving = `${decisionsText}\n## D48 — Keep the two extra rules on DemoLine\n- Kind: answer\n- Decided by: user\n`
+    + "- Asked: Two entity rules on DemoLine are not in the plan (InternalRequest filter, Customer when filled). Keep them?\n"
+    + "- Quote: \"keep both\"\n- Approves: `entity-rule:DemoLine.InternalRequest`, `entity-rule:DemoLine.Customer`\n";
+  const approvedRecords = parseDecisionRecords(approving);
+  const va = renderVerify(RUN, withRecords(approving), built);
+  check("object-wide: a user's `Approves:` answer naming the object and attribute accepts an unplanned rule — listed with its decision, no banner",
+    () => [...approvedEntityRules(approvedRecords)].join() === "DemoLine.InternalRequest,D48,DemoLine.Customer,D48"
+      && va.objectWide.unplanned.every((u) => u.approvedBy === "D48") && !/that the plan does not list and no decision approves/.test(va.markdown),
+    () => va.objectWide.unplanned);
+  check("object-wide: `Approves:` counts only on the user's own answer and only for `entity-rule:<Entity>.<Attribute>`",
+    () => {
+      const orch = parseDecisionRecords("## D49 — x\n- Kind: answer\n- Decided by: orchestrator\n- Asked: q\n- Approves: `entity-rule:DemoLine.Customer`\n");
+      const bad = parseDecisionRecords("## D50 — y\n- Kind: answer\n- Decided by: user\n- Asked: q\n- Quote: \"ok\"\n- Approves: `rule:Customer`\n");
+      return approvedEntityRules(orch).size === 0 && approvedEntityRules(bad).size === 0
+        && provenanceIssues(orch).some((p) => /`Approves:` approves an object-wide change only on the user's own answer/.test(p.problem))
+        && provenanceIssues(bad).some((p) => /names `rule:Customer`, which is not an entity rule/.test(p.problem));
+    });
+
+  // The result report, from a task folder whose builder recorded the entity rules per D13, left the mixed-navigation
+  // question unanswered, and wrote two `Object-wide` lines — one citing D33, one citing nothing.
+  const base = tmp("object-wide-report");
+  fs.writeFileSync(path.join(base, "decisions.md"), decisionsText);
+  const dir = path.join(base, "build-tasks");
+  const label = (k) => v.objectWide.rows.find((r) => r.kind === k).deliverable;
+  const task = (id, pageKey, rs, notes = "") => ({ id, file: `${id}.md`, group: id, pageKey, status: "done", kind: "build", notes,
+    rows: rs.map(([l, reason]) => ({ label: l, outcomeKind: "built", outcome: `built — ${reason}`, outcomeReason: reason, na: null })) });
+  const tasks = [
+    task("t-child", "child:DemoLine", [[label("entity-rules"), "two entity rules per D13"]],
+      "- Object-wide (row 1): DemoLine.ProductType shows as a dropdown on every page (column setting) — D33\n"
+        + "- Object-wide (row 1): DemoLine.Account made read-only on the object, as on the Classic page\n"),
+    task("t-wiring", "main", [[label("related-page"), "add-on written, empty before"], [label("mixed-navigation"), "noted for the final report"]]),
+  ];
+  const rep = renderFinalReport({ result: RUN, verifyRes: v, set: { planVersion: RUN.planVersion, tasks }, dir, built });
+  const section = rep.markdown.slice(rep.markdown.indexOf("## Object-wide changes"));
+  const body = section.slice(0, section.indexOf("\n## ", 3) > 0 ? section.indexOf("\n## ", 3) : undefined);
+  check("object-wide: the result has an Object-wide changes section listing every change made beyond the page, each with what approved it",
+    () => /^## Object-wide changes \(7\)$/m.test(body)
+      && /Entity business rules on `DemoLine`: Order, Product .*\| \*\*D13\*\* — Lookup filters become entity rules/.test(body)
+      && /RelatedPage add-on for `DemoLine` .*\| the approved plan \|/.test(body)
+      && /Edit card of `DemoLine` stays Classic .*\| ⚠ no recorded answer \|/.test(body)
+      && /Entity rule `BusinessRule_b1` on `DemoLine` — NOT in the plan .*\| ⚠ no decision approves it \|/.test(body)
+      && /DemoLine\.ProductType shows as a dropdown .*\| \*\*D33\*\* — Product type lookups/.test(body)
+      && /DemoLine\.Account made read-only on the object.*\| ⚠ no recorded decision \|/.test(body),
+    () => body);
+  check("object-wide: an unanswered mixed-navigation question, an unapproved rule and a builder's line without a decision leave the run NOT COMPLETE and say why",
+    () => rep.complete === false && rep.reasons.some((r) => /^4 object-wide changes without a recorded decision — see Object-wide changes$/.test(r)),
+    () => rep.reasons);
+  fs.writeFileSync(path.join(base, "decisions.md"), approving);
+  const repOk = renderFinalReport({ result: RUN, verifyRes: va, dir, built, set: { planVersion: RUN.planVersion, tasks: [
+    task("t-child", "child:DemoLine", [[label("entity-rules"), "two entity rules per D13"]],
+      "- Object-wide (row 1): DemoLine.ProductType shows as a dropdown on every page (column setting) — D33\n"),
+    task("t-wiring", "main", [[label("related-page"), "add-on written, empty before"], [label("mixed-navigation"), "user keeps the Classic card, D33"]]),
+  ] } });
+  check("object-wide: with every change approved the section stays, and adds no reason to the verdict",
+    () => /## Object-wide changes \(6\)/.test(repOk.markdown) && !repOk.reasons.some((r) => /object-wide/.test(r)),
+    () => repOk.reasons);
+  fs.rmSync(base, { recursive: true, force: true });
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

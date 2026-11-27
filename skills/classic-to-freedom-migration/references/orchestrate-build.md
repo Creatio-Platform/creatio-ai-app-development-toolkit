@@ -435,6 +435,16 @@ may change it at any time by saying so — update the line first.
    `` - Closes: `<pageKey>#business-rule:<Attribute>`[, …] ``, naming only attributes the page's rule
    rows list; `--verify` reads it as the same `built-elsewhere` status, with the same quote.
 
+   **An object-wide change the plan does not list needs the user's answer before it is built.** An
+   entity rule reaches every page and list of its object, so a builder asking for one the plan has
+   not got (the same filter "by analogy" on another lookup) is a new question for the user, never a
+   wider reading of an earlier answer. Record the answer as a `Kind: answer` entry with the line
+   `` - Approves: `entity-rule:<Entity>.<Attribute>`[, …] ``. `--verify` reads the object's rules and
+   fails the run on a rule the plan does not list and no such line approves; the result report's
+   **Object-wide changes** section lists every change, the plan's and the approved ones, with the
+   decision behind each. Each `[mixed-navigation] <Entity>` ⚠ Confirm item is answered at plan
+   approval like any other; an unanswered one leaves its binding row `not-built — needs-decision`.
+
    **Every planning decision is accounted for before the first dispatch.** A `D<N>` that drops no
    deliverable is listed in `manifest.decisionsWithoutDeliverable: ["D<N>", …]`; the plan prints
    the list under `### Won't do` so the approver sees it. Until a task is dispatched, `--tasks` (the
@@ -696,7 +706,11 @@ page named by its Freedom schema) — verdict first (`✅ COMPLETE` /
 plan items recorded not built that still need a decision — each with the `Decision needed (row N)`
 line the build agent wrote, **2.** boundaries closed `not-applicable` — those citing a recorded
 decision (`D<N>` in `decisions.md`, `Adjustment N` in the plan) as information, those citing none as
-a question, **3.** machine rows the engine could not confirm (only when there are any), **4.** the
+a question, then **Object-wide changes** (only when there are any) — every entity rule, RelatedPage
+add-on entry and Classic edit card the run left on an object, each entity rule found on an object
+that the plan does not list, and every `Object-wide (row N)` line a builder wrote, each with the
+decision that approved it; one with none (an unanswered `[mixed-navigation]` item, an unapproved rule,
+a line citing no `D<N>`) is a verdict reason, **3.** machine rows the engine could not confirm (only when there are any), **4.** the
 task ledger with HOW each task was verified (machine / evidence + judge / by hand), **5.** per-task
 details of what is still open, with each build agent's `Check on stand (row N)` line. The
 plan-vs-built table is not written as a file — the report carries everything it says. The verdict is

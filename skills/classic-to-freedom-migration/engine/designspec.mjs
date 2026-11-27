@@ -3352,6 +3352,25 @@ function childWiringRow(c, pkg) {
       what: `RelatedPage add-on read for \`${esc(c.entity)}\``, query: relatedPageQuery(c.entity, pkg) },
   };
 }
+// The ⚠ Confirm item a wired child owes when its Classic edit page stays the object's edit card. This run never
+// writes `SysModuleEdit`, so once the add-on names the rebuilt page the related list opens Freedom while every other
+// entry point to the object (its section, a lookup, a link) still opens the Classic card: an object-wide state the
+// user has to accept before the build, not a note a builder files after it. One item per object.
+export const MIXED_NAVIGATION = "mixed-navigation";
+export function mixedNavigationDecisions(childs) {
+  const out = new Map();
+  for (const c of childs || []) {
+    const classic = c?.resolvedFrom || (typeof c?.editPage === "string" ? c.editPage : null);
+    if (!c?.entity || !classic || out.has(c.entity) || childWiringKind(c) !== "wire") continue;
+    out.set(c.entity, { kind: MIXED_NAVIGATION, item: c.entity,
+      reason: `${c.entity}'s edit card in SysModuleEdit stays the Classic ${classic}, and this run never writes SysModuleEdit. `
+        + "Once the RelatedPage add-on names the rebuilt page, the related list opens the Freedom page while the section, "
+        + `lookups and every other entry point to ${c.entity} still open the Classic card. Ask the user whether to keep `
+        + "that mixed navigation (they switch the card themselves if not) and record the answer as its own D<N> before "
+        + "the binding row is built; without that answer the binding row is recorded not built, needs-decision" });
+  }
+  return [...out.values()];
+}
 // The rows for THIS page's related lists. Each page renders its own children, so a grandchild's row sits on the
 // child page that holds its list.
 function childWiringRows(childs, opts = {}) {
@@ -4594,6 +4613,62 @@ function ruleSource(vk) {
   const object = vk.entity ? " `" + esc(vk.entity) + "`" : "";
   return { slot: ENTITY_RULES_SLOT, subject: "entity business rules", read: "read-entity-business-rules",
     target: `the object${object} in the target package`, kind: "entity", where: "on the object" };
+}
+// OBJECT-WIDE CHANGES. An entity rule, a RelatedPage add-on entry and the object's edit card reach every page of the
+// object, not only the page the plan rebuilds. `--verify` lists each one the plan carries, and reads the object's own
+// rules for any rule the plan did not list: such a rule stands only on the user's `Approves:` answer naming the object
+// and the attribute it governs (`approvedEntityRules` in directives.mjs). One the user never approved leaves the run
+// incomplete, whatever the rows say.
+const objectWideKind = (r) => {
+  if (r.vk?.type === "rule" && r.vk.slot === ENTITY_RULES_SLOT) return "entity-rules";
+  if (r.vk?.type === "relatedpage") return "related-page";
+  return r.confirm?.kind === MIXED_NAVIGATION ? MIXED_NAVIGATION : null;
+};
+function objectWideEntry(r, row) {
+  const kind = objectWideKind(r);
+  if (!kind) return null;
+  const entity = r.vk?.entity || r.confirm?.item || null;
+  return { kind, pageKey: row.pageKey, entity, deliverable: row.deliverable, status: row.status, outcome: row.outcome,
+    ...(kind === "entity-rules" ? { attributes: [...new Set(r.vk.names || [])] } : {}) };
+}
+const ruleNameOf = (rule) => String(rule?.name || rule?.caption || "?");
+function objectRulesOf(page) {
+  const slot = entryObject(page)?.[ENTITY_RULES_SLOT];
+  if (Array.isArray(slot)) return slot;
+  return Array.isArray(slot?.rules) ? slot.rules : [];
+}
+// The rules read off each object that govern none of the attributes the plan lists for it, each with the decision
+// that approved it, or null. The same object read on two pages is one set of rules, so a rule is listed once.
+export function unplannedEntityRules(groups, root, approvals = {}) {
+  const planned = new Map();
+  for (const g of groups) for (const r of g.rows) {
+    if (objectWideKind(r) !== "entity-rules" || !r.vk.entity) continue;
+    const p = planned.get(r.vk.entity) || { attrs: new Set(), pages: [] };
+    for (const n of r.vk.names || []) p.attrs.add(n);
+    p.pages.push(r.pageKey || g.pageKey || "main");
+    planned.set(r.vk.entity, p);
+  }
+  const out = [];
+  for (const [entity, p] of planned) {
+    const seen = new Set();
+    for (const key of p.pages) for (const rule of objectRulesOf(root?.pages?.[key])) {
+      const name = ruleNameOf(rule);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const tokens = builtRuleTokens([rule])[0];
+      if ([...p.attrs].some((a) => tokens.has(a))) continue;
+      const approved = [...tokens].find((t) => Object.hasOwn(approvals || {}, `${entity}.${t}`));
+      out.push({ entity, pageKey: key, name, attribute: approved || null, approvedBy: approved ? approvals[`${entity}.${approved}`] : null });
+    }
+  }
+  return out;
+}
+function unplannedBanner(unapproved) {
+  if (!unapproved.length) return [];
+  const named = unapproved.map((u) => "`" + esc(u.name) + "` on `" + esc(u.entity) + "`").join(", ");
+  return ["", `> ⛔ **${unapproved.length} entity rule(s) on the object that the plan does not list and no decision approves**: ${named}.`
+    + " An entity rule applies on every page and list of its object. Ask the user; record the answer with"
+    + " `Approves: entity-rule:<Entity>.<Attribute>` (their own answer, quoted), or remove the rule."];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element", "classic-extras"]);
@@ -6243,6 +6318,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // the report's Carry-over section (postponed) or as decided boundaries (wont-do / not-applicable) —
   // nothing is dropped in silence; the LIST just changes source.
   const decided = [];
+  const objectWide = [];
   const derivedEvidenceIds = new Set();
   const peers = pageItemPeers(groups, decidedKeys);
   for (const g of groups) {
@@ -6262,6 +6338,8 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
       rows.push(row);
       L.push(tableLine);
+      const ow = objectWideEntry(r, row);
+      if (ow) objectWide.push(ow);
     }
   }
   // A RECORD FILED WHERE THE ENGINE NEVER LOOKS IS NOT A RECORD. The ids are engine-derived and written into the
@@ -6270,6 +6348,8 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
   // every other page's id would read as an orphan of the scope rather than of the run.
   const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
+  const unplanned = unplannedEntityRules(groups, root, opts.entityRuleApprovals);
+  const unapproved = unplanned.filter((u) => !u.approvedBy);
   const { missing, unverified, builderOpen, pages } = tally;
   const verdict = verifyVerdict(missing, unverified, orphans.length);
   const decidedBanner = decided.length
@@ -6282,7 +6362,9 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
     ...decidedBanner,
     ...planGapBanner(result),
     ...orphanBanner(orphans),
-    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans)].join("\n");
+    ...unplannedBanner(unapproved),
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans), ...unplannedBanner(unapproved)].join("\n");
   return { markdown: md, missing, unverified, builderOpen,
-    complete: missing === 0 && unverified === 0 && orphans.length === 0, orphans, pages, rows, decided };
+    complete: missing === 0 && unverified === 0 && orphans.length === 0 && unapproved.length === 0, orphans, pages, rows, decided,
+    objectWide: { rows: objectWide, unplanned } };
 }

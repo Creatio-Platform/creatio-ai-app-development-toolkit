@@ -22,6 +22,11 @@ Provenance (important):
 - `tasks-aggregate-rows/` — a task folder (its build task only) in the one-row coverage format (`Fields — N expected`,
   `Related lists — N expected`) with a `built` cell on the main page's Fields row and a `wont-do (D3)` cell on its
   Related lists row. `run-tasks.mjs` copies it and never edits it in place.
+- `object-wide-retest/` — **synthetic**, reduced from a customer retest with every name replaced (`DemoSub`,
+  `DemoLine`, placeholder rule names): a parent page whose related list opens a child rebuilt from its Classic edit
+  page, which filters two lookups. `built.json` is the object's rules as read back — the two the plan lists and three
+  a builder added on its own — and `decisions.md` holds the two answers the run recorded. `run-tasks.mjs` asserts the
+  mixed-navigation question, the unplanned-rule flag and the result report's Object-wide changes section.
 
 - `client-modules-v2/` — **real built Freedom code** from a migration benchmark run of the synthetic Classic
   test package `MbContract` (no customer data): the three client modules the pages call into and the delivery-note

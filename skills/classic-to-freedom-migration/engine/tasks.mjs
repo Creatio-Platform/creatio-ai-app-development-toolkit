@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic, pauseSync, tempPathFor, FileBusyError } from "./fsatomic.mjs";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO, esc, dataWritingPages, dataWriteBullets, MIXED_NAVIGATION } from "./designspec.mjs";
 import { conventionsTaskLines } from "./conventions.mjs";
 import { directiveCovers, parseDirectiveRowId } from "./directives.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
@@ -322,6 +322,8 @@ function rowWeight(row, baseTitle, B) {
   // The binding is already in the related list's weight (`relatedList` carries its binding and its child page), so
   // the row that checks it adds none — like the per-item rows above.
   if (row.vk?.type === "relatedpage") return 0;
+  // The mixed-navigation question is answered at plan approval and gates that same binding, so it adds no build work.
+  if (row.confirm?.kind === MIXED_NAVIGATION) return 0;
   const label = String(row.label || "");
   const fields = /—\s*(\d+)\s+fields?\b/.exec(label);
   if (fields) return Number(fields[1]) * B.field;
@@ -1252,6 +1254,11 @@ function markersBlock() {
     "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
       + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
       + " can follow without reading the rest of your notes.",
+    "  - for every change you made that reaches beyond this page — an entity rule, an object column's setting, a"
+      + " RelatedPage add-on entry, a system setting: `Object-wide (row N): <what changed, on which object> — D<N>`,"
+      + " citing the decision that approved it. Make no such change the plan or a recorded answer does not name:"
+      + " never by analogy with one that was approved. The result report lists every line, and one citing no"
+      + " recorded decision leaves the run incomplete.",
     "  - for every `Handler — …` row you ported under another name: `Ported as (row N): <symbol>` — the request"
       + " type the page sends (`usr.SetCanEditRequest`), the page function a handler calls, or `Module.function`"
       + " (the module's schema name, also when the page calls it through its `define()` parameter, and also for a"

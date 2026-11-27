@@ -34,6 +34,16 @@ clio-safety rules apply to every write.
    scaffolding is its own task, ahead of every page, and a switch-over happens only when the user
    approved one.) The existence re-check before every create (`build-task-execution.md`) holds for
    each subtask here too.
+   - **Object-wide changes are built only as approved, never by analogy.** An entity business rule,
+     an object column's setting, a RelatedPage add-on entry and a system setting reach every page and
+     list of the object, not only the page you build. Build the ones the plan lists, under the answer
+     its ⚠ Confirm item recorded, and no other: a rule that "would fit the same decision" is a new
+     object-wide change. Ask the user first; record the answer as its own `D<N>`, and for an entity
+     rule add `- Approves: entity-rule:<Entity>.<Attribute>` to it (the user's own answer, quoted).
+     Write each change you made as `Object-wide (row N): <what changed, on which object> — D<N>`
+     under `## Notes`. `--verify` reads the object's rules and fails the run on any rule the plan does
+     not list and no `Approves:` names, and the result report lists every object-wide change with the
+     decision behind it.
    - **On a RECONCILE (existing Freedom page), apply the `reconcileMode:` in your task's front matter.**
      `overlay` (or no key) — add the client delta onto the existing Freedom layout, keeping base
      positions and base "extra" elements. `classic-layout` — re-lay the page so every FIELD and DETAIL
@@ -132,10 +142,14 @@ clio-safety rules apply to every write.
      `kind` is `classic` or `freedom`, and `typeColumnValue` names the Type a per-type card serves.
      The read is all you do there — **never write `SysModuleEdit`**, a system table. When any entry
      has `kind: classic`, the binding leaves navigation mixed: the related list opens the Freedom
-     page while other entry points open Classic. Ask the user whether to keep that state (they switch
-     it themselves if not), record the answer as its own `D<N>` and write
-     `mixed navigation — <entity>: SysModuleEdit → <cardSchema>` under the row's `## Notes`, one line
-     per Classic entry.
+     page while other entry points open Classic. The plan asks this before the build, as the
+     `[mixed-navigation] <Entity>` item of ⚠ Confirm; build on the `D<N>` that records the user's
+     answer, cite it in the row's outcome, and write
+     `Object-wide (row N): mixed navigation — <entity>: SysModuleEdit → <cardSchema> — D<N>` under
+     `## Notes`, one line per Classic entry. **No recorded answer — the item was missed, or the read
+     finds a Classic card the plan did not ask about — means you do not bind:** record the row
+     `not-built — needs-decision` with a `Decision needed (row N):` line naming the card. A note
+     "for the final report" is not an answer.
      `create-related-page-addon` REPLACES the whole configuration, so send back every entry you read
      plus your change: the BUILT child page as the general default entry (`is-default`, no
      `type-column-value`, the `All employees` role or none), a separate `is-add` entry only when a
