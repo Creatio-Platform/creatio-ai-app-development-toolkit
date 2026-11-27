@@ -30,6 +30,7 @@
 //     "constantsModules": { "<Module>": { "body": "<define(...) source>" }, … }, // the bodies of projectConventions.constantsModules — the plan maps every GUID it shows to its `Module.Path`
 //     "qualityThresholds": { maxFunctionLines?, maxNestedFunctionsPerHandler?, maxSequentialIndependentAwaits? }, // optional; overrides quality.mjs's DEFAULT_QUALITY_THRESHOLDS (60 / 3 / 2) for the `--verify` Code quality rows. Root only — every fold uses the root's
 
+//     "openWrites": [ { via, hook?, writes?: [{ call, target? }], addModeOnly?, evidence? }, … ], // optional, per bundle (a child page's in its own nested manifest); a write the page runs while it opens from code the bundle does not carry (a mixin body, a called module) — the analysis declares it, and the plan lists the page under **Pages that write data when opened**
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 //     "deliverableStatus": { "<pageKey>#<deliverable id>": { status: "wont-do" | "build", decision?: "D<N>" }, … } // optional; a planning decision on one deliverable (see deliverableStatusIssues). `wont-do` needs a D<N> in decisions.md; `build` is the explicit answer a related deliverable needs
@@ -3389,6 +3390,7 @@ export function runMigration(manifest, opts = {}) {
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
     processButtons: processButtonMap(processPage), // a process page's buttons end or keep its step: no generated request handler
     siblingOf: manifest.siblingOf,            // an earlier migration built this page's twin — this bundle's own fact, never inherited by a fold
+    openWrites: manifest.openWrites,          // writes on open the analysis found in code the bundle lacks (a mixin) — this bundle's own fact
     componentAvailable: (t) => carriesComponent(runRegistry, t), // a component newer than the vendored index is built only where the run's registry carries it
     registrySource: runRegistry.source,
     registryUnindexedVersion: runRegistry.unindexedVersion || null, // a pinned platformVersion the vendored index does not know

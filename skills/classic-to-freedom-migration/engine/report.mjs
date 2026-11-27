@@ -30,7 +30,7 @@ import path from "node:path";
 import { esc, planGaps, dataWritingPages } from "./designspec.mjs";
 import { readDecisionRecords, orchestratorDecisions, DECISION_HEADING, headingTitle } from "./directives.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS, notesMarker, notesMarkers, writesPage, readWorklogBrowserAnswer, browserAnswerOf,
-  worklogFieldValues, addModeChecks, STAND_DATA_FIELD, STAND_DATA_MARKER,
+  worklogFieldValues, addModeChecks, keptCounters, STAND_DATA_FIELD, STAND_DATA_MARKER,
   S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
@@ -220,20 +220,26 @@ function standDataSection(result, tasks, { text: worklog = "", unread = null }, 
     ...tasks.flatMap((t) => [...notesMarkers(t.notes, STAND_DATA_MARKER)].flatMap(([n, values]) => values.map((v) => ({
       text: withoutClosingBold(v), where: `[${cell(t.group || t.id)}](${enc(t.file)}), row ${n}` }))))];
   const pages = dataWritingPages(result);
-  const { agreed, unknown } = addModeChecks(worklog, pages);
   if (!changes.length && !pages.length) return [];
   const L = [`## Stand data this run changed (${changes.length})`, ""];
   if (changes.length) L.push(...changes.map((c) => `- ${cell(c.text)} — ${c.where}`));
   if (unread) L.push(`\`worklog.md\` was not read (${cell(unread)}), so the changes recorded there are not listed; only the task notes were read.`);
   else if (!changes.length) L.push("No change to stand data was recorded by this run.");
-  if (pages.length) {
-    const one = pages.length === 1;
-    L.push("", `The plan named ${plural(pages.length, "page")} that write${one ? "s" : ""} data when opened, so ${one ? "it was" : "they were"}`
-      + " to be opened only in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".",
-    agreed.size ? `Add-mode checks the user agreed to: ${[...agreed.values()].map(cell).join("; ")}.`
-      : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule.");
-    if (unknown.length) L.push(`Not counted as consent — an \`Add-mode check:\` line that names no page key of the plan's list: ${unknown.map(cell).join("; ")}.`);
-  }
+  if (pages.length) L.push(...dataWritingPagesLines(pages, worklog, pageName));
+  return L;
+}
+// The pages the plan kept to edit mode, the consent the user gave for each, and the Classic counters the user kept.
+function dataWritingPagesLines(pages, worklog, pageName) {
+  const { agreed, unknown } = addModeChecks(worklog, pages);
+  const counters = keptCounters(worklog, pages);
+  const one = pages.length === 1;
+  const L = ["", `The plan named ${plural(pages.length, "page")} that write${one ? "s" : ""} data when opened, so ${one ? "it was" : "they were"}`
+    + " to be opened only in edit mode on an existing record: " + pages.map((p) => `**${pageName(p.pageKey)}**`).join(", ") + ".",
+  agreed.size ? `Add-mode checks the user agreed to: ${[...agreed.values()].map(cell).join("; ")}.`
+    : "No add-mode check was agreed, so none of them should have consumed data; a change listed above on one of them is a check that broke that rule."];
+  if (unknown.length) L.push(`Not counted as consent — an \`Add-mode check:\` line that names no page key of the plan's list: ${unknown.map(cell).join("; ")}.`);
+  if (counters.agreed.size) L.push(`Browser-side counters the user chose to keep (a user without the right to change system settings gets no number): ${[...counters.agreed.values()].map(cell).join("; ")}.`);
+  if (counters.unknown.length) L.push(`Not counted as a decision — a \`Client counter kept:\` line that names no page the plan lists as taking a number on open: ${counters.unknown.map(cell).join("; ")}.`);
   return L;
 }
 // The block of `## Notes` that is ABOUT row N: from a heading / bold line naming the row ("## 2 — Handler", "### Row 9",

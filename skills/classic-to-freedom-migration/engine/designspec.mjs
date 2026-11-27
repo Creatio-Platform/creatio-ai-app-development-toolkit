@@ -3422,16 +3422,32 @@ export function dataWriteText(w) {
 // One bullet per write of each page: the plan and the task files list them the same way.
 export const dataWriteBullets = (pages, indent = "") =>
   pages.flatMap((p) => p.writes.map((w) => `${indent}- **${esc(p.label)}** (\`${esc(p.pageKey)}\`) — ${dataWriteText(w)}`));
+// A COUNTER TAKEN IN THE BROWSER: a page that, while it opens, writes a system setting (the `XLastNumber` idiom) or
+// asks the number generator for the next value. Ported as it is, every add-form open consumes a number and a user
+// without the right to change system settings gets none, so the build rule moves it to the save, on the server.
+const COUNTER_CALL_RX = /(?:^|\.)post(?:Personal)?SysSettingsValue$|(?:^|\.)getIncrement(?:Code|Number|Value)\w*$/;
+export const counterPages = (pages) => (pages || []).filter((p) => p.writes.some((w) => w.writes.some((x) => COUNTER_CALL_RX.test(x.call))));
+export const COUNTER_KEPT_FIELD = "Client counter kept:";
+export const COUNTER_RULE = "the number is taken when the record is SAVED, on the server — the column's platform"
+  + " autonumbering where the stand offers it, an entity event or business process on insert, or a configuration"
+  + " service that runs with the rights it needs — and the card shows it after the save. Never port it as a browser"
+  + " write of a system setting or a counter: every add-form open would consume a number, and a user without the right"
+  + " to change system settings would get none.";
 // The plan section. Nothing for a run without such a page, so an ordinary plan reads exactly as before.
 function dataWritingPlanLines(pages) {
   if (!pages.length) return [];
+  const counters = counterPages(pages);
   return ["### Pages that write data when opened", "",
     "⚠ Opening these pages changes data on the stand. Every browser check — the browser-question probe, `page-smoke`,"
       + " a builder's check — opens them only in EDIT mode on an existing record (`page-smoke` with `record-id`)."
       + " An add-mode check needs the user's consent for that page, the values below recorded before it, and what"
       + " changed written as a `Stand data changed:` line in `worklog.md`; the migration result lists it."
       + " A page that writes every time it opens is not opened at all without that consent.", "",
-    ...dataWriteBullets(pages), ""];
+    ...dataWriteBullets(pages), "",
+    ...(counters.length ? [
+      `**Build rule — a number taken on open (${counters.map((p) => "`" + esc(p.pageKey) + "`").join(", ")}):** ${COUNTER_RULE}`
+        + " Keeping the Classic behaviour is the user's call: ask it with the browser question, and record a yes as"
+        + ` \`${COUNTER_KEPT_FIELD} <page key> (user: "<their words>")\` in \`worklog.md\`.`, ""] : [])];
 }
 // Dedupe on the FINAL `pageKey` (D1), not on `pageDedupeId`. The two agree only because `assignPageKeys` has
 // already guaranteed one key per physical page; keying the splice on the KEY is what makes that guarantee load-

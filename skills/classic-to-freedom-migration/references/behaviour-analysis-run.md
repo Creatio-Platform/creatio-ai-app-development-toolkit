@@ -122,7 +122,11 @@ proof is a whole-surface census that no single scope can produce:
   base-page chain, every mixin body, the referenced modules and constants, and the message
   publish/subscribe register. It returns the scope list and OWNS the cards for everything shared.
   Without it each scope re-reads the same base layers and mixins, and two scopes write two different
-  cards for one mixin.
+  cards for one mixin. A mixin body (or any module the page calls) that writes data while the page
+  opens — the next number from a system setting or the number generator, an insert, a save — goes
+  into the page's bundle as `openWrites` (`{ via, hook, writes: [{ call, target }], addModeOnly,
+  evidence }`; see the manifest notes in `engine/migrate.mjs`): the engine reads the page's own layers,
+  never a mixin, and without the entry the plan does not list the page among the pages that write data.
 - **Describe (count decided from the inventory, not fixed)** — the script packs the `--stubs` scopes
   into batches by row count: a surface under the row target gets ONE agent over everything (the
   whole-surface run the analysis skill was written for), a larger one gets several, and a scope is

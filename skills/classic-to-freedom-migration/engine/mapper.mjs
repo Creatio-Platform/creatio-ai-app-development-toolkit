@@ -619,7 +619,7 @@ export function mapToFreedom(eff, opts = {}) {
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
   // the page writes data while it opens: the plan names it and every browser check keeps to edit mode
-  const dataWritesOnOpen = writesOnOpen(payloadMethods);
+  const dataWritesOnOpen = [...writesOnOpen(payloadMethods), ...declaredOpenWrites(opts.openWrites)];
 
   // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
   // (messages / mixins / the full define() dep list) ----
@@ -2349,6 +2349,10 @@ function buildCallerIndex(methods) {
 // The walk starts at the hooks the platform runs while the page opens and
 // follows `this.<method>` calls through the page's own methods, so a helper one
 // hop away (`onEntityInitialized → mbAssignNumber`) is found where it writes.
+// A body that calls `this.callParent` runs the client layer below it too, so the
+// walk reads that layer's body as well: a top layer whose `onEntityInitialized`
+// only subscribes to a message and calls `callParent` would otherwise hide the
+// counter its base layer writes.
 // ---------------------------------------------------------------------------
 const OPEN_HOOKS = ["init", "onEntityInitialized", "onRender"];
 
@@ -2372,22 +2376,62 @@ function walkFromHook(hook, byName, found, visited) {
     const name = pathTo.at(-1);
     if (visited.has(`${name}|false`) || visited.has(`${name}|${addMode}`)) continue;
     visited.add(`${name}|${addMode}`);
-    const f = byName.get(name).facts;
-    keepWrites(found, { hook, path: pathTo, method: name, addMode, writes: f.dataWrites || [] });
-    const guarded = new Set(f.addModeOnlyCalls || []);
-    for (const c of f.calls) {
-      const next = internalCallTarget(c);
-      if (next && byName.has(next)) queue.push({ pathTo: [...pathTo, next], addMode: addMode || guarded.has(c) });
+    // The add-mode branch of an upper body holds its `callParent` too: the layer below then runs for a new card only.
+    let layerMode = addMode;
+    for (const [i, layer] of bodiesRun(byName.get(name)).entries()) {
+      layerMode = walkBody({ hook, name, pathTo, layer: i === 0 ? null : layer.pkg, facts: layer.facts, addMode: layerMode },
+        byName, found, queue);
     }
   }
 }
-// Keep one entry per method: the first one found, replaced only by a path that makes it write on every open.
-function keepWrites(found, { hook, path, method, addMode, writes }) {
+// One body of the method: keep its writes, queue the page methods it calls, and return the mode the layer below runs in.
+function walkBody({ hook, name, pathTo, layer, facts: f, addMode }, byName, found, queue) {
+  const path = layer ? [...pathTo, `callParent (${layer})`] : pathTo;
+  keepWrites(found, { hook, path, method: name, layer, addMode, writes: f.dataWrites || [] });
+  const guarded = new Set(f.addModeOnlyCalls || []);
+  for (const c of f.calls) {
+    const next = internalCallTarget(c);
+    if (next && byName.has(next)) queue.push({ pathTo: [...path, next], addMode: addMode || guarded.has(c) });
+  }
+  return addMode || f.calls.some((c) => CALL_PARENT_RX.test(c) && guarded.has(c));
+}
+// The bodies one call of a method runs, top layer first: the effective body and, while a body calls `this.callParent`,
+// the client layer below it. A base-template layer ends the chain: its bodies are layout context, not this page's code.
+// A method built without its stack (`layers`) is its one effective body.
+const CALL_PARENT_RX = /(?:^|\.)callParent$/;
+function bodiesRun(m) {
+  const out = [];
+  for (const l of m.layers || [{ pkg: null, seed: false, facts: m.facts }]) {
+    if (l.seed || !l.facts) break;
+    out.push(l);
+    if (!l.facts.calls.some((c) => CALL_PARENT_RX.test(c))) break;
+  }
+  return out;
+}
+// THE OPEN WRITES THE ANALYSIS DECLARED (`manifest.openWrites`): a write the page runs while it opens from code the
+// bundle does not carry — a mixin body, a module the page calls — which the walk above cannot read. Each entry is
+// `{ via, hook?, writes?: [{ call, target? }], addModeOnly?, evidence? }`; `via` names the code that writes. A write is
+// add-mode only when the entry says so, and an entry that names no write still marks the page, through `via`: a
+// declared write the engine cannot type is a page that writes, the safe reading.
+function declaredOpenWrites(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.filter((e) => e && typeof e === "object" && typeof e.via === "string" && e.via.trim()).map((e) => {
+    const hook = typeof e.hook === "string" && e.hook.trim() ? e.hook.trim() : "onEntityInitialized";
+    const addModeOnly = e.addModeOnly === true;
+    const listed = (Array.isArray(e.writes) ? e.writes : []).filter((w) => w && typeof w.call === "string" && w.call.trim());
+    const writes = (listed.length ? listed : [{ call: e.via.trim() }])
+      .map((w) => ({ call: w.call.trim(), target: typeof w.target === "string" && w.target.trim() ? w.target.trim() : null, addModeOnly }));
+    return { hook, path: [hook, `${e.via.trim()} (declared)`], method: e.via.trim(), declared: true, writes, addModeOnly };
+  });
+}
+// Keep one entry per method body: the first one found, replaced only by a path that makes it write on every open.
+function keepWrites(found, { hook, path, method, layer, addMode, writes }) {
   if (!writes.length) return;
   const ws = writes.map((w) => ({ call: w.call, target: w.target, addModeOnly: addMode || w.addModeOnly === true }));
-  const entry = { hook, path, method, writes: ws, addModeOnly: ws.every((w) => w.addModeOnly) };
-  const prev = found.get(method);
-  if (!prev || (prev.addModeOnly && !entry.addModeOnly)) found.set(method, entry);
+  const entry = { hook, path, method, ...(layer ? { layer } : {}), writes: ws, addModeOnly: ws.every((w) => w.addModeOnly) };
+  const key = layer ? `${method}|${layer}` : method;
+  const prev = found.get(key);
+  if (!prev || (prev.addModeOnly && !entry.addModeOnly)) found.set(key, entry);
 }
 
 // Walk callers upward until something ANSWERS what starts the chain: a caller

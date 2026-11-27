@@ -818,12 +818,15 @@ export function walkAstBounded(root, visit) {
 // blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH).
 // THE ADD-MODE BRANCH of a body: every call that runs only when the card is new — inside the consequent of
 // `if (this.isAddMode())` (or `isNewMode` / `isCopyMode`, alone or as one operand of `&&`), the `? :` consequent, or
-// the right side of `this.isAddMode() && …`. A negated or `||` test is not one: a call reads as add-mode only when
-// the code proves it, so a doubtful case is a write on every open, the safe label.
+// the right side of `this.isAddMode() && …`. A negated test is not one, nor an `||` with any other operand: a call
+// reads as add-mode only when the code proves it, so a doubtful case is a write on every open, the safe label. An `||`
+// of mode tests alone (`this.isAddMode() || this.isCopyMode()`) is one: every operand is true only for a new card.
 const ADD_MODE_TEST_RX = /^this\.(?:isAddMode|isNewMode|isCopyMode)$/;
 function isAddModeTest(t) {
   if (t?.type === "CallExpression") return ADD_MODE_TEST_RX.test(calleePath(t.callee) || "");
-  return t?.type === "LogicalExpression" && t.operator === "&&" && (isAddModeTest(t.left) || isAddModeTest(t.right));
+  if (t?.type !== "LogicalExpression") return false;
+  if (t.operator === "||") return isAddModeTest(t.left) && isAddModeTest(t.right);
+  return t.operator === "&&" && (isAddModeTest(t.left) || isAddModeTest(t.right));
 }
 function addModeBranch(node) {
   if ((node.type === "IfStatement" || node.type === "ConditionalExpression") && isAddModeTest(node.test)) return node.consequent;
@@ -2356,7 +2359,10 @@ function mergeMethods(L, seed, methods) {
     // Inheriting them would report the base implementation's line span, calls and category as the effective
     // method's evidence: a plan stating "body does: service-call" about a body that makes no service call.
     const facts = factsByName.get(m) ?? null;
-    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed, facts });
+    // Every layer's facts are kept beside the effective ones, top layer first: a body that calls `this.callParent`
+    // runs the layer below too, so a reader that follows what a method DOES (the open-hook walk) reads them there.
+    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed, facts,
+      layers: [{ pkg: L.pkg, seed, facts }, ...(prev?.layers || [])] });
   }
 }
 
@@ -2693,6 +2699,8 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // body evidence (calls / attribute reads-writes / message traffic / line span), null when the layer's body
       // was not statically readable — the NAME still survives, so a member is never lost for lack of evidence
       facts: m.facts || null,
+      // the override stack's bodies, top layer first (`{ pkg, facts }`): what `this.callParent` runs, layer by layer
+      layers: m.layers,
       // Where the method is INVOKED FROM, sourced from data rather than inferred from its name:
       //  • `attributes.<Col>.dependencies[].methodName` → the classic "recompute when these columns change" wiring
       //  • a diff item's click/change binding → a control on the page
