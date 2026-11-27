@@ -1,0 +1,29 @@
+{
+ "pages": {
+  "main": { "schemaName": "DemoSub_FormPage", "viewConfig": [] },
+  "child:DemoLine": {
+   "schemaName": "DemoLine_FormPage",
+   "viewConfig": [],
+   "entityBusinessRules": {
+    "count": 5,
+    "rules": [
+     { "name": "BusinessRule_a1", "caption": "Order filtered by Account",
+       "condition": {},
+       "actions": [{ "type": "apply-filter", "target": "Order", "targetFilterPath": "Account", "source": "Account" }] },
+     { "name": "BusinessRule_a2", "caption": "Product filtered by type",
+       "condition": {},
+       "actions": [{ "type": "apply-filter", "target": "Product", "targetFilterPath": "ProductType", "source": "ProductType" }] },
+     { "name": "BusinessRule_b1", "caption": "Internal request filter",
+       "condition": {},
+       "actions": [{ "type": "apply-filter", "target": "InternalRequest", "targetFilterPath": "RequestType", "source": "RequestType" }] },
+     { "name": "BusinessRule_b2", "caption": "Customer when filled",
+       "condition": { "conditions": [{ "leftExpression": "Customer", "comparisonType": "is-filled" }] },
+       "actions": [{ "type": "make-required", "items": ["Customer"] }] },
+     { "name": "BusinessRule_b3", "caption": "Order when filled",
+       "condition": { "conditions": [{ "leftExpression": "Order", "comparisonType": "is-filled" }] },
+       "actions": [{ "type": "make-read-only", "items": ["Order"] }] }
+    ]
+   }
+  }
+ }
+}

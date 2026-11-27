@@ -10,6 +10,8 @@
 //   - Expectation: <one statement a judge can check on the built page>
 //   - Closes: `<pageKey>#business-rule:<Attribute>`[, …]   (an answer only: the rule attributes the user accepted as
 //     built another way after the plan was approved — see `closedRuleAttributes`)
+//   - Approves: `entity-rule:<Entity>.<Attribute>`[, …]   (an answer only: an entity rule the plan did not list that the
+//     user accepted on the object, which reaches every page of it — see `approvedEntityRules`)
 //
 // A `directive` is an instruction the user gave without being asked ("use the Summaries component"). An `answer`
 // is the user's reply to a question the orchestrator asked, including a reply outside the offered options. Both
@@ -59,6 +61,7 @@ const FIELD_OF = new Map([
   ["scope", "scope"],
   ["expectation", "expectation"],
   ["closes", "closes"],
+  ["approves", "approves"],
 ]);
 // The `## D<N> — <title>` heading grammar, shared with the decision-title reader in report.mjs so both read the same
 // entries and the same titles.
@@ -175,23 +178,51 @@ export const directiveCovers = (directive, pageKey) =>
 // address is read here, and only from an entry the user decided in their own words: the other statuses drop or
 // re-open a deliverable, which is a planning choice the approved plan has to show.
 const RULE_ATTRIBUTE_KEY = /^[^#\s]+#business-rule:[^\s#]+$/;
+// THE OBJECT-WIDE CHANGES A USER'S ANSWER APPROVES (`Approves:`). Each reaches every page of its object, so it stands
+// only on the user's own answer naming it: `entity-rule:<Entity>.<Attribute>` for an entity rule the plan did not
+// list (`--verify` flags every other rule it reads on the object), `mixed-navigation:<Entity>` for keeping the
+// object's Classic edit card while its related list opens the rebuilt page.
+const OBJECT_WIDE_APPROVAL = /^(?:entity-rule:[A-Za-z_]\w*\.[A-Za-z_]\w*|mixed-navigation:[A-Za-z_]\w*)$/;
 const closesFromUser = (f) => f?.kind === KIND_ANSWER && f.decidedBy === DECIDED_BY_USER && !blank(f.quote);
-export function closedRuleAttributes(records) {
+// The address lines a user's answer may carry, each with the shape its addresses must have.
+const ANSWER_LINES = [
+  { field: "closes", label: "Closes:", acts: "closes a rule", re: RULE_ATTRIBUTE_KEY,
+    shape: "a business-rule attribute (`<pageKey>#business-rule:<Attribute>`)" },
+  { field: "approves", label: "Approves:", acts: "approves an object-wide change", re: OBJECT_WIDE_APPROVAL,
+    shape: "an object-wide change (`entity-rule:<Entity>.<Attribute>` or `mixed-navigation:<Entity>`)" },
+];
+// The well-formed addresses of one line across the user's own answers, as `[{ key, decision }]`, in file order.
+function userAnswerKeys(records, field, re) {
   return (records || []).filter((r) => closesFromUser(r.fields))
-    .flatMap((r) => scopeKeys(r.fields.closes).filter((k) => RULE_ATTRIBUTE_KEY.test(k)).map((key) => ({ key, decision: r.id })));
+    .flatMap((r) => scopeKeys(r.fields[field]).filter((k) => re.test(k)).map((key) => ({ key, decision: r.id })));
 }
-// A `Closes:` line that closes nothing is named, never dropped: on an entry that is not the user's own answer, and
-// for each address that is not a business-rule attribute.
-function closesIssues(r) {
-  const keys = scopeKeys(r.fields?.closes);
-  if (!keys.length) return [];
-  if (!closesFromUser(r.fields)) {
-    return [`\`Closes:\` closes a rule only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
+export function closedRuleAttributes(records) {
+  return userAnswerKeys(records, "closes", RULE_ATTRIBUTE_KEY);
+}
+// `{ "<address>": "D<N>" }` for every address a user's answer approves; the first answer approving one counts.
+export function approvedObjectWide(records) {
+  const out = {};
+  for (const { key, decision } of userAnswerKeys(records, "approves", OBJECT_WIDE_APPROVAL)) {
+    if (!Object.hasOwn(out, key)) out[key] = decision;
   }
-  return keys.filter((k) => !RULE_ATTRIBUTE_KEY.test(k))
-    .map((k) => `\`Closes:\` names \`${k}\`, which is not a business-rule attribute (\`<pageKey>#business-rule:<Attribute>\`)`);
+  return out;
 }
-
+// The ids of the entries that are the user's own answers — the only decisions that can approve an object-wide change.
+export function userAnswerIds(records) {
+  return new Set((records || []).filter((r) => closesFromUser(r.fields)).map((r) => r.id));
+}
+// An address line that addresses nothing is named, never dropped: on an entry that is not the user's own answer,
+// and for each address of the wrong shape.
+function answerLineIssues(r) {
+  return ANSWER_LINES.flatMap(({ field, label, acts, re, shape }) => {
+    const keys = scopeKeys(r.fields?.[field]);
+    if (!keys.length) return [];
+    if (!closesFromUser(r.fields)) {
+      return [`\`${label}\` ${acts} only on the user's own answer — \`Kind: ${KIND_ANSWER}\`, \`Decided by: ${DECIDED_BY_USER}\` and a \`Quote:\``];
+    }
+    return keys.filter((k) => !re.test(k)).map((k) => `\`${label}\` names \`${k}\`, which is not ${shape}`);
+  });
+}
 // Who decided each entry, and in what words: `{ D<N>: { decidedBy, quote } }` for the entries that carry either
 // line, as a plain object so it rides on a run result the way the directives do. An entry without provenance is
 // absent, which reads as "not the user's own words".
@@ -265,6 +296,6 @@ function directiveIssues(r, pageKeys) {
 // Every provenance problem as `{ key, problem }`, keyed by the entry's D<N>. `pageKeys` is the list of page keys
 // the plan publishes; without it a directive's scope is checked for presence only.
 export function provenanceIssues(records, pageKeys = null) {
-  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...closesIssues(r)]
+  return (records || []).flatMap((r) => [...fieldIssues(r), ...userWordsIssues(r), ...directiveIssues(r, pageKeys), ...answerLineIssues(r)]
     .map((problem) => ({ key: r.id, problem })));
 }

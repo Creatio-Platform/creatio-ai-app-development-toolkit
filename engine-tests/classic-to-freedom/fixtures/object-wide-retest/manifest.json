@@ -1,0 +1,85 @@
+{
+ "entity": "DemoSub",
+ "seed": [
+  {
+   "pkg": "BaseModulePageV2",
+   "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}}],methods:{init:function(){return 1;},getActions:function(){return 2;},onSaved:function(){return 3;},setColumns:function(){return 4;},loadValues:function(){return 5;},onRender:function(){return 6;},onEntry:function(){return 7;},onExit:function(){return 8;}}};});"
+  }
+ ],
+ "addRecordMiniPage": false,
+ "section": {
+  "schemas": [],
+  "listColumns": {
+   "success": true,
+   "sectionSchema": "DemoSubSection",
+   "entity": "DemoSub",
+   "source": "schema-default",
+   "columns": [
+    {
+     "name": "Name"
+    }
+   ]
+  }
+ },
+ "planMeta": {
+  "scope": "single-section",
+  "environment": "test",
+  "package": "P → UsrDemoSub",
+  "approach": "Parallel rebuild",
+  "whatItDoes": "DemoSub register.",
+  "sectionSchema": "DemoSubSection",
+  "listTemplate": "ListPageV3",
+  "formTemplate": "FormPageTemplate"
+ },
+ "signals": {
+  "dcm": {
+   "resolved": true,
+   "present": false
+  },
+  "processes": {
+   "resolved": true,
+   "present": false
+  },
+  "printables": {
+   "resolved": true,
+   "present": false
+  },
+  "deduplication": {
+   "resolved": true,
+   "present": false
+  }
+ },
+ "schemas": [
+  {
+   "pkg": "P",
+   "body": "define(\"DemoSubPage\",[],function(){return{entitySchemaName:\"DemoSub\",details:{Lines:{schemaName:\"DemoLineDetail\",entitySchemaName:\"DemoLine\",filter:{detailColumn:\"DemoSub\",masterColumn:\"Id\"}}},diff:[{operation:\"insert\",name:\"LinesTab\",parentName:\"Tabs\",values:{itemType:15,isTab:true}},{operation:\"insert\",name:\"Lines\",parentName:\"LinesTab\",values:{itemType:2}},{operation:\"insert\",name:\"Name\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"Name\"}},{operation:\"insert\",name:\"Owner\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"Owner\"}}]};});"
+  }
+ ],
+ "detailSchemas": {
+  "DemoLineDetail": {
+   "entity": "DemoLine",
+   "columns": [
+    "Order",
+    "Product"
+   ],
+   "editPage": "DemoLinePage"
+  }
+ },
+ "childPageSchemas": {
+  "DemoLinePage": {
+   "entity": "DemoLine",
+   "seed": [
+    {
+     "pkg": "BaseModulePageV2",
+     "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}}],methods:{init:function(){return 1;},getActions:function(){return 2;},onSaved:function(){return 3;},setColumns:function(){return 4;},loadValues:function(){return 5;},onRender:function(){return 6;},onEntry:function(){return 7;},onExit:function(){return 8;}}};});"
+    }
+   ],
+   "schemas": [
+    {
+     "pkg": "P",
+     "body": "define(\"DemoLinePage\",[],function(){return{entitySchemaName:\"DemoLine\",businessRules:{Order:{FiltrationOrderByAccount:{ruleType:1,baseAttributePatch:\"Account\"}},Product:{FiltrationProductByType:{ruleType:1,baseAttributePatch:\"ProductType\"}}},diff:[{operation:\"insert\",name:\"Order\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"Order\"}},{operation:\"insert\",name:\"Product\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"Product\"}},{operation:\"insert\",name:\"Account\",parentName:\"ProfileContainer\",propertyName:\"items\",values:{bindTo:\"Account\"}}]};});"
+    }
+   ]
+  }
+ }
+}

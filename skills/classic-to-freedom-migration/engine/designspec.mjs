@@ -3352,6 +3352,26 @@ function childWiringRow(c, pkg) {
       what: `RelatedPage add-on read for \`${esc(c.entity)}\``, query: relatedPageQuery(c.entity, pkg) },
   };
 }
+// The ⚠ Confirm item a wired child owes when its Classic edit page stays the object's edit card. This run never
+// writes `SysModuleEdit`, so once the add-on names the rebuilt page the related list opens Freedom while every other
+// entry point to the object (its section, a lookup, a link) still opens the Classic card: an object-wide state the
+// user has to accept before the build, not a note a builder files after it. One item per object.
+export const MIXED_NAVIGATION = "mixed-navigation";
+export function mixedNavigationDecisions(childs) {
+  const out = new Map();
+  for (const c of childs || []) {
+    const classic = c?.resolvedFrom || (typeof c?.editPage === "string" ? c.editPage : null);
+    if (!c?.entity || !classic || out.has(c.entity) || childWiringKind(c) !== "wire") continue;
+    out.set(c.entity, { kind: MIXED_NAVIGATION, item: c.entity,
+      reason: `${c.entity}'s edit card in SysModuleEdit stays the Classic ${classic}, and this run never writes SysModuleEdit. `
+        + "Once the RelatedPage add-on names the rebuilt page, the related list opens the Freedom page while the section, "
+        + `lookups and every other entry point to ${c.entity} still open the Classic card. Ask the user whether to keep `
+        + "that mixed navigation (they switch the card themselves if not) and record their answer as its own D<N>, "
+        + `with the line Approves: mixed-navigation:${c.entity} when they keep it, before `
+        + "the binding row is built; without that answer the binding row is recorded not built, needs-decision" });
+  }
+  return [...out.values()];
+}
 // The rows for THIS page's related lists. Each page renders its own children, so a grandchild's row sits on the
 // child page that holds its list.
 function childWiringRows(childs, opts = {}) {
@@ -4525,10 +4545,13 @@ export function elementColumnsOf(ops) {
   for (const [name, cols] of seen) if (cols.size === 1) out.set(name, [...cols][0]);
   return out;
 }
+// A rules read as an array: the bare array, or `{ count, rules }`; null when the slot holds neither.
+function rulesIn(built) {
+  if (Array.isArray(built)) return built;
+  return Array.isArray(built?.rules) ? built.rules : null;
+}
 function builtRuleTokens(built, elementColumn) {
-  let rules = null;
-  if (Array.isArray(built)) rules = built;
-  else if (Array.isArray(built?.rules)) rules = built.rules;
+  const rules = rulesIn(built);
   if (rules == null) return null;
   return rules.map((r) => {
     // A rule with none of the governed keys (an unknown shape) falls back to the whole record, minus its labels —
@@ -4594,6 +4617,76 @@ function ruleSource(vk) {
   const object = vk.entity ? " `" + esc(vk.entity) + "`" : "";
   return { slot: ENTITY_RULES_SLOT, subject: "entity business rules", read: "read-entity-business-rules",
     target: `the object${object} in the target package`, kind: "entity", where: "on the object" };
+}
+// OBJECT-WIDE CHANGES. An entity rule, a RelatedPage add-on entry and the object's edit card reach every page of the
+// object, not only the page the plan rebuilds. `--verify` lists each one the plan carries, and reads the object's own
+// rules for any rule the plan did not list: such a rule stands only on the user's `Approves:` answer naming the object
+// and the attribute it governs (`approvedEntityRules` in directives.mjs). One the user never approved leaves the run
+// incomplete, whatever the rows say.
+const objectWideKind = (r) => {
+  if (r.vk?.type === "rule" && r.vk.slot === ENTITY_RULES_SLOT) return "entity-rules";
+  if (r.vk?.type === "relatedpage") return "related-page";
+  return r.confirm?.kind === MIXED_NAVIGATION ? MIXED_NAVIGATION : null;
+};
+function objectWideEntry(r, row) {
+  const kind = objectWideKind(r);
+  if (!kind) return null;
+  const entity = r.vk?.entity || r.confirm?.item || null;
+  return { kind, pageKey: row.pageKey, entity, deliverable: row.deliverable, status: row.status,
+    ...(kind === "entity-rules" ? { attributes: [...new Set(r.vk.names || [])] } : {}) };
+}
+// A rule's identity on its object: its schema name; a rule without one is told apart by its place in the read.
+const ruleNameOf = (rule, i) => String(rule?.name || `${rule?.caption || "unnamed rule"} #${i + 1}`);
+// Planned entity-rule attributes per object, and the pages whose entry holds that object's rules. A row the user
+// declined (`wont-do`), and an attribute the user accepted as built another way, plan no rule on the object — but
+// the object is still read, so a rule built against the answer is found.
+function addPlannedEntityRules(planned, r, pageKey) {
+  if (objectWideKind(r) !== "entity-rules" || !r.vk.entity) return;
+  const p = planned.get(r.vk.entity) || { attrs: new Set(), pages: [] };
+  const declined = r.status?.kind === STATUS_WONT_DO;
+  for (const n of r.vk.names || []) if (!declined && !Object.hasOwn(r.vk.decided || {}, n)) p.attrs.add(n);
+  p.pages.push(pageKey);
+  planned.set(r.vk.entity, p);
+}
+// What a rule acts on: the column forms its `actions` name, and whether any action filters a lookup — the only kind
+// of entity rule a plan lists. Null for a rule whose actions cannot be read, which is then matched on its whole
+// governed text, as the rule rows are.
+function ruleTargets(rule) {
+  const actions = Array.isArray(rule?.actions) ? rule.actions : null;
+  if (!actions?.length) return null;
+  const raw = String(JSON.stringify(actions)).match(/[A-Za-z_]\w*/g) || [];
+  return { attrs: new Set(raw.flatMap(columnFormsOf)), filters: actions.some((a) => /filter/i.test(String(a?.type || a?.action || ""))) };
+}
+// The rules read off each object that the plan does not list — a lookup filter on a planned attribute is the plan's,
+// any other rule is not — each with the user's answer approving it (`Approves: entity-rule:<Entity>.<Attribute>`
+// naming an attribute it acts on), or null. The same object read on two pages is one set of rules.
+export function unplannedEntityRules(planned, root, approvals) {
+  const out = [];
+  for (const [entity, p] of planned) {
+    const seen = new Set();
+    for (const key of p.pages) {
+      const slot = entryObject(root?.pages?.[key])?.[ENTITY_RULES_SLOT];
+      const rules = rulesIn(slot) || [];
+      (builtRuleTokens(slot) || []).forEach((tokens, i) => {
+        const name = ruleNameOf(rules[i], i);
+        if (seen.has(name)) return;
+        seen.add(name);
+        const t = ruleTargets(rules[i]);
+        const acted = t ? t.attrs : tokens;
+        if ((!t || t.filters) && [...p.attrs].some((a) => acted.has(a))) return;
+        const approvedBy = [...acted].map((a) => approvals?.[`entity-rule:${entity}.${a}`]).find(Boolean) || null;
+        out.push({ entity, pageKey: key, name, approvedBy });
+      });
+    }
+  }
+  return out;
+}
+function unplannedBanner(unapproved) {
+  if (!unapproved.length) return [];
+  const named = unapproved.map((u) => "`" + esc(u.name) + "` on `" + esc(u.entity) + "`").join(", ");
+  return ["", `> ⛔ **${unapproved.length} entity rule(s) on the object that the plan does not list and no decision approves**: ${named}.`
+    + " An entity rule applies on every page and list of its object. Ask the user; record the answer with"
+    + " `Approves: entity-rule:<Entity>.<Attribute>` (their own answer, quoted), or remove the rule."];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element", "classic-extras"]);
@@ -6068,10 +6161,11 @@ const noDeliverableIssueText = (x) => `\`${x.key}\` ${x.problem}`;
 // THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.
 // A mis-filed record blocks the run without touching a row, so a verdict computed from rows alone would read
 // positive beside the banner that blocks it.
-function verifyVerdict(missing, unverified, orphans = 0) {
+function verifyVerdict(missing, unverified, orphans = 0, unapproved = 0) {
   if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
   if (orphans > 0) return `⛔ **EVIDENCE MIS-FILED — ${orphans} record(s) filed under id(s) this run does not publish** (re-file them under the id each row names, or drop a key the plan no longer has)`;
+  if (unapproved > 0) return `⛔ **${unapproved} entity rule(s) on the object that the plan does not list and no decision approves** (ask the user, or remove the rule)`;
   return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
 }
 // The PLAN-gap banner (D12), stated separately from the build verdict so the two are never read as one condition.
@@ -6243,26 +6337,33 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // the report's Carry-over section (postponed) or as decided boundaries (wont-do / not-applicable) —
   // nothing is dropped in silence; the LIST just changes source.
   const decided = [];
+  const objectWide = [];
+  const plannedRules = new Map();
   const derivedEvidenceIds = new Set();
   const peers = pageItemPeers(groups, decidedKeys);
+  // One plan row: decided rows are set aside, every other row is resolved into the table and the collections.
+  const verifyOne = (g, r0) => {
+    // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
+    // `buildVerifyRow` applies inside.
+    const rowPage = r0.pageKey || g.pageKey || "main";
+    const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
+    // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
+    // evidence id is one the run publishes, and an evidence record under it is not an orphan.
+    if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
+    if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
+      decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
+      return;
+    }
+    const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
+    rows.push(row);
+    L.push(tableLine);
+    const ow = objectWideEntry(r, row);
+    if (ow) objectWide.push(ow);
+    addPlannedEntityRules(plannedRules, r, rowPage);
+  };
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
-    for (const r0 of g.rows) {
-      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
-      // `buildVerifyRow` applies inside.
-      const rowPage = r0.pageKey || g.pageKey || "main";
-      const r = withPortedAs(withPagePeers(r0, peers), rowPage, opts.portedAs);
-      // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
-      // evidence id is one the run publishes, and an evidence record under it is not an orphan.
-      if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
-      if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
-        decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
-        continue;
-      }
-      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
-      rows.push(row);
-      L.push(tableLine);
-    }
+    for (const r0 of g.rows) verifyOne(g, r0);
   }
   // A RECORD FILED WHERE THE ENGINE NEVER LOOKS IS NOT A RECORD. The ids are engine-derived and written into the
   // skeletons, so a key matching none of them resolves to nothing and the design pass it records counts for
@@ -6270,8 +6371,11 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
   // every other page's id would read as an orphan of the scope rather than of the run.
   const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
+  const unplanned = unplannedEntityRules(plannedRules, root, opts.objectWideApprovals);
+  const unapproved = unplanned.filter((u) => !u.approvedBy);
   const { missing, unverified, builderOpen, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified, orphans.length);
+  const verdict = verifyVerdict(missing, unverified, orphans.length, unapproved.length);
+  const unapprovedBanner = unplannedBanner(unapproved);
   const decidedBanner = decided.length
     ? [`> ℹ ${decided.length} plan row(s) closed by a recorded decision are OUT of this table — the task registry`
         + " is the single source of what is owed. See the migration result report's Carry-over"
@@ -6282,7 +6386,9 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
     ...decidedBanner,
     ...planGapBanner(result),
     ...orphanBanner(orphans),
-    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans)].join("\n");
+    ...unapprovedBanner,
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans), ...unapprovedBanner].join("\n");
   return { markdown: md, missing, unverified, builderOpen,
-    complete: missing === 0 && unverified === 0 && orphans.length === 0, orphans, pages, rows, decided };
+    complete: missing === 0 && unverified === 0 && orphans.length === 0 && unapproved.length === 0, orphans, pages, rows, decided,
+    objectWide: { rows: objectWide, unplanned } };
 }
