@@ -13,22 +13,12 @@ import { buildTaskSet, syncTaskDir, startTask, readTaskDir, renderProgress, rend
   readMergedTaskDir, TASK_INDEX_FILE }
   from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
-import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
+import { approvePlan, recordBrowserAnswer, checker, setOutcome } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATE = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine", "migrate.mjs");
 
-let pass = 0, fail = 0;
-const check = (name, cond, detail) => {
-  let c = cond, threw = null;
-  if (typeof cond === "function") { try { c = cond(); } catch (e) { c = false; threw = e; } }
-  if (c) { pass++; console.log("  ✅ " + name); return; }
-  fail++; console.log("  ❌ " + name + (threw ? "  (threw: " + threw.message + ")" : ""));
-  if (detail !== undefined) {
-    let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; }
-    console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d)));
-  }
-};
+const { check, counts } = checker();
 
 /* ---- the fixture: a main page with a detail whose child page has a grandchild, and a list page ---------------- */
 const SEED_METHODS = ["init", "getActions", "onSaved", "setColumns", "loadValues", "onRender", "onEntry", "onExit"]
@@ -66,18 +56,6 @@ const AT = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_books_${label}_`));
 const taskFilePath = (dir, id) => path.join(dir, fs.readdirSync(dir).find((x) => x.endsWith(".md")
   && x !== TASK_INDEX_FILE && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(dir, x), "utf8"))));
-// The Outcome cell of the n-th deliverable row, set to `value`.
-function setOutcome(text, n, value) {
-  let seen = 0;
-  return text.split("\n").map((line) => {
-    const cells = line.split(/(?<!\\)\|/);
-    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
-    seen++;
-    if (seen !== n) return line;
-    cells[5] = ` ${value} `;
-    return cells.join("|");
-  }).join("\n");
-}
 const closeCells = (dir, id) => {
   const f = taskFilePath(dir, id);
   let text = fs.readFileSync(f, "utf8");
@@ -163,7 +141,7 @@ console.log("\n===== E7, E8: `--tasks` and `--verify` read ONE task set =====");
   const surfaces = [fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8"), next.stdout || "",
     ...repaired.map((r) => fs.readFileSync(path.join(dir, r.file), "utf8"))];
   // The front matter's `order:` is the sort key, data and not a printed step, so it is left out.
-  const printed = (x) => x.split("\n").filter((l) => !/^order: /.test(l) && /9007199254740/.test(l));
+  const printed = (x) => x.split("\n").filter((l) => !l.startsWith("order: ") && /9007199254740/.test(l));
   check("the index, `--next` and the repair task files print a repair task's step, never the sentinel order it sorts on",
     () => repaired.length > 0 && surfaces.every((x) => !printed(x).length) && /\[task-repair-/.test(surfaces[0]),
     () => surfaces.map((x) => printed(x).slice(0, 2)));
@@ -450,5 +428,5 @@ console.log("\n===== AC-6: a ledger through every bookkeeping move ends COMPLETE
   fs.rmSync(base, { recursive: true, force: true });
 }
 
-console.log(`\n=================\nBOOKKEEPING GOLDEN: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+console.log(`\n=================\nBOOKKEEPING GOLDEN: ${counts.pass} passed, ${counts.fail} failed`);
+process.exit(counts.fail ? 1 : 0);

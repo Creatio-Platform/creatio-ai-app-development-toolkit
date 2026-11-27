@@ -33,7 +33,7 @@ import { readPlan, ensureRecordFiles, recordFilesWarning, MERGE_ATTEMPTS, RENAME
 // The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
 // rather than a module that does not link.
 import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { approvePlan, recordBrowserAnswer } from "./_testkit.mjs";
+import { approvePlan, recordBrowserAnswer, setOutcome } from "./_testkit.mjs";
 import { parseDecisionRecords, provenanceIssues, directivesOf, orchestratorDecisions, scopeKeys }
   from "../../skills/classic-to-freedom-migration/engine/directives.mjs";
 
@@ -3231,19 +3231,8 @@ check("pageGroup: the SAME group name on two different pages yields the same `ba
   }, () => GROUPS.filter((g) => g.baseTitle === "Quality gates").map((g) => g.title));
 
 console.log("\n===== the OUTCOME column: the status is computed from the rows, not typed =====");
-// Rewrites the Outcome cell of row `n` (1-based) of a rendered task file. The agent edits this cell and nothing
-// else in the table; every test below goes through the same path a sub-agent would.
-function setOutcome(text, n, value) {
-  let seen = 0;
-  return text.split("\n").map((line) => {
-    const cells = line.split(/(?<!\\)\|/);
-    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
-    seen++;
-    if (seen !== n) return line;
-    cells[5] = ` ${value} `;
-    return cells.join("|");
-  }).join("\n");
-}
+// `setOutcome` (from `_testkit.mjs`) rewrites the Outcome cell of row `n` of a rendered task file. The agent edits
+// this cell and nothing else in the table; every test below goes through the same path a sub-agent would.
 // Hoisted: written by most checks below.
 // One task re-read through the merge, exactly as `syncTaskDir` does it: render → edit → parse → carry over.
 const reread = (task, set, edit) => {

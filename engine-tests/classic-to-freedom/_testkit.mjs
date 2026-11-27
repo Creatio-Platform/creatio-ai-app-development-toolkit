@@ -74,3 +74,39 @@ function appendOnceBeside(tasksDir, fileName, entry, who, gap) {
   }
   return file;
 }
+
+// A runner's assertions. `cond` and `detail` may be thunks: each is evaluated on its own, and a throw is recorded
+// rather than raised, so one failing assertion never hides the checks after it. `detail` is printed on a failure
+// only, so a red golden in CI shows what was computed without a local rerun.
+const settle = (v) => {
+  if (typeof v !== "function") return { value: v };
+  try { return { value: v() }; } catch (error) { return { error }; }
+};
+export function checker() {
+  const counts = { pass: 0, fail: 0 };
+  const check = (name, cond, detail) => {
+    const { value, error } = settle(cond);
+    if (value && !error) { counts.pass++; console.log(`  ✅ ${name}`); return; }
+    counts.fail++;
+    console.log(`  ❌ ${name}${error ? `  (threw: ${error.message})` : ""}`);
+    if (detail === undefined) return;
+    const shown = settle(detail);
+    const text = shown.error ? `<detail threw: ${shown.error.message}>` : shown.value;
+    console.log(`      ↳ ${typeof text === "string" ? text : JSON.stringify(text)}`);
+  };
+  return { check, counts };
+}
+
+// The Outcome cell of the n-th deliverable row (1-based) of a rendered task file, set to `value` — the one cell of
+// the table a sub-agent writes. Pipes escaped as `\|` inside a caption are not cell borders.
+export function setOutcome(text, n, value) {
+  let seen = 0;
+  return text.split("\n").map((line) => {
+    const cells = line.split(/(?<!\\)\|/);
+    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
+    seen++;
+    if (seen !== n) return line;
+    cells[5] = ` ${value} `;
+    return cells.join("|");
+  }).join("\n");
+}
