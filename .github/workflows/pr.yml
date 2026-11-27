@@ -140,6 +140,13 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-tasks.mjs
+      # The ledger moves a confirmed run reaches only through the engine (`--decide`, `--tasks`, `--verify`, a plan
+      # change) close it rather than re-open it: one task set for every mode, per-row round caps, drift only on a
+      # recorded row that changed, every `--row` answered (ENG-108022).
+      - name: Run bookkeeping goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-bookkeeping.mjs
       # The page code map a page writer reads before it writes, and the analysis behind the blocking `Page code`
       # verify row: a helper defined in several handlers, a function over the length limit, a request nothing sends.
       - name: Run page code-map goldens

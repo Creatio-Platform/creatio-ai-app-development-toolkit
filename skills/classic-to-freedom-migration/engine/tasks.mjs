@@ -530,6 +530,9 @@ const rowDigestInput = (r) => {
 // The `Page code` row is left out: it checks the code the other rows produce, so a task that gains it has no new
 // deliverable, and a `done` task must not read as drifted (and be re-dispatched) because the engine added it.
 export const rowsDigest = (rows) => shortHash(rows.filter((r) => r.vk?.type !== "pagecode").map(rowDigestInput).join(" "));
+// A task row keeps only its row KIND, so the source row's digest input rides along on it: that is what lets a
+// re-slice tell which of a settled task's rows changed (`onlyRowsAdded`) instead of only that the set did.
+const digestFields = (r) => (r.vk?.type === "pagecode" ? {} : { digestInput: rowDigestInput(r) });
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -564,6 +567,7 @@ function taskOf(chunk, order) {
     ...(r.behaviour ? { behaviour: r.behaviour } : {}),
     ...(r.confirm ? { confirm: true } : {}),
     ...statusFields(r),
+    ...digestFields(r),
   }));
   const task = {
     id: taskId(identityKey, artifact, anchor),
@@ -2247,7 +2251,7 @@ function settledCovers(t, credits) {
   return out;
 }
 
-function roundCoverage(t) {
+function roundCoverage(t, spentOn) {
   if (t.kind !== REPAIR_KIND || t.status === S_BLOCKED) return null;
   const credits = t.dispatched === "yes";
   if (CLOSED.has(t.status) && !credits) return null;
@@ -2258,12 +2262,14 @@ function roundCoverage(t) {
   // Said as its OWN state rather than by staying silent: silence leaves an earlier round's `open` standing, and
   // `open` reads as scheduled work and clears the gate over a deliverable nobody built. Same end state as a
   // `blocked` round, which is excluded for the same reason; parking is otherwise only a line on stdout.
-  const unsettledState = round >= REPAIR_ROUND_CAP && ROUND_ATTEMPTED.has(t.status) ? "parked" : "open";
+  // Counted per row, as `nextRound` spends the cap: the round NUMBER also counts rounds over other rows of the kind.
+  const attempted = ROUND_ATTEMPTED.has(t.status);
   // `covers` is the authoritative list: a row deleted from the body is not a row that was built.
   const states = new Map();
   for (const c of t.covers || []) {
     const k = `${t.pageKey} ${c}`;
-    states.set(k, closed.has(k) ? "closed" : unsettledState);
+    const parked = attempted && spentOn(t, c) >= REPAIR_ROUND_CAP;
+    states.set(k, closed.has(k) ? "closed" : (parked ? "parked" : "open"));
   }
   return { round, states };
 }
@@ -2278,8 +2284,16 @@ function repairCoverage(tasks) {
     const prev = latest.get(key);
     if (!prev || round > prev.round || (round === prev.round && state === "open")) latest.set(key, { round, state });
   };
+  // The attempted rounds that covered each row, keyed like the cap (page, kind of row, row).
+  const spent = new Map();
+  const spentKey = (t, c) => `${capKey(t.pageKey, t.cause)} ${c}`;
   for (const t of tasks || []) {
-    const round = roundCoverage(t);
+    if (t.kind !== REPAIR_KIND || !ROUND_ATTEMPTED.has(t.status)) continue;
+    for (const c of t.covers || []) spent.set(spentKey(t, c), (spent.get(spentKey(t, c)) || 0) + 1);
+  }
+  const spentOn = (t, c) => spent.get(spentKey(t, c)) || 0;
+  for (const t of tasks || []) {
+    const round = roundCoverage(t, spentOn);
     if (!round) continue;
     for (const [key, state] of round.states) say(key, round.round, state);
   }
@@ -2620,6 +2634,18 @@ function carryWithMovedFiledMarks(task, prev, sources, live) {
   return { ...task, rows: rows.map((r, i) => (moved.has(keys[i]) ? withMark(r, moved.get(keys[i])) : r)) };
 }
 
+// ROWS ADDED TO A SETTLED TASK ARE NOT A CHANGE TO ITS RECORD. The rows its file already listed digest exactly as the
+// status was recorded, so every carried cell still sits on the deliverable it was written for; the new rows arrive
+// blank and keep the task `partial` until they are built or decided. Holding the old digest there named the task
+// "deliverables CHANGED" on every later sync, with nothing a builder or a decision could do to clear it — six such
+// tasks kept the retest's confirmed run NOT COMPLETE after a plan change that only added module-dependency rows.
+function onlyRowsAdded(rows, prev) {
+  const listed = new Set(rowKeys((prev.table || []).map((r) => r.label)));
+  const keys = rowKeys((rows || []).map((r) => r.label));
+  const kept = (rows || []).filter((r, i) => listed.has(keys[i]) && r.vk !== "pagecode");
+  if (!kept.length || kept.length === rows.length || kept.some((r) => r.digestInput === undefined)) return false;
+  return shortHash(kept.map((r) => r.digestInput).join(" ")) === prev.meta.rowsDigest;
+}
 function carryOver(task, prev) {
   if (!prev) return task;
   const outcomes = prev.outcomes instanceof Map ? prev.outcomes : new Map();
@@ -2637,7 +2663,7 @@ function carryOver(task, prev) {
   // for are not the deliverables now in the file. The digest the status was recorded against is therefore KEPT in
   // the file for as long as that status stands, and only a status back at `todo` (the task re-opened) adopts the
   // current rows. Refreshing it eagerly would clear the warning on the very re-slice that should raise it.
-  const held = status !== S_TODO && prev.meta.rowsDigest ? prev.meta.rowsDigest : task.rowsDigest;
+  const held = status !== S_TODO && prev.meta.rowsDigest && !onlyRowsAdded(task.rows, prev) ? prev.meta.rowsDigest : task.rowsDigest;
   return {
     ...task,
     status,
@@ -2781,7 +2807,8 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
       rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
-        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...(r.confirm ? { confirm: true } : {}), ...statusFields(r) })),
+        ...(r.subject ? { subject: r.subject } : {}), ...(r.behaviour ? { behaviour: r.behaviour } : {}), ...(r.confirm ? { confirm: true } : {}), ...statusFields(r),
+        ...digestFields(r) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,
@@ -2945,7 +2972,8 @@ function repairRounds(existing) {
     const prevCap = rounds.get(capk);
     rounds.set(capk, {
       round: Math.max(prevCap?.round || 0, n),
-      attempts: (prevCap?.attempts || 0) + (decisionClosed ? 0 : 1),
+      // Each attempt with the rows it covered: the cap is spent per ROW (see `nextRound`).
+      attempts: [...(prevCap?.attempts || []), ...(decisionClosed ? [] : [coversOf(e.meta)])],
       status: !prevCap || n >= prevCap.round ? status : prevCap.status,
     });
     const ownKey = `${e.meta.pageKey} ${e.meta.cause || ""}`;
@@ -2972,13 +3000,22 @@ const ROUND_ATTEMPTED = new Set([S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_PARTIAL]
 // still somebody's work, and a cause that has had its rounds is a decision for a person.
 // `cap` is what this page has spent on this KIND of row; `own` is this CAUSE's own last round. Only `own` can
 // hold a cause pending — its rows are the work of a round that is still somebody's.
-function nextRound(cap, own) {
+// THE CAP IS SPENT PER ROW. A round counts against the rows it covered, not against every row of its kind on the
+// page: the retest's three rounds over duplicated directive rows (`not-built:other`) parked the FIRST round over
+// unrelated module-dependency rows that a later plan change added, and the user was asked to decide rows nobody
+// had attempted. So `parked` holds the rows three attempted rounds already covered, and the rest get the round.
+// A round file with no `covers` (written before it was recorded) counts against every row, as it always did.
+function nextRound(cap, own, rows) {
   if (own && !ROUND_ATTEMPTED.has(own.status)) return { hold: "pending", round: own.round, status: own.status };
   // The NUMBER always continues from the highest one used, so a new file can never collide with one on disk.
   // The CAP counts attempts only, so a round a person closed by decision does not spend one of the three.
   const round = (cap?.round || 0) + 1;
-  return (cap?.attempts || 0) >= REPAIR_ROUND_CAP ? { hold: "parked", round } : { hold: null, round };
+  const spent = (row) => attemptsOn(cap?.attempts, coverKey(row.deliverable));
+  const parked = rows.filter((r) => spent(r) >= REPAIR_ROUND_CAP);
+  return { hold: null, round, parked, live: rows.filter((r) => !parked.includes(r)) };
 }
+const coversOf = (meta) => (meta?.covers ? new Set(String(meta.covers).split(/\s+/).filter(Boolean)) : null);
+const attemptsOn = (attempts, cover) => (attempts || []).filter((covers) => !covers || covers.has(cover)).length;
 
 export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing = []) {
   const B = budgetOf(opts);
@@ -2997,16 +3034,14 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
       byCause.get(cause).push(row);
     }
     for (const [cause, rows] of byCause) {
-      const next = nextRound(rounds.get(capKey(pageKey, cause)), openRounds.get(`${pageKey} ${cause}`));
+      const next = nextRound(rounds.get(capKey(pageKey, cause)), openRounds.get(`${pageKey} ${cause}`), rows);
       if (next.hold === "pending") {
         pending.push({ pageKey, cause, rows: rows.length, round: next.round, status: next.status });
         continue;
       }
-      if (next.hold === "parked") {
-        parked.push({ pageKey, cause, rows: rows.length, rounds: REPAIR_ROUND_CAP });
-        continue;
-      }
-      tasks.push(...repairRoundTasks({ pageKey, identityKey: identity.get(pageKey) || pageKey, cause, rows, round: next.round, B }));
+      if (next.parked.length) parked.push({ pageKey, cause, rows: next.parked.length, rounds: REPAIR_ROUND_CAP });
+      if (!next.live.length) continue;
+      tasks.push(...repairRoundTasks({ pageKey, identityKey: identity.get(pageKey) || pageKey, cause, rows: next.live, round: next.round, B }));
     }
   }
   return { tasks, parked, pending };
@@ -3106,14 +3141,13 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // ids while every file on disk carries the split's slug ids, so nothing would match, every task would read as
   // stale, and the index would be rewritten with all of them back at `todo` — an index describing a folder that
   // does not exist. `taskSetFor` falls back to `buildTaskSet` on its own when there is no split.
-  const fresh = taskSetFor(dir, result, opts);
+  const mergedForResidual = readMergedTaskDir(dir, result, opts);
   // A refused split writes NOTHING, for the reason `syncTaskDir` refuses: half a folder schedules half a plan.
-  if (fresh.refused) return { ...fresh, written: [], parked: [], pending: [], disputed: [], stalled: [], set: { ...fresh, tasks: [] } };
+  if (mergedForResidual.refused) return { ...mergedForResidual, written: [], parked: [], pending: [], disputed: [], stalled: [], set: mergedForResidual };
   const existing = readExisting(dir);
   // The rows a BUILD agent recorded as not built are routed here too, and only here: one trigger, one grouping,
   // one round cap for both kinds of open row. Read off the merged set because the Outcome cells live in the
   // files, and a task is only `partial` once those cells have been parsed back.
-  const mergedForResidual = resolvePartials(attachDispatch(mergeTaskSet(fresh, existing), dir));
   const residual = notBuiltOpenRows(mergedForResidual.tasks);
   // Filtered against what the ledger has already settled by decision, and against the round that last closed
   // each row. Nothing is dropped silently: a decision-settled row is returned as `boundaries` and named on the
@@ -3136,14 +3170,11 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
       cardDecisions: opts.decisions, cardDecisionTexts: opts.decisionTexts }));
     written.push(t);
   }
-  // Re-derived from the FILES, so the new repair files are in it with everything else.
-  const merged = mergeTaskSet(fresh, readExisting(dir));
-  merged.reconcileMode = reconcileMode;
-  // The Dispatched column is folder-derived like the rest of the index: without this every row would render as
-  // "not known" and a repair round would quietly erase what the build rounds recorded. It also feeds
-  // `resolvePartials`, which only lets a DISPATCHED closure resolve a residual.
-  attachDispatch(merged, dir);
-  resolvePartials(merged);
+  // Re-derived from the FILES, so the new repair files are in it with everything else. The Dispatched column is
+  // folder-derived like the rest of the index: without it every row would render as "not known" and a repair round
+  // would quietly erase what the build rounds recorded. It also feeds `resolvePartials`, which only lets a
+  // DISPATCHED closure resolve a residual.
+  const merged = readMergedTaskDir(dir, result, opts);
   unrouteStalled(merged, stalled);
   // Opening a round changes the residual coverage of every task whose rows it covers, so their files are
   // re-written here too and not only the index.
@@ -3170,14 +3201,23 @@ function unrouteStalled(set, stalled) {
 // tellable from an approved one; dispatch and residuals resolved), minus every write. It exists for the paths
 // where the repair leg wrote nothing (a dispatch-gate refusal, a plan-level gap) and the report still has to say
 // what the folder holds: a run refused at the gate is exactly the run whose ledger the user most needs to see.
-export function readMergedTaskDir(dir, result, opts = {}) {
-  const fresh = taskSetFor(dir, result, opts);
-  if (fresh.refused) return { ...fresh, tasks: [] };
-  const merged = mergeTaskSet(fresh, readExisting(dir));
+export function readMergedTaskDir(dir, result, opts = {}, split = null) {
+  const merged = folderTaskSet(dir, result, opts, split);
+  if (merged.refused) return merged;
   merged.reconcileMode = effectiveFrozenMode(dir); // the index refresh reads `merged`; keep the frozen stamp on it
   attachDispatch(merged, dir);
   resolvePartials(merged);
   return merged;
+}
+// THE FOLDER'S TASK SET, and the only derivation of it: the plan's tasks (the frozen split's when the folder has
+// one) merged with every file on disk, an orphan an earlier cut left named in `stale` and out of the queue.
+// `--tasks`, `--verify`, `--route`, `--decide` and `--revoke` all read it here. The retest's `--verify` audited the
+// raw files instead, so a task "no longer in the plan" failed its dispatch gate while `--tasks` said it was not the
+// plan's work, and the two modes disagreed on which tasks and rows the folder held.
+export function folderTaskSet(dir, result, opts = {}, split = null) {
+  const fresh = taskSetFor(dir, result, opts, split);
+  if (fresh.refused) return { ...fresh, tasks: [], stale: [], blocked: [] };
+  return mergeTaskSet(fresh, readExisting(dir));
 }
 
 // THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every
@@ -4797,9 +4837,8 @@ export function applyDecision(dir, result, opts = {}) {
   const { decision, mode, destination, decisions } = opts;
   const guard = decideGuardProblems(opts);
   if (guard) return { refused: true, problems: guard };
-  const fresh = taskSetFor(dir, result, opts, opts.split || null);
-  if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
-  const merged = mergeTaskSet(fresh, readExisting(dir));
+  const merged = folderTaskSet(dir, result, opts, opts.split || null);
+  if (merged.refused) return { refused: true, problems: merged.problems || ["the task folder could not be sliced"] };
   merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
@@ -5024,9 +5063,8 @@ function revokeInTask(t, decision, cleared, skipped) {
 export function revokeDecision(dir, result, opts = {}) {
   const { decision } = opts;
   if (!decision || !/^D\d+$/.test(decision)) return { refused: true, problems: [`--revoke needs a D<N> (got '${decision || "(none)"}')`] };
-  const fresh = taskSetFor(dir, result, opts, opts.split || null);
-  if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
-  const merged = mergeTaskSet(fresh, readExisting(dir));
+  const merged = folderTaskSet(dir, result, opts, opts.split || null);
+  if (merged.refused) return { refused: true, problems: merged.problems || ["the task folder could not be sliced"] };
   merged.reconcileMode = effectiveFrozenMode(dir); // keep the frozen stamp — persistTaskSet rewrites files/index from `merged`
 
   const cleared = [];
@@ -5163,17 +5201,16 @@ function applyPlanStatuses(merged, decisions) {
 export function syncTaskDir(dir, result, opts = {}, split = null) {
   // Read before any task file is, so every clock in it was open when the statuses below were read.
   const seenClocks = readTimingsFile(dir).running;
-  const fresh = taskSetFor(dir, result, opts, split);
+  const merged = folderTaskSet(dir, result, opts, split);
   // A refused split writes NOTHING. Half a folder schedules half a plan and silently drops the rest, which is the
   // failure the coverage check exists to prevent.
-  if (fresh.refused) return { ...fresh, tasks: [], stale: [], blocked: [] };
-  const merged = mergeTaskSet(fresh, readExisting(dir));
+  if (merged.refused) return merged;
   const problems = applyPlanStatuses(merged, opts.decisions);
-  if (problems.length) return { ...fresh, refused: true, refusal: REFUSED_STATUS, problems, tasks: [], stale: [], blocked: [] };
+  if (problems.length) return { ...merged, refused: true, refusal: REFUSED_STATUS, problems, tasks: [], stale: [], blocked: [] };
   const unaccounted = decisionRefusal(merged, dir, opts);
-  if (unaccounted) return { ...fresh, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
+  if (unaccounted) return { ...merged, refused: true, refusal: REFUSED_DECISIONS, ...unaccounted, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
-  merged.addModeChecks = addModeChecks(readWorklogText(dir).text, fresh.dataWritingPages).agreed;
+  merged.addModeChecks = addModeChecks(readWorklogText(dir).text, merged.dataWritingPages).agreed;
   // Close the clocks of everything that finished since the last pass, before the files are written. A lock another
   // process keeps is a refusal like the others above: nothing is written, and the caller re-runs.
   // A ledger file kept busy past the rename budget is a refusal too, with the difference `REFUSED_LEDGER_BUSY`
@@ -5193,7 +5230,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
     if (!refusal) {
       throw e;
     }
-    return { ...fresh, ...refusal, tasks: [], stale: [], blocked: [] };
+    return { ...merged, ...refusal, tasks: [], stale: [], blocked: [] };
   }
   return merged;
 }

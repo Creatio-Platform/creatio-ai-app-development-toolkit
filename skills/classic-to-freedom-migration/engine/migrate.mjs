@@ -69,7 +69,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   freedomRowActionsToDrop, publishedPageKeys, reEsc, SUMMARIES_KIND } from "./designspec.mjs";
 import { readDecisionRecords, directivesOf, provenanceIssues, provenanceById, userDecision, directiveCovers, closedRuleAttributes } from "./directives.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
-  REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
+  REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION, HOLD_BROWSER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, portedRowSymbols, rowSubjects, REFUSED_STATUS, REFUSED_DECISIONS, decisionWaitingRows, decisionPendingRows, BUILD_MODE,
@@ -4467,7 +4467,7 @@ function runNextMode(result, dir, opts, cmdFor) {
 // dispatch ledger, or a run that cannot move).
 const readTextOr = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } };
 // The folder-level preconditions, with the values they read — the renderer reuses them rather than reading again.
-function handoffCauses(result, dir, folder) {
+function handoffCauses(result, dir, folder, opts) {
   const causes = [];
   if (!fs.existsSync(path.join(dir, TASK_INDEX_FILE))) {
     causes.push(`the plan is not sliced — there is no task folder at ${dir} (no ${TASK_INDEX_FILE}). Slice it first`
@@ -4490,7 +4490,7 @@ function handoffCauses(result, dir, folder) {
   // no page work begun): without it every such task is refused, and a queue that still starts the reference cache
   // would hand off a session whose first page `--start` is that refusal.
   const browser = readWorklogBrowser(dir);
-  const owed = fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && browserAnswerOwed(readTaskDir(dir), readTimingsFile(dir).running);
+  const owed = fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && browserAnswerOwed(readMergedTaskDir(dir, result, opts).tasks, readTimingsFile(dir).running);
   if (!browser && owed) {
     causes.push(`worklog.md in ${folder} has no \`Browser:\` line naming one of ${BROWSER_ANSWERS.join(" · ")} (the`
       + " last `Browser:` line is the one read). Ask the browser question first (orchestrate-build.md 7.0b) and write the"
@@ -4505,7 +4505,7 @@ function runHandoffMode(result, dir, opts, ctx) {
   if (gapRefusal) { handoffRefusalFailure = true; return gapRefusal; }
   const tasksDir = path.resolve(dir);
   const folder = path.dirname(tasksDir);
-  const { causes, approvalLine, route, browser } = handoffCauses(result, tasksDir, folder);
+  const { causes, approvalLine, route, browser } = handoffCauses(result, tasksDir, folder, opts);
   if (causes.length) {
     handoffRefusalFailure = true;
     return handoffRefusalHeader(tasksDir) + "\n" + causes.map((c) => `  — ${c}`).join("\n") + "\n";
@@ -4557,18 +4557,17 @@ function runHandoffMode(result, dir, opts, ctx) {
 // not the answer; it is a decision for the user.
 // The two refusals a repair round makes BEFORE it writes anything, shared by `--verify --tasks` and `--route`:
 // both schedule sub-agents, so both answer the same two questions first. Returns the refusal text, or null.
-function repairPreflight(result, dir) {
-  // THE LEDGER IS CHECKED BEFORE MORE WORK IS SCHEDULED AGAINST IT. Read-only: the folder is not re-sliced here,
-  // so this sees the recorded front matter and the clocks exactly as they stand. No repair task is written while
-  // it fails — a repair round adds sub-agents on top of closures nobody was dispatched for, and the rows it would
-  // open cannot be trusted to describe what was actually built.
-  const folder = readTaskDir(dir);
-  // NOT-BUILT IS NOT JUDGED HERE. `readTaskDir` computes a status off the cells alone and never resolves a
-  // residual, so a row whose repair task has closed still reads unrouted on this path — and the refusals below
-  // return before `syncRepairDir` can correct it. The verdict is set once, after that call, off the folder it
-  // wrote; a refusal reports the gate that actually fired and nothing else.
-  const audit = dispatchAudit(folder, dir);
-  if (audit.failing.length) {
+function repairPreflight(result, dir, opts) {
+  // THE LEDGER IS CHECKED BEFORE MORE WORK IS SCHEDULED AGAINST IT. Read-only: nothing is written here. No repair
+  // task is written while it fails — a repair round adds sub-agents on top of closures nobody was dispatched for,
+  // and the rows it would open cannot be trusted to describe what was actually built.
+  // THE SAME TASK SET `--tasks` GATES ON (`readMergedTaskDir`), not the raw files: a file an earlier cut left "no
+  // longer in the plan" is nobody's work in this run, and auditing it here failed a confirmed run on a task
+  // `--tasks` could neither start nor decide. A set the plan cannot be cut into is refused by the round itself.
+  // NOT-BUILT IS NOT JUDGED HERE: the verdict is set once, after `syncRepairDir`, off the folder it wrote; a
+  // refusal reports the gate that actually fired and nothing else.
+  const audit = readMergedTaskDir(dir, result, opts).dispatch;
+  if (audit?.failing.length) {
     dispatchGateFailure = { audit, dir, started: true };
     // The files and their remedies go out ONCE, on stderr with the other ⛔ banners. Stdout carries the verify
     // table the caller presents verbatim, so the same list on both streams is the caller's report read twice.
@@ -4679,7 +4678,7 @@ export function repairRoundLines(res, dir, kind) {
 // routing is a mode and never a file a caller authors.
 function runRouteMode(result, dir, opts) {
   // The read-only preflight (dispatch audit, then plan gaps) answers first, so a gapped plan keeps its own refusal.
-  const refused = repairPreflight(result, dir);
+  const refused = repairPreflight(result, dir, opts);
   if (refused) return refused;
   const unapproved = planApprovalRefusal(result, dir, "repair tasks");
   if (unapproved) { approvalRefusalFailure = true; return unapproved; }
@@ -4712,7 +4711,7 @@ function runRouteMode(result, dir, opts) {
 // round was refused before it merged anything — the caller then reads the folder read-only), and what the round
 // wrote (null when refused).
 function runRepairMode(result, dir, verifyRes, opts) {
-  const refused = repairPreflight(result, dir);
+  const refused = repairPreflight(result, dir, opts);
   if (refused) return { note: refused, set: null, repair: null };
   let res;
   // Same verdict as the routed round, raised on the same flag: one repair code path reached by two entry commands,
