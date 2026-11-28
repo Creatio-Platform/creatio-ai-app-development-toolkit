@@ -318,7 +318,7 @@ rules.
   island card settings get caught only after the user asks about styles on other pages. The gate
   runs when the page is saved, its core is the tool-based style diff (reference page +
   `get-component-info` per added component), and its evidence is a mandatory row in the step-8
-  Plan-vs-Done table. → the guidelines skill's "Style parity" checklist item.
+  Plan-vs-Done table. → the guidelines skill's checklist item L-28 "Style parity".
 - **Means-of-communication downgraded to a grid.** A `ContactCommunication` detail is the native
   **Communication-options** component (`crt.CommunicationOptions`, the compositeOnly component the
   "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY

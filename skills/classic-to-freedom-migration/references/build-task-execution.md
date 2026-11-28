@@ -211,9 +211,9 @@ wait for the user to ask for a UI review.
      report it done or build anything on it. It may NOT be marked `PENDING`/"later" and skipped — an
      unrun gate leaves the page `TODO`/`BLOCKED`, never "done". Its mandatory core is the
      **style-parity step, done with tools not eyeballed**: open a SHIPPED reference page on the same
-     template, run `get-component-info` on EACH component you added, and diff the concrete props
-     against the native one (`color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption`
-     not raw `title`, `labelPosition`, widget size, column count). A screenshot/metadata glance is
+     template, run `get-component-info` on EACH component you added, and diff the props that
+     checklist item **L-28** *Style parity* names (`creatio-ui-guidelines`,
+     `references/review-checklists.md`) against the native ones. A screenshot/metadata glance is
      not the gate. Record the gate result in `worklog.md` as evidence — **which reference page you
      diffed against + which components you checked via `get-component-info`** — because that
      evidence is the step-8 UI-gate row. A page that is technically correct (bindings, data sources)
