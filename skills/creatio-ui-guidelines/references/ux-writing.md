@@ -1,6 +1,6 @@
 # UX writing for Freedom UI pages
 
-Use this reference when you write or review the words on a Freedom UI page: button and menu captions, field labels, placeholders and tooltips, validation and error messages, empty states, confirmation dialogs, status and progress messages, and the wording around values an AI skill or a process filled in. It is the deeper guide behind the copy rules that already live elsewhere in this skill — the tooltip and placeholder rule in `SKILL.md` (*Mandatory implementation rules*) and the sections *Text, labels, and messages*, *Fields*, *Buttons and actions*, *Long-running and destructive actions* and *Dialogs and modals* in page-layout-and-controls.md. Those rules stay where they are and are not repeated here; each section below names the one it builds on. The through-line: **say what will happen, in the words the business already uses.** A button captioned *Submit* is a defect in the same way a gap in the layout is — it just does not show in the page schema.
+Use this reference when you write or review the words on a Freedom UI page: button and menu captions, field labels, placeholders and tooltips, validation and error messages, empty states, confirmation dialogs, status and progress messages, and the wording around values an AI skill or a process filled in. It is the deeper guide behind the copy rules that already live elsewhere in this skill — the sections *Text, labels, and messages*, *Field guidance*, *Buttons and actions*, *Long-running and destructive actions* and *Dialogs and modals* in page-layout-and-controls.md. Those rules stay where they are and are not repeated here; each section below names the one it builds on. The through-line: **say what will happen, in the words the business already uses.** A button captioned *Submit* is a defect in the same way a gap in the layout is — it just does not show in the page schema.
 
 ## Contents
 
@@ -77,16 +77,16 @@ Explanation belongs in the tooltip, the description line or a helper line under 
 
 ## 3. Field labels and helper text
 
-The tooltip and placeholder rule — when a field needs guidance, how specific it must be, and that it is a localizable string — is in `SKILL.md`, *Mandatory implementation rules*. Choosing between placeholder, tooltip and description line, the *Add …* placeholder for empty optional fields, and the read-only tooltip are in page-layout-and-controls.md, *Fields*. This section adds how to word them.
+When a field needs guidance, choosing between placeholder, tooltip and description line, the *Add …* placeholder for empty optional fields, and the read-only tooltip are in page-layout-and-controls.md, *Field guidance*. This section adds how to word them.
 
 - **Labels are short nouns in the business's words:** *Expected close date*, not *Date*; *Delivery address*, not *Address info*.
 - **No colons, no articles, sentence case.**
-- **A placeholder is not a label.** It disappears when typing starts and it carries less contrast than the label; never hide a label and let the placeholder stand in for it. Use the placeholder for a format or a sample value, with the label present; the one exception is the *Add …* invitation on an optional field that usually stays empty (page-layout-and-controls.md, *Fields*).
+- **A placeholder is not a label.** It disappears when typing starts and it carries less contrast than the label; never hide a label and let the placeholder stand in for it. Use the placeholder for a format or a sample value, with the label present; the one exception is the *Add …* invitation on an optional field that usually stays empty (page-layout-and-controls.md, *Field guidance*).
 - **State the rule before it is broken.** A tooltip or description line that says the limit up front beats a validation message afterwards.
 - **Explain why where the rule is surprising.** *Used to match payments on the bank statement* tells the user whether to be careful.
 - **For a read-only or calculated field, name the source and the moment it changes.**
 - **A checkbox is captioned with the state it sets, not as a code-style question.** *Critical project*, *Overdue*, *Permit required* — not *Is critical*, *Is overdue*, *Requires permit?* The same caption serves the field and the list column.
-- **Mark required the way the platform does.** Required fields carry the platform's own required marker (page-layout-and-controls.md, *Fields*); do not add *(required)* or *(optional)* to captions, and do not add a legend explaining the marker.
+- **Mark required the way the platform does.** Required fields carry the platform's own required marker (page-layout-and-controls.md, *Required fields*); do not add *(required)* or *(optional)* to captions, and do not add a legend explaining the marker.
 
 | Field | Before | After |
 |---|---|---|
@@ -130,7 +130,7 @@ When an error does happen, its text has three jobs:
 
 ## 5. Empty states
 
-The *Add …* placeholder for an empty optional field is in page-layout-and-controls.md, *Fields*; a list's or detail's own *No data* text is rendered by the component. This section covers what to write where you control the words.
+The *Add …* placeholder for an empty optional field is in page-layout-and-controls.md, *Field guidance*; a list's or detail's own *No data* text is rendered by the component. This section covers what to write where you control the words.
 
 Four situations that are routinely given one generic text:
 
@@ -148,11 +148,9 @@ Four situations that are routinely given one generic text:
 
 ## 6. Confirmations and destructive actions
 
-When an action needs a confirmation, undo or cancel is in page-layout-and-controls.md, *Long-running and destructive actions*, and accessibility-and-colors.md, *Inputs, forms & validation* (SC 3.3.4). This section is how the confirmation reads.
+Whether an action gets a confirmation, an undo or neither is decided in design-judgement.md, *Confirm, undo or neither*; the mechanics are in page-layout-and-controls.md, *Long-running and destructive actions*, and accessibility-and-colors.md, *Inputs, forms & validation* (SC 3.3.4). This section is how the confirmation reads.
 
-- **Do not confirm what is reversible.** A confirmation on an undoable action is a tax people learn to click through — and then they click through the one that mattered. Prefer undo.
 - **Do not double the platform's confirmation.** The standard delete already asks; do not add a second dialog in front of it.
-- **Confirm when the action is irreversible, bulk or expensive:** it sends email, posts to an external system, starts a process for many records, or deletes for good.
 - **The title asks the real question:** *Delete selected invoices?*
 - **The body states the consequence**, including what cannot be undone: *The invoices are deleted permanently. This can't be undone.*
 - **The buttons are the two outcomes:** *Delete invoices* / *Cancel* — never *Yes* / *No*.
@@ -217,7 +215,7 @@ Business rules hide and show fields, panels and steps; templates move blocks; a 
 
 ## 10. Writing for localisation
 
-`SKILL.md` requires tooltip and placeholder text to be localizable strings; accessibility-and-colors.md, *Localization, links & status*, requires every element to be translated into all enabled languages. This section is how to write strings that survive translation.
+Tooltip and placeholder text is a localizable string (page-layout-and-controls.md, *Field guidance*); accessibility-and-colors.md, *Localization, links & status*, requires every element to be translated into all enabled languages. This section is how to write strings that survive translation.
 
 - **Every user-visible string is a localizable string:** captions, button and menu labels, tooltips, placeholders, description and helper lines, validator messages, dialog titles, bodies and buttons, empty-state and status text. Column captions are localized on the object. An inline literal shows the same untranslated text to every culture.
 - **Name a resource key after its role, not its wording** (a discount tooltip, not the sentence it holds), so rewording the text does not leave a misleading key.
@@ -242,7 +240,7 @@ Sentence case, no Title Case or all caps, and no closing period in short helper 
 
 ## 12. Check the words on the rendered page
 
-Copy defects hide in the schema the same way layout defects do (`SKILL.md`, *Judge the rendered page, not the schema*). Before calling the copy done:
+Copy defects hide in the schema the same way layout defects do, so they are found on the rendered page. Before calling the copy done:
 
 - **Read every string on the rendered page**, in each state the page can be in: a new record, a filled one, read-only, each business-rule branch, each stepper step, each dialog the page opens.
 - **Cover-test every button and menu item** (section 1).

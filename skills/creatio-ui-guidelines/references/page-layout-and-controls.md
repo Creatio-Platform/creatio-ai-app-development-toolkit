@@ -1,343 +1,422 @@
 # Page layout and control guidelines
 
-Use these rules for Creatio Freedom UI page creation and UI/UX review.
+Use this reference to build or review a Creatio Freedom UI page: which component, where it goes, how it is configured. Each rule has one home here; other files point to it by section name. List the headings with their line numbers and read the section you need.
+
+Where a rule's strength is not obvious, its lead sentence names it: **pass/fail** (a tool or a measurement decides; a miss is a defect), **default** (do it unless the plan names a reason not to), **heuristic** (a signal for judgement; name the reasoning in the plan). `SKILL.md`, *When rules collide*, defines the levels.
+
+## Contents
+
+- Choosing the component (source of truth)
+- General product fit
+- Text, labels, and messages
+- Page composition: Choosing the page template · Match existing styles · Island structure · Balance the page · Component alignment · Contextual side panel · Article page
+- Analytics and metric widgets: Charts and metric tiles
+- Field-driven companions: amount → analytics · deadline → timer · Contact or Account → profile island
+- Buttons and actions: Button placement · Header actions · Button styles · Icons · Button vs menu action vs checkbox
+- Long-running and destructive actions
+- Typography and visual style: Native appearance · Custom CSS · Contrast and accessible names
+- Adding and editing data: Mini pages · Required fields · Label position
+- Grouping and page flow: Field groups · Related lists · Read-only detail · Containers for grouping inputs · Flex vs Grid · New island / card container — standard settings · Layout coordinates and container nesting
+- Step-by-step page (stepper)
+- Record connections
+- Fields: Field layout and order · Lookups and status chips · Field guidance · Special field controls
+- List (section) page layout: Filters and search · List columns
+- Dialogs and modals: Text-heavy modals
+- Default Freedom UI behaviors that silently violate the guidelines
 
 ## Choosing the component (source of truth)
 
-This guide refers to components by conceptual UX terms (profile island, field group, detail list, lookup, metric widget, …). Do NOT author the concrete `crt.*` names from memory or from a static list — they drift between versions and a wrong/renamed type fails to render at runtime. Resolve every concept → component with `get-component-info` against the target environment, which is authoritative and version-scoped:
+This reference names components by UX concept: profile island, field group, detail list, lookup, metric widget. Concrete `crt.*` names drift between versions, and a wrong or renamed type fails to render, so resolve every concept with `get-component-info` against the target environment, never from memory (pass/fail: the type exists in the target catalog).
 
-- **Browse** the full catalog: `get-component-info` (list mode) — returns every component type with a description and, in detail mode, `whenToUse` / `whenNotToUse` / `synonyms` / `useCases` to choose between visually similar components.
-- **Find** by concept/keyword: `search='tab' | 'lookup' | 'chart' | 'profile' | 'list' …`.
-- **Pre-built combinations** — e.g. "Expanded list" (detail/related child list), "Attachments", "Next steps", "Communication options", "Approval list" — are **composites**, not single types. Get the assembly recipe with `composite='<caption>'` and never hand-build a composite from raw component types.
+- **Browse**: list mode returns every type with a description; detail mode adds `whenToUse` / `whenNotToUse` / `synonyms` / `useCases` to choose between similar components.
+- **Find** by concept: `search='tab' | 'lookup' | 'chart' | 'profile' | 'list'`.
+- **Scope** to the target version with `environment-name`. When the version cannot be resolved (`requiresVersionConfirmation`), tell the user and confirm before building.
 
-Scope the catalog to the target platform version by passing `environment-name`; if the version cannot be resolved (`requiresVersionConfirmation`), tell the user the version is unknown and confirm before building.
+**A pre-built combination is a composite: build every part its recipe names (pass/fail).** Designer-listed combinations (Expanded list, Attachments, Next steps, Communication options, Approval list) assemble several components; Approvals, for one, is a module above the profile island plus the approval list. Get the recipe with `get-component-info composite='<caption>'` and build each part. Never hand-build a composite from raw types or insert only the part you recognize. When a plan lists a composite's parts, each part is its own deliverable.
 
-## Quick index
-
-Jump to the section you need:
-
-- **Component names** → "Choosing the component (source of truth)" (above) — resolve via `get-component-info`.
-- **Record/form page** → General product fit · Text, labels, and messages · Page composition (incl. *Choosing the page template*) · Analytics and metric widgets · Field-driven companions · Record connections · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
-- **Step-by-step page (wizard, stepper)** → Step-by-step page (stepper).
-- **List/section page** → List (section) page layout (incl. *List columns*, which also covers related lists on a record page).
-- **Dialogs** → Dialogs and modals.
-- **Review** → Default Freedom UI behaviors that silently violate the guidelines (below). The full audit checklist (anti-patterns folded in) lives in `./review-checklists.md`.
+**Record the recipe of every `compositeOnly` type you insert.** When `get-component-info` reports a type as `compositeOnly`, write in your worklog or evidence, not only in your reasoning, the `composite='<caption>'` recipe you fetched and every part it named, so a reviewer can compare the build with the recipe and catch a partial composite.
 
 ## General product fit
 
-- New apps and custom pages must align with the overall project solution and Creatio visual language.
-- Prefer ready page templates and built-in Freedom UI components. Avoid custom UI unless a standard pattern cannot solve the use case.
-- Before creating a new pattern, find an analogous base Creatio implementation and mimic its interaction model, placement, labels, state behavior, and visual weight.
-- Design for the actual role and process frequency. Put frequent and critical actions in fast access; move rare actions into menus or later sections.
-- Use no-code business rules and dynamic loading to progressively reveal content instead of showing every field at once.
+- New apps and custom pages align with the overall solution and Creatio's visual language (*Native appearance*).
+- Prefer ready templates and native building blocks: no-code components, predefined typography and colors, business rules, dynamic cases, mini pages, the DCM stage progress bar, widgets, existing navigation patterns. Build custom UI only when no standard pattern solves the use case.
+- Before creating a new pattern, find an analogous base Creatio implementation and mimic its interaction model, placement, labels, state behavior and visual weight.
+- Design for the actual role and process frequency: actions used on most visits, and critical ones, go in fast access; rare ones go into menus or later sections.
+- Make the page understandable without separate instructions, through structure, labels, placeholders and tooltips (*Field guidance*), help and validation.
+- Reveal content progressively with business rules and dynamic loading instead of showing every field at once.
 
 ## Text, labels, and messages
 
-- Use **Sentence case** for Creatio labels and headings: only the first word starts with a capital letter unless grammar or a proper noun requires otherwise.
-- Avoid Title Case and all-caps headings for fields, groups, details, and dialogs.
-- Keep button labels short and result-oriented, for example “Send for approval,” not “Click here.”
-- Use typical wording from existing Creatio interfaces when possible.
-- Do not put a period after the final sentence in short UI helper text or button/dialog copy unless the local style guide requires it.
-- Error messages for admins and regular users can differ. For regular users, explain what happened and how they can solve it themselves.
-- Validate text with a quick usability check: a new user, with no help from the project team, should understand what to do.
-- **Introduce a non-obvious section or tab with one short helper line under its heading.** Where a section's purpose isn't clear from its title (a rules area, a conditions list, a config step), add one sentence beneath the heading saying what it does and how it's used, in muted body text, before the controls. One line, authored as a localizable string. Skip it on self-explanatory sections.
+- Use **Sentence case** for labels and headings: only the first word is capitalized unless grammar or a proper noun requires otherwise. No Title Case or all-caps headings.
+- Keep button labels short and result-oriented: "Send for approval", not "Click here". Use typical wording from existing Creatio interfaces.
+- No period after the final sentence of short helper text or button and dialog copy unless the local style guide requires it.
+- Error messages for admins and regular users can differ; for regular users, say what happened and how they can solve it themselves.
+- Validate text with a quick usability check: a new user, with no help from the project team, understands what to do.
+- **Introduce a non-obvious section or tab with one short helper line under its heading.** Non-obvious: the title alone does not tell a new user what the area does (a rules area, a conditions list, a configuration step). One sentence in muted body text, before the controls, saying what it does and how it is used, as a localizable string.
+
+Word choices: `ux-writing.md`.
 
 ## Page composition
 
-- Use ready page templates where possible; they already include standard spacing and alignment.
-- **Match what's already there — this page, or a reference page when this one is new.** Read the current page (`get-page`) and reuse its established conventions for any new element — ExpansionPanel style, input `labelPosition`, container spacing/padding/radius, widget sizes, column count. New components must look like they were part of the original design, not a different hand. **If the page is new/empty (a freshly created migration page) and has nothing to match, `get-page` a shipped Freedom page on the SAME template and copy those conventions from it** — a new ExpansionPanel or added container must carry the platform's spacing/padding/`borderRadius`/color, not a bare default.
-- Preserve left/right spacing around headers and consistent gaps between containers.
-- Put controls in proper containers, not directly onto a grid when alignment will break. For button groups, use flex layout and align heights.
-- **A component among fields aligns with them on both axes.** A timer, badge, button or read-only value placed in a field group takes the anatomy of a field: its caption in the label column, its value in the value column. Vertically, its left edge lines up with the field values (or with the labels, when it carries its own caption in the label column) — never starting under a label. Horizontally, it takes a whole grid row of its own, and its text sits on the same line as the text of the fields in that row; a component shorter than a field row (a timer is a label) must not ride up against the field above it or leave a gap below. Check the rendered page by measuring: the component's text top and left edge match the neighbouring fields within 2px.
-- Prefer a clear “island” structure on complex record pages:
-  - record header;
-  - profile island for key stable data;
-  - metrics/widgets/indicators/charts;
-  - related record profiles;
-  - progress bar;
-  - tabs and toggle panels for secondary information.
-- Avoid pages that require long scrolling. Split information into tabs and groups so the user can jump to the needed area in one click.
-- Do not waste large side-profile space when the object genuinely has only one or two key fields — move them into a group or use a header-above-tabs template instead of a big empty side profile. (This is the opposite case from *Balance the page* below: collapse the side when there is little to show; fill it with more islands when there are many columns but the side is under-filled.) Never pad a short side with filler to make it look full — decorative widgets, a metric that repeats a field, placeholder groups: when nothing the user needs is left to put there, the template is wrong, not the column.
-- **Balance the page — the left and right areas must be proportional in length.** The whole page should read as two columns of comparable height, not a tall content area beside a short, half-empty left column. The left/profile column must be filled down to **at least the end of the page's content** (roughly level with the bottom of the right area), not stop a couple of fields in.
-- **Fill the left/profile column — don't leave it near-empty, and don't stop at "a field or two".** The record-page template ships with a single left island. If the object has many columns, the left side will look empty next to the content area — add a **second (and, if needed, third) left island** below the first, with the **same settings as the existing one** (see *New island / card container — standard settings*), and distribute key stable fields (and small metrics that answer the page's question) into them so the left column reaches the length of the right. Every block placed there must pass the subtract check — remove it: is anything lost? If not, it is filler. **Adding just one or two fields to the left island is NOT enough** when the right area is long: keep grouping related stable attributes into left islands until the left column is genuinely proportional to the right, not merely "no longer blank". Judge this against the *rendered* page height, not the schema — an island that looks fine in the designer can still leave the left column short at runtime.
-- **The left column can be a stack of compact single-value status islands.** When a record's key state is a few independent indicators (lifecycle mode, matching count, last refresh, usage), use several small islands — each one metric/status with a supporting icon and, where relevant, a state badge — stacked vertically, rather than one island crammed with unlabeled numbers. One idea per island.
-- Avoid mixing one-column and two-column fields inside the same group unless it intentionally improves reading flow.
-- **Reference information or tools that accompany a record or page belong in a contextual side panel, not the page body or a modal.** When a page needs supporting context or controls alongside its main content (e.g. a customer summary while handling a case, or managing connected accounts beside a dashboard), use a right-docked panel the user opens from the header and can close — not extra fields inline, not a blocking modal. Reuse the platform's ready panels (attachments, communication) where they exist instead of rebuilding them.
-- **A content/article page uses a full-width reading column, not the record field grid.** For long-form textual content (knowledge-base article, note, digest), lay the body out as one full-width rich-text column with a short meta/byline row above it (type, last updated, author) — not the two-column field grid and not side profile islands, which are for structured data entry. Keep a comfortable reading measure and use the predefined typography presets.
+- Use ready page templates; they carry standard spacing and alignment. Keep the spacing around headers and the gaps between containers consistent.
+- Put controls in proper containers, not loose on a grid where alignment breaks (buttons: *Button placement*).
+- **A dense or overloaded layout is a fix or a question for the user, never an optional refinement.** Before calling a page done, reread the rendered page against *Balance the page*, the spacing in *New island / card container — standard settings* and *Field groups*. How dense the page should be: `design-judgement.md`, *How dense*.
 
 ### Choosing the page template (before you create the page)
 
-The template decides the page's skeleton — which slots exist and where. It is fixed when the page is created and **cannot be swapped afterwards**: changing it means creating a new page from the right template and re-authoring the body. So derive the template from the intended composition BEFORE `create-page`, not after the fields are in.
+The template decides which slots exist and where. It is fixed at `create-page` and cannot be swapped afterwards; changing it means a new page and a re-authored body. So derive the template from the intended composition before `create-page` (pass/fail).
 
-- **Resolve what the target environment actually offers with `list-page-templates`** and choose from that list. Template names are version- and environment-specific — do not author one from memory, and do not assume the default form page is right.
-- **A record with stages/lifecycle needs the template that already includes the stage progress bar (DCM), not the default form page.** If the page is meant to show ordered process state (`crt.EntityStageProgressBar` / DCM stages), create it from the progress-bar template so the bar sits in its native slot with the platform's spacing and behavior. Do NOT create a default page and then hand-place a progress bar into it — that rebuilds a template slot by hand, drifts from the native look, and is exactly the customization these guidelines forbid. On a recent build this template is `PageWithTabsAndProgressBarTemplate` (title "Tabbed Page with Progress Bar"), but names are version- and environment-specific — always look the exact one up on the target stand (`list-page-templates`), and when several look similar, confirm the choice with the developer.
-- The same reasoning applies to the other composition decisions the template owns: header-above-tabs vs a side profile area (see the note above about not wasting side-profile space), record page vs list page vs dashboard page, and the mini-page template for quick add.
-- **This also governs scaffolder-created pages — `create-app-section` (and `create-app`) auto-generate the section's list/form pages on a *default* template, with no template choice exposed.** So when a new section's record needs a non-default template (e.g. the DCM progress-bar page), decide it at planning time and do NOT treat the auto-generated form page as final: create the record page explicitly on the right template (`create-page` with the template from `list-page-templates`) and register it as the section's page, or recreate the scaffolded page on that template (the recreate path below). A scaffolder page is fixed to its template exactly like a hand-authored one — it cannot be re-templated in place.
-- If the page already exists on the wrong template, say so explicitly and offer the recreate path with its cost (new page from the right template, body re-authored, add/edit page registrations updated) instead of silently patching the current one.
+- **Choose from `list-page-templates` on the target environment.** Template names are version- and environment-specific; do not author one from memory or assume the default form page.
+- **A record with stages needs the template that ships the stage progress bar (DCM).** Create it from that template so the bar sits in its native slot; hand-placing a bar into a default page rebuilds a template slot and drifts from the native look. On a recent build it is `PageWithTabsAndProgressBarTemplate` ("Tabbed Page with Progress Bar"); look up the exact name on the stand, and confirm with the developer when several look similar.
+- The template also decides header above tabs vs a side profile (*Balance the page*), record vs list vs dashboard page, and the mini-page template for quick add.
+- **Scaffolded pages are fixed to their template too.** `create-app-section` and `create-app` generate list and form pages on a default template. When the record needs another one, decide it at planning time: create the record page with `create-page` on the right template and register it as the section's page, or recreate the scaffolded page on it.
+- If the page already exists on the wrong template, say so and offer the recreate path with its cost (new page, body re-authored, add and edit registrations updated) instead of silently patching it.
+
+### Match existing styles
+
+- **Match what is already there: this page, or a shipped page on the same template when this one is new (default).** Read the current page (`get-page`) and reuse its conventions for every new element: the ExpansionPanel style (spacing, padding, `borderRadius`, header and collapsed state), input `labelPosition`, container spacing, padding and radius, widget sizes, column count. A differently styled component next to existing ones is a defect.
+- **When the page is new or empty**, `get-page` a shipped Freedom page on the same template that has expansion panels and profile islands and copy its conventions, so an added container carries the platform's spacing, padding, `borderRadius` and color, not a bare default.
+- **Compare the rendered page with a native page on the same template before calling it done**: `visual-check.md`.
+
+### Island structure
+
+- On a complex record page, prefer islands: record header; profile island for key stable data; metrics, widgets and charts; related record profiles; progress bar; tabs and toggle panels for secondary information.
+- **Avoid long, unstructured record pages.** When reaching an area takes more than about two screens of scrolling, split the information into tabs and groups so the user reaches it in one click.
+- Avoid mixing one-column and two-column fields in one group unless it improves reading flow.
+
+### Balance the page
+
+**The left and right areas are proportional in length (default, checked on the rendered page).** Test with the first tab open: the left column ends roughly level with the bottom of the right area's content; it fails when it ends above the right area's middle. Judge the rendered height, not the schema.
+
+- **Fill the left column with more islands, not one or two extra fields.** The record template ships one left island. When the right area is long, add a second (and if needed a third) left island below it with the same settings (*New island / card container — standard settings*) and distribute key stable fields into them until the test passes.
+- **Fill it only with what the user needs on this page:** key stable fields, a related-record profile, a metric that answers the page's question. Every block passes the subtract check: remove it; is anything lost? Decorative widgets, a metric that repeats a field and placeholder groups fail it.
+- **Small single-value status islands may stack in the left column**: one metric or status per island, with an icon and, where relevant, a state badge, rather than one island of unlabeled numbers.
+- **Collapse the side when there is little to show.** When the object has only one or two key fields, or nothing passes the subtract check, the template is wrong, not the column: move the fields into a group or use a template without a side profile (resolved with `list-page-templates`).
+
+### Component alignment
+
+**A component among fields aligns with them on both axes (pass/fail, measured).** A timer, badge, button or read-only value in a field group takes a field's anatomy: caption in the label column, value in the value column. Its left edge lines up with the field values (or with the labels, when its caption sits in the label column), never starting under a label. It takes a whole grid row, its text on the same line as the fields' text in that row; a component shorter than a field row does not ride up against the field above or leave a gap below. Measure on the rendered page: text top and left edge within 2px of the neighbouring fields.
+
+### Contextual side panel
+
+**Reference information or tools that accompany a record go in a contextual side panel, not in the page body or a modal (default).** Use a right-docked panel the user opens from the header and can close (a customer summary while handling a case). Reuse the platform's ready panels (attachments, communication) instead of rebuilding them.
+
+### Article page
+
+**A content page uses a full-width reading column, not the record field grid (default).** Long-form text (knowledge-base article, note, digest) is one full-width rich-text column with a short meta row above it (type, last updated, author), in the predefined typography presets; no side profile islands.
 
 ## Analytics and metric widgets
 
-- A page can host analytic widgets — `crt.IndicatorWidget` (single metric/count), `crt.GaugeWidget` (value on a scale), `crt.ChartWidget` (charts), `crt.ListWidget` (embedded list).
-- **Place widgets at the top, where they are seen first:** at the top of the **`SideAreaProfileContainer`** (or its template analog), or as the **first elements of the tab that holds their data**.
-- **A chart goes beside the data it sums up.** Put a chart at the top of the tab that holds its records — finance charts on the finance tab, risk charts above the risks list — not on a separate tab away from them. A dedicated **"Analytics" tab** is only for analytics that span several areas of the record, and then it holds enough compact charts to fill a screen; with fewer than three such charts, place them on their data tabs instead.
-- **Size and arrange charts by clio's `dashboard-and-home-page-layout` guide** (read it with `get-guidance`); it is written for dashboards and home pages and applies to the chart area of a record page too: metrics form one block above the charts; ordinary charts (bars, lines) at most two per row, compact charts (a doughnut, a bar with a few short bars) three per row, never four or more; charts in one row share a height; a trend with many time points goes last at full width; a chart is at least 6 grid rows high and a gauge 6. Check the rendered tab: the charts read as compact cards, with several of them visible without scrolling, not two half-screen charts per screen.
-- **In `SideAreaProfileContainer` keep only metrics, and keep them small** — compact tiles, two per row when there are several, or one tile across the island for a long value. For small metrics, add an **icon** to aid quick visual recognition. Do not put large charts in the side island; place those in the content area.
-- **A widget gets its own island.** A gauge or a block of metric tiles sits in an island of its own, not in one island with input fields; a field joins it only when it explains that very metric (and the plan says so).
-- **Metric color follows meaning.** A metric that signals a problem — overdue, failed, over the limit — takes the negative or attention color when its value needs action; neutral counts stay neutral. Take the colors, the banned low-contrast colors and the icon per meaning from clio's `widget-color-and-icon` guide (read it with `get-guidance`), and keep the meaning in the title too, never in color alone.
-- **A compact summary/relations widget may sit inline as the first cell of the content field grid.** On an information tab you can place a small widget (e.g. a related-records counter) at `column: 1` of the first field band and let the fields flow into the remaining columns beside it, instead of giving it its own full-width row. Keep it XS/S so it reads as one grid cell, and keep the remaining columns' `colSpan` math correct.
+- Widgets: a single metric or count (`crt.IndicatorWidget`), a value on a scale (`crt.GaugeWidget`), charts (`crt.ChartWidget`), an embedded list (`crt.ListWidget`); confirm each with `get-component-info`.
+- **Place widgets where they are seen first:** at the top of the `SideAreaProfileContainer` (or its template analog), or first in the tab that holds their data.
+- **A widget gets its own island (default).** A gauge or a block of tiles does not share an island with input fields; a field joins it only when it explains that metric and the plan says so.
+- **Metric color follows meaning.** A metric that signals a problem (overdue, failed, over the limit) takes the negative or attention color when its value needs action; neutral counts stay neutral. Colors, banned low-contrast colors and icons come from clio's `widget-color-and-icon` guide (`get-guidance`); the title carries the meaning too.
+- **A small summary widget may be the first cell of the content field grid**: `column: 1` of the first field band, size XS or S, with the fields in the remaining columns and their `colSpan` math kept correct.
 
-## Field-driven companions (amount, deadline, Contact/Account)
+### Charts and metric tiles
 
-Certain fields imply a component beside them. A deadline's timer and a business contact's profile are part of "the field is done", not an optional nicety — the field alone leaves the user doing date math or navigation that the page should have done for them. An amount's analytics depends on the page's question: it is required when the user comes to the page to learn something about the value, and absent when no such question exists. Resolve each component or composite with `get-component-info` (`search='indicator' | 'gauge' | 'chart' | 'timer' | 'profile'`, `composite='<caption>'` for ready combinations) — never author `crt.*` names from memory — and place it per the placement/spacing rules above.
+- **Every chart answers a question named in the plan and shows all the data it compares (pass/fail on the rendered page).** A comparison chart (budget against actual) carries every series it names, each with data. A chart that answers no question is removed. Chart type: `design-judgement.md`, *Which chart*.
+- **A chart goes beside the data it sums up (default):** at the top of the tab that holds its records, not on a separate tab. A dedicated Analytics tab is only for analytics spanning several areas of the record, and holds enough charts to fill a screen; with fewer than three such charts, place them on their data tabs.
+- **Sizes and arrangement come from clio:** `get-guidance name=dashboard-and-home-page-layout` owns the chart and tile sizes, how many per row and the order of metrics and charts, and applies to a record page's chart area too. Check the rendered tab: the charts read as compact cards, several visible without scrolling.
+- **The side profile column holds only small metrics**: XS or S tiles with an icon, or one tile across the island for a long value. Large charts go in the content area.
+
+## Field-driven companions
+
+Some fields imply a component beside them. A deadline's timer and a business contact's profile are part of "the field is done" (default): without them the user does date math or navigation the page should do. An amount's analytics depends on the page's question (heuristic). Resolve each with `get-component-info` (`search='indicator' | 'gauge' | 'chart' | 'timer' | 'profile'`, `composite=` for ready combinations).
 
 ### An amount field gets analytics when the page asks a question about it
 
-- **Applies to** any money or quantity field — total, sum, amount, price, cost, budget, discount, revenue, hours, quantity — whether it is **entered by hand or calculated**, on a record page or a section page.
-- First name the question the user brings to this page about the value: is the total within the limit, how much is paid and how much remains, how plan compares with actual. A metric is added only to answer such a question, and the plan names it. When the page carries no such question — a line amount on an add mini page, a price the user only reads — the field stays alone; a metric there would be decoration.
-- The metric says something *useful* about that value, not a restatement of it: a rollup across related child records (order lines, payments, submissions), paid vs remaining, plan vs actual, average per unit/period/record, share of a larger total, or a count paired with its sum for a related list.
-- **Placement** follows *Analytics and metric widgets* above: compact indicator/gauge widgets with an icon in their own island at the top of the profile column; trend/breakdown **charts** at the top of the tab that holds their data. Never a large chart in the side island.
-- A **calculated** amount also needs the read-only-field tooltip explaining how and when it is derived (see *Fields*).
-- Where the amount belongs to a set of records (a section page, or a parent with line items), put the aggregate on the section page's Dashboard component too — that is where users compare across records.
-- Anti-patterns: a record whose page exists to judge an amount (a budget, an invoice, an expense report against its limit) with no rollup, comparison, or trend anywhere; a "metric" widget that repeats the field's own value; a metric added to a page that asks no question about the amount; a wall of amount widgets with no icons crammed at zero spacing.
+- **Applies to** any money or quantity field (total, amount, price, cost, budget, revenue, hours, quantity), entered or calculated, on a record or section page.
+- **First name the question** the user brings to the page about the value: within the limit? how much paid and how much remains? plan vs actual? Add a metric only to answer such a question, and name it in the plan. With no such question (a line amount on an add mini page, a price the user only reads), the field stays alone.
+- **The metric says something the field does not:** a rollup across child records, paid vs remaining, plan vs actual, an average per unit or period, a share of a larger total, a count with its sum for a related list.
+- **Placement:** *Charts and metric tiles*. A calculated amount also gets the read-only tooltip (*Field guidance*). An amount that belongs to a set of records also gets its aggregate on the section page's Dashboard component, where users compare records.
+- Anti-patterns: a page that exists to judge an amount (a budget, an invoice against its limit) with no rollup, comparison or trend; a metric repeating the field's value; a metric on a page that asks no question about the amount; a wall of icon-less amount widgets at zero spacing.
 
 ### A deadline field gets a timer beside it
 
-- **Applies to** any field carrying a point in time the user must act before within the working horizon of the page — due date, deadline, expiry, valid-until, SLA response/solution time, next review or inspection, expected close date. A far date of a long-running record (a project's planned end months away) is not such a deadline: a countdown in months tells the user nothing to do; show it as a metric (*Days until planned end*) when the page's question needs it, or leave the date alone.
-- Add a **timer** component next to that field — same island or group, on its own row under the date, aligned with the fields (*Page composition*: a component among fields aligns with them on both axes) — bound to the date column, so the user reads **time left / overdue** at a glance instead of subtracting dates in their head.
-- **The timer says what it counts and shows its state in color.** Give it a visible caption (*Time to inspection*), and set its colors explicitly: `positiveTextColor` green while there is time, `negativeTextColor` red once it is overdue, plus a `negativeTextValue` such as *Overdue* so the state does not rest on color alone. Check on the rendered page that the caption shows. Creatio's case/SLA pages are the reference implementation: mimic their placement, format, and copy. Resolve the component with `get-component-info search='timer'`; if the target version's catalog has no timer component, say so and offer the closest native alternative rather than hand-building a countdown field maintained by a process.
-- The timer **complements** the field, never replaces it: keep the date visible (users still need the exact date; a read-only or calculated SLA date is fine), and keep both in the same visual block so cause and effect read together.
-- Where the deadline drives state (at risk, overdue), express that through the record's existing status/stage indicator rather than a new colored label, and never through color alone (see `./accessibility-and-colors.md`).
-- Anti-patterns: a bare `Due date` on a page whose entire purpose is to act before that date; a "Days left" number field kept up to date by a scheduled process where the platform timer would do it live; a timer without the date, or a timer parked in a different tab from the deadline it counts.
+- **Applies to** a point in time the user must act before within the page's working horizon: due date, expiry, valid-until, SLA response or solution time, next inspection, expected close date. A far date months away (a project's planned end) is not one: show it as a metric (*Days until planned end*) when the page's question needs it, or leave it alone.
+- **Add a timer next to the date**, in the same island or group on its own row under it, aligned per *Component alignment*, bound to the date column, so the user reads time left or overdue at a glance. Keep the date visible: the timer complements it.
+- **The timer says what it counts and shows its state in color:** a visible caption (*Time to inspection*), `positiveTextColor` green while there is time, `negativeTextColor` red when overdue, and a `negativeTextValue` such as *Overdue*, so the state does not rest on color alone. Check that the caption renders. Creatio's case and SLA pages are the reference for placement, format and copy. If the target catalog has no timer (`get-component-info search='timer'`), say so and offer the closest native alternative, not a countdown field maintained by a process.
+- Where the deadline drives state (at risk, overdue), show it through the record's existing status or stage indicator, never color alone (`accessibility-and-colors.md`).
+- Anti-patterns: a bare `Due date` on a page whose purpose is to act before it; a "Days left" field kept current by a scheduled process; a timer without its date, or on another tab.
 
 ### A Contact or Account field gets that record's profile island
 
-- **Applies to** lookups to **Contact** or **Account**, and comparable person/organization lookups, that name a business relationship (responsible, primary contact, customer, supplier, owner, candidate) — someone the user needs to *reach*. Pure audit lookups (Created by / Modified by) are out of scope.
-- Add a **related-record profile island** for that lookup: the linked record's identity and reach — name (with photo where available), job title, company, phone, email — plus the platform's communication options, **read-only**, in its own island in the side/profile column (or the template's analog), captioned for the relationship (`Primary contact`, `Customer`, `Recruiter`). Get the assembly from `get-component-info` (`search='profile'`, and `composite=` for the ready combinations such as communication options) — never hand-build the panel out of raw component types.
-- **Keep the lookup field itself** where it belongs in the form. The island is the expanded, read-only view of that link — not a second place to edit it, and not a copy of the related record's fields as editable inputs on this page.
-- **Bind the island's visibility to the lookup** so an unfilled record does not render a blank profile.
-- Two related profiles (e.g. Contact **and** Account) are **two islands stacked vertically**, never side by side, each with the standard island settings (see *New island / card container*). They are also the natural way to fill the left column — see *Balance the page*.
-- Anti-patterns: a Contact lookup and nothing else, forcing the user to open the contact card in another tab to find a phone number; re-adding `Email`/`Phone` as editable fields on this page instead of a profile island; a profile island built from the *current* record's own fields (that is the main profile island, not a related profile).
+- **Applies to** Contact, Account and comparable lookups that name a business relationship (responsible, primary contact, customer, supplier, owner): someone the user needs to reach. Audit lookups (Created by, Modified by) are out of scope.
+- **Add a related-record profile island**: the linked record's name (with photo where available), job title, company, phone, email and the platform's communication options, read-only, in its own island in the side column, captioned for the relationship (`Primary contact`, `Customer`). Get the assembly from `get-component-info` (`search='profile'`, `composite=` for communication options).
+- **Keep the lookup field** in the form. The island is its read-only expanded view, not a second place to edit it and not editable copies of the related record's fields.
+- **Bind the island's visibility to the lookup**, so an unfilled record shows no blank profile.
+- Two related profiles stack vertically as two standard islands, never side by side; they are the natural way to fill the left column (*Balance the page*).
+- Anti-patterns: a Contact lookup and nothing else; `Email` and `Phone` re-added as editable fields; a "related" profile built from the current record's own fields.
 
 ## Buttons and actions
 
-- Place page-level buttons in the upper-right page area.
-- **Where to put a button (Creatio):**
-  - **General / page-level actions** (apply to the whole record — e.g. save, refresh, run a process) go in the page header's **`ActionButtonsContainer`** (top-right).
-  - **Context-specific actions** that act on one place — fill a field, run a calculation, generate a value — go **next to the component that shows their result**, not in the header. Put the button beside that field/widget so the cause and effect are visually connected.
-  - **Actions that operate on the record a profile/summary island represents** (e.g. Escalate, Assign to me on a case profile) go **inside that island, below its fields**, in a `crt.FlexContainer` — not in the page header — so a state-changing action sits next to the state it reads. Keep to a couple; move the rest into a menu.
-- **Wrap buttons in a `crt.FlexContainer`, do not drop them directly on a grid.** Flex adapts to label length and localization (translated captions change width) and keeps button heights/alignment consistent. When a button sits next to an input (e.g. a value field + a "Calculate" button), put **both the input and the button in the same `crt.FlexContainer`** so they align and reflow together.
-- Use no more than one **Primary** button in the current context. It is for the main navigation/action or active dialog action.
-- **The single primary may be semantically colored for a launch/activate step.** Blue is the default primary. A launch/activate/positive-commit action that starts a process (e.g. Start a bulk send, Activate) may use a green primary to signal "go". This is still one primary per context, not a second one; the meaning must be carried by the label (`Start`), never by color alone; and no other button colors are introduced ad hoc. Ordinary Save/Apply stays the default primary.
-- Use no more than one **Secondary** button for positive confirmation in the same context.
-- Use **Plain** buttons freely for secondary or neutral actions.
-- **The header keeps one or two frequent actions as buttons; the rest go into one actions menu.** For every page-level action, judge from the business scenario how often the user needs it: an action used on most visits stays a button, an occasional one (put on hold, request an inspection, add a change order from the header) goes under one menu button such as *Actions*. Three or more separate header buttons need a reason named in the plan.
-- **Use a split button for one primary action that has close variants.** When an action has a main form plus a few variants (Save / Save and new / Save and close), use a split button — the primary action on the button, its variants in the attached dropdown — instead of separate buttons or a plain menu. It still counts as the single primary for the context.
-- **To print reports, add the dedicated Print button — don't hand-build a report button or menu.** Creatio's standard **Print** action builds its own dropdown from the reports/printables registered for the page's object and keeps that menu in sync as reports are added. Add that button rather than a custom button or a hand-assembled report list, which would duplicate the platform behavior and drift out of date. Resolve it via `get-component-info` (it is a built-in action, not a plain button).
-- Buttons in one group must have consistent height and alignment.
-- Use an unambiguous icon that matches the action. Add tooltip/accessibility text for icon buttons.
-- **Add icons where they aid recognition** — on buttons and menu items, and especially for a set of related actions or several filters: pick distinct, fitting icons (from the Freedom UI icon library) so the UI is scannable and varied, not a row of identical or icon-less items. Keep icon style consistent across the page.
-- **Quick filters on the same page MUST each have a different icon.** When a page shows several quick filters, every filter needs its own distinct, meaning-fitting icon — never repeat the same icon across two filters and never leave several filters sharing one generic icon. Identical icons make the filters indistinguishable and defeat the purpose of the icon; pick a unique icon per filter (consistent in style with the rest of the page).
-- A button must be visible and active only when it can be used. Hide or disable it based on record state and user rights.
-- For state-dependent workflow actions, remove actions that no longer apply, for example hide “Send for approval” once the record is already under approval.
+### Button placement
+
+- **Page-level actions** (save, refresh, run a process) go in the header's `ActionButtonsContainer`, top right; how many: *Header actions*.
+- **Context-specific actions** (fill a field, run a calculation) go next to the component that shows their result, so cause and effect connect.
+- **Actions on the record a profile island represents** (Escalate, Assign to me) go inside that island below its fields, in a `crt.FlexContainer`: one or two there, the rest in a menu.
+- **Wrap buttons in a `crt.FlexContainer`, not directly on a grid.** Flex adapts to label length and translation and keeps heights aligned. A button beside an input ("Calculate" beside a value) shares one flex with it.
+- **A button is visible and active only when it can be used**, by record state and user rights; state-dependent actions that no longer apply are hidden ("Send for approval" once under approval).
+
+### Header actions
+
+**The header keeps one or two frequent actions as buttons; the rest go into one actions menu (default).** An action used on most visits stays a button; an occasional one goes under one menu button such as *Actions*. Three or more separate header buttons need a reason named in the plan.
+
+### Button styles
+
+- **One Primary button per context**, for the main action or the active dialog action. It may be green instead of the default blue for a step that starts or activates a process; the label still carries the meaning (`Start`, `Activate`), and no other ad hoc button colors appear. Save and Apply stay the default primary.
+- At most one **Secondary** button for positive confirmation per context; **Plain** buttons freely for neutral actions.
+- **A primary action with close variants is a split button** (Save / Save and new / Save and close); it counts as the single primary.
+- **Reports print through the platform's Print button**, whose dropdown follows the reports registered for the object; a hand-built report button drifts out of date. Resolve it via `get-component-info`.
+
+### Icons
+
+- An icon matches the action unambiguously; every icon button has a tooltip and accessible text.
+- **A set of related actions or menu items gets distinct, fitting icons** from the Freedom UI library, in one style, so items are told apart at a glance. Quick filters: *Filters and search*.
 
 ### Button vs menu action vs checkbox
 
-- Use a visible button for frequent actions that materially affect functionality or start a meaningful process.
-- Use a menu action for rare actions that affect functionality.
-- Use a logical field/checkbox for state data that does not itself execute a process.
-- **Toggle switch vs checkbox.** Use a toggle for a setting/mode that takes effect as configuration (e.g. Commit to forecast, Use contact's timezone, Throttling) — an on/off state the user is tuning. Use a checkbox for a plain boolean attribute captured with the record's other data. Resolve the concrete component via `get-component-info`; don't swap one for the other to restyle.
-- **Offer a meaningful either/or choice as selectable cards, not a bare dropdown.** When the user must pick between 2–3 consequential options (e.g. send manually vs via campaign flow; send now vs schedule vs smart-send), render them as selectable cards — icon, short title, one-line consequence — with a single selection. Reserve this for choices that change what happens next; an ordinary value pick stays a dropdown. Resolve the component with `get-component-info`.
-
+- A visible button for actions used on most visits that change data or start a process; a menu action for rare ones; a checkbox for state data that runs no process.
+- **A toggle sets a mode that takes effect as configuration** (Use contact's timezone); a checkbox records a plain boolean with the record's data. Do not swap one for the other to restyle.
+- **A consequential either/or choice is selectable cards, not a dropdown.** When two or three options change what happens next (send now, schedule, smart-send), show cards with an icon, a short title and a one-line consequence, one selection. An ordinary value pick stays a dropdown.
 
 ## Long-running and destructive actions
 
-- Warn the user before launching an action that can take a long time.
-- Show execution status using a loading mask, snack-bar message, countdown, or progress/status area.
-- If an operation takes more than 30 seconds or duration is unknown, prefer asynchronous execution and notify the user after completion.
+- Warn the user before launching an action that can take long.
+- Show execution status with a loading mask, a snack-bar, a countdown or a progress area.
+- Over 30 seconds or of unknown duration: run asynchronously and notify the user on completion.
 - If an operation can affect system performance, recommend scheduling it outside business hours.
-- For long-running external updates, show when data was last updated.
-- Any destructive, irreversible, or high-impact action must be cancellable, undoable, or confirmed before execution.
+- For long-running external updates, show when the data was last updated.
+- A destructive, irreversible or high-impact action is cancellable, undoable or confirmed. Which one: `design-judgement.md`, *Confirm, undo or neither*; wording: `ux-writing.md`.
 
 ## Typography and visual style
 
-- Freedom UI font is Montserrat. Use predefined typography and colors instead of custom styles.
-- Minimize the number of font styles and colors.
-- Reuse template styles: Headline 1-4 for headings, Body for regular text, Caption for supporting text.
-- Treat color as information coding only with text/icon/status support.
-- Before requesting global font, theme, or style overrides, ask why the change is needed and how it affects system perception and consistency.
-- **Custom CSS is a last resort — native inputs first, then warn and confirm (mandatory).** Expressing a look through a `styles` object, a `classes`/CSS class, or a component `extraStyles` hook (e.g. `extraStyles.toggle`, `extraStyles.label` with `color`/`fill`/`font-family`) is custom CSS — `extraStyles` is not "native" merely because it is a component input, and changing a font-family or hard-coding a color is never a native default. Custom CSS is not covered by Creatio's platform-upgrade compatibility guarantees, so it can break on a future upgrade. First exhaust the component's native inputs (`get-component-info`); only if none can achieve the look, tell the user no native option exists, warn about the upgrade-compatibility risk, and get explicit confirmation before writing any `styles`/`classes`/`extraStyles`. If the user declines, offer the nearest native alternative instead. A "just apply / don't ask" instruction still requires at least a one-line upgrade-risk warning — never apply custom CSS silently. (See the "Mandatory implementation rules" list in `SKILL.md`.)
+- The Freedom UI font is Montserrat. Use predefined typography and colors, and few font styles and colors: Headline 1–4 for headings, Body for text, Caption for supporting text.
+- Color supports information and is never its only channel: text, an icon or a status goes with it.
+- Before requesting a global font, theme or style override, ask why it is needed and how it affects consistency.
+
+### Native appearance
+
+- **Custom additions do not stand out from the base product (default).** Keep the default component appearance, typography, colors, spacing and borders. A customization that makes the page look different from base Creatio, even "nicer", is a defect. Deviate only for a business priority, as a deliberate, scoped and confirmed decision.
+- **Do not restyle components to fix a small nuance or satisfy another rule.** Switching every `crt.Input` to `appearance: "outline"`, or changing fonts, borders or colors across a form to work around one issue, makes the whole form deviate. Fix only the specific field when truly needed.
+
+### Custom CSS
+
+**Custom CSS is a last resort: native inputs first, then warn and confirm (pass/fail).** A visual requirement (color, background, font, text size, spacing, border, size, alignment) is custom CSS once expressed as a `styles` object, a `classes` CSS class, or an `extraStyles` hook (`extraStyles.toggle`, `extraStyles.label`) carrying raw values such as `color`, `fill` or `font-family`; the three count equally, and `extraStyles` is not native because it is a component input. A changed font-family or a hard-coded color is never a native default, since both come from theme tokens. Custom CSS is outside Creatio's upgrade-compatibility guarantees and can break on a future upgrade. The order:
+
+1. Exhaust the component's native inputs (`get-component-info`). If one achieves the look, use it and do not mention CSS.
+2. Otherwise tell the user no native option exists, warn about the upgrade risk, and get explicit confirmation before writing `styles`, `classes` or `extraStyles`.
+3. If the user declines, apply none: offer the nearest native alternative or say the look is not achievable natively.
+
+"Just apply, don't ask" waives the question, not the one-line upgrade-risk warning.
+
+### Contrast and accessible names
+
+**Checked on every page you build, not only in an audit (pass/fail).** Standard and small text has at least 4.5:1 contrast, large text 3:1, custom tabs, areas, charts, backgrounds, images, dialogs and components included. Every component's accessible name (title, `aria-label`, tooltip, alt text) carries a real value, never empty or a placeholder default. Beyond this baseline: `accessibility-and-colors.md`.
 
 ## Adding and editing data
 
-- Prefer a mini page for creating or editing data when the task is focused, role-specific, or step-limited.
-- **A mini page names what it creates and carries the fields that define the record.** Caption it with the object (*New change order*), not the template's *New record*. Put on it the required fields and the few that make the record meaningful at creation (for a change order: description, cost and schedule impact, request date, approval status) — not only the ones that happen to come first.
-- **Values filled in for the user must be valid.** A number, code or date suggested on the mini page must not duplicate an existing record (a proposed *CO-004* when CO-004 exists) or contradict the record's state; use the platform's sequence or leave the field for the user.
-- **Mini page columns follow the values.** One column is the default for a sequential capture. Two columns are fine when the fields are short and pair by meaning — a number beside its date, cost impact beside schedule impact, requested by beside approval status; long text (a description) always takes the full width. Labels stay `above` either way (*Dialogs and modals*).
-- Put required fields on the first screen: the header or top island, the left profile column, or the first tab. Do not hide a required field on a second or later tab, where the user meets it only when saving fails. This is a strong default, not a hard rule — when a required field has to live elsewhere, name the reason.
-- Use logical field order based on how users fill in data.
-- Use validation, input filtering, lookup filtering, default values, and auto-substitution.
-- Configure fields used when copying records.
-- Use placeholders for examples/format and tooltips for longer instructions (full placeholder/tooltip rules are in SKILL.md's mandatory rules).
-- Do not overload create flows with information needed only later during record processing.
+- Prefer a mini page for creating or editing when the task is focused, role-specific or step-limited.
+- Order fields by how users fill them in (*Field layout and order*). Use validation, input and lookup filtering, defaults and auto-substitution; configure the fields copied with a record.
+- Do not overload create flows with information needed only later.
+
+### Mini pages
+
+- **A mini page names what it creates and carries the fields that define the record.** Caption it with the object (*New <object>*), not *New record*; put on it the required fields and the few that make the record meaningful at creation.
+- **Values filled in for the user are valid**: a suggested number, code or date does not duplicate an existing record or contradict its state. Use the platform's sequence or leave the field to the user.
+- **Columns follow the values.** One column by default; two when the fields are short and pair by meaning (a number beside its date); long text takes the full width. Labels: *Label position*.
+
+### Required fields
+
+- **Require the real minimum only (default).** A field is required only when the record cannot be created or is meaningless without it. Extra required fields block quick creation and invite junk; guide recommended fields with defaults, placeholders or business rules instead.
+- **Required fields are on the first screen (default):** the header or top island, the left profile column or the first tab, in logical order, with the platform's required mark. On a later tab the user meets the field only when saving fails; when one must live there, name the reason in the plan. Fields edited on most visits go early too.
+
+### Label position
+
+- **Inputs in one group share one label position, and no component is restyled to get it.** Prefer a concrete value (`"above"` or `"left"`). Never change a component's `appearance` (`crt.Input` `legacy` to `outline`) to make a position render: the base look wins. If an explicit position needs that, keep the default appearance; `"auto"` is acceptable on a record page when it renders consistently.
+- **Every field on a mini page or a modal sets `labelPosition: "above"` explicitly (pass/fail).** A `left` label column squeezes the input at that width, and the default `auto` switches between `left` and `above` by container width, so a field without the property can render its label beside the input. The one exception is a wide page, size L or XL, where `left` may be set if it reads cleanly; on S and M it is `above`. One position across the dialog. Shipped mini pages write `above` on each field with the default appearance; do not switch to `outline` to make it render.
 
 ## Grouping and page flow
 
-- Use field groups to divide information. Keep nesting shallow: at most 2 levels.
-- Use tabs and groups for large datasets.
-- **Group fields into meaningful blocks — a group of just 1–2 fields is a poor grouping, not only a single lone field.** A container (group / tab / island) should hold a logically coherent *block* of related fields — 3–4 fields is a signal to check against the page's question, not a quota (`design-judgement.md`, *Rules are not counts*). A group with a single data-entry field is always wrong (merge it or add the fields that belong to that block); a group with only two fields is a warning sign — combine it with a related group or pull in the other attributes of that business block so it reads as a real block, not a stub. Sparse 1–2-field groups make the page look thin and unbalanced; grouping fields into fuller blocks is also what keeps the page proportional (see *Balance the page* above). Never split what is one business block into several tiny groups just to "have groups".
-- **Fill out the "main information" block.** The record's primary block (profile island + the first/general tab) must carry the core descriptive attributes a user expects for that record type, not just the `Name` — the identifying who/what/when (owner/responsible, type/status, key dates), grouped together. A near-empty main block (e.g. only `Name` in the island while everything else sits elsewhere) is an anti-pattern: move the key stable fields up into it.
-- **Surface related child records as related lists — with a working add flow.** For every business object whose records belong to this one (a `Related list <name>` surface in §6 of the Business Plan — a 1:M child where this object is the parent), put a related list on the record page so those child records are visible and managed in context; do not silently omit it just because the app is simple. Each related list MUST have a **working** way to add a record — never ship one whose records cannot be created, and never wire a "New" / "+ Add" to a page that is not registered for the object. The default is **two layers together**, not a choice between them:
-  - **Inline adding and editing — always on.** Every related list lets the user add a row and edit rows in place, with the master link pre-set. Set it explicitly on the list's `crt.DataGrid`: `features.editable` with `enable: true` and `itemsCreation: true` (resolve the exact shape with `get-component-info component-type='crt.DataGrid'`). A grid without `features.editable` renders read-only rows, so leaving it out is not "the default" — it silently removes editing. Turn inline off only when the user names that restriction, and then make the list read-only on all three counts (see the read-only detail rule below).
-  - **Plus pages — a quick-add mini page and a full edit page.** On top of inline editing, wire the list's **"+ Add"** to a compact **mini page** (the starter fields) and register the **full record page** for opening and editing a row — or a mini page alone when it holds the whole record. When the child has **no section of its own**, register both pages for the object — the mini page as the add page and the full page as the default/edit page — so "+ Add" resolves and does not error.
-  - **Only a tiny list skips the pages.** A list of a few short columns (a tag, a date, an amount) is added and edited inline only, with no separate pages. Phases, tasks, materials, invoices and similar line items with more columns are not tiny: they get both layers.
-  - **Not defaults:** a related list with no inline editing, and a related list with no pages (other than the tiny-list case). Record the choice for each list in the plan.
-  Do NOT wire a header "+ Add" / "New" to a page that is not registered for the object; register the add/edit pages first (see below) so the button resolves. Lookups are NOT related lists (they are dropdown fields, never a list/page). Build the list and its add wiring via clio (`get-guidance related-list`, the **"Expanded list"** composite from `get-component-info composite='Expanded list'`, and `get-guidance related-page-binding` to register the mini/edit pages) — don't hand-build it.
-- Put logically related fields next to each other (same group, adjacent rows) so the two-column layout reads as coherent pairs, not random placement.
-- If the process has clear steps, show them explicitly or use a wizard (a stepper, see *Step-by-step page (stepper)*) to guide the user through it — don't expose the whole data model at once; reveal later fields with business rules as earlier input is filled (progressive disclosure).
-- **Implementation — containers for grouping inputs (Creatio):** field groups of inputs are placed either in a **`crt.ExpansionPanel`** (a named, collapsible field group — the standard way to title and fold a set of related fields) or in a **profile island** (the side `SideAreaProfileContainer`, for key stable data). Inside either, lay the fields out with a `crt.GridContainer` (an N-column grid via `layoutConfig`, where N is the container's own column; full-width field `colSpan: N`, half-width `colSpan: N/2`) or a `crt.FlexContainer`. Note `crt.ExpansionPanel` serves double duty: it wraps a **list** to form a detail (related child-records list) *and* wraps **inputs** to form a collapsible field group — pick the children accordingly. Prefer an ExpansionPanel over a bare grid when a group of fields needs a visible title or should be collapsible.
-- **Choose Flex vs Grid by whether the content changes at runtime.** A `crt.GridContainer` pins each item to fixed `row`/`column` coordinates, so when an item is **hidden** (a field toggled off by a business rule) or **shrinks** (a `crt.ExpansionPanel` collapsing), its slot stays reserved → an empty gap. A `crt.FlexContainer` has no fixed slots: siblings pull up/together to fill the freed space, so the layout adapts. Therefore:
-  - If any field in a group can be **conditionally hidden/shown** (business rule), place that group's fields in a **flex**, so hiding a field leaves no empty slot.
-  - Stack **collapsible panels** (`crt.ExpansionPanel`) and whatever follows them in a **flex**, so the page reflows and lower components pull up when a panel collapses.
-  - This is also why buttons go in a flex (they resize to their label) — see *Buttons and actions*.
-  - Use a **grid** only for **static, always-present** field layouts where the set of visible items and their coordinates don't change at runtime.
+- Use field groups to divide information, nested at most two levels; tabs and groups for large datasets.
+- Put related fields next to each other (same group, adjacent rows), so the two columns read as pairs.
+- A process with clear steps gets a stepper (*Step-by-step page (stepper)*) or business rules that reveal later fields as earlier ones are filled.
+
+### Field groups
+
+- **A group is a meaningful block (heuristic, except the single-field case).** A group, tab or island holds a coherent block of related fields; three or four fields is a signal to check against the page's question, not a quota (`design-judgement.md`, *Design principles*, "Rules are not counts"). A group with one data-entry field is a defect: merge it or add the fields of its block. A two-field group is a warning sign: combine it with a related group or pull in the rest of the block. Never split one business block into tiny groups.
+- **Fill out the main information block.** The profile island plus the first tab carry the core attributes a user expects for the record type: owner, type or status, key dates, not `Name` alone.
+
+### Related lists
+
+**Every 1:M child object of this record gets a related list on the record page, with a working add flow (default).** Do not omit a list because the app is simple. A list whose records cannot be created, or whose "+ Add" opens a page not registered for the object, is a defect (pass/fail). The default is two layers together:
+
+- **Inline adding and editing, always on.** Set `features.editable` with `enable: true` and `itemsCreation: true` on the list's `crt.DataGrid` (shape from `get-component-info component-type='crt.DataGrid'`), so the user adds and edits rows in place with the master link pre-set. A grid without it renders read-only rows. Turn inline off only when the user names that restriction, and then follow *Read-only detail*.
+- **Plus pages.** Wire "+ Add" to a mini page with the starter fields and register the full page for opening and editing, or a mini page alone when it holds the whole record. A child with no section of its own gets both registered for its object (mini page as add page, full page as default and edit page).
+- **Only a tiny list skips the pages (heuristic):** rows of about three short values or fewer (a tag, a date, an amount) and no long text. Line items with more columns get both layers.
+
+Record the choice for each list in the plan. Lookups are not related lists. Build the list through clio: `get-guidance related-list`, the "Expanded list" composite (`get-component-info composite='Expanded list'`), and `get-guidance related-page-binding` for the pages.
+
+### Read-only detail
+
 - **A read-only detail must be read-only on its rows too, not just have its add button hidden.** Making a detail (child list) non-editable takes THREE changes: (1) hide/remove the add (`+`) button; (2) clear the inline-editing flag on the List component itself; (3) remove the row **Copy** and **Delete** actions from the List's rows, while **keeping records opening from the list** (open-on-click) so users can still view them. Hiding only the add button still leaves existing rows editable in place (and often a new-row affordance), and a row that still offers Copy or Delete still creates and destroys records, so the detail is not actually read-only. Removing Copy/Delete is not a reason to stop rows opening: a read-only list is for looking records up. On a `crt.DataGrid` the recipe is: `features.editable` set to `{ enable: false, itemsCreation: false }`, and `rowToolbarItems` set to exactly one `crt.MenuItem` that mirrors the platform's own Open item: a localized `caption` (a page resource string such as `#ResourceString(<List>_OpenMenuItem_caption)#`, never a hard-coded English `"Open"` literal), `icon: "edit-row-action"`, and `clicked` set to `{ request: "crt.UpdateRecordRequest", params: { itemsAttributeName: "<Items>", recordId: "$<Items>.<DS>_Id" }, useRelativeContext: true }` (`<Items>` is the list's items attribute, `<DS>` its data source). Keep the platform item's two guards as well: it is hidden when the list's entity has no edit page, and disabled while the parent record is still in create mode (not saved yet) — so leave the item out for an entity with no edit page, and bind its `disabled` to the page's create-mode state. The platform adds its default row actions (Open, Copy, Delete) only while `rowToolbarItems` is unset, and any value you give replaces all three — so `rowToolbarItems: []` or `features.rows.toolbar: false` leaves the rows with no Open at all, and leaving it unset keeps Copy and Delete. Before building, confirm the shape on the target version with `get-component-info` for the list component, or copy it from an out-of-the-box page whose list rows offer Open alone.
+
+### Containers for grouping inputs
+
+- **Input groups go in a `crt.ExpansionPanel` or a profile island.** An ExpansionPanel is a titled, collapsible field group (it also wraps a list to form a detail); a profile island (`SideAreaProfileContainer`) holds key stable data. Inside either, lay fields out with a `crt.GridContainer` or `crt.FlexContainer` (*Flex vs Grid*). Prefer a panel over a bare grid when a group needs a title or should collapse.
+- **Expansion panels stack vertically at full width (pass/fail).** A panel spans the full width of its tab or container, one under another with a gap; never two in one row or in a two-column grid. Two columns apply to the fields inside a panel.
+
+### Flex vs Grid
+
+**Choose by whether the content changes at runtime (default).** A `crt.GridContainer` pins items to fixed `row` / `column` coordinates, so a hidden field or a collapsing panel leaves its slot empty. A `crt.FlexContainer` has no fixed slots; siblings close the gap.
+
+- A group with a field that a business rule can hide or show goes in a flex.
+- Collapsible panels, and whatever follows them, stack in a flex.
+- Buttons go in a flex because they resize to their label (*Button placement*).
+- A grid is for static layouts whose visible items do not change at runtime.
 
 ### New island / card container — standard settings
 
-When you add a **new island** (a `crt.GridContainer`/card-style group), apply these standard appearance settings so it matches the native look — do not leave designer defaults. They are the expected native values: when a shipped page on the same template measures otherwise, the measurement wins (`visual-check.md`, *The native page wins over any written description of it*):
+A new island (a `crt.GridContainer` or card-style group) takes these settings, not the Designer defaults. They are the expected native values; when a shipped page on the same template measures otherwise, the measurement wins (*When rules collide* in `SKILL.md`; how to measure: `visual-check.md`).
 
 - **Column spacing:** Large
 - **Row spacing:** None
 - **Border radius:** Medium
 - **Spacing (padding):** Top = Medium, Bottom = Medium, Left = Large, Right = Large
-- **Color:** White (the card background that makes the island read as a card).
+- **Color:** White (the card background)
 
-Resolve the real container property keys, value enums, and defaults from `get-component-info crt.GridContainer` — do not author them from memory. Note the Designer "Column spacing"/"Row spacing" settings are the per-axis `gap.columnGap`/`gap.rowGap` object (there are no `columnSpacing`/`rowSpacing` properties); the card look is `color`, `borderRadius`, and the per-side `padding` object.
+Resolve the property keys and enums with `get-component-info crt.GridContainer`. "Column spacing" and "Row spacing" are the `gap.columnGap` / `gap.rowGap` object (there are no `columnSpacing` / `rowSpacing` properties); the card look is `color`, `borderRadius` and the per-side `padding` object.
 
-**Plain grid for inputs (NOT an island) — different settings.** When you add a bare `crt.GridContainer` only to lay out inputs *inside* an existing island/panel/tab (no card chrome of its own), use:
+**Plain grid for inputs (not an island).** A bare `crt.GridContainer` that only lays out inputs inside an island, panel or tab has no card chrome:
 
 - **Column spacing:** Large
 - **Row spacing:** None
 - **Border radius:** None
-- **Spacing (padding):** Top = None, Bottom = None, Left = None, Right = None
-- **Color:** Transparent (it must not paint its own background — the parent island/tab shows through).
+- **Spacing (padding):** None on all sides
+- **Color:** Transparent (the parent shows through)
 
-Rule of thumb: the **island/card** carries the white background, radius and padding (Medium / L-R Large); an **inner layout grid** is transparent with no radius and no padding (it just arranges fields).
-
-**Spacing must fit what the container holds:**
-- **Inputs:** **no row spacing** (rows sit tight) but **keep column spacing** so the two columns don't stick together. (column spacing Large, row spacing None.)
-- **Widgets / charts / metrics:** use **proportional row AND column spacing** so they have room to breathe and align evenly — don't cram them with zero gaps. Keep the row and column gaps consistent with each other and with the widgets' size.
-- Eyeball the result: gaps between sibling components should look even and intentional, not random.
+**Spacing fits the content.** Inputs: no row spacing, column spacing kept so the columns do not touch. Widgets, charts and metrics: proportional row and column spacing, consistent with each other and with the widgets' size, never zero. On the rendered page, gaps between siblings look even.
 
 ### Layout coordinates and container nesting (avoiding gaps)
 
-Mechanics behind the layout rules in `SKILL.md` — read this when a page shows empty gaps or drifting fields:
-
+- **Read the container's column count `N` before placing fields (pass/fail).** It is a property of each container (`columns` / `columnsCount`). Full width is `colSpan: N` at `column: 1`; a two-column row is `column: 1` and `column: N/2 + 1`, each `colSpan: N/2`. Do not hardcode `12`, `6` or `7`.
 - **Why a gap appears:** `layoutConfig` is relative to the immediate parent container, and rows/columns restart at `1` in each nested container; in a container that already has children (a template container) those children keep the rows they declare, and a new child takes the row its place in the layout needs — a free row between them (row 2 between template children at rows 1 and 3) or the next row after them. A field at `row: 3` while `row: 2` is empty reserves a blank row → vertical gap; a `column`/`colSpan` beyond the container's column count wraps to a new row and leaves a blank half.
-- **Let containers size to content:** use `rows: "auto"` + `gap`; never a fixed `rows` count or an oversized `rowSpan`. One titled group = one container — stack groups with `gap`, not with empty rows.
+- **Rows are numbered per container**, never with global numbers reused across groups.
+- **Let containers size to content:** `rows: "auto"` with `gap`; no fixed `rows` count or oversized `rowSpan`. One titled group is one container; stack groups with `gap`, not empty rows.
 - **An insert's `index` counts the parent's existing children, the template's included:** read them from the parent's node in the `get-page` bundle (`bundle.viewConfig`; `childCount` in `bundle.containers` gives the count). Example: on `PageWithAreaFreedomTemplate`, `CardContentWrapper` already holds the template's `TopAreaProfileContainer` at `row: 1`, so an island inserted into it at `row: 2` gets `index: 1` — `index: 0` would put it ahead of the profile container in `items`. In a grid container the order in `items` follows `layoutConfig` row, then column; the grid still renders by `layoutConfig`, so a wrong `index` does not show on the page, but the Designer and every later insert that relies on the order see the mismatch. The diff mechanics themselves (`operation`, `parentName`, `propertyName`) are owned by clio's `page-modification-components` guide.
 - **Several inserts into one parent in one diff:** each insert's `index` is its position, by `layoutConfig` row then column, among the template's children and the other inserts of the diff that land before it in that order — not necessarily the end of `items`. Example: template children at rows 1 and 3 and a new element at row 2 give it `index: 1`, not 2.
-- **Sanity-check before saving:** in each container, `row` numbers run 1..N with no skips, every `column`/`colSpan` is within that container's column count, every field's `parentName` is its real group container, and the order of the children in `items` matches their row, then column order.
+- **Sanity-check before saving (pass/fail):** in each container, `row` runs 1..N with no skips, every `column` / `colSpan` is within the column count, every field's `parentName` is its real group container, and `items` order matches row, then column.
 
-## Step-by-step page (stepper) — by default an island with the indicator on top and a separate island with the stepper below
+## Step-by-step page (stepper)
 
-- **Applies to** a page that leads the user through the ordered stages of one task, each stage with its own content: a configurator (pick products → add recommended ones → set prices), an onboarding, a multi-stage request. It is not the lifecycle of a record — ordered process state of a record is the DCM stage progress bar of the template (see *Choosing the page template*) — and not a set of independent areas the user switches freely, which are tabs.
-- **A stepper is several components, not one, and each of them is placed once.** `crt.Stepper` holds the steps (`crt.StepperItem`) and shows one step's content at a time; a separate `crt.StepperIndicator`, linked to the stepper by `for`, shows the steps and switches them on every step; the Previous / Next / Finish buttons are shared by all steps too. Resolve all of them with `get-component-info` against the target environment and take the property contract (`activeStep`, `linear`, the generated `<StepperName>_*` attributes, the navigation buttons) from its documentation, not from memory. A stepper without an indicator shows only the step content, so always place one. Never copy the indicator or the navigation buttons into each step: one indicator outside the steps and one set of buttons serve every step.
-- **By default the indicator gets its own full-width island directly under the page header.** Unless the user asks for another placement, put the `crt.StepperIndicator` alone in an island with the standard settings (*New island / card container — standard settings*), spanning the whole page width, above all step content. Keep it horizontal there: a horizontal indicator adapts to its width by itself (it shortens the captions, then shows the markers only, then folds steps into "..."). Captions under the markers (`titlePosition: "below"`) keep a full-width row light when the steps are spread across the page.
-- **Other placements are valid when the user asks for them.** The indicator can sit in any container of the page outside the steps — for example in a side column next to the step content (use `orientation: "vertical"` there). Follow the placement the user asks for and keep the other rules of this section. When the indicator and the stepper should read as one component, put both into one container: the indicator first, then the stepper.
-- **By default the stepper gets a separate island below the indicator island.** Put the `crt.Stepper` into a second island with the standard island settings, full width, under the indicator island and with the same gap as between the other islands of the page (beside the indicator, when the user put the indicator into a side column). The step content then lies on that card: lay it out with plain inner grids (transparent, no radius, no padding — see *Plain grid for inputs*).
-- **The indicator island is only as tall as the indicator.** Put the two islands into a flex column (`crt.FlexContainer`, `direction: "column"`): it keeps each island at the height of its content by itself. A grid sets the heights by its row settings instead — a grid that gives each row an equal share of the height makes the indicator island as tall as the stepper island. So when the islands sit in rows of a grid (for example the content area of the template), read how its rows are sized in the page config (`get-page`) and set the indicator row to fit its content.
-- **Both islands are ordinary islands.** Apply *New island / card container — standard settings* to them as is; the step content, the step header and the footer inside the stepper island get no padding of their own.
-- **The frame stays the same on every step.** Only the step content changes from step to step; the indicator and the footer stay in place. A block that several steps share (a running summary, a selected-items panel) keeps the same position and width on each of them, so it does not jump when the user moves on. Let the stepper island fill the height of the page area, so a short step does not end halfway down an empty page — check it on the rendered page.
-- **Use the step header to tell the user what to do on this step.** The step's `tools` slot is its header, shown above the step content; a stepper dropped in the Designer fills it with a "Step N of M:" label and a title. The indicator caption only names the stage, so the header is the place for the details the user needs to complete it:
-  - **what to do** on this step, as an action ("Add the products the customer orders; you can change quantities later in the quote");
-  - **what happens next** or what the result is used for, when that is not obvious ("Recommended products are picked from what you add here").
-  Write one or two short sentences under the step title, each as a `crt.Label` directly in the step's `tools`, after the row with the counter and title, with its own localizable string (typography: the next rule). Write the text for the specific step, never a generic "Fill in the fields".
-- **Titles and header text keep the standard typography — size and color.** Keep the typography the Designer generates for the step header and do not restyle it: the counter ("Step N of M:") and the step title sit in one row (`crt.FlexContainer`, `direction: "row"`, `alignItems: "baseline"`), both `labelType: "headline-3"`; the counter in the muted text color `var(--crt-color-text-muted)`, the title in the heading color `var(--crt-color-text-heading)`. A description line under them is `labelType: "caption"` in `var(--crt-color-text-muted)`. Set the size only with `labelType` and the color only with these theme color variables — never `labelFontSize` / `labelLineHeight` / `labelStyle` or a hex color. Every step uses the same presets, so the header looks the same on each step. The page header — the page title and its actions — comes from the template: do not restyle it. The indicator has no typography inputs: leave its captions and markers as the component renders them.
-- **Navigation buttons are placed once, by default in the stepper's `footer`.** The `footer` is the stepper's own drop zone below the step content, shown on every step: Previous at the start of the row and Next / Finish at its end, bound to the generated navigation attributes (the recipe is in the stepper's `get-component-info` documentation); the footer also keeps keyboard focus on a step change. Keep the button colors from the recipe: the one-Primary rule is for page actions, not for the stepper's navigation. When the user wants the buttons on top, put them into the header zone of the page instead, next to the page actions; when the user asks for another place, put them there. In every case it is one set of buttons for the whole stepper — never a set inside each step.
-- **Captions are short Sentence case nouns for the stage** ("Product selection", "Price configuration"), authored as localizable strings; a step needs a caption because the indicator and screen readers use it.
+By default the indicator sits in its own island on top and the stepper in a separate island below. A record's stage bar is not a stepper: `page-patterns.md`, *Stage bar is not a stepper*.
 
-## Record connections ("Connected to") — one `crt.Connections`, not a ComboBox per link
+- **Applies to** a page that leads the user through the ordered stages of one task (a configurator, an onboarding, a multi-stage request). A record's ordered process state is the DCM progress bar (*Choosing the page template (before you create the page)*); areas the user switches freely are tabs.
+- **A stepper is several components, each placed once.** `crt.Stepper` holds the steps (`crt.StepperItem`) and shows one at a time; a separate `crt.StepperIndicator`, linked by `for`, shows and switches the steps; one set of Previous, Next and Finish buttons serves all steps. Take the property contract (`activeStep`, `linear`, the generated `<StepperName>_*` attributes, the navigation buttons) from `get-component-info`. Always place an indicator; never copy it or the buttons into each step.
+- **By default the indicator is alone in a full-width standard island directly under the page header**, horizontal, above all step content; it adapts to its width by itself. `titlePosition: "below"` keeps the row light. On the user's request it can sit in any container outside the steps, such as a side column (`orientation: "vertical"`); when indicator and stepper should read as one component, both go in one container, indicator first.
+- **By default the stepper is in a second full-width standard island below**, with the page's usual gap between islands; step content uses plain inner grids (*New island / card container — standard settings*). Step content, header and footer get no padding of their own.
+- **The indicator island is only as tall as the indicator.** Put both islands in a flex column (`crt.FlexContainer`, `direction: "column"`). In a grid whose rows share the height equally, the indicator island grows to the stepper's height; there, read the row sizing in `get-page` and size the indicator row to its content.
+- **The frame stays the same on every step.** Only the step content changes; a block several steps share keeps its position and width. The stepper island fills the page area's height, so a short step does not end halfway down an empty page.
+- **The step header says what to do on this step.** The step's `tools` slot is its header ("Step N of M:" and a title from the Designer). Under the title, add one or two short sentences, each a `crt.Label` in `tools` with its own localizable string: what to do, as an action, and what happens next when not obvious. Write for the specific step, never "Fill in the fields".
+- **Header typography stays standard.** Counter and title in one row (`crt.FlexContainer`, `direction: "row"`, `alignItems: "baseline"`), both `labelType: "headline-3"`, the counter in `var(--crt-color-text-muted)`, the title in `var(--crt-color-text-heading)`; a description line is `labelType: "caption"` in `var(--crt-color-text-muted)`. Size only through `labelType`, color only through these variables; never `labelFontSize` / `labelLineHeight` / `labelStyle` or a hex color. The page header and the indicator keep their own look.
+- **Navigation buttons are placed once, by default in the stepper's `footer`**: Previous at the start, Next and Finish at the end, bound to the generated navigation attributes per the `get-component-info` recipe, with the recipe's colors (the one-primary rule is for page actions). The footer also keeps keyboard focus on a step change. On the user's request they go in the page header zone or elsewhere, still one set.
+- **Step captions are short Sentence case nouns** ("Product selection"), as localizable strings; the indicator and screen readers use them.
 
-- **Applies to** a request to show or add the record's **connections** — "add the record connections", "show what this record is connected to", the Classic **Connected to** block, or a group of links to other records (Contact, Account, Opportunity, Case, …) shown together where only the filled ones need room.
-- Place **one `crt.Connections` element**: first read `get-guidance name=page-modification-field-contract` (*CONNECTIONS ARE NOT INSERTED FIELDS*), then resolve the element with `get-component-info search='connections'` and read its documentation — the page contract lives there. By default it goes into a `crt.ExpansionPanel` titled "Connections" in the side/profile column; the panel title is its heading, so the element carries no `caption`. Do **not** place a `crt.ComboBox` per connection, and do not declare attributes, datasources or child elements for them: the platform generates a field per connection of the object at page load.
-- **Which connections exist is a property of the OBJECT, not of the page** — its Connections list in the Object designer. Which columns are connections, and the clio version that ships the tools below, are in `get-guidance name=process-activity-connections`. To add, remove or reorder a connection, change the object (clio `get-entity-connections` → `update-entity-connections`; read their parameters and update semantics from `get-tool-contract`). If the connected clio does not list these tools (`get-tool-contract`), tell the user to change the object's Connections list in the Object designer — never fall back to page fields. Change the page only for per-connection display settings, in the element's `connections` property; take its entry shape from `get-component-info search='connections'`, not from memory.
-- **It renders only with the `UseConnectionsComponent` feature ON** (OFF by default). Check the feature on the target environment before placing the element: clio has no feature-toggle reader, so treat a `get-entity-connections` warning that names `UseConnectionsComponent` as "off"; if it is off, tell the user the block stays invisible until the feature is turned on — do not fall back to separate ComboBoxes and do not turn the feature on without their consent. If the connected clio does not list `get-entity-connections` (`get-tool-contract`), the feature state is **unknown**, not "on": place the element and tell the user it renders only when `UseConnectionsComponent` is ON and that this could not be verified.
-- **Keep `crt.ComboBox` only for a lookup that is NOT one of the object's connections** and is part of the form's own task flow — a field the user must always see and fill in a specific place (Owner, Stage, Type), or one with a filtered/custom list. A column already shown by `crt.Connections` must not also get its own ComboBox on the same page (both bind the same attribute, so the value is shown twice).
-- Anti-patterns: a column of five unrelated empty lookups ("Contact", "Account", "Opportunity", "Order", "Case") on a record page where a Connections block would show only the filled ones; adding a connection by inserting a field into `crt.Connections` `items`; editing the page to add a connection the object does not list.
+## Record connections
+
+**Record connections are one `crt.Connections` element, not a ComboBox per link (pass/fail).**
+
+- **Applies to** a request to show or add the record's connections: the Classic **Connected to** block, or links to other records (Contact, Account, Opportunity, Case) shown together where only the filled ones need room.
+- **Place one `crt.Connections`.** First read `get-guidance name=page-modification-field-contract` (*CONNECTIONS ARE NOT INSERTED FIELDS*), then `get-component-info search='connections'` for the page contract. By default it goes in a `crt.ExpansionPanel` titled "Connections" in the side column, with no `caption` of its own. Declare no ComboBox, attribute, datasource or child element per connection: the platform generates a field per connection at page load.
+- **Which connections exist is a property of the object**, its Connections list in the Object designer (`get-guidance name=process-activity-connections`). To add, remove or reorder one, change the object (`get-entity-connections`, then `update-entity-connections`; semantics from `get-tool-contract`). If clio does not list these tools, tell the user to change the list in the Object designer; never fall back to page fields. The page changes only per-connection display settings, in the element's `connections` property, with the entry shape from `get-component-info`.
+- **It renders only with the `UseConnectionsComponent` feature on** (off by default). A `get-entity-connections` warning naming the feature means off: tell the user the block stays invisible until it is on, and do not turn it on without their consent or fall back to ComboBoxes. Without `get-entity-connections` in clio the state is unknown, not on: place the element and say so.
+- **A `crt.ComboBox` stays only for a lookup that is not a connection** and belongs to the form's own flow (Owner, Stage, Type, or a filtered list). A column shown by `crt.Connections` gets no second ComboBox; both would bind the same attribute.
+- Anti-patterns: a column of empty unrelated lookups where a Connections block would show only the filled ones; inserting a field into `crt.Connections` `items`; adding on the page a connection the object does not list.
 
 ## Fields
 
-- Prefer two-column field layout for standard record fields.
-- Use concise, clear field labels. Move explanatory text to placeholder or tooltip.
-- Use dropdown lists for lookups with a small number of values.
-  - **Implementation (Creatio):** dropdown-vs-selection-window is controlled at the entity-column level, not by the page component. A **simple lookup** column renders as an inline dropdown; a **standard lookup** column renders the modal selection window. Set the column's `IsSimpleLookup` flag (clio `simple-lookup: true` on a `modify`/`add` column operation) for small enum-like catalogs (status, type, category, stage, priority — typically under ~20 rows). Keep standard lookups (selection window) only for large or relationship lookups such as Contact, Account, or a parent record. The page still binds the field as `crt.ComboBox` either way — do not try to fix this with a page-body property.
-- **A status-like lookup gets colored chips.** For a few-value lookup whose values carry a state or a level (status, stage, priority, health, risk, inspection result), color its values, without waiting to be asked. The form field on the record page and every list cell then show the value as a colored chip; the page needs no change. Choose the color by the value's meaning and keep one meaning per color across the app: good or done green, attention or waiting amber, problem (failed, overdue, red health) red, draft or closed neutral. Never assign colors by palette order — *Red* health in a green chip is a defect. Keep the text in the chip and check its contrast on the rendered page. Lookups whose values carry no state (country, product line, category of equal weight) stay plain. The color column, the write and the read-back are owned by clio: read `get-guidance name=lookup-colors` and follow it, taking the colors from this rule rather than from that guide's palette order. After the change, open the page and a list that shows the lookup and confirm the chips render.
-- Put checkboxes/logical fields after related input fields, usually at the bottom of a group or island.
-- Filter lookup fields to relevant values, for example only responsible colleagues, and add a hint about the filter if needed.
-- For read-only fields, add a tooltip explaining why the field is read-only and how/when it is filled or calculated.
-- **Pick the guidance channel deliberately: placeholder, tooltip, or an always-visible description line.** Besides placeholder (example/format inside the input) and tooltip (on-demand detail behind an `i` icon), a field may carry a permanent one-line description in muted caption text under it. Use the description line only for standing guidance the user must see every time (e.g. a sending-domain caveat); a tooltip when it's needed only sometimes; a placeholder for format. Don't stack all three on one field; author every variant as a localizable string.
-- **An empty optional field should read as an actionable invitation, not a blank.** This is the one exception to *a placeholder shows a format or a sample value* (`ux-writing.md`), and it applies to lookups too. For an optional field that usually stays empty on a saved record, phrase the placeholder as a call to action naming what to add (e.g. `Add revenue`, `Add primary contact`) so the empty state guides the user. This is the authored placeholder only — a list/detail's empty state (`No data`) is rendered by the component.
-- Order fields by task flow and requiredness. Required fields must be marked and visible early.
-- **Require the real minimum only.** Mark a field required only when the record cannot be created or is meaningless without it (the genuine "minimum to create"). Do not make many fields required — extra mandatory fields block fast creation and push users to enter junk. Keep recommended-but-optional fields optional and guide them with defaults, placeholders, or business rules instead.
-- Use a DCM (Dynamic Case Management) stage progress bar — component `crt.EntityStageProgressBar` — for statuses, stages, and ordered process state instead of a loose status combo box. ("DCM" / "progress bar" both refer to this stepped stage indicator.)
-- For information easier scanned visually than read as fields, use widgets (see *Analytics and metric widgets*).
-- **Use a slider for a bounded numeric the user sets by feel.** For a value on a known scale the user estimates rather than types precisely (e.g. Confidence level 0–100), use a slider showing the range endpoints; keep an exact-entry numeric input for values that must be typed. Resolve the component via `get-component-info`.
-- **Auto-compose the primary display name from the record's key fields.** Where a readable title can be derived (e.g. `<Need> / <Contact>, <Account>` for an opportunity), fill the primary display field automatically from those fields (calculated value / business rule) so the user isn't asked to hand-write it, and keep it editable. State the source in a tooltip per the read-only/derived-field rule.
+### Field layout and order
+
+- Prefer a two-column layout for standard record fields.
+- Keep labels concise; explanations go in a placeholder or tooltip (*Field guidance*).
+- Order fields by task flow and requiredness (*Required fields*).
+- Put checkboxes after the related inputs, usually at the bottom of a group or island.
+- Information read faster visually than as fields goes into widgets (*Analytics and metric widgets*).
+
+### Lookups and status chips
+
+- **A lookup to a small fixed catalog is a simple lookup, a dropdown (pass/fail).** Small fixed catalog: values that admins maintain and users only pick, up to about 20 (two included): status, type, category, stage, priority. This is set on the entity column, not the page: set `IsSimpleLookup` (clio `simple-lookup: true` on a `modify` or `add` column operation). Lookups to records users create, or catalogs that grow past about 20 values (Contact, Account, a parent record), keep the selection window. The page binds `crt.ComboBox` either way.
+- **Filter lookups to relevant values** (only responsible colleagues), with a hint when the user could miss the filter.
+- **A status-like lookup gets colored chips (default).** When a small-catalog lookup's values carry a state or a level the user scans for (status, stage, priority, health, risk, result), color its values without being asked; the form field and every list then show colored chips with no page change. Color follows meaning, one meaning per color across the app, from the scale in `accessibility-and-colors.md`, *Freedom UI color guidance*, never palette order: *Red* health in a green chip is a defect. The chip keeps its text; check its contrast on the rendered page. Lookups without state (country, product line) stay plain. How to write the colors is owned by clio: `get-guidance name=lookup-colors`, with the colors from the scale. Afterwards, confirm the chips render on the page and in a list.
+
+### Field guidance
+
+- **A field that is not self-explanatory gets guidance (default).** Test: a new user could not fill it correctly from the label alone, because it has a format, a unit or scale, limited allowed values, or a source. Non-obvious inputs without guidance are a defect, and so are empty, generic or "e.g."-prefixed hints.
+- **Placeholders go on free-entry inputs whose format or sample helps** (text, number, date, email, phone, web). Skip them on self-evident fields, lookups and checkboxes; an unneeded placeholder is as bad as a missing one. A date with a picker usually needs none, and a date hint follows the user's culture.
+- **The channel follows when the user needs it:** placeholder for format or sample; tooltip (`i` icon) for meaning the sample cannot carry (units, source, the rule behind a calculated value); a muted one-line description under the field only for guidance needed on every visit. Two channels only when format and meaning both need it, never three.
+- **The text is specific and localizable.** "Enter value" or a repeat of the label helps nobody. Every placeholder, tooltip and description is a resource string. Wording: `ux-writing.md`, *3. Field labels and helper text*.
+- **A read-only or calculated field gets a tooltip** saying why it is read-only and how and when it is filled.
+- **An empty optional field reads as an invitation.** The one exception to "a placeholder shows a format or sample", lookups included: an optional field that usually stays empty on a saved record gets a call-to-action placeholder (`Add revenue`, `Add primary contact`). A list's empty state (`No data`) is the component's own.
+
+### Special field controls
+
+- **Ordered process state uses the DCM stage progress bar** (`crt.EntityStageProgressBar`), not a status combo box; template: *Choosing the page template (before you create the page)*.
+- **A date without a time of day uses a date-only column.**
+- **A bounded number the user sets by feel uses a slider** with the range endpoints (a confidence level 0–100); values typed exactly keep a numeric input.
+- **The primary display name is composed from key fields** where a readable title can be derived (`<Need> / <Contact>, <Account>`), by a calculated value or business rule, kept editable, with its source in a tooltip.
 
 ## List (section) page layout
 
-The sections above describe the record/form page. A **section (list) page** uses its own container slots — put things in the right one instead of dropping them loose on the page:
+A section page has its own container slots; put things in the right one.
 
-- **Additional / custom filters go into the filter row before the search, never after it.** The template's filter row is **`LeftFilterContainerInner`** (inside `LeftFilterContainer`): folder actions, the filter menu, the quick filters, and **`SearchFilter` last**. Insert a custom quick filter or filter control into that row ahead of `SearchFilter`; read the row's children in the `get-page` bundle to set the `index`. Anything placed after the search field jumps while the user works with the search. **`RightFilterContainer`** holds the list's own tools — summaries, refresh, the list/dashboard view switch — not filters; and no filter goes inline in the grid area.
-- **Additional list actions / buttons** go in **`ActionButtonsContainer`** (top-right), same as on the record page.
-- **Analytics, metrics, and dashboards** go into the **Dashboard component (`crt.Dashboards`)**. If you are not sure how to configure the Dashboard component, place them in **`DashboardsTabContainer`** (the list page's analytics/dashboards tab container) instead — do not scatter widgets into the grid or filter areas.
+- **Additional list actions** go in `ActionButtonsContainer` (top right).
+- **Analytics and dashboards** go into the Dashboard component (`crt.Dashboards`), or `DashboardsTabContainer` when you are unsure how to configure it; never into the grid or filter areas.
+
+### Filters and search
+
+- **Additional filters go into the filter row before the search (pass/fail).** The row is `LeftFilterContainerInner` (inside `LeftFilterContainer`): folder actions, the filter menu, the quick filters, `SearchFilter` last. Insert ahead of `SearchFilter`, reading the row's children in the `get-page` bundle to set the `index`; anything after the search field jumps while the user searches. `RightFilterContainer` holds the list's own tools (summaries, refresh, view switch), not filters; no filter goes inline in the grid.
+- **Each quick filter has its own icon (pass/fail)**, distinct and fitting its meaning; filters sharing an icon cannot be told apart.
 
 ### List columns
 
-Applies to every list: the section list and each related list on a record page. Check it on the rendered list with the demo data, not in the schema.
+Applies to the section list and every related list. Check the rendered list with demo data (pass/fail).
 
-- **Nothing is cut.** No value and no column header ends in an ellipsis on the real data; a money column shows the whole amount with its currency, a lookup shows the whole name. Widen the column or shorten the caption (*Overdue*, not *Is overdue*).
-- **The columns fill the list.** Together they reach the list's width; a list whose columns stop at half the width, leaving the right part empty, is a defect. Give the spare width to the columns that need it — names, descriptions, accounts.
-- **Width follows the content.** A date, a checkbox, a count or a short code takes a narrow column; it does not hold width that a text column needs. Lists on one tab follow the same approach.
-- **Height follows the rows.** A related list shows its rows up to a sensible limit without an inner scroll for a handful of records, and without a fixed height that leaves a blank band under a short list or the tab's bottom empty.
+- **Nothing is cut.** No value or header ends in an ellipsis; money shows the whole amount with its currency. Widen the column or shorten the caption (*Overdue*, not *Is overdue*).
+- **The columns fill the list's width**; columns stopping at half the width are a defect. Spare width goes to names, descriptions, accounts.
+- **Width follows the content.** Dates, checkboxes, counts and short codes take narrow columns.
+- **Height follows the rows.** A related list grows until its rows fit without an inner scroll, with no fixed height leaving a blank band below a short list.
 
 ## Dialogs and modals
 
-- Dialogs should follow the same styling as Creatio mini pages where possible: predictable title placement, button placement, and visual hierarchy.
-- **Collect a focused set of action parameters in a modal, not a full page.** When an operation needs the user to supply a small, self-contained set of inputs before it runs — configuring a test send, closing an opportunity (loss reason + details), qualifying a lead into the next stage — gather them in a modal dialog asking for exactly those fields and no more: required ones marked, the explanation/instructions above the inputs, one primary confirm action. Don't route the user to the full edit page for a handful of parameters, and don't ask for data the operation doesn't need.
-- **Field labels on mini pages and modals use `labelPosition: "above"`, set explicitly on every field.** On a mini page or a modal/dialog page every field label sits above its input — the narrow width leaves no room for a `left` label column, which would squeeze the input and break alignment. The ONLY exception is a genuinely wide page — size **L or XL** — where `left` may be set if it reads cleanly; on S/M always use `above`. Keep the position the same across the whole dialog (don't mix `above` and `left`). Write the value on each field: the default `auto` switches between `left` and `above` by the container's width, so a field without the property can render its label beside the input. Shipped mini pages (for example the contact mini page) set `above` on each field and keep the component's default appearance — do not switch the appearance to `outline` to make `above` render.
-- Put explanatory text before the fields/buttons that depend on it. Users read from top to bottom.
-- **Text-heavy modals must be structured, not a wall of text.** When a dialog carries a lot of explanatory copy, lay it out with clear typography, spacing, and hierarchy instead of dumping dense paragraphs:
-  - **The modal shell is template-provided — don't hand-build or restyle it.** The dialog title, the close (`×`) icon, the actions/buttons row, and the outer dialog padding come from the modal template. Do not set their typography, spacing, or button styles by hand — configure only the **content area** (your fields, their descriptions, tooltips). Match whatever the template already renders.
-  - **Typography — set it with the label's `labelType` preset, never hardcoded px.** `crt.Label` typography is a preset (`labelType`); do NOT set `labelFontSize`/`labelLineHeight`/`labelStyle` by hand — raw values fight the preset and break theme switching (a documented pitfall). Map each role to a preset and keep it consistent:
-    - Section subheading you add yourself → a heading preset, e.g. `labelType: "headline-3"` (design reference ≈ 18/24) — never fake a heading with bold body text or an odd custom size.
-    - Explanatory / description copy → `labelType: "body"` (≈ 13/20) in a **muted/secondary** text color via the `labelColor` **theme token** (design reference `#757575`; do not hardcode the hex), so the description reads as subordinate to its control.
-    - Secondary hints → `labelType: "caption"` (≈ 12/16), also muted.
-    - Set weight with `labelThickness`, not custom CSS. (Button-label typography is intentionally not specified — it belongs to the template.)
-  - **Spacing — use the container's `gap`/`padding` SizeEnum keywords, not raw pixels.** Lay the content out in `crt.FlexContainer`/`crt.GridContainer` and set spacing through `gap` (grid: the `{ columnGap, rowGap }` object; flex: a single keyword) and per-side `padding` — always **`SizeEnum` keywords** (`none`/`small`/`medium`/`large`/…) so they track theme tokens rather than drifting from them. Concretely:
-    - Keep each control together with its own description in a **column** flex with a **small** gap, so the description sits tight under its control (design reference ≈ 8px).
-    - Separate one control-block from the next with a **larger** gap — e.g. `medium`/`large` (design reference ≈ 16px) — so blocks read as distinct.
-    - The pixel figures are the **design intent to eyeball against**, not values to hardcode — the actual property value is the `SizeEnum` keyword.
-    - Never let a paragraph run straight into the next block/heading with no separating gap. Align everything to one left edge; don't push actions/links to a cramped right margin misaligned with the text.
-  - **Move long or conditional explanations into a tooltip, not inline.** A long "why is this disabled / why can't I do this" message, or extra detail a user needs only sometimes, belongs in a **tooltip (`i` icon) next to the control** — with a link to the instruction if relevant — not as a permanent inline block of text. Keep the always-visible copy short; let the tooltip carry the depth. For example, an unavailable option explains itself through an `i` tooltip with a link to the instruction, while its visible description stays one short line.
-  - If the content is genuinely large and cannot be reduced, reconsider whether a modal is the right container at all — a full page may fit better than an overflowing dialog.
-- Use consistent action labels such as “Save,” “Cancel,” or domain-specific result verbs.
-- Use Plain style for neutral close/cancel actions when appropriate.
-- Dialog errors must explain what the user can do next; avoid admin-only technical text for regular users.
+- Dialogs follow the styling of Creatio mini pages: predictable title, button placement and hierarchy.
+- **A focused set of action parameters is collected in a modal, not a full page.** When an operation needs a few self-contained inputs (closing an opportunity with a loss reason), ask for exactly those: required ones marked, instructions above the inputs, one primary confirm action.
+- Labels: *Label position*. Explanatory text comes before the fields and buttons that depend on it.
+- Use consistent action labels ("Save", "Cancel", domain result verbs) and Plain style for neutral close and cancel.
+- Dialog errors say what the user can do next, without admin-only technical text.
+
+### Text-heavy modals
+
+Lots of copy gets typography, spacing and hierarchy, not a wall of text.
+
+- **The shell comes from the template**: title, close icon, actions row and outer padding are not restyled. Configure only the content area.
+- **Typography through the `labelType` preset**, never `labelFontSize` / `labelLineHeight` / `labelStyle`, which fight the preset and break theme switching. A subheading you add: `labelType: "headline-3"` (≈ 18/24). Explanatory copy: `labelType: "body"` (≈ 13/20), muted through the `labelColor` theme token (design reference `#757575`, never hardcoded). Hints: `labelType: "caption"` (≈ 12/16), muted. Weight: `labelThickness`.
+- **Spacing through `gap` and `padding` `SizeEnum` keywords** (`none`, `small`, `medium`, `large`), not pixels. A control and its description share a column flex with a small gap (≈ 8px); blocks are separated by `medium` or `large` (≈ 16px). The pixel figures are intent to compare against, not values to write. No paragraph runs into the next block without a gap; everything aligns to one left edge.
+- **Long or conditional explanations go into a tooltip beside the control**, with a link to the instruction when there is one; visible copy stays one short line.
+- If the content cannot be reduced, a full page may fit better than a modal.
 
 ## Default Freedom UI behaviors that silently violate the guidelines
 
-Platform defaults that look fine in the designer but break the rules above at runtime. Quick scan list — full guidance is in the topical sections referenced:
+Platform defaults that look fine in the Designer and break a rule at runtime:
 
-- Few-value lookup opens a selection window → make it a simple lookup (dropdown). [Fields]
-- `Date` field shows a time component → use a date-only column. [Fields / data entry]
-- Multi-word captions come out Title Case → set Sentence case. [Text, labels, and messages]
-- Read-only/calculated and other non-obvious fields ship with no tooltip/placeholder → add guidance. [Fields]
-- Ordered status defaults to a combo box → use a DCM stage progress bar (`crt.EntityStageProgressBar`). [Fields]
-- New side island holds only `Name` → add the key stable fields. [Grouping and page flow]
-- Detail's add button hidden but rows still edit inline → also turn off inline editing on the List. [Grouping and page flow]
-- A `crt.DataGrid` without `features.editable` renders read-only rows and no inline add → set `editable` with `enable: true` and `itemsCreation: true` on every related list unless the user restricted it. [Grouping and page flow]
-- List columns keep their default widths → values and headers cut by an ellipsis while the right part of the list stays empty; size the columns to the data. [List columns]
-- A mini page opened from "+ Add" keeps the template caption *New record* → caption it with the object (*New change order*). [Adding and editing data]
-- A field on a mini page or modal left at the default `labelPosition: "auto"` can render its label beside the input → set the position explicitly: `above`, or `left` only on a wide L/XL page. [Dialogs and modals]
+- A small-catalog lookup opens a selection window → *Lookups and status chips*.
+- A `Date` field shows a time → *Special field controls*.
+- Multi-word captions come out Title Case → *Text, labels, and messages*.
+- Non-obvious and read-only fields ship without a tooltip or placeholder → *Field guidance*.
+- Ordered status defaults to a combo box → *Special field controls*.
+- A new side island holds only `Name` → *Field groups*.
+- A detail's add button is hidden but rows still edit inline → *Read-only detail*.
+- A `crt.DataGrid` without `features.editable` renders read-only rows → *Related lists*.
+- List columns keep default widths, cutting values while the right part stays empty → *List columns*.
+- A mini page from "+ Add" keeps the caption *New record* → *Mini pages*.
+- A mini page or modal field left at `labelPosition: "auto"` renders its label beside the input → *Label position*.
