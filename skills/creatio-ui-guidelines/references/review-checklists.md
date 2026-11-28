@@ -31,7 +31,7 @@ Answer these from the user's perspective before the detailed checks:
 ### Navigation and object setup
 
 - [ ] Section has a unique icon that works in collapsed navigation.
-- [ ] Icon style matches Freedom UI: filled, rounded, `#0D2E4E`, SVG where possible.
+- [ ] Icon style matches Freedom UI: filled, rounded, in the dark blue of the base palette (`accessibility-and-colors.md`), SVG where possible.
 - [ ] Primary display column exists, is text, required, auto-filled, and ideally unique.
 - [ ] Primary display value is useful in page title, lookup, register, and record links.
 
@@ -43,7 +43,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Important fields fit in the header/profile area.
 - [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
 - [ ] Field groups have clear names and no unnecessary one-field duplicate-title groups.
-- [ ] No container (group / tab / profile island) holds a single lone data-entry field, and thin 1–2-field groups are avoided; each holds a logically related block (≥3–4 fields as a rule of thumb) — merge or fill stubs rather than scatter tiny groups.
+- [ ] No container (group / tab / profile island) holds a single lone data-entry field, and thin 1–2-field groups are avoided; each holds a logically related block — 3–4 fields is a signal to check against the page's question, not a quota (`design-judgement.md`, *Rules are not counts*); merge or fill stubs rather than scatter tiny groups.
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
 - [ ] Every related (1:M child) business object surfaced as a `Related list <name>` in §6 of the plan is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
@@ -54,7 +54,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Empty space is not created by an oversized side island with too little content.
 - [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area.
 - [ ] Page content actually reads as proper **islands (white cards with rounded corners and padding)**, not fields/widgets dropped into bare structural containers. Every group of fields, every profile/metric block, and every related list sits inside a real card island (or an `ExpansionPanel` styled to match) — a transparent/chrome-less container holding content directly on the page background is a defect. Judge this on the RENDERED page, not the schema: a group that looks like loose fields on grey with no card edge fails even if the schema "has containers".
-- [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
+- [ ] New islands look like native islands on the same template — expected settings: white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large; where a shipped page measures otherwise, the measurement wins (`visual-check.md`); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
 - [ ] Step-by-step page follows *Step-by-step page (stepper)* in `./page-layout-and-controls.md`: the indicator and the stepper sit in separate islands, the indicator on top, unless the user asked for another placement; one indicator and one set of navigation buttons serve every step; each step header says what to do on the step and keeps the Designer typography.
 - [ ] One-column/two-column mixes do not break reading flow.
 - [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2).
@@ -84,7 +84,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Lookup fields are filtered to relevant values.
 - [ ] The record's connections are one `crt.Connections` element, not a separate `crt.ComboBox` per connection, and no column is shown by both.
 - [ ] Small enum-like lookups (status, type, category, ~<20 rows) are simple lookups → render as dropdowns (`simple-lookup: true`); large/related lookups (Contact, Account, parent) use the selection window.
-- [ ] Status-like lookups (status, stage, priority, health, risk, result) show colored chips on the record page and in lists — colors by meaning (good green, attention amber, problem red, draft neutral), one meaning per color across the app, never by palette order, text kept in the chip; set up per clio's `lookup-colors`; lookups without a state stay plain.
+- [ ] Status-like lookups (status, stage, priority, health, risk, result) show colored chips on the record page and in lists — colors by meaning (good green, attention amber, problem that needs action red, draft and routine outcomes such as Lost neutral), one meaning per color across the app, never by palette order, text kept in the chip; set up per clio's `lookup-colors`; lookups without a state stay plain.
 - [ ] Checkbox captions name the state (*Critical project*, *Overdue*), not a code-style question (*Is critical*); tab captions name their content, no *Details*, *Other* or *Money*.
 - [ ] Date-only business fields are not rendered with a time picker.
 - [ ] Read-only fields explain why/how/when they are filled (tooltip) and show units/scale (placeholder).
@@ -97,7 +97,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Checkboxes/logical fields are placed after related fields.
 - [ ] Status/stage/order uses DCM/progress bar where appropriate.
 - [ ] Field guidance uses the right channel — placeholder (format) / tooltip (on-demand) / permanent description line (must-see) — not all three at once.
-- [ ] Empty optional fields show an actionable "Add …" placeholder, not a blank.
+- [ ] Optional fields that usually stay empty on a saved record show an actionable "Add …" placeholder, not a blank — the one exception to placeholder-as-format (`page-layout-and-controls.md`, *Fields*).
 - [ ] Toggles are used for settings/modes, checkboxes for plain record booleans.
 - [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
 - [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
@@ -146,7 +146,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Font sizes/styles are minimized and based on Headline 1-4, Body, Caption.
 - [ ] Colors are minimized and based on predefined palette.
 - [ ] Color is not the only indication of status or meaning.
-- [ ] Status colors follow one semantic scale (green = on-track/ready/done, amber = draft/paused, red = stopped/overdue/lost, gray = inactive); same state = same color everywhere, always paired with a text label and adequate contrast.
+- [ ] Status colors follow one semantic scale (green = on-track/ready/done, amber = paused/needs attention, red = a problem that needs action — stopped/overdue/failed, gray = draft/inactive/closed and routine outcomes such as Lost); same state = same color everywhere, always paired with a text label and adequate contrast.
 - [ ] Custom global styles/themes have a clear business reason.
 - [ ] Components keep the default Creatio appearance — no global restyle (e.g. `crt.Input` switched to `appearance: "outline"`, custom borders/fonts) that makes the form look different from the base product; no restyle done just to satisfy another rule (e.g. label position).
 
@@ -198,6 +198,9 @@ Report findings separately for each audited page. One subsection per page; if a 
 | … | … | … | … | … |
 
 **Category** is one of: **Accessibility** (WCAG/contrast/keyboard/alt/announcements) or **UX improvement** (layout, grouping, copy, components, flow).
+
+## Recommended structure
+[Proposed layout, tabs and actions — when the findings call for a restructure. Omit otherwise.]
 
 ## Cross-page notes
 [Issues that span multiple pages — e.g. inconsistent styles, naming, or spacing across the audited set. Omit if none.]
@@ -269,7 +272,7 @@ Example: `| Medium | UX improvement | Lookups | Status opens a selection window 
 - “Split the header into a concise title/status area and move secondary fields into tab groups.”
 - “Replace this status field with DCM/progress bar to show ordered process state.”
 - “Add a tooltip explaining the source and editability of this read-only field.”
-- “Use dropdown instead of lookup because the value set is small.”
+- “Make this a simple lookup so it opens as a dropdown, because the value set is small.”
 - “Do not rely on color alone; add label/icon/status text.”
 - “Validate this custom tab/background pair against 4.5:1 contrast before release.”
 
@@ -278,7 +281,7 @@ Example: `| Medium | UX improvement | Lookups | Status opens a selection window 
 Answer these twelve questions **in writing** before anyone else sees the page — "yes, probably" is how a weak page survives. Look at the rendered page, not the schema.
 
 1. **Is the most important information immediately recognisable?** Squint at the page: is what survives the answer to the page's question?
-2. **Is the space used deliberately?** No region is stretched to fill or left holed; you can say what each region is for. On a record page the left and right columns stay balanced (*Default page design principles* in `SKILL.md`): an empty stretch of the left column is not a deliberate region.
+2. **Is the space used deliberately?** No region is stretched to fill or left holed; you can say what each region is for. On a record page the left and right columns stay balanced (*Keep the left and right areas proportional* in `SKILL.md`, *Mandatory implementation rules*): an empty stretch of the left column is not a deliberate region.
 3. **Is the density right for the task?** Scanned (a list) → dense; read (a record) → comfortable; filled in (a mini page, a step) → generous.
 4. **Does the layout follow the user's priorities, or the data model's?** Would the person who uses this page recognise their own order of importance?
 5. **Is any block too large or too small** for how much it matters?

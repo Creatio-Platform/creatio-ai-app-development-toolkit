@@ -102,7 +102,7 @@ Native components bring their own roles, names, and keyboard behaviour. A confor
 - Widget Color parameter in Freedom UI Designer and Dashboard Designer shows WCAG-compliant colors; choosing from it is usually safe.
 - Pipeline, Sales pipeline, Full pipeline, Doughnut, and Progress bar widgets use preset accessible color sequences and are not user-configurable.
 - Tabs and Area backgrounds require manual validation because text/background combinations can fail contrast.
-- **Assign status colors from a consistent semantic scale, and always pair the color with text.** When you color a status, use one meaning-to-color scale across the app: green = on-track / ready / positive / done; amber = draft / paused / needs attention; red = stopped / overdue / at-risk / lost; neutral gray = inactive / not started. The same state uses the same color everywhere, the label states the status in words (color is never the only signal), and every pair meets the contrast minimums above.
+- **Assign status colors from a consistent semantic scale, and always pair the color with text.** When you color a status, use one meaning-to-color scale across the app: green = on-track / ready / positive / done; amber = paused / waiting / needs attention; red = a problem that needs action — stopped / overdue / failed / at-risk; neutral gray = draft / inactive / not started / closed, and a routine outcome of the process such as *Lost* or *Rejected*, which must not look like a failure (`visual-judgement.md`). The same state uses the same color everywhere, the label states the status in words (color is never the only signal), and every pair meets the contrast minimums above.
 
 ## Recommended multi-series chart order
 
@@ -166,4 +166,4 @@ Accessibility is checked while the page is built, not as a closing pass, and it 
 5. **Screen reader** through the primary task, when one is available. Nothing replaces hearing the page read aloud; an agent usually has none, and then says so.
 6. **Text spacing override.** Apply the SC 1.4.12 values from *Screen-level decisions: hover, drag, zoom, and text spacing* in the browser, for inspection only, and look for clipping.
 
-**Say what you verified and what you did not.** "Accessibility tree and keyboard pass clean on create and edit; zoom checked at 200% only; no screen reader available" is a useful finding. "Accessible", with no method named, is not. Put this statement in the audit's *Accessibility checks* (`SKILL.md`, *Review output format*).
+**Say what you verified and what you did not.** "Accessibility tree and keyboard pass clean on create and edit; zoom checked at 200% only; no screen reader available" is a useful finding. "Accessible", with no method named, is not. Put this statement in the audit's *Accessibility notes* (`review-checklists.md`, *Audit output template*).

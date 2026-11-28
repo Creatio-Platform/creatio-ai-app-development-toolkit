@@ -89,7 +89,7 @@ Use this reference once the kind of page is known, to build or judge it as that 
 - **Answers:** how much of this task is left, and what do I do on this step.
 - **Use when** a task is sequential, rare and order-dependent. **Not when** people do it daily — a wizard taxes experts every time — or the steps are independent: then it is one form with groups filled in any order.
 - **Structure in Creatio:** a stepper, its indicator and one set of navigation buttons, built per *Step-by-step page (stepper)* in `page-layout-and-controls.md`. A consequential either/or choice inside a step is selectable cards — see *Button vs menu action vs checkbox*.
-- **Measured observation:** in shipped step-by-step flows each step is a whole page inside the ordinary shell, not a modal, and Back and Next are the last row of the step content.
+- **Measured observation:** in shipped step-by-step flows each step is a whole page inside the ordinary shell, not a modal. Those flows put Back and Next as the last row of the step content; on a stepper page you build, the buttons go once in the stepper's `footer` (*Step-by-step page (stepper)* in `page-layout-and-controls.md`).
 - **A wizard configures; pages maintain.** Every value the wizard sets stays changeable on the record or settings page without re-running it.
 - **Traps:** three steps that should be one form; a step with one field; no way back without losing input; validation only at the end; no done state on finished steps; a final button that does not name the result ("Create request", not "Next").
 

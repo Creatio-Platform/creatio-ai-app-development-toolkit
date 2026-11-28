@@ -81,7 +81,7 @@ The tooltip and placeholder rule — when a field needs guidance, how specific i
 
 - **Labels are short nouns in the business's words:** *Expected close date*, not *Date*; *Delivery address*, not *Address info*.
 - **No colons, no articles, sentence case.**
-- **A placeholder is not a label.** It disappears when typing starts and it carries less contrast than the label; never hide a label and let the placeholder stand in for it. Use the placeholder for a format or a sample value only, with the label present.
+- **A placeholder is not a label.** It disappears when typing starts and it carries less contrast than the label; never hide a label and let the placeholder stand in for it. Use the placeholder for a format or a sample value, with the label present; the one exception is the *Add …* invitation on an optional field that usually stays empty (page-layout-and-controls.md, *Fields*).
 - **State the rule before it is broken.** A tooltip or description line that says the limit up front beats a validation message afterwards.
 - **Explain why where the rule is surprising.** *Used to match payments on the bank statement* tells the user whether to be careful.
 - **For a read-only or calculated field, name the source and the moment it changes.**
