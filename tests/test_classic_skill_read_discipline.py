@@ -290,11 +290,11 @@ class UiGuidelinesPointerTests(unittest.TestCase):
 
     def test_pointers_read_a_section_not_the_file(self):
         for unqualified in (
-            "read `./references/page-layout-and-controls.md` first",
+            "read `./references/layout-mechanics.md` first",
             "read `./references/accessibility-and-colors.md` first",
         ):
             self.assertNotIn(unqualified, self.text)
-        for reference in ("page-layout-and-controls.md", "accessibility-and-colors.md"):
+        for reference in ("layout-mechanics.md", "accessibility-and-colors.md"):
             self.assertRegex(
                 self.text,
                 rf"`\./references/{re.escape(reference)}`[^.]*list its headings",

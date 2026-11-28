@@ -24,12 +24,12 @@ Use this reference to decide what a Freedom UI page is for, what goes on it firs
 ## Where this reference sits
 
 - **Design the real page, not a mock.** Its parts are the components `get-component-info` returns for the target environment, on a template `list-page-templates` returns.
-- **Write no numbers into design decisions** — no hex, pixel or type sizes. Colour and typography come from the theme and the components' native inputs, spacing from the template and *New island / card container — standard settings* in `page-layout-and-controls.md`; custom CSS follows *Custom CSS* there. Only WCAG minimums (*Contrast rules* in `accessibility-and-colors.md`) and facts measured on native Creatio, stated as observations, are allowed.
+- **Write no numbers into design decisions** — no hex, pixel or type sizes. Colour and typography come from the theme and the components' native inputs, spacing from the template and *New island / card container — standard settings* in `layout-mechanics.md`; custom CSS follows *Custom CSS* there. Only WCAG minimums (*Contrast rules* in `accessibility-and-colors.md`) and facts measured on native Creatio, stated as observations, are allowed.
 - **A decision the target version cannot express is written down, not approximated.** A worklist's sort order may have no native setting: state it in the handoff or audit as not implemented, never stand in a component that means something else.
 
 ## Before choosing a template
 
-The template is fixed at `create-page` (*Choosing the page template (before you create the page)* in `page-layout-and-controls.md`), so answer these questions first; if you cannot, you are not ready to pick one.
+The template is fixed at `create-page` (*Choosing the page template (before you create the page)* in `page-record.md`), so answer these questions first; if you cannot, you are not ready to pick one.
 
 ### State the page's one question
 
@@ -50,7 +50,7 @@ Rank every field before laying anything out; if everything is critical, nothing 
 - **Secondary** fields are needed often but not to decide: on the surface and quieter, in the first tab's groups below the critical block.
 - **Contextual** fields are needed occasionally, by some people: behind one gesture — a collapsed expansion panel, a later tab, a tooltip, or the related record's own page.
 
-Group by task, not by data model: fields read in the same moment share a group, a value sits with the action it provokes, things compared sit side by side (*Field groups* in `page-layout-and-controls.md`). A case page grouped *Case · Contact · Account · SLA · Activities* mirrors the schema; the same fields grouped *What happened · Who is affected and what they are entitled to · What we have done · What happens next* serve the person resolving it.
+Group by task, not by data model: fields read in the same moment share a group, a value sits with the action it provokes, things compared sit side by side (*Field groups* in `page-record.md`). A case page grouped *Case · Contact · Account · SLA · Activities* mirrors the schema; the same fields grouped *What happened · Who is affected and what they are entitled to · What we have done · What happens next* serve the person resolving it.
 
 ### Name the kind: monitor, worklist or report
 
@@ -64,7 +64,7 @@ Not a page kind: it tells you which page kind to pick and how to fill it.
 | A good day looks like | Nothing stands out | A short list | A clear shape |
 | Usual Creatio form | Dashboard page or component, home page | Section list page with a starting view and default sort; a list widget | Analytics tab or dashboard; a printable report |
 
-The kind also changes a record page: one opened from a worklist needs its next action and deadline (with the timer from *Field-driven companions* in `page-layout-and-controls.md`) above everything else; one opened to monitor needs its state readable without scrolling.
+The kind also changes a record page: one opened from a worklist needs its next action and deadline (with the timer from *Field-driven companions* in `page-record.md`) above everything else; one opened to monitor needs its state readable without scrolling.
 
 ### When you cannot ask
 
@@ -72,14 +72,17 @@ Ask when someone can answer. When nobody can, write the assumption in the propos
 
 ## Design principles
 
-These principles decide the content and emphasis of a page. They never license restyling it: the look of base Creatio stays as it is (*Match existing styles* in `page-layout-and-controls.md`).
+These principles decide the content and emphasis of a page. They never license restyling it: the look of base Creatio stays as it is (*Match existing styles* in `layout-mechanics.md`).
 
 - **The biggest block answers the question** — on a record page usually the profile island, the stage progress bar and the first tab's critical group; on a dashboard, the largest widget. If the largest block is decoration and the answer is a number in a corner, the hierarchy is wrong however correct the components are.
-- **Density is a decision.** Creatio users trade whitespace for information willingly, but filling space is not a goal either: decide from the task (*How dense* below). Whatever fills a region passes the subtract check — remove it; is anything lost? A side column padded with decorative widgets to look level fails it (*Balance the page* in `page-layout-and-controls.md`).
+- **Density is a decision.** Creatio users trade whitespace for information willingly, but filling space is not a goal either: decide from the task (*How dense* below). Whatever fills a region passes the subtract check — remove it; is anything lost? A side column padded with decorative widgets to look level fails it (*Balance the page* in `page-record.md`).
 - **Colour is meaning.** Keep the page mostly neutral and spend colour on the data — the stage progress bar, the one metric that needs action, status labels, chart series — not on chrome (*Colour or not* below).
-- **Words are design.** A *Submit* button or a group titled *Other* is a defect like a misaligned column (`ux-writing.md`; *Field guidance* in `page-layout-and-controls.md`).
+- **Words are design.** A *Submit* button or a group titled *Other* is a defect like a misaligned column (`ux-writing.md`; *Field guidance* in `block-fields.md`).
 - **Deliberate beats consistent.** Six identical metric widgets in a row are consistent and say nothing; give the block that answers the question the weight and let the rest recede — emphasis within the platform's look, never a departure from it.
-- **Rules are not counts.** A rule shaped like a count breaks on the next page, because what varied was never the quantity but what the page was for: "one filled tile in four" fails on a page where nothing needs action today. Count to learn the vocabulary; ask what the page is for to learn the grammar. A page has as many tabs, metrics or columns as its task needs, sometimes none. Phrase a rule as the question it protects: "is the left column level with the right?" survives every page, "put three islands on the left" does not; an amount gets analytics only when they answer the page's question (*Field-driven companions* in `page-layout-and-controls.md`). Rules of thumb such as group sizes are signals to check against the page's question, not quotas to fill.
+- **Rules are not counts.** A rule shaped like a count breaks on the next page, because what varied was never the quantity but what the page was for: "one filled tile in four" fails on a page where nothing needs action today. Count to learn the vocabulary; ask what the page is for to learn the grammar. A page has as many tabs, metrics or columns as its task needs, sometimes none. Phrase a rule as the question it protects: "is the left column level with the right?" survives every page, "put three islands on the left" does not; an amount gets analytics only when they answer the page's question (*Field-driven companions* in `page-record.md`). Rules of thumb such as group sizes are signals to check against the page's question, not quotas to fill.
+
+- **Native building blocks first.** Before creating a new pattern, find an analogous base Creatio implementation and mimic its interaction model, placement, labels, state behaviour and visual weight; build custom UI only when no standard pattern solves the use case.
+- **Reveal content progressively** with business rules and dynamic loading instead of showing every field at once.
 
 ## Two options for a complex page
 
@@ -92,7 +95,7 @@ When a page is complex — several roles, a staged lifecycle, many columns, more
 
 ## Decision trees
 
-Each tree is a quick call, and each answer maps to a Creatio construct. The component and placement rules live in the section named next to the answer — in `page-layout-and-controls.md` unless another file is named; this file does not repeat them.
+Each tree is a quick call, and each answer maps to a Creatio construct. The component and placement rules live in the section named next to the answer — in the file named next to it (the `page-*.md` file for the page kind, a `block-*.md` file for one element, `layout-mechanics.md` for placement); this file does not repeat them.
 
 ### Which page shape
 
@@ -136,7 +139,7 @@ How often does this person need it on a NORMAL visit?
 └─ never        → ask why it is on the page; leave it off (it stays on the object)
 ```
 
-Decide by frequency, not importance: importance is an argument, frequency is a fact. A panel opened on every visit was never secondary, so surface it; forty fields laid flat across a tab is not transparency, it is unsorted. Required fields go early and visible whatever this tree says (*Required fields* in `page-layout-and-controls.md`).
+Decide by frequency, not importance: importance is an argument, frequency is a fact. A panel opened on every visit was never secondary, so surface it; forty fields laid flat across a tab is not transparency, it is unsorted. Required fields go early and visible whatever this tree says (*Required fields* in `block-fields.md`).
 
 ### Which container
 
@@ -158,7 +161,7 @@ Must it be finished before anything else can continue?
                     └─ a short explanation tied to one control     → TOOLTIP (Freedom UI has no general popover; do not build one)
 ```
 
-Read, in `page-layout-and-controls.md`: dialog → *Dialogs and modals*; mini page → *Adding and editing data*; side panel, profile and extra left islands → *Page composition* and *New island / card container — standard settings*; related profile → *Field-driven companions*; widgets → *Analytics and metric widgets*; expansion panel and tab → *Grouping and page flow*; tooltip → *Field guidance*.
+Read: dialog and mini page → `page-dialogs-and-mini.md`; side panel, profile and extra left islands, related profile, expansion panel and tab → `page-record.md` (*Page composition*, *Field-driven companions*, *Grouping and page flow*) and *New island / card container — standard settings* in `layout-mechanics.md`; widgets → `block-widgets.md`; tooltip → *Field guidance* in `block-fields.md`.
 
 A dialog must earn blocking the page. An island is a card holding identity, metrics or a related profile; an expansion panel is a titled, collapsible, full-width group inside a tab.
 
@@ -185,7 +188,7 @@ Do people COMPARE records across the same attributes?
                     └─ more      → LIST anyway
 ```
 
-A grid of islands each holding one text-only record is a list chopped into pieces. For related lists, use the Expanded list composite (*Related lists* in `page-layout-and-controls.md`).
+A grid of islands each holding one text-only record is a list chopped into pieces. For related lists, use the Expanded list composite (*Related lists* in `block-lists.md`).
 
 ### Which chart
 
@@ -201,7 +204,7 @@ What is the question?
 └─ "what is the single number?"       → an INDICATOR widget, not a chart
 ```
 
-Resolve the chart, indicator, gauge, list and pipeline widgets with `get-component-info` (`search='chart' | 'indicator' | 'gauge' | 'pipeline'`). Size and place them per *Charts and metric tiles* in `page-layout-and-controls.md`. Series colours: *Recommended multi-series chart order* in `accessibility-and-colors.md`. Before adding any chart, ask whether a list widget would answer better — it is readable, sortable and accessible by default.
+Resolve the chart, indicator, gauge, list and pipeline widgets with `get-component-info` (`search='chart' | 'indicator' | 'gauge' | 'pipeline'`). Size and place them per *Charts and metric tiles* in `block-widgets.md`. Series colours: *Recommended multi-series chart order* in `accessibility-and-colors.md`. Before adding any chart, ask whether a list widget would answer better — it is readable, sortable and accessible by default.
 
 ### Colour or not
 
@@ -214,7 +217,7 @@ Does the colour answer a question the reader is asking?
 └─ none of these                  → NO. Leave it neutral
 ```
 
-Then two checks. Would it still be coloured tomorrow? A signal that never changes is wallpaper. Is the colour on the data, not on tabs, areas or headers? Status colours follow the scale in *Freedom UI color guidance*; tab and area colours need *Tab and title colors* and *Area backgrounds* (all in `accessibility-and-colors.md`); the primary button follows *Buttons and actions* in `page-layout-and-controls.md`.
+Then two checks. Would it still be coloured tomorrow? A signal that never changes is wallpaper. Is the colour on the data, not on tabs, areas or headers? Status colours follow the scale in *Freedom UI color guidance*; tab and area colours need *Tab and title colors* and *Area backgrounds* (all in `accessibility-and-colors.md`); the primary button follows *Buttons and actions* in `block-actions.md`.
 
 ### Confirm, undo or neither
 
@@ -226,7 +229,7 @@ Is it reversible?
           └─ no  → a lightweight confirmation dialog whose buttons name both outcomes
 ```
 
-A confirmation on a reversible action is a tax people learn to click through — and then they click through the one that mattered. A field the user can edit back is reversible; a sent email, a started bulk process, a deleted record or a call to an external system is not. Do not build a custom undo. Rules: *Long-running and destructive actions* and *Dialogs and modals* in `page-layout-and-controls.md`; the dialog's wording: *Confirmations and destructive actions* in `ux-writing.md`.
+A confirmation on a reversible action is a tax people learn to click through — and then they click through the one that mattered. A field the user can edit back is reversible; a sent email, a started bulk process, a deleted record or a call to an external system is not. Do not build a custom undo. Rules: *7. System status and progress* in `ux-writing.md` and *Dialogs and modals* in `page-dialogs-and-mini.md`; the dialog's wording: *Confirmations and destructive actions* in `ux-writing.md`.
 
 ### Tabs, sections or separate pages
 
@@ -241,7 +244,7 @@ Is the content consulted ONE SET AT A TIME, not compared across?
                                                     reached from a related list
 ```
 
-Do not nest a tab strip inside a tab on a page you build; use expansion panels inside the tab (a nested strip that ships with the product is not a finding). A tab that is empty on most records is a candidate for removal, not for an empty state. Panel stacking and tab placement: *Grouping and page flow* in `page-layout-and-controls.md`.
+Do not nest a tab strip inside a tab on a page you build; use expansion panels inside the tab (a nested strip that ships with the product is not a finding). A tab that is empty on most records is a candidate for removal, not for an empty state. Panel stacking and tab placement: *Grouping and page flow* in `page-record.md`.
 
 ### Filter, search or both
 
@@ -253,7 +256,7 @@ How many records, and do people arrive knowing which one they want?
 └─ hundreds and more          → BOTH, plus sorting, folders, and a starting view that is not all records
 ```
 
-Placement of custom and quick filters: *Filters and search* in `page-layout-and-controls.md`. Use only the platform's own filter behaviour; do not build a separate apply-filter mechanism.
+Placement of custom and quick filters: *Filters and search* in `page-list.md`. Use only the platform's own filter behaviour; do not build a separate apply-filter mechanism.
 
 ## The consistency guard
 
@@ -272,6 +275,6 @@ Before changing anything, check the request against what is written. "Written" m
 
 Then wait for the user's choice — choosing for them is the failure this guard exists for, and "do both" is not an option. When the same exception comes up a second time, say so and recommend changing the rule: either the rule is wrong, or the exception is a pattern nobody has written down.
 
-Rules with their own confirmation flow keep it: custom CSS and restyling follow the warn-and-confirm sequence in *Custom CSS* (`page-layout-and-controls.md`); the template's irreversibility follows *Choosing the page template (before you create the page)*.
+Rules with their own confirmation flow keep it: custom CSS and restyling follow the warn-and-confirm sequence in *Custom CSS* (`layout-mechanics.md`); the template's irreversibility follows *Choosing the page template (before you create the page)*.
 
 Credit: the consistency guard is adapted from design-spec-framework (github.com/denysosadchyi/design-spec-framework, MIT).

@@ -27,7 +27,7 @@ Four facts decide how a rendered page is checked:
 - **A screenshot finds the big surfaces; a measurement and a difference overlay find the craft.** A full-page look catches a missing island or a page that reads as one flat sheet, not letter-spacing, a marker off its rule, a radius one step too large, or a hairline present on one page and absent on the other.
 - **Clipping hides overflow, and a screenshot confirms the lie.** Content wider than its container looks perfect when an ancestor clips it. Overflow is a measurement (`scrollWidth` against `clientWidth`), never a look.
 - **For looks, the measured native page beats any written description of it** (*When rules collide* in `SKILL.md`). When this skill, a design mock, or memory says how a native element looks and the native reference measures otherwise, report the contradiction instead of "fixing" the page toward the text. Looks only (border, radius, spacing, colour role): a native page that breaks a layout rule of this skill, such as the column balance, does not overrule it.
-- **A measurement is evidence, not a target.** Values the helpers print (pixels, `rgb()` colours) describe what the native page renders. Never type them into a page body: the fix is the component's native input or the removal of a custom style (*Custom CSS* in `page-layout-and-controls.md`).
+- **A measurement is evidence, not a target.** Values the helpers print (pixels, `rgb()` colours) describe what the native page renders. Never type them into a page body: the fix is the component's native input or the removal of a custom style (*Custom CSS* in `layout-mechanics.md`).
 
 ## The minimum check (default after every built page)
 
@@ -72,7 +72,7 @@ The style census lists, for every component that carries an `element-name`, the 
 
 1. Install the helpers (previous section) on the reference page and run `__vcCensus('reference')`. Read the table once: it is the native vocabulary of this template — which containers are cards, which carry a hairline, which only space their children.
 2. Open the page under review by in-app route and run `__vcCensus('ours')`. It prints the difference:
-   - **`+` lines — only in ours.** Each is a finding: a border, shadow, radius, background or spacing the native page never draws on that kind of component. Remove it (set the component's native input back, drop the `styles`/`classes`/`extraStyles` that carry it) or justify it as a deliberate, confirmed decision under *Custom CSS* in `page-layout-and-controls.md`. The names after `<-` are the page-body elements to fix; find them in `get-page`.
+   - **`+` lines — only in ours.** Each is a finding: a border, shadow, radius, background or spacing the native page never draws on that kind of component. Remove it (set the component's native input back, drop the `styles`/`classes`/`extraStyles` that carry it) or justify it as a deliberate, confirmed decision under *Custom CSS* in `layout-mechanics.md`. The names after `<-` are the page-body elements to fix; find them in `get-page`.
    - **`-` lines — only in the reference.** Native styling ours lacks: typically a container holding content on the page background with no card (see the island item in `review-checklists.md` → *Layout and structure*), or a panel without the native radius. Check whether ours has a component of that kind at all before calling it a defect; a page without related lists legitimately lacks the panel lines.
 3. When a component's look comes from its inner parts (an expansion panel's header row, a data grid's header), rerun both sides with `__vcCensus('reference', true)` and `__vcCensus('ours', true)`; inner elements are then listed under `<tag> > <inner tag>`.
 4. Fix through the page body, never by copying a printed value: compare the offending node's properties in `get-page` with the reference node's properties and with `get-component-info`, and change the property that differs.
@@ -112,7 +112,7 @@ If the helper answers `frame refused`, the site does not allow same-origin frami
 
 Say so in the report; the eye still matters.
 
-- **Whether the page is the right page.** Composition, balance, the order a user fills it in, the fit of the template — that is the checklist in `review-checklists.md`, `design-judgement.md` and `page-layout-and-controls.md`.
+- **Whether the page is the right page.** Composition, balance, the order a user fills it in, the fit of the template — that is the checklist in `review-checklists.md`, `design-judgement.md` and the `page-*.md` and `block-*.md` references.
 - **Relationships between parts.** Two radii nesting badly, two greys that are each native but wrong together, a colour role reused for an unrelated meaning.
 - **Choice of content.** The wrong icon or image, a label that is accurate but unclear, data that is technically valid but implausible.
 - **States not on screen.** Hover, focus, disabled, read-only, empty, error, loading — unless you put the page into that state and run the checks again.

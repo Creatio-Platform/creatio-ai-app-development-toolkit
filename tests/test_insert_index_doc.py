@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SKILL = ROOT / "skills/creatio-ui-guidelines/SKILL.md"
 GUIDELINES = ROOT / "skills/creatio-ui-guidelines/references"
-LAYOUT = GUIDELINES / "page-layout-and-controls.md"
+LAYOUT = GUIDELINES / "layout-mechanics.md"
 CHECKLISTS = GUIDELINES / "review-checklists.md"
 
 SKILL_RULE = "- **An insert's `index` counts the children the parent already has"

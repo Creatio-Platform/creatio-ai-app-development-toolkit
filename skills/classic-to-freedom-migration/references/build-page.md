@@ -399,7 +399,7 @@ rules.
   never set `features.rows.toolbar: false`: any value replaces all the platform's default row
   actions, so both leave the rows with no Open. The full recipe (the exact `clicked` params and
   the Open item's guards) is the read-only detail rule in the `creatio-ui-guidelines` reference
-  `page-layout-and-controls.md`. A
+  `block-lists.md`. A
   removed Classic Edit maps to nothing: Freedom has no separate Edit row action, so it never means
   "stop records opening". When the override is in a form the engine cannot read (a reference to
   another function, an over-long body), the same ⚠ says its effect is **UNKNOWN** and the Layout

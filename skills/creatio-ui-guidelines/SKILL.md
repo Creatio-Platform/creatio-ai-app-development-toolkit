@@ -43,44 +43,49 @@ Every rule has one of three strengths, stated in its home section when it is not
 
 ## Where to read — by task
 
-**Read a reference by section, never whole.** List its headings with their line numbers (`grep -n '^#'`), then read that one section's lines (the file-reading tool's offset and limit, or `sed -n '<from>,<to>p'`). A read with no offset or limit, a full-file shell `cat`, and a series of ranged passes that walks the whole file each cost a full read of `page-layout-and-controls.md`, and a truncated `cat` also hides the part it cut off.
+The references are split by what you arrive with:
 
-Look up `./references/page-layout-and-controls.md` by section: list its headings, then read the section for the element you are placing — start with *Choosing the component*, and resolve every component name through `get-component-info`, never from memory. For contrast, colour, charts, tabs or custom components, look up `./references/accessibility-and-colors.md` by section: list its headings, then read the section for the element you are placing. For an audit, read `./references/review-checklists.md` whole only for a full audit; for one check, look up its section by heading.
+- **A kind of page** → its `page-*.md` file in `./references/`, read whole: `page-record.md`, `page-list.md`, `page-step-by-step.md`, `page-dialogs-and-mini.md`. Kinds without a file of their own (dashboard, worklist, feed, settings, AI approval) are in `./references/page-patterns.md`.
+- **One element** → its section in a `block-*.md` file in `./references/`: `block-fields.md` (fields, lookups, chips, guidance, connections), `block-lists.md` (columns, related lists, read-only lists), `block-actions.md` (buttons and menus), `block-widgets.md` (metrics and charts).
+- **Before every `update-page`** → look up `./references/layout-mechanics.md` by section: list its headings, then read the section for the element you are placing — start with *Choosing the component (source of truth)*, and resolve every component name through `get-component-info`, never from memory.
+
+**Read a large reference by section, never whole.** List its headings with their line numbers (`grep -n '^#'`), then read that one section's lines (the file-reading tool's offset and limit, or `sed -n '<from>,<to>p'`). A read with no offset or limit, a full-file shell `cat`, and a series of ranged passes that walks the whole file each cost a full read, and a truncated `cat` also hides the part it cut off. The `page-*.md` files are short and read whole.
+
+For contrast, colour, charts, tabs or custom components, look up `./references/accessibility-and-colors.md` by section: list its headings, then read the section for the element you are placing. For an audit, read `./references/review-checklists.md` whole only for a full audit; for one check, look up its section by heading.
 
 | Task | Read, in this order |
 |---|---|
-| Any new page | `design-judgement.md` *Before choosing a template*, *Which page shape* → the page's pattern in `page-patterns.md` → `page-layout-and-controls.md` *Choosing the page template* |
-| Record page | `page-patterns.md` *Record page* → `page-layout-and-controls.md` *Page composition*, *Field-driven companions*, *Buttons and actions*, *Grouping and page flow*, *Fields* |
-| Section list or worklist | `design-judgement.md` *Filter, search or both* → `page-patterns.md` *Section list page* or *Worklist* → `page-layout-and-controls.md` *List (section) page layout* |
-| Related list on a record page | `page-layout-and-controls.md` *Related lists*, *List columns*; read-only lists: *Read-only detail*; then `get-guidance name=related-list` |
-| Mini page, modal, add or edit form | `page-layout-and-controls.md` *Adding and editing data*, *Dialogs and modals* → `ux-writing.md` §3 |
-| Step-by-step page | `page-patterns.md` *Step-by-step page* → `page-layout-and-controls.md` *Step-by-step page (stepper)* |
-| Record connections | `page-layout-and-controls.md` *Record connections* (needs the `UseConnectionsComponent` feature — check it and tell the user when it is off or unknown) |
-| Charts and metrics | `design-judgement.md` *Which chart* → `page-layout-and-controls.md` *Analytics and metric widgets* → clio `get-guidance name=dashboard-and-home-page-layout` and `name=widget-color-and-icon` |
+| Any new page | `design-judgement.md` *Before choosing a template*, *Which page shape* → `page-patterns.md` for the kind → the `page-*.md` file |
+| Record page | `page-record.md` → `block-*.md` sections for its elements → `layout-mechanics.md` |
+| Section list or worklist | `design-judgement.md` *Filter, search or both* → `page-list.md` (worklist: `page-patterns.md` *Worklist*) → `block-lists.md` *List columns* |
+| Related list | `block-lists.md` *Related lists*, *List columns*, *Read-only detail* → clio `get-guidance name=related-list` |
+| Mini page, modal, add or edit form | `page-dialogs-and-mini.md` → `ux-writing.md` §3 |
+| Step-by-step page | `page-step-by-step.md` |
+| Charts and metrics | `design-judgement.md` *Which chart* → `block-widgets.md` → clio `get-guidance name=dashboard-and-home-page-layout` and `name=widget-color-and-icon` |
 | Dashboard or home page | `page-patterns.md` *Overview, dashboard and home page* → clio `get-guidance name=dashboard-and-home-page-layout` |
 | Captions, messages, errors, empty states | `ux-writing.md`, the section for the text |
 | Checking the built page | `visual-check.md` (the minimum check) → `review-checklists.md` *Self-critique before delivering* |
 | Audit or review | `review-checklists.md` whole → `accessibility-and-colors.md` *Verifying accessibility on the rendered page* → `visual-check.md` |
 
-A page built or reviewed without the matching sections is unfinished work, even if it happens to look right.
+A page built or reviewed without the matching references is unfinished work, even if it happens to look right.
 
 ## Core rules
 
-Each line is the rule and its check; the full rule, reasons and exceptions live in the named section of `./references/page-layout-and-controls.md` unless another file is named.
+Each line is the rule and its check; the full rule, its reasons and exceptions are in the named section.
 
-- **Components come from the catalog, composites from their whole recipe.** Resolve every `crt.*` type with `get-component-info`; for a Designer combination (Expanded list, Attachments, Approvals…) fetch `get-component-info composite='<caption>'`, build every part it names, and name the recipe and its parts in your evidence. *Choosing the component*.
-- **Choose the template before `create-page`.** The template cannot be changed afterwards; a record with ordered stages needs a template with the progress bar. Resolve names with `list-page-templates`. *Choosing the page template*.
-- **Keep the base Creatio look.** Copy styles from this page or, for a new page, from a shipped page on the same template; never restyle components across a form. Custom CSS (`styles`, `classes`, raw-CSS `extraStyles`) only after native inputs are exhausted, with an upgrade-risk warning and the user's confirmation. *Match existing styles*, *Custom CSS*.
-- **Grid mechanics.** Read the container's column count before placing fields; stack ExpansionPanels full width, never side by side. *Layout coordinates and container nesting*, *Containers for grouping inputs*.
-- **No empty layout gaps.** Inside each container, number rows 1, 2, 3… with no skipped row, counting the rows its existing children — the template's included — already take; only a container you create starts at row 1. *Layout coordinates and container nesting*.
-- **An insert's `index` counts the children the parent already has — the parent template's included**, not only the inserts you emit. Read the parent's node in the `get-page` bundle before you set it; in a grid container the order in `items` follows `layoutConfig` row, then column. Worked example and several inserts into one parent: *Layout coordinates and container nesting* in `./references/page-layout-and-controls.md`.
-- **A balanced, aligned record page.** The left column reaches the length of the right content, filled only with blocks that pass the subtract check; a component placed among fields lines up with them on both axes (within 2px on the rendered page). *Balance the page*, *Component alignment*.
-- **Fields.** Required fields are the real minimum and sit on the first screen (default); few-value lookups are simple lookups (dropdowns); status-like lookups get colored chips by meaning (scale: *Freedom UI color guidance* in `./references/accessibility-and-colors.md`; how to set them: clio `get-guidance name=lookup-colors`); non-obvious and read-only fields get a placeholder or tooltip as localizable strings. *Required fields*, *Lookups and status chips*, *Field guidance*.
-- **Every field on a mini page or a modal sets `labelPosition: "above"` explicitly.** *Label position*.
-- **Lists.** Every related list is editable inline (`features.editable` with `enable: true` and `itemsCreation: true` on its `crt.DataGrid`) and also gets a mini page and a full page; only a tiny list goes without pages, and inline is off only when the user asks. Columns show whole values and fill the list's width. On a list page, filters go before `SearchFilter`. *Related lists*, *List columns*, *Filters and search*.
-- **Field companions and analytics.** A deadline the user acts on soon gets a timer with a caption and explicit colours; a business Contact or Account gets its profile island; an amount gets a metric or chart only when it answers the page's question — in its own island or beside the data it sums, every compared series present. *Field-driven companions*, *Charts and metric tiles*.
-- **The header shows one or two frequent actions; the rest go into one actions menu.** *Header actions*.
-- **Accessibility basics on every page.** Text contrast ≥ 4.5:1 (large text ≥ 3:1), every component has a real accessible name, colour is never the only signal. `./references/accessibility-and-colors.md`.
+- **Components come from the catalog, composites from their whole recipe.** Resolve every `crt.*` type with `get-component-info`; for a Designer combination (Expanded list, Attachments, Approvals…) fetch `get-component-info composite='<caption>'`, build every part it names, and name the recipe and its parts in your evidence. *Choosing the component (source of truth)* in `./references/layout-mechanics.md`.
+- **Choose the template before `create-page`.** The template cannot be changed afterwards; a record with ordered stages needs a template with the progress bar. Resolve names with `list-page-templates`. *Choosing the page template* in `./references/page-record.md`.
+- **Keep the base Creatio look.** Copy styles from this page or, for a new page, from a shipped page on the same template; never restyle components across a form. Custom CSS (`styles`, `classes`, raw-CSS `extraStyles`) only after native inputs are exhausted, with an upgrade-risk warning and the user's confirmation. *Match existing styles*, *Custom CSS* in `./references/layout-mechanics.md`.
+- **Grid mechanics.** Read the container's column count before placing fields; stack ExpansionPanels full width, never side by side. *Layout coordinates and container nesting*, *Containers for grouping inputs* in `./references/layout-mechanics.md`.
+- **No empty layout gaps.** Inside each container, number rows 1, 2, 3… with no skipped row, counting the rows its existing children — the template's included — already take; only a container you create starts at row 1. *Layout coordinates and container nesting* in `./references/layout-mechanics.md`.
+- **An insert's `index` counts the children the parent already has — the parent template's included**, not only the inserts you emit. Read the parent's node in the `get-page` bundle before you set it; in a grid container the order in `items` follows `layoutConfig` row, then column. Worked example and several inserts into one parent: *Layout coordinates and container nesting* in `./references/layout-mechanics.md`.
+- **A balanced, aligned record page.** The left column reaches the length of the right content, filled only with blocks that pass the subtract check; a component placed among fields lines up with them on both axes (within 2px on the rendered page). *Balance the page* in `./references/page-record.md`, *Component alignment* in `./references/layout-mechanics.md`.
+- **Fields.** Required fields are the real minimum and sit on the first screen (default); few-value lookups are simple lookups (dropdowns); status-like lookups get colored chips by meaning (scale: *Freedom UI color guidance* in `./references/accessibility-and-colors.md`; how to set them: clio `get-guidance name=lookup-colors`); non-obvious and read-only fields get a placeholder or tooltip as localizable strings. *Required fields*, *Lookups and status chips*, *Field guidance* in `./references/block-fields.md`.
+- **Every field on a mini page or a modal sets `labelPosition: "above"` explicitly.** *Label position* in `./references/page-dialogs-and-mini.md`.
+- **Lists.** Every related list is editable inline (`features.editable` with `enable: true` and `itemsCreation: true` on its `crt.DataGrid`) and also gets a mini page and a full page; only a tiny list goes without pages, and inline is off only when the user asks. Columns show whole values and fill the list's width. *Related lists*, *List columns* in `./references/block-lists.md`. On a list page, filters go before `SearchFilter`: *Filters and search* in `./references/page-list.md`.
+- **Field companions and analytics.** A deadline the user acts on soon gets a timer with a caption and explicit colours; a business Contact or Account gets its profile island; an amount gets a metric or chart only when it answers the page's question — in its own island or beside the data it sums, every compared series present. *Field-driven companions* in `./references/page-record.md`, *Charts and metric tiles* in `./references/block-widgets.md`.
+- **The header shows one or two frequent actions; the rest go into one actions menu.** *Header actions* in `./references/block-actions.md`.
+- **Accessibility basics on every page.** Text contrast ≥ 4.5:1 (large text ≥ 3:1), every component has a real accessible name, colour is never the only signal. *Creatio accessibility baseline* in `./references/accessibility-and-colors.md`.
 - **Check the rendered page before calling it done.** Run the minimum check in `./references/visual-check.md` against a native page on the same template, then answer *Self-critique before delivering* in `./references/review-checklists.md` in writing; fix what is weak and check again.
 
 ## Page creation workflow

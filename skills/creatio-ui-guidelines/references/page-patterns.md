@@ -1,6 +1,6 @@
 # Page patterns
 
-Use this reference once the kind of page is known, to build or judge it as that pattern: what question it answers, when to use it and when not, how it is built from Creatio pages, templates and components, and the traps that make a correct-looking page fail its user. Choosing the kind is in `design-judgement.md`; component rules in `page-layout-and-controls.md`; native look and colour in `visual-judgement.md`; wording in `ux-writing.md` — this file links to them by section title instead of restating them. Resolve every component with `get-component-info`, every template with `list-page-templates`, and judge the result on the rendered page.
+Use this reference once the kind of page is known, to build or judge it as that pattern: what question it answers, when to use it and when not, how it is built from Creatio pages, templates and components, and the traps that make a correct-looking page fail its user. Choosing the kind is in `design-judgement.md`; what goes where on a page kind in the `page-*.md` files, single elements in the `block-*.md` files and grid mechanics in `layout-mechanics.md`; native look and colour in `visual-judgement.md`; wording in `ux-writing.md` — this file links to them by section title instead of restating them. Resolve every component with `get-component-info`, every template with `list-page-templates`, and judge the result on the rendered page.
 
 ## Contents
 
@@ -36,7 +36,7 @@ Use this reference once the kind of page is known, to build or judge it as that 
 
 - **Answers:** which of many records of one object need my attention, and lets me act on them.
 - **Use when** people find, compare and act on many records of one object. **Not when** one record is needed in depth (record page) or the content mixes object types (a feed).
-- **Structure in Creatio:** the section's list page — title and the New action, a toolbar (folders, filters, search; summaries, view switch and list actions on the right), and one list filling the work area; slots: *List (section) page layout* in `page-layout-and-controls.md`. A shipped section page is a plain list or a section home of titled groups (*Overview, dashboard and home page*), never content tabs; the view switch moves between the list and its dashboards.
+- **Structure in Creatio:** the section's list page — title and the New action, a toolbar (folders, filters, search; summaries, view switch and list actions on the right), and one list filling the work area; slots: *List (section) page layout* in `page-list.md`. A shipped section page is a plain list or a section home of titled groups (*Overview, dashboard and home page*), never content tabs; the view switch moves between the list and its dashboards.
 - **Traps:**
   - No useful starting view on a list of hundreds or more — set a default folder, quick filter or "Show closed" off.
   - Every column the object has (see *Lists and tables*).
@@ -47,17 +47,17 @@ Use this reference once the kind of page is known, to build or judge it as that 
 
 - **Answers:** everything about one record its user needs now — identity, state, and the next decision.
 - **Use when** one record is worked in depth with its related records. **Not when** the task is changing many records (list page with bulk actions) or finding an unknown record (list page with search).
-- **Structure in Creatio:** a form page on the template its composition needs — side profile column, header above tabs, or the progress-bar template for a staged record. Composition and island settings: *Page composition* and *Grouping and page flow* in `page-layout-and-controls.md`; the native shapes and island look: *What native Creatio looks like* in `visual-judgement.md`.
-- **The header carries the decision.** If the page exists to make a decision (Approve, Escalate), that decision is its most prominent control (*Header actions* in `page-layout-and-controls.md`).
+- **Structure in Creatio:** a form page on the template its composition needs — side profile column, header above tabs, or the progress-bar template for a staged record. Composition and island settings: *Page composition* and *Grouping and page flow* in `page-record.md`; the native shapes and island look: *What native Creatio looks like* in `visual-judgement.md`.
+- **The header carries the decision.** If the page exists to make a decision (Approve, Escalate), that decision is its most prominent control (*Header actions* in `block-actions.md`).
 - **State is in the first screenful** — stage, overdue, at risk, approved — via the stage progress bar or a status in the profile island, never in a later tab.
-- **Columns balance and fields get their companions:** *Balance the page* and *Field-driven companions* in `page-layout-and-controls.md`.
+- **Columns balance and fields get their companions:** *Balance the page* and *Field-driven companions* in `page-record.md`.
 - **Traps:** fields in schema order instead of fill order; a tab strip with one meaningful tab; borders, shadows or backgrounds drawn on islands to separate them; two tabs showing the same grid of fields — each tab answers its own question, so its columns and rows differ.
 
 ## Overview, dashboard and home page
 
 - **Answers:** what is the state of this area now, and does anything need me. A dashboard is one screen used daily or weekly; if it needs scrolling or explaining, it is a report.
 - **Use when** someone checks a domain repeatedly and leaves when nothing is wrong. **Not when** the person always comes to do one thing — give them that thing (worklist).
-- **Structure in Creatio:** the list page's Dashboard component, a dashboard page, or a home page; a section home is titled groups ("Needs attention", "Performance"), each a metric row, a list in a titled block and charts. Sizes and placement: *Charts and metric tiles* in `page-layout-and-controls.md`; chart type: *Which chart* in `design-judgement.md`.
+- **Structure in Creatio:** the list page's Dashboard component, a dashboard page, or a home page; a section home is titled groups ("Needs attention", "Performance"), each a metric row, a list in a titled block and charts. Sizes and placement: *Charts and metric tiles* in `block-widgets.md`; chart type: *Which chart* in `design-judgement.md`.
 - **Measured observations:** a dashboard's title is a selector over the dashboards folder, not the page heading. Widgets span whole grid columns; metrics wrap rather than squeeze; charts switch to a smaller variant rather than shrink their text. Widget size and colour scheme are user settings, so the layout must survive a resize.
 - **Metric size and fill:** the smallest size that fits the figure; the largest for the one figure that is the screen's answer, or none. Nothing has to be filled: a fill goes only on a figure actionable now that would not be filled every day; two fills read well only as one escalation (due, then overdue). Colour roles: *The colour budget and colour roles* in `visual-judgement.md`.
 - **Traps:** equal widgets so nothing leads; metrics included because they were available; a chart answering no question; a widget titled with a headline instead of a report name ("Cases by channel"); a zero or undefined change shown in a good/bad colour; colour meaning up/down instead of good/bad (rising days-in-stage is bad).
@@ -78,13 +78,13 @@ Use this reference once the kind of page is known, to build or judge it as that 
 
 ## Master–detail
 
-- **No Creatio page equivalent:** pages you author have no split list-plus-detail layout. Use a record page whose children show as an expanded list (*Related lists* in `page-layout-and-controls.md`), or a list page that opens each record in its record page or mini page — never a split view faked with two islands.
+- **No Creatio page equivalent:** pages you author have no split list-plus-detail layout. Use a record page whose children show as an expanded list (*Related lists* in `block-lists.md`), or a list page that opens each record in its record page or mini page — never a split view faked with two islands.
 
 ## Step-by-step page (wizard)
 
 - **Answers:** how much of this task is left, and what do I do on this step.
 - **Use when** a task is sequential, rare and order-dependent. **Not when** people do it daily — a wizard taxes experts every time — or the steps are independent: then it is one form with groups.
-- **Structure in Creatio:** a stepper, its indicator and one set of navigation buttons, built per *Step-by-step page (stepper)* in `page-layout-and-controls.md`; each step is page content inside the ordinary shell, not a modal. A consequential either/or choice inside a step is selectable cards (*Button vs menu action vs checkbox*).
+- **Structure in Creatio:** a stepper, its indicator and one set of navigation buttons, built per *Step-by-step page (stepper)* in `page-step-by-step.md`; each step is page content inside the ordinary shell, not a modal. A consequential either/or choice inside a step is selectable cards (*Button vs menu action vs checkbox*).
 - **A wizard configures; pages maintain.** Every value the wizard sets stays changeable on the record or settings page without re-running it.
 - **Traps:** three steps that should be one form; a step with one field; no way back without losing input; validation only at the end; no done state on finished steps; a final button that does not name the result ("Create request", not "Next").
 
@@ -99,15 +99,15 @@ Use this reference once the kind of page is known, to build or judge it as that 
 ## Workspace and multi-pane screens
 
 - **Answers:** handle live work (a call, a chat, a queue) while the record is the context.
-- **Creatio equivalent is the shell, not a page:** its right-docked panels (assistant, communication, notifications; one open at a time) and, where installed, a left-docked agent inbox. A page cannot add a shell panel; say so, and use a record page with a contextual side panel (*Page composition* in `page-layout-and-controls.md`).
+- **Creatio equivalent is the shell, not a page:** its right-docked panels (assistant, communication, notifications; one open at a time) and, where installed, a left-docked agent inbox. A page cannot add a shell panel; say so, and use a record page with a contextual side panel (*Page composition* in `page-record.md`).
 - **Inside a page,** islands form a narrow column beside the content when they are context, or full-width bands when they are the content — by meaning, not size.
 
 ## Lists and tables
 
 - **Answers:** compare records of one kind row by row. List or cards: *Table, list or cards* in `design-judgement.md`.
-- **Structure in Creatio:** the section list, an expanded list on a record page (the "Expanded list" composite — *Related lists* in `page-layout-and-controls.md`), or a list widget. The list's own actions (add, list menu) sit in its header, not in a toolbar above it.
+- **Structure in Creatio:** the section list, an expanded list on a record page (the "Expanded list" composite — *Related lists* in `block-lists.md`), or a list widget. The list's own actions (add, list menu) sit in its header, not in a toolbar above it.
 - **Columns:** identity first, then what people scan for, then dates and metadata; numbers in numeric columns so the list formats and aligns them natively; one status mark per row; on an overview, cap the rows and link to the full list.
-- **Row actions:** a row menu only where there is a real action; Open is the row click. A read-only list: *Read-only detail* in `page-layout-and-controls.md`. Widths: *List columns*.
+- **Row actions:** a row menu only where there is a real action; Open is the row click. A read-only list: *Read-only detail* in `block-lists.md`. Widths: *List columns*.
 - **Traps:** every column the object has; horizontal scrolling before asking whether the columns are needed; hover-only actions keyboard users cannot reach; restyled headers or zebra rows instead of the native list.
 
 ## Filters, search, folders and quick filters
@@ -117,20 +117,20 @@ Use this reference once the kind of page is known, to build or judge it as that 
   - **Folders** are the saved views: static for a hand-picked set, dynamic for a saved filter. Offer one for every subset a role returns to.
   - **Quick filters** cover the two or three axes people narrow by most (owner, period, status); a section checkbox ("Show closed", "Only mine") covers one frequent yes/no.
   - **Search** finds a known record by name or code; **Filters** (the advanced filter) takes the rare complex cases.
-  - Placement and icons: *Filters and search* in `page-layout-and-controls.md`.
+  - Placement and icons: *Filters and search* in `page-list.md`.
 - **On a dashboard** filters are configured per widget and in its data settings; there is no filter bar to draw.
 - **Traps:** a quick filter per column; filters sharing one icon; a hand-built apply-filter mechanism beside the platform's own; an active filter that is not visible, so an empty result looks like lost records (*Empty states* in `ux-writing.md`).
 
 ## Bulk operations and selection
 
 - **Answers:** do the same thing to many records at once. Use only when people routinely do that; otherwise multi-select is noise.
-- **Structure in Creatio:** the list's native multi-select and bulk actions (contract from `get-component-info`). A long or destructive bulk action follows *Long-running and destructive actions* in `page-layout-and-controls.md` and *Confirmations and destructive actions* in `ux-writing.md`.
+- **Structure in Creatio:** the list's native multi-select and bulk actions (contract from `get-component-info`). A long or destructive bulk action follows *7. System status and progress* in `ux-writing.md` and *Confirmations and destructive actions* in `ux-writing.md`.
 - **Traps:** no count of the selection; selecting the visible page when the user meant the whole filtered set; no path to the records that failed (partial failure: *Errors: prevention, then recovery* in `ux-writing.md`).
 
 ## Forms and data entry
 
 - **Answers:** capture what this step of the process needs, in the order the user knows it.
-- **Structure in Creatio:** fields in expansion panels or profile islands per *Fields*, *Field groups*, *Field guidance* and *Required fields* in `page-layout-and-controls.md`; which fields lead: *Sort fields into critical, secondary and contextual* in `design-judgement.md`. A few starter fields make a mini page; a long sequential capture is a step-by-step page.
+- **Structure in Creatio:** fields in expansion panels or profile islands per *Field layout and order*, *Field guidance* and *Required fields* in `block-fields.md` and *Field groups* in `page-record.md`; which fields lead: *Sort fields into critical, secondary and contextual* in `design-judgement.md`. A few starter fields make a mini page; a long sequential capture is a step-by-step page.
 - **Group by the user's task, not the schema.** A short sequential capture (mini page, dialog, one step) may run in one column where each answer depends on the previous one.
 - **Attachments** use the native "Attachments" composite, never a hand-built file field.
 - **Traps:** placeholder used as label; forty fields with no groups; required marks on fields the record can be created without; asking at creation for data needed only later.
@@ -155,7 +155,7 @@ Use this reference once the kind of page is known, to build or judge it as that 
 | short explanation at a control | tooltip | no |
 | transient result | platform notification | no |
 
-- **Rules:** eleven fields make a page, not a modal (*Which container* in `design-judgement.md`); nothing the user needs lives only in a panel; a panel belongs to what it sits beside. Build: *Dialogs and modals* and *Adding and editing data* in `page-layout-and-controls.md`.
+- **Rules:** eleven fields make a page, not a modal (*Which container* in `design-judgement.md`); nothing the user needs lives only in a panel; a panel belongs to what it sits beside. Build: *Dialogs and modals* and *Adding and editing data* in `page-dialogs-and-mini.md`.
 - **Traps:** a mini page grown into a full record form; a dialog whose title and primary button lack the verb ("Close opportunity" / "Close"); a destructive confirmation that does not restate the object and count.
 
 ## Feed and timeline
@@ -181,7 +181,7 @@ Use this reference once the kind of page is known, to build or judge it as that 
 ## Settings and administration
 
 - **Answers:** how does this behave, and what changes if I change it.
-- **Structure in Creatio:** system settings, lookups and permissions are product sections — use them. An app's own settings page is a form page of grouped expansion panels; toggles for modes and checkboxes for attributes (*Button vs menu action vs checkbox*); a standing description line under a setting (*Field guidance*), both in `page-layout-and-controls.md`.
+- **Structure in Creatio:** system settings, lookups and permissions are product sections — use them. An app's own settings page is a form page of grouped expansion panels; toggles for modes and checkboxes for attributes (*Button vs menu action vs checkbox* in `block-actions.md`, *Choice controls* in `block-fields.md`); a standing description line under a setting (*Field guidance* in `block-fields.md`).
 - **Rules:** group by what the person wants to achieve, not by owning service; state each setting's effect next to it; show the effective value, including inherited or overridden; for permissions show what a role can actually do, not only the grant; keep dangerous settings apart and confirm them.
 - **Traps:** a page that transcribes database rows with add/edit/delete instead of supporting the admin's tasks; a consequential switch worded like an ordinary preference.
 

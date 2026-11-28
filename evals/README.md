@@ -10,8 +10,8 @@ answer a question, template choice for a thin object, label position on mini pag
 placement on list pages, related lists editable inline and through pages, status chips
 colored by meaning, header actions by frequency, timers and charts that answer a question, a
 step-by-step page with a brand-styling request (custom CSS only after a warning and confirmation), and interface copy.
-The `reads-layout-by-section` graders check that the agent reads `page-layout-and-controls.md`
-by section (a ranged read) rather than skipping it. They are text-only — the agent describes
+The `reads-page-reference` graders check that the agent opens the `page-*.md` reference for
+the kind of page the case asks about (record, list, mini page, step-by-step). They are text-only — the agent describes
 the page, it does not build it — so they do not see rendering defects.
 
 Run from the repository root:

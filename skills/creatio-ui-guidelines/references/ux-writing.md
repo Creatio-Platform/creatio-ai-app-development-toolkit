@@ -1,6 +1,6 @@
 # UX writing for Freedom UI pages
 
-Use this reference when you write or review the words on a Freedom UI page: button and menu captions, field labels, placeholders and tooltips, validation and error messages, empty states, confirmation dialogs, status and progress messages, and the wording around values an AI skill or a process filled in. It is the deeper guide behind the copy rules that already live elsewhere in this skill — the sections *Text, labels, and messages*, *Field guidance*, *Buttons and actions*, *Long-running and destructive actions* and *Dialogs and modals* in page-layout-and-controls.md. Those rules stay where they are and are not repeated here; each section below names the one it builds on. The through-line: **say what will happen, in the words the business already uses.** A button captioned *Submit* is a defect in the same way a gap in the layout is — it just does not show in the page schema.
+Use this reference when you write or review the words on a Freedom UI page: button and menu captions, field labels, placeholders and tooltips, validation and error messages, empty states, confirmation dialogs, status and progress messages, and the wording around values an AI skill or a process filled in. It is the home of the text rules (§11 *Style basics*) and of the wording around long-running actions (§7). The component rules it builds on live elsewhere: *Field guidance* in `block-fields.md`, the buttons in `block-actions.md`, *Dialogs and modals* in `page-dialogs-and-mini.md`; each section below names the one it builds on. The through-line: **say what will happen, in the words the business already uses.** A button captioned *Submit* is a defect in the same way a gap in the layout is — it just does not show in the page schema.
 
 ## Contents
 
@@ -19,7 +19,7 @@ Use this reference when you write or review the words on a Freedom UI page: butt
 
 ## 1. Buttons and actions
 
-Placement, the one-primary rule, icons and menus are in page-layout-and-controls.md, *Buttons and actions*; sentence case and "result-oriented, not *Click here*" are in *Text, labels, and messages*. This section is about the caption itself.
+Placement, the one-primary rule, icons and menus are in block-actions.md, *Buttons and actions*; sentence case and "result-oriented, not *Click here*" are in *Text, labels, and messages*. This section is about the caption itself.
 
 **A button caption says what the button does.** The test: read the caption with the rest of the page covered. If you cannot tell what happens when it is clicked, rewrite it.
 
@@ -44,7 +44,7 @@ Placement, the one-primary rule, icons and menus are in page-layout-and-controls
 
 ## 2. Terminology and consistency
 
-Sentence case and "use typical wording from existing Creatio interfaces" are in page-layout-and-controls.md, *Text, labels, and messages*. This section is about which word to use.
+Sentence case and "use typical wording from existing Creatio interfaces" are in ux-writing.md, *11. Style basics*. This section is about which word to use.
 
 **Use the business's words, not the schema's.** If the organisation says *claim* and the object's code name is `UsrReimbursementRequest`, every caption says *Claim*. Code names follow the schema-naming rules of the creatio-schema-naming skill; the caption the user reads is a separate, localizable value and is written for the user.
 
@@ -77,16 +77,16 @@ Explanation belongs in the tooltip, the description line or a helper line under 
 
 ## 3. Field labels and helper text
 
-When a field needs guidance, choosing between placeholder, tooltip and description line, the *Add …* placeholder for empty optional fields, and the read-only tooltip are in page-layout-and-controls.md, *Field guidance*. This section adds how to word them.
+When a field needs guidance, choosing between placeholder, tooltip and description line, the *Add …* placeholder for empty optional fields, and the read-only tooltip are in block-fields.md, *Field guidance*. This section adds how to word them.
 
 - **Labels are short nouns in the business's words:** *Expected close date*, not *Date*; *Delivery address*, not *Address info*.
 - **No colons, no articles, sentence case.**
-- **A placeholder is not a label.** It disappears when typing starts and it carries less contrast than the label; never hide a label and let the placeholder stand in for it. Use the placeholder for a format or a sample value, with the label present; the one exception is the *Add …* invitation on an optional field that usually stays empty (page-layout-and-controls.md, *Field guidance*).
+- **A placeholder is not a label.** It disappears when typing starts and it carries less contrast than the label; never hide a label and let the placeholder stand in for it. Use the placeholder for a format or a sample value, with the label present; the one exception is the *Add …* invitation on an optional field that usually stays empty (block-fields.md, *Field guidance*).
 - **State the rule before it is broken.** A tooltip or description line that says the limit up front beats a validation message afterwards.
 - **Explain why where the rule is surprising.** *Used to match payments on the bank statement* tells the user whether to be careful.
 - **For a read-only or calculated field, name the source and the moment it changes.**
 - **A checkbox is captioned with the state it sets, not as a code-style question.** *Critical project*, *Overdue*, *Permit required* — not *Is critical*, *Is overdue*, *Requires permit?* The same caption serves the field and the list column.
-- **Mark required the way the platform does.** Required fields carry the platform's own required marker (page-layout-and-controls.md, *Required fields*); do not add *(required)* or *(optional)* to captions, and do not add a legend explaining the marker.
+- **Mark required the way the platform does.** Required fields carry the platform's own required marker (block-fields.md, *Required fields*); do not add *(required)* or *(optional)* to captions, and do not add a legend explaining the marker.
 
 | Field | Before | After |
 |---|---|---|
@@ -99,9 +99,9 @@ When a field needs guidance, choosing between placeholder, tooltip and descripti
 
 ## 4. Errors: prevention, then recovery
 
-Error rules already in place: page-layout-and-controls.md, *Text, labels, and messages* (admin and regular-user messages differ) and *Dialogs and modals* (dialog errors say what to do next); accessibility-and-colors.md, *Inputs, forms & validation* (errors identified, required marked at entry). This section is the wording and where each kind of message comes from.
+Error rules already in place: ux-writing.md, *11. Style basics* (admin and regular-user messages differ) and *Dialogs and modals* (dialog errors say what to do next); accessibility-and-colors.md, *Inputs, forms & validation* (errors identified, required marked at entry). This section is the wording and where each kind of message comes from.
 
-**The best error message is the one never shown.** Design the error out first with what Creatio already provides: a simple lookup with filtered values instead of free text, defaults and auto-substitution, a date-only column for a date, business rules that make a field required, read-only or hidden until it applies and that filter lookup values, and action buttons hidden or disabled while they cannot be used (page-layout-and-controls.md, *Buttons and actions*).
+**The best error message is the one never shown.** Design the error out first with what Creatio already provides: a simple lookup with filtered values instead of free text, defaults and auto-substitution, a date-only column for a date, business rules that make a field required, read-only or hidden until it applies and that filter lookup values, and action buttons hidden or disabled while they cannot be used (block-actions.md, *Buttons and actions*).
 
 When an error does happen, its text has three jobs:
 
@@ -130,7 +130,7 @@ When an error does happen, its text has three jobs:
 
 ## 5. Empty states
 
-The *Add …* placeholder for an empty optional field is in page-layout-and-controls.md, *Field guidance*; a list's or detail's own *No data* text is rendered by the component. This section covers what to write where you control the words.
+The *Add …* placeholder for an empty optional field is in block-fields.md, *Field guidance*; a list's or detail's own *No data* text is rendered by the component. This section covers what to write where you control the words.
 
 Four situations that are routinely given one generic text:
 
@@ -142,13 +142,13 @@ Four situations that are routinely given one generic text:
 | **Could not load** (failure) | that it is a failure, not emptiness, and what to try: *Couldn't load cases. Retry* |
 
 - **Check what the component lets you author.** Resolve the list, detail or widget with `get-component-info`; if it exposes an empty-state text input, write it per the table. If it does not, the component's own text stands — do not lay a hand-built message over it.
-- **Keep the filtered case honest.** A filtered-to-nothing list that reads like an empty one sends people to support, believing their records vanished. When you add custom filters (page-layout-and-controls.md, *List (section) page layout*), make sure their active state stays visible on the rendered page, so an empty result reads as filtered.
-- **Where only the surrounding copy is yours**, use the one-line helper under the heading (page-layout-and-controls.md, *Text, labels, and messages*) to say what the area is for.
+- **Keep the filtered case honest.** A filtered-to-nothing list that reads like an empty one sends people to support, believing their records vanished. When you add custom filters (page-list.md, *List (section) page layout*), make sure their active state stays visible on the rendered page, so an empty result reads as filtered.
+- **Where only the surrounding copy is yours**, use the one-line helper under the heading (ux-writing.md, *11. Style basics*) to say what the area is for.
 - Keep it to a line or two: say what is missing and offer the next step; do not teach the whole page.
 
 ## 6. Confirmations and destructive actions
 
-Whether an action gets a confirmation, an undo or neither is decided in design-judgement.md, *Confirm, undo or neither*; the mechanics are in page-layout-and-controls.md, *Long-running and destructive actions*, and accessibility-and-colors.md, *Inputs, forms & validation* (SC 3.3.4). This section is how the confirmation reads.
+Whether an action gets a confirmation, an undo or neither is decided in design-judgement.md, *Confirm, undo or neither*; the mechanics are in ux-writing.md, *7. System status and progress*, and accessibility-and-colors.md, *Inputs, forms & validation* (SC 3.3.4). This section is how the confirmation reads.
 
 - **Do not double the platform's confirmation.** The standard delete already asks; do not add a second dialog in front of it.
 - **The title asks the real question:** *Delete selected invoices?*
@@ -168,7 +168,7 @@ Worked example — a bulk action that sends email to every contact of the select
 
 ## 7. System status and progress
 
-The mechanism — loading mask, snack-bar, asynchronous run with a notification, *last updated* for external data — is in page-layout-and-controls.md, *Long-running and destructive actions*. This section is the wording.
+**The mechanism.** Warn before launching an action that can take long. Show execution status with a loading mask, a snack-bar, a countdown or a progress area. Over 30 seconds or of unknown duration, run asynchronously and notify the user on completion. When an operation can affect system performance, recommend scheduling it outside business hours. For long-running external updates, show when the data was last updated. The rest of this section is the wording.
 
 | Moment | Before | After |
 |---|---|---|
@@ -215,12 +215,12 @@ Business rules hide and show fields, panels and steps; templates move blocks; a 
 
 ## 10. Writing for localisation
 
-Tooltip and placeholder text is a localizable string (page-layout-and-controls.md, *Field guidance*); accessibility-and-colors.md, *Localization, links & status*, requires every element to be translated into all enabled languages. This section is how to write strings that survive translation.
+Tooltip and placeholder text is a localizable string (block-fields.md, *Field guidance*); accessibility-and-colors.md, *Localization, links & status*, requires every element to be translated into all enabled languages. This section is how to write strings that survive translation.
 
 - **Every user-visible string is a localizable string:** captions, button and menu labels, tooltips, placeholders, description and helper lines, validator messages, dialog titles, bodies and buttons, empty-state and status text. Column captions are localized on the object. An inline literal shows the same untranslated text to every culture.
 - **Name a resource key after its role, not its wording** (a discount tooltip, not the sentence it holds), so rewording the text does not leave a misleading key.
 - **Never build a sentence by concatenation.** *"You have " + n + " item(s)"* breaks in every language with grammatical number. Use one whole string with a placeholder for the value, and where the count changes the grammar, word it so it holds for any number: *Selected: 12*, *Invoices to post: 240*.
-- **Leave room.** Translations commonly run a third longer than English, and some much more. Keep buttons in a flex container (page-layout-and-controls.md, *Buttons and actions*) and never shorten the English to make a fixed width fit.
+- **Leave room.** Translations commonly run a third longer than English, and some much more. Keep buttons in a flex container (block-actions.md, *Buttons and actions*) and never shorten the English to make a fixed width fit.
 - **No idiom, wordplay or humour.** It has no translation and reads badly in a business system.
 - **Do not put meaning in word order** a translator cannot keep — for example a sentence split across a label and the field after it.
 - **Keep sentences short and single-clause** — easier to read, easier to translate, better for people working in a second language.
@@ -228,7 +228,12 @@ Tooltip and placeholder text is a localizable string (page-layout-and-controls.m
 
 ## 11. Style basics
 
-Sentence case, no Title Case or all caps, and no closing period in short helper text are in page-layout-and-controls.md, *Text, labels, and messages*. Beyond those:
+- **Sentence case** for labels and headings: only the first word is capitalized unless grammar or a proper noun requires otherwise. No Title Case or all-caps headings. Multi-word captions the platform generates come out Title Case: fix them.
+- **No period** after the final sentence of short helper text, button or dialog copy, unless the local style guide requires it.
+- **Typical wording.** Short, result-oriented button labels in the words existing Creatio interfaces use (*Send for approval*, not *Click here*).
+- **A non-obvious section or tab gets one short helper line under its heading**: one sentence in muted body text, before the controls, saying what the area does, as a localizable string. Non-obvious: the title alone does not tell a new user what the area does.
+- **Error messages for admins and regular users can differ**; for regular users, say what happened and how they can solve it themselves.
+- **Check with a new user in mind**: without help from the project team, they understand what to do.
 
 - **Active voice:** *The system couldn't reach the bank*, not *The bank could not be reached*.
 - **Second person for the reader.** Keep the corporate *we* for cases where people really do something (*We'll email you when it's ready*).

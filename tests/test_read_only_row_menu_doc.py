@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 GUIDELINES = ROOT / "skills/creatio-ui-guidelines/references"
-LAYOUT = GUIDELINES / "page-layout-and-controls.md"
+LAYOUT = GUIDELINES / "block-lists.md"
 CHECKLISTS = GUIDELINES / "review-checklists.md"
 BUILD_PAGE = ROOT / "skills/classic-to-freedom-migration/references/build-page.md"
 
@@ -88,7 +88,7 @@ class ReadOnlyRowMenuRecipeTests(unittest.TestCase):
     def test_migration_row_actions_note_points_at_the_guideline_recipe(self):
         note = self.note()
         self.assertIn("`rowToolbarItems`", note)
-        self.assertIn("page-layout-and-controls.md", note)
+        self.assertIn("block-lists.md", note)
         self.assertNotIn("the row-action property comes from `get-component-info`", note)
 
     def test_migration_row_actions_note_carries_the_short_recipe_inline(self):

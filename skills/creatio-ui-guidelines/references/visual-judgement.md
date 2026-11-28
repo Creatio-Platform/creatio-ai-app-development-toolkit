@@ -1,6 +1,6 @@
 # Visual judgement
 
-A Freedom UI page can use only native components, sit on the right template, have every field placed without gaps, and still look wrong: assembled rather than designed, loud where it should be quiet, with no decision about what matters. This reference is the judgement layer for that gap: how to look at the RENDERED page and decide whether it is composed, how to spend colour, type, surface and space, what native Creatio looks like so that deviations read as defects, and which authority wins when judgement and the product disagree. Apply it after the structural rules in `page-layout-and-controls.md` and before calling a page done; use `review-checklists.md` for the audit format and severity model.
+A Freedom UI page can use only native components, sit on the right template, have every field placed without gaps, and still look wrong: assembled rather than designed, loud where it should be quiet, with no decision about what matters. This reference is the judgement layer for that gap: how to look at the RENDERED page and decide whether it is composed, how to spend colour, type, surface and space, what native Creatio looks like so that deviations read as defects, and which authority wins when judgement and the product disagree. Apply it after the structural rules in the `page-*.md`, `block-*.md` and `layout-mechanics.md` references and before calling a page done; use `review-checklists.md` for the audit format and severity model.
 
 ## Contents
 
@@ -23,7 +23,7 @@ A Freedom UI page can use only native components, sit on the right template, hav
 
 Judgement in this file ranks below what the native product renders, the component contract and this skill's layout rules (*When rules collide* in `SKILL.md`). Where the running product does something this file advises against, the product wins for looks, and the review says so.
 
-Judgement decides **what goes on the page**: which blocks exist, which one leads, what is grouped with what, what is left out. It never decides **how a component is drawn**. Once a judgement produces a number (a gap, a size, a colour value) it has left its lane: the theme and the component's native inputs answer that, and custom CSS is the last resort (*Custom CSS* in `page-layout-and-controls.md`). "This group needs more room" is judgement; how much room is a native spacing input on the container.
+Judgement decides **what goes on the page**: which blocks exist, which one leads, what is grouped with what, what is left out. It never decides **how a component is drawn**. Once a judgement produces a number (a gap, a size, a colour value) it has left its lane: the theme and the component's native inputs answer that, and custom CSS is the last resort (*Custom CSS* in `layout-mechanics.md`). "This group needs more room" is judgement; how much room is a native spacing input on the container.
 
 ## The five checks
 
@@ -53,7 +53,7 @@ Rules here are questions, not counts (*Design principles* in `design-judgement.m
 
 Two opposite failures with one root: no decision about relative importance was made.
 
-- **Fragmentation**: many small islands or expansion panels of two or three fields each. The page reads as a filing cabinet, every boundary costs attention, nothing dominates. It comes from turning the data model's column list into the page structure. The fix is regrouping, not styling: a dozen small panels are usually three real business blocks (see *Grouping and page flow* in `page-layout-and-controls.md`).
+- **Fragmentation**: many small islands or expansion panels of two or three fields each. The page reads as a filing cabinet, every boundary costs attention, nothing dominates. It comes from turning the data model's column list into the page structure. The fix is regrouping, not styling: a dozen small panels are usually three real business blocks (see *Grouping and page flow* in `page-record.md`).
 - **Monotony**: identical blocks in a row, such as six metric widgets of one size or four islands of one height. Consistent, defensible, and silent. The fix is hierarchy: the block that answers the page's question gets more room or a more prominent place; the rest get less.
 
 Keep spacing, typography presets, component behaviour, colour meanings and action placement consistent; vary span, height and position by importance.
@@ -92,7 +92,7 @@ Empty space is a decision or a hole, and conflating them produces opposite defec
 
 **The test:** can you say what the empty region is for? "Breathing room around the stage bar" is an answer; "that is where the column ran out" is a hole. Fixing a hole is rarely a matter of filler; usually the structure is wrong.
 
-The side column of a record page is the exception: "the empty region is deliberate" is never an answer for it, because its balance is a layout rule, not a judgement call (*Balance the page* in `page-layout-and-controls.md`). Elsewhere (beside a reading column, around a focal block, after a short list) the test above applies.
+The side column of a record page is the exception: "the empty region is deliberate" is never an answer for it, because its balance is a layout rule, not a judgement call (*Balance the page* in `page-record.md`). Elsewhere (beside a reading column, around a focal block, after a short list) the test above applies.
 
 ## Restraint: surfaces, borders and elevation
 
@@ -105,7 +105,7 @@ Enterprise software that reads as mature is visually quiet:
 - **Icons with jobs**: the platform's icon family, where the native component carries one or a glyph is faster than a word; not one per caption for decoration.
 - **No gradients** on islands, buttons, text or backgrounds unless the theme ships them.
 
-Island appearance comes from the template and *New island / card container — standard settings* (`page-layout-and-controls.md`); copy it from a shipped page on the same template rather than choosing it.
+Island appearance comes from the template and *New island / card container — standard settings* (`layout-mechanics.md`); copy it from a shipped page on the same template rather than choosing it.
 
 ## The colour budget and colour roles
 
@@ -134,7 +134,7 @@ A business status stays quiet: the native chip is a pale tint of its hue with da
 
 ## Typography relationships
 
-Typeface, sizes and weights come from the theme and the components' typography presets (see *Typography and visual style* in `page-layout-and-controls.md`). Judgement owns the relationships:
+The Freedom UI font is Montserrat. Typeface, sizes and weights come from the theme and the components' typography presets: Headline 1–4 for headings, Body for text, Caption for supporting text, few styles and colours. Before requesting a global font, theme or style override, ask why it is needed and how it affects consistency; a changed font is custom CSS (*Custom CSS* in `layout-mechanics.md`). Judgement owns the relationships:
 
 - **Labels recede, values lead.** In a native field the label is grey and smaller, the value is darker ink. "Owner" above a person's name reads as the name with a small grey word above it, never as two equal lines.
 - **The page title is the largest text on the page, and it is not large.** A working page is not a landing page.
@@ -161,7 +161,7 @@ Every interactive element needs an answer for each state. Native components draw
 | empty | is it broken or just empty | says which of the four empty states it is |
 | error | what went wrong and what now | in words next to the problem, not only red |
 
-**Read-only is not disabled.** Native Creatio keeps a read-only field's value in full ink and marks it with a lock; a disabled field greys its value. Read-only means "this is information"; disabled means "you cannot do this now, for a reason". A read-only field styled as disabled sends users hunting for a permission problem that does not exist. Read-only and calculated fields also need the source tooltip (*Field guidance* in `page-layout-and-controls.md`).
+**Read-only is not disabled.** Native Creatio keeps a read-only field's value in full ink and marks it with a lock; a disabled field greys its value. Read-only means "this is information"; disabled means "you cannot do this now, for a reason". A read-only field styled as disabled sends users hunting for a permission problem that does not exist. Read-only and calculated fields also need the source tooltip (*Field guidance* in `block-fields.md`).
 
 **Empty and failed states** have their own words: the four empty states and partial failure are in *Empty states* and *Errors: prevention, then recovery* in `ux-writing.md`. A tab or related list empty on most records is a candidate for removal or conditional visibility, not for an empty state.
 

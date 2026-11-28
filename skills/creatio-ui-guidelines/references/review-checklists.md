@@ -36,85 +36,85 @@ Many defects show only on the render (an under-filled column, a heading that doe
 
 - [ ] The section has a unique icon that stays recognisable in collapsed navigation. **N-01** `[render]`
 - [ ] The section icon is filled, rounded, dark blue from the base palette, SVG where possible. **N-02** `[render]` (*Freedom UI color guidance* in `accessibility-and-colors.md`)
-- [ ] The primary display column is text, required, unique where possible, and auto-composed from key fields when derivable, still editable. **N-03** `[tool]` (*Special field controls* in `page-layout-and-controls.md`)
+- [ ] The primary display column is text, required, unique where possible, and auto-composed from key fields when derivable, still editable. **N-03** `[tool]` (*Special field controls* in `block-fields.md`)
 - [ ] The primary display value reads well in the page title, lookups, lists and record links. **N-04** `[judgement]`
 
 ### Layout and structure
 
-- [ ] The page uses the template its composition needs (`list-page-templates`); ordered stages use the progress-bar template, not a hand-placed bar. **L-01** `[tool]` (*Choosing the page template (before you create the page)* in `page-layout-and-controls.md`)
-- [ ] The header is not overloaded with fields or buttons. **L-02** `[render]` (*Island structure* in `page-layout-and-controls.md`)
-- [ ] A page longer than about two screens is split into tabs, groups or steps; the tab row starts on the first screen. **L-03** `[render]` (*Island structure* in `page-layout-and-controls.md`)
-- [ ] Every field group has a clear name and a logically related block: no lone-field container, no group titled like its only field. **L-04** `[render]` (*Field groups* in `page-layout-and-controls.md`)
-- [ ] Fields are grouped by business meaning, related fields side by side. **L-05** `[judgement]` (*Field groups* in `page-layout-and-controls.md`)
-- [ ] The profile island and first tab carry the record's who, what, when and status, not just Name. **L-06** `[judgement]` (*Grouping and page flow* in `page-layout-and-controls.md`)
-- [ ] Every 1:M child object in the plan is a related list on the parent page; lookups are not related lists. **L-07** `[tool]` (*Related lists* in `page-layout-and-controls.md`)
-- [ ] Each related list has inline adding and editing on, and + Add opens a registered page; exceptions are named in the plan. **L-08** `[tool]` (*Related lists* in `page-layout-and-controls.md`)
-- [ ] Every related list is the Expanded list composite, matching `get-component-info composite='Expanded list'` and `get-guidance name=related-list`. **L-09** `[tool]` (*Related lists* in `page-layout-and-controls.md`)
-- [ ] The Expanded list host keeps the current `get-component-info` defaults (`fullWidthHeader` included); its title and toolbar fit the panel. **L-10** `[render]` (*Related lists* in `page-layout-and-controls.md`)
-- [ ] Left and right columns are balanced: no oversized side island with little content, no near-empty left column. **L-11** `[render]` (*Balance the page* in `page-layout-and-controls.md`)
-- [ ] Every field group, profile block and related list sits in a card island (white, rounded, padded), never on bare background. **L-12** `[render]` (*New island / card container — standard settings* in `page-layout-and-controls.md`)
-- [ ] A stepper page has indicator and stepper in separate islands, indicator on top, one navigation button set, an instruction header per step. **L-13** `[render]` (*Step-by-step page (stepper)* in `page-layout-and-controls.md`)
-- [ ] Standard record fields use two columns; one- and two-column mixes keep the reading flow. **L-14** `[render]` (*Field layout and order* in `page-layout-and-controls.md`)
-- [ ] Each container's column count was read, not assumed to be 12; every `column` and `colSpan` fits it. **L-15** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `page-layout-and-controls.md`)
-- [ ] No layout gaps: no skipped row indices, no oversized `rowSpan`; group containers use `rows: "auto"`. **L-16** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `page-layout-and-controls.md`)
-- [ ] Every field's `parentName` is its intended group, with coordinates local to that container. **L-17** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `page-layout-and-controls.md`)
-- [ ] Every insert's `index` counts the parent's existing children, the parent template's included, as the parent's node in the `get-page` bundle shows them; in a grid container the order in `items` follows `layoutConfig` row, then column. **L-18** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `page-layout-and-controls.md`)
-- [ ] Expansion panels are full width and stacked vertically, never side by side or with a partial `colSpan`. **L-19** `[tool]` (*Flex vs Grid* in `page-layout-and-controls.md`)
-- [ ] Read-only details take all three steps: no add button, inline editing off, no row Copy or Delete; records still open on click. `rowToolbarItems` holds only Open (`crt.MenuItem`, localized caption, `edit-row-action`, `crt.UpdateRecordRequest`), never `[]` or `features.rows.toolbar: false`. **L-20** `[tool]` (*Read-only detail* in `page-layout-and-controls.md`)
-- [ ] Analytic widgets come first where they sit; the profile column holds only compact metrics with icons, in their own island. **L-21** `[render]` (*Charts and metric tiles* in `page-layout-and-controls.md`)
-- [ ] Charts sit beside the data they sum up (an Analytics tab only for cross-area analytics); rows follow `get-guidance name=dashboard-and-home-page-layout`. **L-22** `[render]` (*Charts and metric tiles* in `page-layout-and-controls.md`)
-- [ ] Every chart answers a question named in the plan, shows every series it names with data, and fits its data's type. **L-23** `[render]` (*Charts and metric tiles* in `page-layout-and-controls.md`; *Which chart* in `design-judgement.md`)
-- [ ] A problem metric (overdue, failed) takes the negative or attention colour from clio's `widget-color-and-icon`; neutral metrics stay neutral. **L-24** `[tool]` (*Charts and metric tiles* in `page-layout-and-controls.md`)
-- [ ] A timer, badge or button among fields aligns with them on both axes. **L-25** `[render]` (*Component alignment* in `page-layout-and-controls.md`)
-- [ ] Every list fits its demo data: no value cut by an ellipsis, no empty right part, height following the rows. **L-26** `[render]` (*List columns* in `page-layout-and-controls.md`)
-- [ ] On a list page, custom filters sit before `SearchFilter` in `LeftFilterContainerInner`, actions in `ActionButtonsContainer`, analytics in the Dashboard component. **L-27** `[tool]` (*Filters and search* in `page-layout-and-controls.md`)
-- [ ] **Style parity:** each added component's props (colour, padding, radius, gap, `toggleType`, `caption`, `labelPosition`, columns) match a shipped same-template page, diffed via `get-component-info`. **L-28** `[tool]` (*Match existing styles* in `page-layout-and-controls.md`)
-- [ ] Spacing fits the content: inputs have column but no row spacing, widgets proportional spacing, sibling gaps even. **L-29** `[render]` (*New island / card container — standard settings* in `page-layout-and-controls.md`)
-- [ ] Reference context (customer summary, connected accounts) opens in a closable contextual side panel, not inline or in a modal. **L-30** `[judgement]` (*Contextual side panel* in `page-layout-and-controls.md`)
-- [ ] A long-form content page uses a full-width reading column with a meta row, not the field grid. **L-31** `[render]` (*Article page* in `page-layout-and-controls.md`)
+- [ ] The page uses the template its composition needs (`list-page-templates`); ordered stages use the progress-bar template, not a hand-placed bar. **L-01** `[tool]` (*Choosing the page template (before you create the page)* in `page-record.md`)
+- [ ] The header is not overloaded with fields or buttons. **L-02** `[render]` (*Island structure* in `page-record.md`)
+- [ ] A page longer than about two screens is split into tabs, groups or steps; the tab row starts on the first screen. **L-03** `[render]` (*Island structure* in `page-record.md`)
+- [ ] Every field group has a clear name and a logically related block: no lone-field container, no group titled like its only field. **L-04** `[render]` (*Field groups* in `page-record.md`)
+- [ ] Fields are grouped by business meaning, related fields side by side. **L-05** `[judgement]` (*Field groups* in `page-record.md`)
+- [ ] The profile island and first tab carry the record's who, what, when and status, not just Name. **L-06** `[judgement]` (*Grouping and page flow* in `page-record.md`)
+- [ ] Every 1:M child object in the plan is a related list on the parent page; lookups are not related lists. **L-07** `[tool]` (*Related lists* in `block-lists.md`)
+- [ ] Each related list has inline adding and editing on, and + Add opens a registered page; exceptions are named in the plan. **L-08** `[tool]` (*Related lists* in `block-lists.md`)
+- [ ] Every related list is the Expanded list composite, matching `get-component-info composite='Expanded list'` and `get-guidance name=related-list`. **L-09** `[tool]` (*Related lists* in `block-lists.md`)
+- [ ] The Expanded list host keeps the current `get-component-info` defaults (`fullWidthHeader` included); its title and toolbar fit the panel. **L-10** `[render]` (*Related lists* in `block-lists.md`)
+- [ ] Left and right columns are balanced: no oversized side island with little content, no near-empty left column. **L-11** `[render]` (*Balance the page* in `page-record.md`)
+- [ ] Every field group, profile block and related list sits in a card island (white, rounded, padded), never on bare background. **L-12** `[render]` (*New island / card container — standard settings* in `layout-mechanics.md`)
+- [ ] A stepper page has indicator and stepper in separate islands, indicator on top, one navigation button set, an instruction header per step. **L-13** `[render]` (*Step-by-step page (stepper)* in `page-step-by-step.md`)
+- [ ] Standard record fields use two columns; one- and two-column mixes keep the reading flow. **L-14** `[render]` (*Field layout and order* in `block-fields.md`)
+- [ ] Each container's column count was read, not assumed to be 12; every `column` and `colSpan` fits it. **L-15** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `layout-mechanics.md`)
+- [ ] No layout gaps: no skipped row indices, no oversized `rowSpan`; group containers use `rows: "auto"`. **L-16** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `layout-mechanics.md`)
+- [ ] Every field's `parentName` is its intended group, with coordinates local to that container. **L-17** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `layout-mechanics.md`)
+- [ ] Every insert's `index` counts the parent's existing children, the parent template's included, as the parent's node in the `get-page` bundle shows them; in a grid container the order in `items` follows `layoutConfig` row, then column. **L-18** `[tool]` (*Layout coordinates and container nesting (avoiding gaps)* in `layout-mechanics.md`)
+- [ ] Expansion panels are full width and stacked vertically, never side by side or with a partial `colSpan`. **L-19** `[tool]` (*Flex vs Grid* in `layout-mechanics.md`)
+- [ ] Read-only details take all three steps: no add button, inline editing off, no row Copy or Delete; records still open on click. `rowToolbarItems` holds only Open (`crt.MenuItem`, localized caption, `edit-row-action`, `crt.UpdateRecordRequest`), never `[]` or `features.rows.toolbar: false`. **L-20** `[tool]` (*Read-only detail* in `block-lists.md`)
+- [ ] Analytic widgets come first where they sit; the profile column holds only compact metrics with icons, in their own island. **L-21** `[render]` (*Charts and metric tiles* in `block-widgets.md`)
+- [ ] Charts sit beside the data they sum up (an Analytics tab only for cross-area analytics); rows follow `get-guidance name=dashboard-and-home-page-layout`. **L-22** `[render]` (*Charts and metric tiles* in `block-widgets.md`)
+- [ ] Every chart answers a question named in the plan, shows every series it names with data, and fits its data's type. **L-23** `[render]` (*Charts and metric tiles* in `block-widgets.md`; *Which chart* in `design-judgement.md`)
+- [ ] A problem metric (overdue, failed) takes the negative or attention colour from clio's `widget-color-and-icon`; neutral metrics stay neutral. **L-24** `[tool]` (*Charts and metric tiles* in `block-widgets.md`)
+- [ ] A timer, badge or button among fields aligns with them on both axes. **L-25** `[render]` (*Component alignment* in `layout-mechanics.md`)
+- [ ] Every list fits its demo data: no value cut by an ellipsis, no empty right part, height following the rows. **L-26** `[render]` (*List columns* in `block-lists.md`)
+- [ ] On a list page, custom filters sit before `SearchFilter` in `LeftFilterContainerInner`, actions in `ActionButtonsContainer`, analytics in the Dashboard component. **L-27** `[tool]` (*Filters and search* in `page-list.md`)
+- [ ] **Style parity:** each added component's props (colour, padding, radius, gap, `toggleType`, `caption`, `labelPosition`, columns) match a shipped same-template page, diffed via `get-component-info`. **L-28** `[tool]` (*Match existing styles* in `layout-mechanics.md`)
+- [ ] Spacing fits the content: inputs have column but no row spacing, widgets proportional spacing, sibling gaps even. **L-29** `[render]` (*New island / card container — standard settings* in `layout-mechanics.md`)
+- [ ] Reference context (customer summary, connected accounts) opens in a closable contextual side panel, not inline or in a modal. **L-30** `[judgement]` (*Contextual side panel* in `page-record.md`)
+- [ ] A long-form content page uses a full-width reading column with a meta row, not the field grid. **L-31** `[render]` (*Article page* in `page-record.md`)
 
 ### Fields and data entry
 
-- [ ] Non-obvious fields (abbreviations, units, codes, formats) have a placeholder or tooltip; the form is no wall of bare inputs. **F-01** `[render]` (*Field guidance* in `page-layout-and-controls.md`)
-- [ ] Lookup fields are filtered to relevant values. **F-02** `[tool]` (*Lookups and status chips* in `page-layout-and-controls.md`)
-- [ ] The record's connections are one `crt.Connections`, not a ComboBox per link, and no column shows in both. **F-03** `[tool]` (*Record connections* in `page-layout-and-controls.md`)
-- [ ] Small fixed catalogs (status, type, category) are simple lookups (dropdowns); Contact, Account and parent keep the selection window. **F-04** `[tool]` (*Lookups and status chips* in `page-layout-and-controls.md`)
-- [ ] Status-like lookups show chips on the page and in lists, coloured by meaning on one app-wide scale, text kept. **F-05** `[render]` (*Lookups and status chips* in `page-layout-and-controls.md`; scale: *Freedom UI color guidance* in `accessibility-and-colors.md`)
-- [ ] Date-only business fields have no time picker. **F-06** `[tool]` (*Special field controls* in `page-layout-and-controls.md`)
-- [ ] Read-only fields have a tooltip saying why and how they are filled, and show units or scale. **F-07** `[tool]` (*Field guidance* in `page-layout-and-controls.md`)
-- [ ] Inputs in one group share one `labelPosition`, explicit where possible, without restyling components to force it. **F-08** `[tool]` (*Label position* in `page-layout-and-controls.md`)
-- [ ] Required fields are marked and on the first screen (header, top island, profile column, first tab), or the plan says why not. **F-09** `[render]` (*Required fields* in `page-layout-and-controls.md`)
-- [ ] Only fields the record cannot be created without are required. **F-10** `[judgement]` (*Required fields* in `page-layout-and-controls.md`)
-- [ ] Checkboxes and logical fields follow the fields they relate to. **F-11** `[tool]` (*Field layout and order* in `page-layout-and-controls.md`)
-- [ ] Each field's guidance uses one fitting channel: placeholder for format, tooltip on demand, description line for must-see. **F-12** `[tool]` (*Field guidance* in `page-layout-and-controls.md`)
-- [ ] An optional field that usually stays empty on a saved record shows an actionable "Add …" placeholder. **F-13** `[render]` (*Field guidance* in `page-layout-and-controls.md`)
-- [ ] Toggles serve settings and modes; checkboxes serve plain record booleans. **F-14** `[tool]` (*Button vs menu action vs checkbox* in `page-layout-and-controls.md`)
-- [ ] A consequential two- or three-way choice uses selectable cards; ordinary value picks stay dropdowns. **F-15** `[judgement]` (*Button vs menu action vs checkbox* in `page-layout-and-controls.md`)
-- [ ] A bounded numeric set by feel uses a slider; an exact value keeps a numeric input. **F-16** `[judgement]` (*Special field controls* in `page-layout-and-controls.md`)
-- [ ] Every amount the page asks a question about has analytics named in the plan, not a repeat of its own value. **F-17** `[judgement]` (*Field-driven companions* in `page-layout-and-controls.md`)
-- [ ] Every deadline acted on within the page's working horizon has a captioned, coloured timer beside it, *Overdue* text set, date visible. **F-18** `[tool]` (*Field-driven companions* in `page-layout-and-controls.md`)
-- [ ] Every business-relationship Contact or Account lookup has a read-only profile island, captioned for the relationship, shown when filled. **F-19** `[tool]` (*Field-driven companions* in `page-layout-and-controls.md`)
+- [ ] Non-obvious fields (abbreviations, units, codes, formats) have a placeholder or tooltip; the form is no wall of bare inputs. **F-01** `[render]` (*Field guidance* in `block-fields.md`)
+- [ ] Lookup fields are filtered to relevant values. **F-02** `[tool]` (*Lookups and status chips* in `block-fields.md`)
+- [ ] The record's connections are one `crt.Connections`, not a ComboBox per link, and no column shows in both. **F-03** `[tool]` (*Record connections* in `block-fields.md`)
+- [ ] Small fixed catalogs (status, type, category) are simple lookups (dropdowns); Contact, Account and parent keep the selection window. **F-04** `[tool]` (*Lookups and status chips* in `block-fields.md`)
+- [ ] Status-like lookups show chips on the page and in lists, coloured by meaning on one app-wide scale, text kept. **F-05** `[render]` (*Lookups and status chips* in `block-fields.md`; scale: *Freedom UI color guidance* in `accessibility-and-colors.md`)
+- [ ] Date-only business fields have no time picker. **F-06** `[tool]` (*Special field controls* in `block-fields.md`)
+- [ ] Read-only fields have a tooltip saying why and how they are filled, and show units or scale. **F-07** `[tool]` (*Field guidance* in `block-fields.md`)
+- [ ] Inputs in one group share one `labelPosition`, explicit where possible, without restyling components to force it. **F-08** `[tool]` (*Label position* in `page-dialogs-and-mini.md`)
+- [ ] Required fields are marked and on the first screen (header, top island, profile column, first tab), or the plan says why not. **F-09** `[render]` (*Required fields* in `block-fields.md`)
+- [ ] Only fields the record cannot be created without are required. **F-10** `[judgement]` (*Required fields* in `block-fields.md`)
+- [ ] Checkboxes and logical fields follow the fields they relate to. **F-11** `[tool]` (*Field layout and order* in `block-fields.md`)
+- [ ] Each field's guidance uses one fitting channel: placeholder for format, tooltip on demand, description line for must-see. **F-12** `[tool]` (*Field guidance* in `block-fields.md`)
+- [ ] An optional field that usually stays empty on a saved record shows an actionable "Add …" placeholder. **F-13** `[render]` (*Field guidance* in `block-fields.md`)
+- [ ] Toggles serve settings and modes; checkboxes serve plain record booleans. **F-14** `[tool]` (*Button vs menu action vs checkbox* in `block-actions.md`)
+- [ ] A consequential two- or three-way choice uses selectable cards; ordinary value picks stay dropdowns. **F-15** `[judgement]` (*Button vs menu action vs checkbox* in `block-actions.md`)
+- [ ] A bounded numeric set by feel uses a slider; an exact value keeps a numeric input. **F-16** `[judgement]` (*Special field controls* in `block-fields.md`)
+- [ ] Every amount the page asks a question about has analytics named in the plan, not a repeat of its own value. **F-17** `[judgement]` (*Field-driven companions* in `page-record.md`)
+- [ ] Every deadline acted on within the page's working horizon has a captioned, coloured timer beside it, *Overdue* text set, date visible. **F-18** `[tool]` (*Field-driven companions* in `page-record.md`)
+- [ ] Every business-relationship Contact or Account lookup has a read-only profile island, captioned for the relationship, shown when filled. **F-19** `[tool]` (*Field-driven companions* in `page-record.md`)
 
 ### Buttons, actions, and dialogs
 
-- [ ] Page-level actions sit in `ActionButtonsContainer` top right; a context action sits beside the component showing its result. **B-01** `[tool]` (*Button placement* in `page-layout-and-controls.md`)
-- [ ] Buttons sit in a `crt.FlexContainer`, not on a grid; a button beside an input shares its flex. **B-02** `[tool]` (*Button placement* in `page-layout-and-controls.md`)
-- [ ] Each context has at most one Primary button; a split button counts as that one. **B-03** `[tool]` (*Button styles* in `page-layout-and-controls.md`)
-- [ ] The header shows at most two frequent actions as buttons, the rest in one actions menu, or the plan says why. **B-04** `[judgement]` (*Header actions* in `page-layout-and-controls.md`)
-- [ ] A mini page is captioned with its object, holds the defining fields, suggests no duplicate number, and pairs only short fields. **B-05** `[tool]` (*Mini pages* in `page-layout-and-controls.md`)
-- [ ] Buttons, menu items and multiple filters have distinct, consistent icons where icons aid recognition. **B-06** `[render]` (*Icons* in `page-layout-and-controls.md`)
-- [ ] Buttons share one height and alignment. **B-07** `[render]` (*Button placement* in `page-layout-and-controls.md`)
-- [ ] Buttons are visible or active only when their action applies. **B-08** `[render]` (*Button placement* in `page-layout-and-controls.md`)
+- [ ] Page-level actions sit in `ActionButtonsContainer` top right; a context action sits beside the component showing its result. **B-01** `[tool]` (*Button placement* in `block-actions.md`)
+- [ ] Buttons sit in a `crt.FlexContainer`, not on a grid; a button beside an input shares its flex. **B-02** `[tool]` (*Button placement* in `block-actions.md`)
+- [ ] Each context has at most one Primary button; a split button counts as that one. **B-03** `[tool]` (*Button styles* in `block-actions.md`)
+- [ ] The header shows at most two frequent actions as buttons, the rest in one actions menu, or the plan says why. **B-04** `[judgement]` (*Header actions* in `block-actions.md`)
+- [ ] A mini page is captioned with its object, holds the defining fields, suggests no duplicate number, and pairs only short fields. **B-05** `[tool]` (*Mini pages* in `page-dialogs-and-mini.md`)
+- [ ] Buttons, menu items and multiple filters have distinct, consistent icons where icons aid recognition. **B-06** `[render]` (*Icons* in `block-actions.md`)
+- [ ] Buttons share one height and alignment. **B-07** `[render]` (*Button placement* in `block-actions.md`)
+- [ ] Buttons are visible or active only when their action applies. **B-08** `[render]` (*Button placement* in `block-actions.md`)
 - [ ] Destructive or irreversible actions ask for confirmation, offer undo, or can be cancelled (SC 3.3.4). **B-09** `[render]` (*Confirm, undo or neither* in `design-judgement.md`)
-- [ ] Long-running actions warn and show progress; over 30 seconds or of unknown duration they run asynchronously and notify. **B-10** `[judgement]` (*Long-running and destructive actions* in `page-layout-and-controls.md`)
-- [ ] Dialogs follow Creatio mini-page styling and place instructions before controls. **B-11** `[render]` (*Dialogs and modals* in `page-layout-and-controls.md`)
-- [ ] Every field on a mini page or modal sets `labelPosition`: `above` on S/M; `left` only on L/XL, then on every field. **B-12** `[tool]` (*Label position* in `page-layout-and-controls.md`)
-- [ ] A text-heavy dialog uses real heading levels, consistent fonts and spaced blocks, not a wall of text. **B-13** `[render]` (*Text-heavy modals* in `page-layout-and-controls.md`)
-- [ ] Long or conditional explanations sit in an `i` tooltip next to the control, not inline. **B-14** `[render]` (*Text-heavy modals* in `page-layout-and-controls.md`)
-- [ ] Actions on a profile island's record sit in that island below its fields, not in the header. **B-15** `[tool]` (*Button placement* in `page-layout-and-controls.md`)
-- [ ] Report printing uses the platform's Print button, not a custom button or menu. **B-16** `[tool]` (*Button styles* in `page-layout-and-controls.md`)
-- [ ] A green primary appears only on a launch or activate action, meaning in its label; no ad-hoc button colours. **B-17** `[tool]` (*Button styles* in `page-layout-and-controls.md`)
-- [ ] A focused set of operation parameters is gathered in a modal (needed fields, required marked, instructions above), not a page. **B-18** `[judgement]` (*Dialogs and modals* in `page-layout-and-controls.md`)
+- [ ] Long-running actions warn and show progress; over 30 seconds or of unknown duration they run asynchronously and notify. **B-10** `[judgement]` (*7. System status and progress* in `ux-writing.md`)
+- [ ] Dialogs follow Creatio mini-page styling and place instructions before controls. **B-11** `[render]` (*Dialogs and modals* in `page-dialogs-and-mini.md`)
+- [ ] Every field on a mini page or modal sets `labelPosition`: `above` on S/M; `left` only on L/XL, then on every field. **B-12** `[tool]` (*Label position* in `page-dialogs-and-mini.md`)
+- [ ] A text-heavy dialog uses real heading levels, consistent fonts and spaced blocks, not a wall of text. **B-13** `[render]` (*Text-heavy modals* in `page-dialogs-and-mini.md`)
+- [ ] Long or conditional explanations sit in an `i` tooltip next to the control, not inline. **B-14** `[render]` (*Text-heavy modals* in `page-dialogs-and-mini.md`)
+- [ ] Actions on a profile island's record sit in that island below its fields, not in the header. **B-15** `[tool]` (*Button placement* in `block-actions.md`)
+- [ ] Report printing uses the platform's Print button, not a custom button or menu. **B-16** `[tool]` (*Button styles* in `block-actions.md`)
+- [ ] A green primary appears only on a launch or activate action, meaning in its label; no ad-hoc button colours. **B-17** `[tool]` (*Button styles* in `block-actions.md`)
+- [ ] A focused set of operation parameters is gathered in a modal (needed fields, required marked, instructions above), not a page. **B-18** `[judgement]` (*Dialogs and modals* in `page-dialogs-and-mini.md`)
 
 ### Copy and content
 
@@ -124,15 +124,15 @@ Many defects show only on the render (an under-filled column, a heading that doe
 - [ ] Error messages say what the user can do next. **C-04** `[render]` (*4. Errors: prevention, then recovery* in `ux-writing.md`)
 - [ ] Regular users see no admin technical details unless they need them. **C-05** `[judgement]`
 - [ ] All user-facing text is localized to every enabled language, with no unintended language mix (SC 3.1.1, 3.1.2). **C-06** `[render]` (*10. Writing for localisation* in `ux-writing.md`)
-- [ ] Tooltip, placeholder and description texts are localizable resource strings, not inline literals. **C-07** `[tool]` (*Field guidance* in `page-layout-and-controls.md`)
-- [ ] A non-obvious section or tab has a one-line localizable intro under its heading. **C-08** `[judgement]` (*Text, labels, and messages* in `page-layout-and-controls.md`)
+- [ ] Tooltip, placeholder and description texts are localizable resource strings, not inline literals. **C-07** `[tool]` (*Field guidance* in `block-fields.md`)
+- [ ] A non-obvious section or tab has a one-line localizable intro under its heading. **C-08** `[judgement]` (*11. Style basics* in `ux-writing.md`)
 
 ### Typography and visual style
 
-- [ ] Text uses Montserrat and only the Freedom UI scale: Headline 1–4, Body, Caption. **T-01** `[render]` (*Typography and visual style* in `page-layout-and-controls.md`)
+- [ ] Text uses Montserrat and only the Freedom UI scale: Headline 1–4, Body, Caption. **T-01** `[render]` (*Typography relationships* in `visual-judgement.md`)
 - [ ] Colours are few and come from the predefined palette. **T-02** `[render]` (*Freedom UI color guidance* in `accessibility-and-colors.md`)
-- [ ] Components keep the default Creatio appearance: no global restyle, and no restyle made only to satisfy another rule. **T-03** `[tool]` (*Native appearance* in `page-layout-and-controls.md`)
-- [ ] Any custom CSS, global style or theme has a business reason and the user's confirmation. **T-04** `[judgement]` (*Custom CSS* in `page-layout-and-controls.md`)
+- [ ] Components keep the default Creatio appearance: no global restyle, and no restyle made only to satisfy another rule. **T-03** `[tool]` (*Native appearance* in `layout-mechanics.md`)
+- [ ] Any custom CSS, global style or theme has a business reason and the user's confirmation. **T-04** `[judgement]` (*Custom CSS* in `layout-mechanics.md`)
 
 ### Accessibility
 
@@ -190,7 +190,7 @@ Before building a page, write the proposal in the shape of `../assets/templates/
 Answer these twelve questions **in writing** before anyone else sees the page, looking at the rendered page; "yes, probably" is how a weak page survives.
 
 1. **Is the most important information immediately recognisable?** Squint: is what survives the answer to the page's question?
-2. **Is the space used deliberately?** No region is stretched to fill or left holed, and the columns are balanced (*Balance the page* in `page-layout-and-controls.md`).
+2. **Is the space used deliberately?** No region is stretched to fill or left holed, and the columns are balanced (*Balance the page* in `page-record.md`).
 3. **Is the density right for the task?** (*How dense* in `design-judgement.md`)
 4. **Does the layout follow the user's priorities, or the data model's?**
 5. **Is any block too large or too small** for how much it matters?
@@ -253,7 +253,7 @@ A pixel review reports visual findings as the page under review against its nati
 - **Every finding ends in a `Done when:` line**: an observable end state naming native components and properties, not appearance. For accessibility, cite the criterion: *Done when: Tab reaches every row action and the focused one shows the focus ring (WCAG 2.4.7).*
 - **Colour findings name roles and relationships, never hex values**; a relationship survives a theme change.
 - **Nice-to-have findings say *optional*.**
-- **A platform gap is noted on the finding** where no native component achieves the look (*Custom CSS* in `page-layout-and-controls.md`).
+- **A platform gap is noted on the finding** where no native component achieves the look (*Custom CSS* in `layout-mechanics.md`).
 
 Write the `Done when:` line first, for your own decisions too: a decision without an observable outcome is not specific enough to build.
 
